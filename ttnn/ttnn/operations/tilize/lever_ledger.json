@@ -1,8 +1,8 @@
 {
   "op": "tilize",
   "topology": {
-    "phase": 2,
-    "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+    "phase": 3,
+    "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
     "plan_paths": [
       "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
       "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -11,7 +11,8 @@
       "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
       "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
       "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
-      "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)"
+      "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+      "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
     ],
     "dtypes": [
       "bfloat16",
@@ -59,11 +60,18 @@
         "off_ns": 95146.0,
         "shape": "[1,1,2048,2048] bf16",
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -123,11 +131,37 @@
       "phase": 2
     },
     "A3": {
-      "status": "deferred",
-      "followup": "Place each reader adjacent to one DRAM bank and give it its own VC, per tech_reports/Saturating_DRAM_bandwidth. This is the single largest identified headroom: the op measures 63-68% of the 288 GB/s DRAM peak and the tech report's recipe reaches ~92%.",
-      "predicted_delta_pct": 35.0,
-      "reason": "Interleaved round-robin means every reader touches every bank -> maximal route overlap. Needs a bank-aware work split, which is a topology change, not a knob turn.",
-      "phase": 0
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_a3_one_reader_one_bank_is_not_expressible_on_an_interleaved_source",
+      "reason": "One reader <-> one bank cannot be expressed for an INTERLEAVED ROW_MAJOR source, for any bank count. An interleaved page lives in bank `page_id % num_banks`; tilize's work unit is a tile-row = TILE_H CONSECUTIVE source sticks = TILE_H consecutive page ids, whose residues mod any num_banks > 1 are distinct. So every reader that produces even one tile touches min(TILE_H, num_banks) banks, and no work assignment fixes that without abandoning the tile. The ~92%-of-peak recipe in Saturating_DRAM_bandwidth.md needs a bank's worth of data RESIDENT per core \u2014 that is lever C15 (prefer sharded), already applied in Refinements 1-2. The Phase-0 predicted 35% was ALSO refuted on the target itself: the 288 GB/s datasheet peak is unreachable here. A pure DRAM->DRAM copy of the same tensors (examples/dram_saturation, no compute kernel at all) measures 87,710 ns @64 cores on [1,1,2048,2048] bf16, 12,078 ns on [1,1,32,16384], 174,772 ns on [1,1,8192,1024] \u2014 i.e. ~192 GB/s, and tilize now runs at or below those numbers.",
+      "measured": {
+        "topology": {
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 3
     },
     "A4": {
       "status": "structurally-impossible",
@@ -136,11 +170,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -217,11 +258,40 @@
       "phase": 2
     },
     "B6": {
-      "status": "deferred",
-      "followup": "Sweep WT_CHUNK below its L1 cap so the per-stick read lands at <= 512 B (the WH one-packet fast path) and measure against the current coarsest-chunk choice.",
-      "predicted_delta_pct": 3.0,
-      "reason": "The derivation deliberately maximizes the chunk (B5), which pushes reads ABOVE the one-packet size on most shapes. On wide-short it already lands at exactly 512 B (WT_CHUNK=8, bf16). The two levers pull in opposite directions and only a sweep can price them.",
-      "phase": 0
+      "status": "applied",
+      "knob": "read_one_packet",
+      "reason": "The custom aligned reader takes noc_async_read_one_packet whenever the per-stick transfer fits NOC_MAX_BURST_SIZE (512 B) \u2014 which is exactly the wide/short regime's 512 B read. It never loses (it is compile-time inert above 512 B, so the coarse-chunk shapes are untouched), so B5 and B6 did NOT have to be traded off against each other: B5 picks the chunk, B6 picks the issue path for whatever chunk B5 chose.",
+      "measured": {
+        "on_ns": 13478.0,
+        "off_ns": 13605.0,
+        "shape": "[1,1,32,16384] bf16, 512 B reads (5-sample medians)",
+        "topology": {
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 3
     },
     "B7": {
       "status": "applied",
@@ -249,11 +319,55 @@
       "phase": 0
     },
     "B8": {
-      "status": "deferred",
-      "followup": "Custom reader with NT_BLK > 1: reserve NT_BLK*WT_CHUNK pages, tag each block with a trid, issue NT_BLK*TILE_H reads and barrier on the PREVIOUS trid. NT_BLK is already a named knob and the CB formula is already written against it; the blocker is that the library reader barriers once per tile-row.",
-      "predicted_delta_pct": 12.0,
-      "reason": "Only measurable on a >=2 blocks/core shape \u2014 the bench has one (c_multiblock, 4 blocks/core), so the lever is visible to the bench and this is a real deferral, not a bench gap.",
-      "phase": 0
+      "status": "measured-no-payoff",
+      "knob": "read_trid",
+      "reason": "[write-side twin knob: write_trid \u2014 arms test_bench_lever_write_trid_off / test_bench_lever_both_trid_off] Trid double-issue is BUILT on both halves (reader and writer): block i's transfers are issued before block i-1's barrier, so a request is always in flight across the block boundary. Measured NULL on every regime that can show it (<=1.5%, both signs, inside the +-3% band), including the B0 smallest-regime check on [1,1,32,64]. The cause is measured, not argued: (a) and (c) already run at or below a pure DRAM->DRAM copy of the same tensor, so extra in-flight requests cannot buy bandwidth the DRAM interface will not deliver, and (b) has one block per core so there is no next block to double-issue against. Both levers are correct (bit-exact under --dev) and regression-free, so they are KEPT rather than reverted. NOTE for anyone re-enabling this family: a trid left on the WRITE command buffer halts BRISC in firmware after kernel_main returns (brisck.cc:91 ASSERT(ncrisc_noc_packet_tags_cleared)); it presents as a whole-grid hang at waypoint NKFW, not as a CB deadlock. Reset the trid to 0 before exit.",
+      "measured": {
+        "on_ns": 86530.0,
+        "off_ns": 85930.0,
+        "shape": "[1,1,2048,2048] bf16, both halves off (5-sample medians)",
+        "also": {
+          "[1,1,8192,1024] bf16 (4 blocks/core)": {
+            "on_ns": 172345.0,
+            "off_ns": 172041.0
+          },
+          "[1,1,32,64] bf16 (B0 smallest regime)": {
+            "on_ns": 2923.0,
+            "off_ns": 2922.0
+          },
+          "write half only off, [1,1,2048,2048] bf16": {
+            "on_ns": 86530.0,
+            "off_ns": 87031.0
+          }
+        },
+        "topology": {
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_b8_trid_is_gated_on_the_two_slot_cb_geometry",
+      "phase": 3
     },
     "B9": {
       "status": "applied",
@@ -281,11 +395,46 @@
       "phase": 0
     },
     "B10": {
-      "status": "deferred",
-      "followup": "Assign a distinct VC per reader so DRAM responses stop serializing first-come-first-serve; pairs with A3.",
-      "predicted_delta_pct": 10.0,
-      "reason": "Needs the bank-adjacent placement of A3 to be meaningful; measured DRAM utilisation (63-68% of peak) is consistent with response-queue serialization.",
-      "phase": 0
+      "status": "measured-no-payoff",
+      "knob": "read_vc",
+      "reason": "Spreading read requests over NUM_READ_VCS unicast VCs is neutral on the grid-filling square and a LOSS on the wide/short shape. 64 readers already spread over the whole grid, reading pages that round-robin over every DRAM bank, have no first-come-first-serve shared route to break up \u2014 and A3 (the placement lever B10 was predicted to pair with) is structurally impossible on an interleaved source. The knob SHIPS PARKED at its byte-identical default (pd.PARKED_LEVERS), so it stays a live tunable; the ON arm is the bench row.",
+      "measured": {
+        "on_ns": 86136.0,
+        "off_ns": 85720.0,
+        "shape": "[1,1,2048,2048] bf16 (5-sample medians)",
+        "also": {
+          "[1,1,32,16384] bf16": {
+            "on_ns": 13478.0,
+            "off_ns": 13131.0
+          }
+        },
+        "topology": {
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 3
     },
     "B11": {
       "status": "structurally-impossible",
@@ -294,11 +443,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -320,11 +476,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -433,17 +596,29 @@
     "C16": {
       "status": "measured-no-payoff",
       "knob": "double_buffer",
-      "reason": "Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget \u2014 but the read/compute/write overlap they buy is not visible at these shapes: the op is DRAM-bandwidth-bound, so the reader cannot run ahead.",
+      "reason": "Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget \u2014 but they buy nothing measurable, and Refinement 3 established WHY, refuting Phase 0's explanation. Phase 0 said 'the op is DRAM-bound so the reader cannot run ahead'; the real reason was that the grid-filling square landed ONE block per core, leaving the second CB slot with nothing to hold. Refinement 3's pipeline knob gives that shape 4 blocks per core and won 1.077x \u2014 and C16 is STILL flat at 4 blocks/core (86,457 depth-2 vs 86,579 depth-1). So the per-core CB depth is genuinely irrelevant here: the read/write overlap that matters is ACROSS cores, and the pipeline win came from both DM halves getting faster (read 50,047->43,641, write 63,830->61,471) at a constant ~19.5 us of overlap, not from per-core buffering.",
       "measured": {
-        "on_ns": 92859.0,
-        "off_ns": 90761.0,
-        "shape": "[1,1,2048,2048] bf16",
+        "on_ns": 86457.0,
+        "off_ns": 86579.0,
+        "shape": "[1,1,2048,2048] bf16, 4 blocks/core (5-sample medians)",
+        "phase0_arm": {
+          "on_ns": 92859.0,
+          "off_ns": 90761.0,
+          "note": "same shape at 1 block/core"
+        },
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -455,10 +630,9 @@
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
-        },
-        "note": "depth-1 is 2.3% FASTER = inside the noise band. wide-short 13315 vs 13426, multiblock 170508 vs 172103, smallest 2889 vs 3041."
+        }
       },
-      "phase": 0
+      "phase": 3
     },
     "C17": {
       "status": "structurally-impossible",
@@ -467,11 +641,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -509,11 +690,18 @@
         "off_ns": 92225.0,
         "shape": "[1,1,2048,2048] bf16",
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -551,11 +739,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -608,11 +803,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -634,11 +836,18 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 3,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
           ],
           "dtypes": [
             "bfloat16",
@@ -659,6 +868,9 @@
     "phase1_stale_closure_reread": "The 10 'possibly unlocked' staleness signals are the topology block moving from interleaved-only to interleaved + three sharded plan paths. Re-read at Refinement 1 and all still hold: A1 (row_wise) is INAPPLICABLE on the sharded path (cores come from shard order, split_work_to_cores is not called); A4 (cliff cores) \u2014 derive_shard_blocking makes WT_CHUNK divide shard_wt exactly and uneven shards fall back to the accessor path; B11 \u2014 a shard row is shard_w*elem with shard_w % 32 == 0, still a 32 B multiple; B12 \u2014 destination tile regions are disjoint, so even the cross-core gather reads no byte twice; C16 \u2014 an aliased CB has no depth and the zero-copy path is compute-bound (ablation: 4901 -> 862 with compute stubbed), so there is still nothing to overlap; C17 \u2014 RM-in / TILE-out still cannot alias (the two aliased CBs sit on different tensors); D20/F23/F26/F27 are untouched by placement.",
     "R2_xfer_gate": "Refinement 2 added the `xfer_gate` knob (LEVERS, default 1) with both arms in _bench_tilize.py (test_bench_lever_xfer_gate, test_bench_lever_xfer_gate_narrow_destination). It decides whether aliasing the DESTINATION shard is worth the read transfer the shard's width pins: 1.66x / 3.21x in favour of the grid split below the 256 B knee, no effect above it (dram->HEIGHT x8, 512 B reads: 7,983 vs 8,058 ns). It never gates a SOURCE-local plan \u2014 the writer always moves whole TILE pages, measured 0.94x (2 cores) to 3.85x (8 cores). Mechanism-wise this is B5 (transaction size) crossed with A2 (core placement); it has no catalog ID of its own.",
     "R2_reshard_retarget": "Re-target for the reshard rows: with the destination local there is NO write traffic, so the ceiling is the SOURCE shard's L1 egress (2 cores x 256 KB in 256 B transfers ~= 14 GB/s/core), not the DRAM floor. Ablation on [1,1,1024,256] WIDTHx2->HEIGHTx8: full 18,487 -> no_compute 17,615 (-4.7%) -> sync_only 745 ns, i.e. DM-bound (95%). Remaining headroom is the source-side fan-in, which the CALLER picks (shard spec), plus L4 split_reader \u2014 now MORE applicable than at Refinement 1, since on a destination-local gather BRISC does no NoC work at all.",
-    "phase2_stale_closure_reread": "The 10 staleness signals at Refinement 2 are the topology block gaining three plan paths (padded-into-local-shard, the paged cross-spec gather, and that gather on the full grid). Re-read, and all still hold: A1 (row_wise) \u2014 still not called on a shard-pinned plan, and the GATED gather does call split_work_to_cores again but over the same round-robin DRAM/L1 page map where it measured as noise; A4 (no cliff width) \u2014 derive_shard_blocking still divides the shard width exactly, and Refinement 2's uneven grids split ROWS, not W, so the short last shard is a cliff in H that the per-shard block count absorbs (no second kernel width); B11 (32 B transactions) \u2014 now stronger, since every page slice of the gather is a 32 B multiple by construction and the one geometry that would break it is refused (test_unaddressable_shard_row_is_refused); B12 (no mcast/semaphores) \u2014 still zero, now asserted per-descriptor in test_reshard_placement_and_source_page_geometry; C16 (double_buffer) and D20 (regime_select) \u2014 unchanged on the interleaved rows they were measured on, though both now have a new consumer (the gather streams through the input CB and forces R_PAD), so they are the two rows most worth re-measuring in a perf phase; C17 / F23 / F26 / F27 \u2014 the format, precision-knob and arithmetic facts they rest on did not move."
+    "phase2_stale_closure_reread": "The 10 staleness signals at Refinement 2 are the topology block gaining three plan paths (padded-into-local-shard, the paged cross-spec gather, and that gather on the full grid). Re-read, and all still hold: A1 (row_wise) \u2014 still not called on a shard-pinned plan, and the GATED gather does call split_work_to_cores again but over the same round-robin DRAM/L1 page map where it measured as noise; A4 (no cliff width) \u2014 derive_shard_blocking still divides the shard width exactly, and Refinement 2's uneven grids split ROWS, not W, so the short last shard is a cliff in H that the per-shard block count absorbs (no second kernel width); B11 (32 B transactions) \u2014 now stronger, since every page slice of the gather is a 32 B multiple by construction and the one geometry that would break it is refused (test_unaddressable_shard_row_is_refused); B12 (no mcast/semaphores) \u2014 still zero, now asserted per-descriptor in test_reshard_placement_and_source_page_geometry; C16 (double_buffer) and D20 (regime_select) \u2014 unchanged on the interleaved rows they were measured on, though both now have a new consumer (the gather streams through the input CB and forces R_PAD), so they are the two rows most worth re-measuring in a perf phase; C17 / F23 / F26 / F27 \u2014 the format, precision-knob and arithmetic facts they rest on did not move.",
+    "phase3_pipeline_lever": "NEW non-catalog lever `pipeline` (PIPELINE_BLOCKS_PER_CORE / MIN_PIPELINE_READ_BYTES): the block derivation now targets several blocks per core instead of stopping at the grid-fill floor, capped so a read transfer never drops below the B5 floor. Both constants are SWEPT, not chosen: blocks/core 1/2/4/8/16 -> 94,398 / 85,846 / 85,122 / 88,444 / 87,298 ns on [1,1,2048,2048] bf16 (4 wins, and fp32 agrees within 0.25%); MIN_PIPELINE_READ_BYTES 128/256/512/1024 -> 15,076 / 14,092 / 13,964 / 13,150 ns on [1,1,32,16384] bf16 (monotonic, so the cap correctly refuses to split that shape finer). Whole-refinement A/B (n=7 medians): [1,1,2048,2048] bf16 92,608 -> 86,235 (-6.9%), fp32 195,738 -> 181,230 (-7.4%). Both arms in _bench_tilize.py (`pipeline`, plus `pre_r3` = every Refinement-3 lever off at once).",
+    "phase3_ceiling_retarget": "The DRAM-floor target the queue quoted (288 GB/s -> 58.3 us on [1,1,2048,2048]) is a datasheet number this box cannot reach for an interleaved DRAM->DRAM stream. Measured practical ceiling with examples/dram_saturation (pure copy, NO compute kernel): 87,710 ns @64c / 86,943 @32c on 2048x2048 bf16 (191-193 GB/s), 12,078 @64c / 11,550 @32c on 32x16384, 174,772 @64c on 8192x1024. tilize now measures 86,235 / 13,606 / 171,695 ns \u2014 i.e. 1.01x, 0.89x and 1.02x of a pure copy of the same bytes. Use these, not 288 GB/s, as the target.",
+    "phase3_split_dm_ablation": "New ABLATE keys dm_read / dm_write attribute the wall to each NoC half. bf16: (a) full 86,594 | no_reads 59,482 | no_writes 43,930; (b) 12,721 | 9,364 | 8,155; (c) 169,518 | 122,680 | 93,055. The WRITE half is the larger one everywhere, which is why B8's writer twin was built rather than shipping a reader-only lever."
   }
 }

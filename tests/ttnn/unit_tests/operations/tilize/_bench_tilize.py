@@ -585,3 +585,46 @@ def test_bench_lever_both_trid_off(device, regime, dtype_name):
         levers=dict(read_trid=0, write_trid=0),
         label=f"both_trid=0/{regime}/{dtype_name}",
     )
+
+
+_PRE_R3 = dict(pipeline=0, read_trid=0, read_vc=0, read_one_packet=0, write_trid=0)
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_pre_refinement_3(device, regime, dtype_name):
+    """Every Refinement-3 lever off at once = the Refinement-2 interleaved path
+    exactly (Phase-0 blocking + the library reader + barrier-per-block writes).
+    The whole-refinement counterfactual, and the non-regression control for the
+    wide/short row whose own run-to-run spread exceeds the +-3% band."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(_PRE_R3),
+        label=f"pre_r3/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("pipeline", [1, 0], ids=["on", "off"])
+@pytest.mark.parametrize(
+    "ablate, name",
+    [({}, "full"), ({"dm_read": 1}, "no_reads"), ({"dm_write": 1}, "no_writes")],
+    ids=["full", "no_reads", "no_writes"],
+)
+def test_bench_pipeline_overlap_mechanism(device, pipeline, ablate, name):
+    """WHY the pipeline knob wins. C16 (per-core depth-2 CB) is flat with or
+    without it, so the win is not per-core double-buffering. Hypothesis: with one
+    block per core every core reads, then computes, then writes IN LOCKSTEP, so
+    the read and write NoCs are busy in disjoint phases; finer blocks desynchronize
+    the cores and the two DRAM directions overlap. Measure it: compare
+    (read half + write half) against the wall in each arm — the bigger the
+    shortfall, the more overlap."""
+    _measure(
+        device,
+        SHAPES["a_square"],
+        ttnn.bfloat16,
+        levers=dict(pipeline=pipeline),
+        ablate=ablate,
+        label=f"overlap/pipeline={pipeline}/{name}",
+    )

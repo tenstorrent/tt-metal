@@ -167,7 +167,7 @@ zero-copy, and no cell is failing on it. `verify_levers --phase 2`: 0 blocking.
 
 ---
 
-### [ ] Refinement 3 — Close the DRAM-bandwidth gap on the interleaved aligned path
+### [x] Refinement 3 — Close the DRAM-bandwidth gap on the interleaved aligned path
 
 **Type**: perf
 
@@ -203,6 +203,33 @@ smallest-regime check per B0) and is written into `lever_ledger.json` + `changel
 is still green; and no regression across the config-spanning guard set (one representative per distinct
 kernel path × placement × dtype: aligned interleaved DRAM→DRAM, padded (R_PAD reader), L1→L1, sharded
 same-spec, sharded crossover, bf16 + fp32, depth-1 + depth-2, single-core).
+
+**Outcome**: done. **`[1,1,2048,2048]` bf16 92,608 → 86,235 ns (−6.9%) and fp32 195,738 → 181,230
+(−7.4%)** (n=7 in-session medians vs a `pre_r3` arm that turns every lever off at once); `[1,1,32,16384]`
+and `[1,1,8192,1024]` are flat within their noise bands. Golden unchanged at 190 passed / 0 failed;
+`verify_levers --phase 3` clean.
+**The target was the real finding.** The queue's 0.63 / 0.55 ratios were against the 288 GB/s DRAM
+*datasheet* peak, which this box cannot reach for an interleaved DRAM→DRAM stream. A pure DRAM→DRAM copy
+of the same tensors (`examples/dram_saturation`, no compute kernel at all) measures 87,710 / 12,078 /
+174,772 ns — ~192 GB/s. Against that measured floor tilize now runs at **1.01× / 0.89× / 1.02×**, i.e. it
+tilizes 16.8 MB *faster than a copy alone moves it*. Ratios against the old datasheet target moved
+0.63 → 0.68 (a) and 0.68 → 0.68 (c); (b) is unmoved at 0.54. `tt_npe.sh` is absent from this checkout, so
+the tt-npe pin could not be produced — the on-device pure-copy floor replaces it and is strictly stronger.
+**The bottleneck now is DRAM bandwidth itself**, on a path that has no bytes left to save: the op reads
+each input byte once and writes each output byte once. The single win came from `pipeline`
+(blocks-per-core, both constants swept); of the three levers this refinement was pointed at, **A3 is
+structurally impossible** on an interleaved source (a tile-row is TILE_H *consecutive* pages, so every
+reader necessarily touches min(TILE_H, num_banks) banks — pinned by a test), **B10 measured a loss** and
+ships parked at a byte-identical default, and **B8 measured null on both halves** (built anyway, reader
+*and* writer, after the new split-DM ablation showed the write half is the larger one) — kept, since
+neither regresses. Notably C16 is *still* flat at 4 blocks/core, so the pipeline win is **not** per-core
+double-buffering: read/write overlap is unchanged (~19.5 µs both arms) and both DM halves simply got
+faster (read −12.8%, write −3.7%); that residual attribution is unexplained and is the one thing worth
+picking up next. What I would try next and did not: `[1,1,32,16384]` is the only regime still off its
+measured floor (0.89×), and the pure-copy sweep says that shape is *faster on 32 cores than on 64*
+(11,550 vs 12,078 ns) — a work-per-core core-count gate is the obvious probe, but master.md records a
+16-core cap already measured at 2.4× slower for tilize, so it needs a real sweep rather than a guess, and
+a core-count knob is a work-distribution change beyond this heading's scope.
 
 ---
 

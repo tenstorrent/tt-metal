@@ -670,3 +670,222 @@ arms (placement flip + identity under each). Bench arms added:
 `test_bench_reshard_cross_spec`, `test_bench_lever_xfer_gate`,
 `test_bench_lever_xfer_gate_narrow_destination`, `test_bench_reshard_ablation`,
 `test_bench_padded_into_local_shard`.
+
+---
+
+## Refinement 3 — Close the DRAM-bandwidth gap on the interleaved aligned path
+
+- **Date**: 2026-08-14
+- **Type**: perf (no SUPPORTED change)
+
+### What was done
+
+**Reused**: `derive_blocking()` and its knob derivation, `cb_pages()` / `cb_bytes()` /
+`wt_cap()`, the `LEVERS` / `ABLATE` counterfactual dicts, the `R_ALIGNED` /
+`R_PAD` regime selector, the writer's block loop, and `_bench_tilize.py`'s
+`_measure()` harness. The compute kernel is **byte-identical** again.
+
+**Added** — one work-distribution knob, one custom reader loop, one writer twin:
+
+| Piece | Where |
+|---|---|
+| `PIPELINE_BLOCKS_PER_CORE` + `MIN_PIPELINE_READ_BYTES` + `read_bytes_per_stick()` (the single source for transfer size) | `tilize_program_descriptor.py` |
+| `pipeline` lever + its OFF arm, and `pre_r3` (every R3 lever off at once) | descriptor `LEVERS`, `_bench_tilize.py` |
+| `issue_tile_row()` + a custom W_BLOCKS aligned reader loop expressing B6 / B8 / B10 | `kernels/tilize_reader.cpp` |
+| B8 write-side double-issue (`write_trid`) | `kernels/tilize_writer.cpp` |
+| `PARKED_LEVERS` registry (a lever shipped at 0 with the measurement that put it there) | `tilize_program_descriptor.py` |
+| Split-DM ablation (`ABLATE["dm_read"]` / `["dm_write"]`) | descriptor + both dataflow kernels |
+
+### The headline: the target itself was wrong, and is now measured
+
+The queue's target came from the 288 GB/s DRAM **datasheet** peak, giving
+achieved ratios of 0.63 / 0.55 / 0.68 and a recorded ~35% of headroom. That
+number is unreachable on this box for an interleaved DRAM→DRAM stream. Measured
+with `ttnn/ttnn/operations/examples/dram_saturation` — a **pure DRAM→DRAM copy of
+the same tensor with no compute kernel at all**:
+
+| shape | pure-copy floor (this box) | achieved BW |
+|---|---|---|
+| `2048x2048` bf16 | 87,710 ns @64 cores · 86,943 @32 | 191–193 GB/s |
+| `32x16384` bf16 | 12,078 ns @64 cores · 11,550 @32 | 174–182 GB/s |
+| `8192x1024` bf16 | 174,772 ns @64 cores | 192 GB/s |
+
+**tilize is now at or below the pure-copy floor on two of the three regimes** —
+it moves the same bytes *and* tilizes them in less time than a copy alone:
+
+| shape (bf16) | tilize before | tilize after | vs pure copy | vs the 288 GB/s target |
+|---|---|---|---|---|
+| (a) `[1,1,2048,2048]` | 92,608 | **86,235** | **1.01x** | 0.63 → **0.68** |
+| (b) `[1,1,32,16384]` | 13,348 | 13,606 | 0.89x | 0.55 → 0.54 (flat) |
+| (c) `[1,1,8192,1024]` | 170,672 | 171,695 | **1.02x** | 0.68 → 0.68 |
+
+`tt_npe.sh` is **absent from this checkout**, so the prompt's tt-npe pin could
+not be produced; the bracket above is the `/perf-ceiling-dm` audit reconciled
+against a real on-device pure-copy measurement instead, which is strictly
+stronger than the datasheet bound it replaces.
+
+### The one lever that won: `pipeline` (blocks per core)
+
+Phase-0 blocking stopped chunking W as soon as the grid was full, so the
+grid-filling square landed **exactly one block per core**: read 128 KB → tilize
+64 tiles → write 128 KB, strictly serialized. The knob now targets several
+blocks per core, capped so a read transfer never falls below the B5 floor.
+
+Both constants are **swept, not chosen** (`[1,1,2048,2048]` bf16 / `[1,1,32,16384]` bf16):
+
+| blocks/core | 1 | 2 | **4** | 8 | 16 |
+|---|---|---|---|---|---|
+| ns | 94,398 | 85,846 | **85,122** | 88,444 | 87,298 |
+
+| MIN_PIPELINE_READ_BYTES | 128 | 256 | 512 | **1024** |
+|---|---|---|---|---|
+| ns | 15,076 | 14,092 | 13,964 | **13,150** |
+
+The second sweep is monotonic, which is *why* (b) is untouched: its read is
+already 512 B, so the cap correctly refuses to split it finer. Whole-refinement
+A/B, n=7 in-session medians: **(a) bf16 92,608 → 86,235 (−6.9%), fp32
+195,738 → 181,230 (−7.4%)**.
+
+**The mechanism is not the one hypothesized — recorded because it was refuted.**
+The hypothesis was per-core read/compute/write overlap through the depth-2 CB.
+It is wrong: C16 (`double_buffer`) is still flat at 4 blocks/core (86,457 depth-2
+vs 86,579 depth-1), and the split-DM ablation shows read/write overlap is
+*unchanged* (19,675 ns with the knob, 19,126 ns without). What actually happened
+is that **both DM halves got faster** at the finer split — read 50,047 → 43,641
+(−12.8%), write 63,830 → 61,471 (−3.7%). Full attribution of *why* smaller,
+more numerous per-core transfers reach higher DRAM efficiency here is not
+claimed; the numbers are.
+
+### The levers that did not win (all measured, none reverted)
+
+**A3** (reader adjacent to its bank) → **structurally-impossible**, pinned by
+`test_a3_one_reader_one_bank_is_not_expressible_on_an_interleaved_source`. An
+interleaved page lives in bank `page_id % num_banks`, and tilize's work unit is
+a tile-row = TILE_H *consecutive* sticks = consecutive page ids, whose residues
+mod any `num_banks > 1` are distinct. Every reader therefore touches
+`min(TILE_H, num_banks)` banks for **any** bank count; no work assignment fixes
+that without abandoning the tile. The ~92%-of-peak recipe needs a bank's worth
+of data *resident* per core — that is lever **C15**, already shipped in
+Refinements 1–2. The predicted 35% was independently refuted by the pure-copy
+measurement above.
+
+**B10** (per-reader VC) → **measured-no-payoff, shipped PARKED**. Neutral on (a)
+(86,136 vs 85,720) and a 2.6% **loss** on (b) (13,478 vs 13,131), 5-sample
+medians. It is not deleted: it ships at its byte-identical default through the
+new `PARKED_LEVERS` registry and stays a live knob with its ON arm in the bench.
+
+**B8** (trid double-issue) → **measured-no-payoff, kept ON, both halves built**.
+The split-DM ablation was run *first*, and it said the **write** half is the
+larger one on every real-work regime ((a) 59,482 vs 43,930; (b) 9,364 vs 8,155;
+(c) 122,680 vs 93,055) — so a reader-only lever would have moved the bottleneck
+across the CB rather than removing it, and the writer twin was built in the same
+pass. Both measure null (≤1.5%, both signs), including the B0 smallest-regime
+check on `[1,1,32,64]` (2,923 vs 2,922). The cause is measured, not argued:
+(a) and (c) already run at the pure-copy floor, so more in-flight requests cannot
+buy bandwidth the DRAM interface will not deliver, and (b) has one block per core
+so there is no next block to double-issue against.
+
+**B6** (one-packet fast path) → **applied**, free with the reader rewrite:
+13,478 vs 13,605 on (b)'s 512 B reads. B5 and B6 turned out **not** to trade off —
+B5 picks the chunk, B6 picks the issue path for whatever chunk B5 chose, and it
+is compile-time inert above 512 B.
+
+### Accuracy achieved
+
+Exact — a permutation op has no error budget. `torch.equal` bit-for-bit
+(PCC = 1.0, rtol = atol = 0) on bf16 **and** fp32 for all four bench regimes plus
+`[1,1,96,128]` and `[1,1,64,96]`, and for `use_double_buffer=False`,
+`use_multicore=False` and both together — verified under `--dev` (watcher, CB
+sanitizer, LLK asserts), so the two-slot trid handshake is race-clean.
+
+### Golden test progress
+
+`eval/golden_tests/tilize/test_golden.py`: **190 passed, 158 xfailed, 0 failed,
+0 xpass-strict drift, 592 INVALID-skipped** — identical to Refinement 2. A perf
+refinement adds no axis value; the number not moving is the correct outcome.
+Whole tilize unit directory: **181 passed** (166 prior + 15 new).
+
+### Perf gate — cumulative bench set (every prior row re-measured)
+
+Medians; the two mandatory regimes also carry the n=7 in-session A/B above.
+
+| shape | dtype | Phase 0 | R1 | R2 | **R3** | vs R2 |
+|---|---|---|---|---|---|---|
+| `[1,1,2048,2048]` | bf16 | 92,859 | 92,407 | 93,160 | **86,235** | **−7.4%** |
+| `[1,1,2048,2048]` | fp32 | 191,169 | 195,416 | 194,007 | **181,230** | **−6.6%** |
+| `[1,1,32,16384]` | bf16 | 13,315 | 12,966 | 13,281 | 13,606 | +2.4% |
+| `[1,1,32,16384]` | fp32 | 27,466 | 25,677 | 27,580 | **26,425** | −4.2% |
+| `[1,1,8192,1024]` | bf16 | 170,508 | 171,441 | 170,672 | 171,695 | +0.6% |
+| `[1,1,8192,1024]` | fp32 | 363,140 | 358,227 | 358,597 | 365,195 | +1.8% |
+| `[1,1,32,64]` | bf16 | 2,889 | 2,909 | 2,870 | 2,888 | +0.6% |
+| `[1,1,32,64]` | fp32 | 3,101 | 3,052 | 3,141 | 3,151 | +0.3% |
+| `[1,1,512,64]` H×4 same-spec | bf16 | — | 1,402 | 1,420 | 1,392 | −2.0% |
+| `[1,1,512,64]` H×4 same-spec | fp32 | — | 2,213 | 2,211 | 2,197 | −0.6% |
+| `[1,1,2048,256]` H×8 same-spec | bf16 | — | 4,901 | 4,843 | 4,889 | +0.9% |
+| `[1,1,2048,256]` H×8 same-spec | fp32 | — | 12,347 | 12,360 | 12,367 | +0.1% |
+| `[1,1,512,64]` DRAM→H×4 | bf16 | — | 7,360 | 4,242 | 4,307 | +1.5% |
+| `[1,1,2048,256]` DRAM→H×8 | bf16 | — | 14,768 | 14,766 | 14,710 | −0.4% |
+| `[1,1,1024,256]` reshard cross-spec | bf16 | — | — | 18,487 | 18,263 | −1.2% |
+| `[1,1,1024,256]` gated reshard | bf16 | — | — | 19,936 | 19,800 | −0.7% |
+| `[1,1,1024,256]` narrow dest (gated) | bf16 | — | — | 16,827 | 16,576 | −1.5% |
+| `[1,1,2040,256]`→pad, H×8 | bf16 | — | — | 22,466 | 22,380 | −0.4% |
+
+Nothing regressed. The one row above the ±3% band, `[1,1,32,16384]` bf16 at
++2.4% against R2's number, was resolved by an **in-session A/B against `pre_r3`**
+(every Refinement-3 lever off at once, n=7): 13,348 vs 13,606, i.e. **+1.9%,
+inside the band, with the two distributions overlapping almost completely**
+(R3's min 12,919 is below the OFF arm's min 13,217). That row's own run-to-run
+spread is ±5–6%, which Refinement 2 had already flagged.
+
+**Re-target for the sharded rows** (carried forward, as the queue asked): a
+local-shard side is L1 loopback, not DRAM, so neither the DRAM floor nor the
+pure-copy floor describes them. Refinement 1 classified the same-spec rows as
+compute-bound at ~63 ns per 32×32 tile (the tilize LLK's own throughput) and
+Refinement 2 re-targeted the reshard rows to the *source* shard's L1 egress.
+They were measured here and none regressed, but this phase is not gated on them.
+
+**Lever ledger**: `python3 -m eval.verify_levers ... --phase 3` → **clean**
+(0 blocking, 0 signal, 0 possibly-unlocked). Status counts moved
+applied 9→10, deferred 9→5, measured-no-payoff 3→5, structurally-impossible 7→8.
+The `topology` block now records the new blocks-per-core and the custom-reader
+plan path, and every stale negative closure was re-read and re-stamped.
+
+### Issues encountered
+
+1. **A trid left on the write command buffer hangs the whole grid — in
+   *firmware*, after `kernel_main` returns.** `brisck.cc:91` asserts
+   `ncrisc_noc_packet_tags_cleared`, which reads `NOC_PACKET_TAG` on the WR /
+   WR_REG / AT command buffers. Under `--dev` that ebreaks every core, and the
+   triage shows BRISC at waypoint **NKFW** with the TRISCs merely waiting — it
+   looks nothing like a CB deadlock, and reading the callstack line rather than
+   pattern-matching "hang ⇒ CB bug" is what found it in one pass. The read
+   command buffer is *not* in that check, which is exactly why the reader-side
+   trid had passed cleanly the day before. Fix is the repo idiom
+   (`matmul_expert_compressed_dram.hpp:552`): reset the trid to 0 before exit.
+2. **The refinement's own premise was wrong and had to be re-measured.** The
+   recorded "~35% headroom, A3+B10" rested on the 288 GB/s datasheet peak. One
+   run of the existing `dram_saturation` example showed the practical ceiling is
+   ~192 GB/s and that the op was already at 0.94 of it — which turned the phase
+   from "chase 35%" into "find the 6% that is really there, and prove the rest
+   is not". Checking the target before optimizing against it was the highest-value
+   ten minutes of the phase.
+3. **`test_production_switches_ship_in_their_optimal_state` asserted all-levers-ON**,
+   which a measured-parked lever necessarily violates. Rather than weaken the
+   guard, `PARKED_LEVERS` was added: parking now requires a named entry *and* a
+   measurement in its reason string (the test asserts both), so a parked lever
+   stays a measurement and can never decay into a shrug.
+4. `derive_blocking()` gained a required `tile_h` parameter (the transfer-size
+   floor needs it). Five test call sites were updated rather than giving it a
+   default of 32, which would have silently mis-sized Refinement 5's tiny tiles.
+
+### Tests added
+
+`test_tilize_levers.py` +6 cases (26 → 32): the A3 structural pin swept over 7
+bank counts plus its kernel-side premise (`the reader really does read
+consecutive sticks`), the pipeline knob's blocks-per-core guarantee **and** its
+OFF arm reproducing the Phase-0 rule, the transfer-floor guard swept over
+W = 64…65536, and the B8 two-slot CB precondition. `_bench_tilize.py` +9 arms:
+`pipeline` OFF, the two constant sweeps, `read_trid` / `write_trid` / `both_trid`
+/ `read_vc` / `read_one_packet` / library-reader OFF arms, the split-DM halves,
+the overlap-mechanism matrix, and `pre_r3`. Whole tilize unit directory:
+**181 passed**, green in plain and `--dev` mode.
