@@ -48,10 +48,19 @@ class TtMLP:
         self.down_plan = build_plan(
             device, int(self.w_down.shape[-2]), int(self.w_down.shape[-1]), max_cores=24
         )
-        # gate/up (3072 -> 9216) deliberately keeps the DEFAULT routing: its N is
-        # 288 tiles, so `ttnn.linear` already spreads it well (369 GB/s, the best
-        # of any projection here). Seven core counts were swept for it and every
-        # one lost -- the plan's two reshard ops cost more than they buy.
+        # gate/up (3072 -> 9216) previously kept the DEFAULT routing: its N is 288
+        # tiles, so `ttnn.linear` already spreads it well, and a sweep of seven
+        # core counts lost every time -- "the plan's two reshard ops cost more
+        # than they buy".
+        #
+        # That accounting no longer holds. The norm ahead of this block now emits
+        # its result IN a 48-core width shard, and gate and up read the SAME
+        # activation, so the plan's input reshard is not two ops or even one: it
+        # is zero. What is left is the matmul routing on its own, which is the
+        # part the old sweep could never see separately.
+        self.gate_up_plan = build_plan(
+            device, int(self.w_gate.shape[-2]), int(self.w_gate.shape[-1]), max_cores=48
+        )
 
     @classmethod
     def build(cls, device, torch_module, compute_kernel_config=None):
@@ -89,8 +98,16 @@ class TtMLP:
         # it in, ttnn appends a `unary_chain` op -- the same launch renamed --
         # and naming a core grid to reach the fused path costs far more than the
         # unary did (gate/up 43.35 -> 57.50 ms on the same 96 cores, measured).
-        gate = ttnn.linear(x, self.w_gate, **mm)
-        up = ttnn.linear(x, self.w_up, **mm)
+        if self.gate_up_plan is not None and self.gate_up_plan.matches(x):
+            # ONE shard for both: gate and up read the same activation, so the
+            # conversion is opened once -- and when the norm already emitted
+            # this exact layout it is not opened at all.
+            shared = self.gate_up_plan.shard_input(x)
+            gate = self.gate_up_plan.run_presharded_raw(shared, self.w_gate, self.compute_kernel_config)
+            up = self.gate_up_plan.run_presharded_raw(shared, self.w_up, self.compute_kernel_config)
+        else:
+            gate = ttnn.linear(x, self.w_gate, **mm)
+            up = ttnn.linear(x, self.w_up, **mm)
         swiglu = {"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]}
         if self.down_plan is not None and self.down_plan.is_decode_row(x):
             # The SwiGLU product is down_proj's only consumer, so it is written

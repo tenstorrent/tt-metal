@@ -79,7 +79,9 @@ class TtDecoderLayer:
             cache_pos_tensor=cache_pos_tensor,
         )
         hidden_states = ttnn.add(hidden_states, attn_out)
-        mlp_out = self.mlp(self.post_attn_norm(hidden_states))
+        # Same hand-over as the attention norm above: the MLP's gate/up plan is
+        # built on this norm's core grid, so its shard is the operand they want.
+        mlp_out = self.mlp(self.post_attn_norm(hidden_states, out_sharded=True))
         return ttnn.add(hidden_states, mlp_out)
 
 
