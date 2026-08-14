@@ -28,6 +28,7 @@ run lives in a `python -m tracy` child and an ad-hoc env var does not reach it.
 
     echo 32   > /tmp/rms_norm_dm_chunk      # DM_CHUNK_TILES (tiles per NoC barrier)
     echo 2    > /tmp/rms_norm_in_depth      # IN_CB_DEPTH    (input double buffer)
+    echo 3    > /tmp/rms_norm_out_depth     # OUT_CB_DEPTH   (the writer twin)
     echo 1.46 > /tmp/rms_norm_l1_mb         # L1_SIZE_PER_CORE_FALLBACK, in MB
     echo no_read   > /tmp/rms_norm_ablate   # ablation payload stubs (kernel-side)
     echo no_compute> /tmp/rms_norm_ablate
@@ -74,7 +75,17 @@ def _read(path, cast, default=None):
 DM_CHUNK = _read("/tmp/rms_norm_dm_chunk", int)
 IN_DEPTH = _read("/tmp/rms_norm_in_depth", int)
 L1_MB = _read("/tmp/rms_norm_l1_mb", float)
+OUT_DEPTH = _read("/tmp/rms_norm_out_depth", int)
 ABLATE = _read("/tmp/rms_norm_ablate", str, "none")
+# Fidelity probe: a zero-code compute-cost classifier.  If the wall does not
+# move between LoFi and HiFi4 the shape is not compute-bound.
+_FIDELITY = {
+    "LoFi": ttnn.MathFidelity.LoFi,
+    "HiFi2": ttnn.MathFidelity.HiFi2,
+    "HiFi3": ttnn.MathFidelity.HiFi3,
+    "HiFi4": ttnn.MathFidelity.HiFi4,
+}
+FIDELITY = _FIDELITY[_read("/tmp/rms_norm_fidelity", str, "HiFi2")]
 
 
 @pytest.fixture(autouse=True)
@@ -83,16 +94,18 @@ def knobs(monkeypatch):
         monkeypatch.setitem(PLAN_GLOBALS, "DM_CHUNK_TILES", DM_CHUNK)
     if IN_DEPTH is not None:
         monkeypatch.setitem(PLAN_GLOBALS, "IN_CB_DEPTH", IN_DEPTH)
+    if OUT_DEPTH is not None:
+        monkeypatch.setitem(PLAN_GLOBALS, "OUT_CB_DEPTH", OUT_DEPTH)
     if L1_MB is not None:
         monkeypatch.setitem(PLAN_GLOBALS, "L1_SIZE_PER_CORE_FALLBACK", int(L1_MB * 1024 * 1024))
     if ABLATE != "none":
         monkeypatch.setitem(PLAN_GLOBALS, "ABLATE", ABLATE)
-    return (DM_CHUNK, IN_DEPTH, L1_MB, ABLATE)
+    return (DM_CHUNK, IN_DEPTH, OUT_DEPTH, L1_MB, ABLATE)
 
 
 def target_compute_config():
     return ttnn.ComputeConfigDescriptor(
-        math_fidelity=TARGET_FIDELITY,
+        math_fidelity=FIDELITY,
         fp32_dest_acc_en=TARGET_FP32_ACC,
         math_approx_mode=False,
     )
@@ -117,7 +130,7 @@ def test_rms_norm_perf_prefill(device, shape, achievable_ns, knobs):
 
     out = ttnn.to_torch(rms_norm(x, gamma=gamma, compute_kernel_config=target_compute_config())).to(torch.float32)
 
-    if ABLATE != "none":
+    if ABLATE != "none" or FIDELITY is not TARGET_FIDELITY:
         return  # payload stubbed: the numbers are meaningless, only the ns matter
 
     xf = torch_x.to(torch.float32)

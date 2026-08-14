@@ -92,6 +92,12 @@ void kernel_main() {
     // waiting the full window is what makes get_write_ptr() == get_read_ptr()
     // (and therefore the in-place rewrite of x) correct for block_rows < shard_rows.
     constexpr uint32_t IN_WAIT_TILES = get_compile_time_arg_val(6);
+    // cb_input_tiles' whole CAPACITY in pages — what the in-place pack index is
+    // taken modulo.  Equal to IN_WAIT_TILES on every path where the CB holds
+    // exactly the live window; larger when the CB is a resident shard (Refinement
+    // 2) or a double-buffered input (IN_CB_DEPTH > 1).  Always a whole multiple of
+    // BLOCK_TILES, so the read window never wraps mid-block.
+    constexpr uint32_t IN_CAPACITY_TILES = get_compile_time_arg_val(7);
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
 
@@ -194,11 +200,11 @@ void kernel_main() {
         // pointer forward.  When the CB's capacity is exactly one block
         // (interleaved, and TILE+sharded at the default block_rows == shard_rows)
         // the read pointer wraps back to base every block and this is 0.  When the
-        // CB is bound to a whole resident shard AND the L1 solve had to cut
-        // block_rows below shard_rows, it is the block's page offset into that
-        // shard — without it every block after the first would rewrite block 0's
-        // pages and silently drop its own scale factor.
-        const uint32_t pack_base = (block * BLOCK_TILES) % IN_WAIT_TILES;
+        // CB is bound to a whole resident shard, or double-buffered (IN_CB_DEPTH
+        // > 1), it is the block's page offset into that capacity — without it
+        // every block after the first would rewrite block 0's pages and silently
+        // drop its own scale factor.
+        const uint32_t pack_base = (block * BLOCK_TILES) % IN_CAPACITY_TILES;
         // ---- tilize_block (ROW_MAJOR only) ----
         if constexpr (IS_ROW_MAJOR) {
             ckl::tilize<SLICE_HIDDEN_TILES, cb_rm_stage_in, cb_input_tiles>(BLOCK_ROWS);

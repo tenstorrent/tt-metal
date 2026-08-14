@@ -10,7 +10,9 @@ parameter here, defined exactly ONCE and derived from downstream:
     NUM_HIDDEN_SLICES     (s)  — cores splitting the reduced (hidden) axis inside a rect
     SLICE_HIDDEN_TILES    (S)  — the hidden block extent = the whole slice
     BLOCK_ROWS            (B)  — the row block extent (coarsest that fits L1)
-    OUT_CB_DEPTH / RM_IN_DEPTH / RM_OUT_DEPTH — buffer-depth knobs
+    IN_CB_DEPTH / OUT_CB_DEPTH / RM_IN_DEPTH / RM_OUT_DEPTH — buffer-depth knobs
+                               (IN_CB_DEPTH co-solves with BLOCK_ROWS in one
+                                L1 ladder — see the knob's comment)
     HIDDEN_TILES_PER_CORE_FLOOR — hidden-granularity floor (bounds S from below)
     FANIN_BALANCE_K       — combine fan-in balance (bounds s from above)
     DM_CHUNK_TILES        — NoC tiles per barrier (reader AND writer)
@@ -66,16 +68,63 @@ def _fanin_slice_cap(hidden_tiles: int) -> int:
 OUT_CB_DEPTH = 2  # cb_output_tiles double buffer (2.78x overlap, double_buffer/report.md)
 RM_IN_DEPTH = 2  # cb_rm_stage_in  tile-row window
 RM_OUT_DEPTH = 2  # cb_rm_stage_out tile-row window
-IN_CB_DEPTH = 1  # cb_input_tiles: exactly one block resident (in-place rewrite needs wr==rd)
-DM_CHUNK_TILES = 8  # tiles per NoC barrier, reader and writer alike (the ROW_MAJOR
-# kernels convert this byte budget into sticks — see RM_CHUNK_STICKS there)
 
-# IN_CB_DEPTH is load-bearing at 1, not a free knob: the two in-place rewrites of x
-# (mask_tail_block, scale_block) rely on get_write_ptr() == get_read_ptr(), which only
-# holds when cb_input_tiles' capacity is EXACTLY the live block.  Turning it to 2 would
-# silently write x*r into the wrong half.  The overlap perf lamp must therefore be
-# measured as "smaller block_rows + a second buffer", never "same block, deeper CB".
-assert IN_CB_DEPTH == 1, "cb_input_tiles must be exactly one block deep (in-place rewrite)"
+# cb_input_tiles depth — the design's OVERLAP perf lamp, now a live knob.
+#
+# Phase 0 asserted this at 1 because the two in-place rewrites of x
+# (mask_tail_block, scale_block) pack at `get_write_ptr(cb) + i*page`, and a
+# compute thread that never pushes cb_input_tiles keeps its write pointer at the
+# CB BASE for the kernel's life — so a deeper CB would have written x*r into the
+# wrong half once the read window moved off base.
+#
+# Refinement 2 removed that coupling for the sharded path (`pack_base`, a runtime
+# offset measured from the CB base) and Refinement 4 generalizes it: the pack
+# index is `(block * BLOCK_TILES) % IN_CAPACITY_TILES`, which tracks the read
+# window through a CB of ANY whole-block-multiple capacity.  So depth > 1 is now
+# expressible, and the lamp is measurable in its correct form — "smaller
+# block_rows + a SECOND input buffer", never "same block, deeper CB" (a deeper CB
+# at the same block gives the reader nothing to prefetch INTO: with
+# num_blocks == 1 there is no block b+1).  When IN_CB_DEPTH > 1 the row block is
+# therefore capped so a core owns at least IN_CB_DEPTH blocks, and the ladder in
+# `_plan` skips the rung entirely when it does not.
+#
+# MEASURED on the interleaved prefill profile (median of 3 fresh runs each,
+# Blackhole p150b, target config, at DM_CHUNK_TILES = 32):
+#     shape             depth 1   depth 2
+#     (1,1,8192,1024)     91004     87836   -3.5%
+#     (1,1,8192,2304)    198987    190696   -4.2%
+#     (1,1,8192,5120)    411580    398782   -3.1%
+#     (1,1,8192,7168)    561649    562318   +0.1%  (L1 cannot afford the second
+#                                                   buffer -> ladder degrades to 1,
+#                                                   so this row is the SAME program)
+# The whole decode regime is one tile-row per core (max_rows_full == 1), so the
+# guard above keeps it byte-identical to Refinement 3.
+#
+# A note on why the ladder degrades instead of forcing the rung: taking the
+# second buffer by *coarsening past the budget* is a measured LOSS.  Widening
+# l1_working_budget to the part's real 1.46 MB (which coarsens block_rows) cost
+# +5.7% on (1,1,8192,5120) and +3.7% on (1,1,8192,7168) at depth 1 — a coarser
+# block means a LONGER fully-serial read before compute starts, which is the
+# opposite of what this profile wants.
+IN_CB_DEPTH = 2
+
+# Tiles per NoC barrier, reader AND writer alike (the ROW_MAJOR kernels convert
+# this byte budget into sticks — see RM_CHUNK_STICKS there).  This bounds the
+# bytes a core keeps IN FLIGHT: the reader issues this many page reads before it
+# blocks on `noc_async_read_barrier`, so a small value drains the NoC to empty
+# once per chunk and pays the DRAM round-trip latency serially.
+#
+# MEASURED on the interleaved prefill profile (Blackhole p150b, target config,
+# device kernel ns, one fresh run per point):
+#     DM_CHUNK_TILES     8      16      32      64     128
+#     (1,1,8192,1024)  91787   92650   90320   90321   88619
+#     (1,1,8192,2304) 206450  204793  198736  197887  194713
+#     (1,1,8192,5120) 432974  418844  403463  412640  412017
+#     (1,1,8192,7168) 580019  557670  559316  551158  561972
+# 32 is the first value at the plateau and the only one that wins on every row;
+# beyond it the rows disagree inside noise.  The decode regime is untouched: a
+# decode block is 4-7 tiles, so it never reaches even the old chunk.
+DM_CHUNK_TILES = 32
 
 # L1 budget. `l1_size_per_core()` is not bound to Python; the fallback is a
 # single named constant (conservative for WH/BH, both >= 1.4 MB usable).
@@ -206,9 +255,9 @@ def _tile_geometry(input_tensor):
 # ---------------------------------------------------------------------------
 
 
-def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_gamma, bytes_):
+def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_gamma, bytes_, in_depth=1):
     b, s_, s = block_rows, slice_tiles, num_slices
-    total = b * s_ * bytes_["in_tile"] * IN_CB_DEPTH  # cb_input_tiles
+    total = b * s_ * bytes_["in_tile"] * in_depth  # cb_input_tiles
     if has_gamma:
         total += s_ * bytes_["gamma_tile"]  # cb_gamma_tiles
     total += b * bytes_["stat_tile"]  # cb_sq_partials
@@ -247,7 +296,11 @@ def _footprint_bytes_sharded(
     b, s_, s = block_rows, slice_tiles, num_slices
     total = 0
     if is_row_major:
-        total += b * s_ * bytes_["in_tile"] * IN_CB_DEPTH  # cb_input_tiles (tilize target)
+        # cb_input_tiles here is tilize's COMPUTE-side target, fed from the resident
+        # shard through cb_rm_stage_in — no reader fills it, so the input-depth knob
+        # does not apply (the staging CB carries its own rm_in_depth).  `_plan_sharded`
+        # returns in_depth = 1 to match.
+        total += b * s_ * bytes_["in_tile"]  # cb_input_tiles (tilize target)
         total += rm_in_depth * s_ * bytes_["in_tile"]  # cb_rm_stage_in
         total += rm_out_depth * s_ * bytes_["out_tile"]  # cb_rm_stage_out
     if has_gamma:
@@ -384,6 +437,7 @@ def _plan_sharded(device, input_tensor, *, has_gamma, bytes_):
         "num_hidden_slices": num_hidden_slices,
         "slice_hidden_tiles": slice_tiles,
         "block_rows": block_rows,
+        "in_depth": 1,
         "rect_w": 0,
         "rect_h": 0,
         "rm_in_depth": rm_in_depth,
@@ -447,14 +501,56 @@ def _plan(device, input_tensor, *, has_gamma, bytes_):
 
     _score, num_row_groups, num_hidden_slices, slice_tiles, rect_w, rect_h = best
 
-    # Coarsest row block that fits: default = the whole per-core assignment.
+    # ---- the block/depth ladder ------------------------------------------------
+    # Two knobs trade against each other inside ONE L1 budget, which is why they
+    # are solved together rather than one after the other:
+    #
+    #   block_rows  — coarser is fewer fixed costs (one init set, one combine
+    #                 round-trip, one fill/drain per block).
+    #   in_depth    — a SECOND input buffer, so the reader can fill block b+1
+    #                 while compute works on block b.  Worth nothing unless the
+    #                 block is small enough that a core owns at least `depth` of
+    #                 them, hence the cap below: this is the design's overlap lamp
+    #                 in its stated form, "smaller block_rows + a second buffer",
+    #                 never "same block, deeper CB".
+    #
+    # The ladder prefers the deeper buffer and degrades to the coarsest single
+    # block when L1 cannot afford it — the same shape as `_plan_sharded`'s
+    # rm-depth ladder.  ROW_MAJOR never takes a rung above 1: there the reader
+    # fills `cb_rm_stage_in` (which has its OWN depth knob) and `cb_input_tiles`
+    # is tilize's compute-side target, so a second one would overlap nothing.
     base, rem = divmod(row_tiles, num_row_groups)
-    max_rows = base + (1 if rem else 0)
-    block_rows = max_rows
-    while block_rows > 1 and _footprint_bytes(
-        block_rows, slice_tiles, num_hidden_slices, is_row_major=is_row_major, has_gamma=has_gamma, bytes_=bytes_
-    ) > _l1_working_budget(device):
-        block_rows -= 1
+    max_rows_full = base + (1 if rem else 0)
+    budget = _l1_working_budget(device)
+
+    def _fits_depth(b, depth):
+        return (
+            _footprint_bytes(
+                b,
+                slice_tiles,
+                num_hidden_slices,
+                is_row_major=is_row_major,
+                has_gamma=has_gamma,
+                bytes_=bytes_,
+                in_depth=depth,
+            )
+            <= budget
+        )
+
+    ladder = (1,) if is_row_major else tuple(range(IN_CB_DEPTH, 0, -1))
+    block_rows, in_depth = 1, 1  # nothing fits => the smallest configuration
+    for depth in ladder:
+        # A core that owns fewer than `depth` blocks has no block b+1 to prefetch,
+        # so the extra buffer would be pure L1 with no overlap.  This is what keeps
+        # the whole DECODE regime (one tile-row per core => max_rows_full == 1)
+        # byte-identical to Refinement 3.
+        if depth > 1 and max_rows_full < depth:
+            continue
+        cap = max(1, _div_up(max_rows_full, depth)) if depth > 1 else max_rows_full
+        chosen = next((b for b in range(cap, 0, -1) if _fits_depth(b, depth)), 0)
+        if chosen:
+            block_rows, in_depth = chosen, depth
+            break
 
     return {
         "grid": (gx, gy),
@@ -464,6 +560,7 @@ def _plan(device, input_tensor, *, has_gamma, bytes_):
         "num_hidden_slices": num_hidden_slices,
         "slice_hidden_tiles": slice_tiles,
         "block_rows": block_rows,
+        "in_depth": in_depth,
         "rect_w": rect_w,
         "rect_h": rect_h,
         "rm_in_depth": RM_IN_DEPTH,
@@ -515,6 +612,7 @@ def create_program_descriptor(
     S_COUNT = plan["num_hidden_slices"]
     S = plan["slice_hidden_tiles"]
     B = plan["block_rows"]
+    in_depth = plan["in_depth"]
     rect_w, rect_h = plan["rect_w"], plan["rect_h"]
     sharded = plan["sharded"]
     shard_rows = plan["shard_rows"]
@@ -686,14 +784,14 @@ def create_program_descriptor(
         if is_row_major:
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_SHARD_IN, input_tensor))
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_SHARD_OUT, output_tensor))
-            cbs.append(_cb(CB_INPUT_TILES, IN_CB_DEPTH * B * S, in_tile, input_tensor.dtype))
+            cbs.append(_cb(CB_INPUT_TILES, B * S, in_tile, input_tensor.dtype))
         else:
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_TILES, input_tensor))
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor))
     else:
         # capacity == live set exactly: the in-place rewrite of x needs
         # get_write_ptr == get_read_ptr, which only holds at a full CB.
-        cbs.append(_cb(CB_INPUT_TILES, IN_CB_DEPTH * B * S, in_tile, input_tensor.dtype))
+        cbs.append(_cb(CB_INPUT_TILES, in_depth * B * S, in_tile, input_tensor.dtype))
         if not is_row_major:
             cbs.append(_cb(CB_OUTPUT_TILES, OUT_CB_DEPTH * S, out_tile, output_tensor.dtype))
 
@@ -720,12 +818,23 @@ def create_program_descriptor(
         cbs.append(_cb(CB_RM_STAGE_OUT, rm_out_depth * S, out_tile, output_tensor.dtype))
 
     # ---- compile-time args ----
-    # A TILE shard is consumed in place, so cb_input_tiles' capacity is the WHOLE
-    # resident shard rather than one block.  Compute therefore waits on the full
-    # shard window (the reader keeps the CB exactly full at every block boundary),
-    # which is what preserves get_write_ptr() == get_read_ptr() for the in-place
-    # rewrite when the L1 solve forces block_rows < shard_rows.
+    # Two DIFFERENT numbers, and conflating them is what pinned IN_CB_DEPTH at 1:
+    #
+    #   in_wait_tiles     — how many pages compute holds at once (its wait count).
+    #   in_capacity_tiles — cb_input_tiles' whole capacity, which is what the
+    #                       in-place pack index is taken MODULO, because a pack
+    #                       lands at `CB base + index*page` and the read window
+    #                       walks the capacity in BLOCK_TILES steps.
+    #
+    # They coincide on every path except (a) TILE + sharded, where the CB IS the
+    # caller's resident shard and compute waits the full shard window so the
+    # reader can keep it exactly full at every block boundary, and (b) a
+    # double-buffered input, where capacity is IN_CB_DEPTH blocks but compute
+    # still waits exactly one.  Capacity is always a whole multiple of BLOCK_TILES
+    # (a shard's block_rows is a divisor of shard_rows), so the read pointer never
+    # wraps mid-block and `% in_capacity_tiles` is exact.
     in_wait_tiles = shard_tiles if (sharded and not is_row_major) else (B * S)
+    in_capacity_tiles = shard_tiles if (sharded and not is_row_major) else (in_depth * B * S)
     in_shard_page = input_tensor.buffer_aligned_page_size() if sharded else 0
     out_shard_page = output_tensor.buffer_aligned_page_size() if sharded else 0
 
@@ -750,6 +859,7 @@ def create_program_descriptor(
         in_wait_tiles,
         in_shard_page,
         1 if gamma_row0_only else 0,
+        in_capacity_tiles,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -782,6 +892,7 @@ def create_program_descriptor(
         1 if is_row_major else 0,
         1 if mask_enabled else 0,
         in_wait_tiles,
+        in_capacity_tiles,
     ]
 
     # ---- per-core runtime args ----

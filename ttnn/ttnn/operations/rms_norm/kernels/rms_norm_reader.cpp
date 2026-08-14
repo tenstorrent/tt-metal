@@ -115,7 +115,13 @@ void kernel_main() {
     // Host-gated off for block-float gamma, whose tile carries a shared-exponent
     // header that a partial read would leave behind.
     constexpr uint32_t GAMMA_ROW0_ONLY = get_compile_time_arg_val(CT + 19);
-    constexpr auto in_args = TensorAccessorArgs<CT + 20>();
+    // cb_input_tiles' whole CAPACITY in pages, which is IN_WAIT_TILES only when
+    // the CB holds exactly the live window.  A double-buffered input (IN_CB_DEPTH
+    // > 1) makes it a multiple of the block, and the boot-time zero-fill of the
+    // ragged hidden tail must cover ALL of it — every buffer is written by some
+    // later block, and those tail columns are never touched again.
+    constexpr uint32_t IN_CAPACITY_TILES = get_compile_time_arg_val(CT + 20);
+    constexpr auto in_args = TensorAccessorArgs<CT + 21>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
@@ -340,8 +346,12 @@ void kernel_main() {
         cb_reserve_back(cb_input_tiles, IN_WAIT_TILES);
         cb_push_back(cb_input_tiles, IN_WAIT_TILES);
     } else if (valid_tiles < SLICE_HIDDEN_TILES) {
+        // Every tile-row slot of the WHOLE capacity, not just the first block:
+        // with IN_CB_DEPTH > 1 the reader alternates between buffers and the tail
+        // columns of both must be zero before Sum(x^2) ever folds them in.
+        constexpr uint32_t IN_CAPACITY_ROWS = IN_CAPACITY_TILES / SLICE_HIDDEN_TILES;
         const uint32_t pad_bytes = (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES;
-        for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
+        for (uint32_t r = 0; r < IN_CAPACITY_ROWS; ++r) {
             noc.async_write_zeros(
                 cb_input_obj, pad_bytes, {.offset_bytes = (r * SLICE_HIDDEN_TILES + valid_tiles) * IN_TILE_BYTES});
         }
