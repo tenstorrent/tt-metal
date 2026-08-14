@@ -11,19 +11,33 @@ the experiment, the sharp edges of operating it, and what is not yet known.
 
 ## State
 
-> **Blocked as of 2026-08-13: the generator token needs SAML SSO re-authorization.** Every mode --
-> baseline, build and verify -- checks out `tenstorrent/tt-dm-codegen`, and that checkout now fails:
->
->     remote: The 'tenstorrent' organization has enabled or enforced SAML SSO.
->     fatal: unable to access 'https://github.com/tenstorrent/tt-dm-codegen/': HTTP 403
->
-> Nothing in the harness can route around it and no run of any kind will get past it. `CODEGEN_REPO_TOKEN`
-> has to be authorized for the `tenstorrent` organization at the SSO URL GitHub prints in that error, or
-> reissued and authorized. It is not a scope problem and not a rotation the pipeline can detect in
-> advance. First seen in run
-> [31736836951](https://github.com/tenstorrent/tt-metal/actions/runs/31736836951), which was verifying
-> two hand-fixed translation defects in `untilize` and would otherwise have been the first graded
-> verdict on real translation work.
+**`untilize` is finished, and not by this harness.** It merged on 2026-08-14 as
+[#50178](https://github.com/tenstorrent/tt-metal/pull/50178), which the generator's own
+`history/vision.md` records as the original Python orchestrator's `--rescope` re-drive. So the op this
+harness spent a week on is now in `main`, `ebanerjee/port-untilize` is retired, and the 76 cases it
+still failed are not worth another minute -- see the pin section below for what they were actually
+telling us.
+
+**The target is now `tilize`, on `ebanerjee/port-tilize`, with the harness on
+`ebanerjee/port-harness`.** Both branch off current `main`; the harness has never been merged and does
+not need to be. `tilize` was chosen over the simpler `move` because it is `untilize`'s mirror, so the
+merged port is the closest structural reference that will ever exist, and because it already has an
+open PR from the original pipeline, [#51919](https://github.com/tenstorrent/tt-metal/pull/51919). That
+PR is an independent oracle: when this harness produces a `tilize` port, the two can be diffed, which
+is a far better measure of the harness than its own pass/fail.
+
+Every manifest op except `move` carries a `ported_codegen_commit`, which the manifest contract says is
+stamped only when an op ships through phase 8. So the original pipeline has shipped all of them, and
+this harness is not racing to port ops nobody has ported -- it is a reimplementation of that pipeline
+as a GitHub Agentic Workflow, and comparing outputs is available for every op it will ever attempt.
+
+Keep in mind when reading everything below: **the generator token's SAML SSO authorization lapses.**
+Every mode checks out `tenstorrent/tt-dm-codegen`, and when it lapses that checkout fails with
+`The 'tenstorrent' organization has enabled or enforced SAML SSO` and HTTP 403. Nothing in the harness
+can route around it and no run of any kind gets past it; `CODEGEN_REPO_TOKEN` has to be re-authorized
+at the SSO URL GitHub prints in the error. It is not a scope problem and not something the pipeline can
+detect in advance. It cost run
+[31736836951](https://github.com/tenstorrent/tt-metal/actions/runs/31736836951) a day.
 
 The harness has produced one real result: a draft PR porting `ttnn.pad`'s codegen builder, from the
 `ebanerjee/port-op-dryrun` branch. Everything after that PR was hardening, driven by what was wrong
@@ -175,12 +189,19 @@ The name `dispatch.py` is a small lie, and the mechanism is worth understanding 
 either workflow, because the obvious design does not work and this one is not obvious.
 
 `port-measure.yaml` triggers on pushes to `port-op-scratch/**`. The launcher has to push the code
-under test regardless, so that push doubles as the trigger. The reason it is not `workflow_dispatch`
-is that `workflow_dispatch` only fires for workflow files that are **already on the default branch**
--- so the dispatch design could not be exercised at all without first merging it, which is a poor
-way to prototype a pipeline. A `push` event has no such rule: it runs the workflow exactly as it
-exists in the commit that was pushed. Nothing about this pipeline needs to reach `main` to work,
-including `port-measure.yaml` itself.
+under test regardless, so that push doubles as the trigger, and it carries the payload in the commit
+message. Nothing about this pipeline needs to reach `main` to work, including `port-measure.yaml`
+itself.
+
+That last sentence used to be justified by a belief that `workflow_dispatch` only fires for workflow
+files already on the default branch. **That belief was wrong, and it is worth knowing why it looked
+right.** Run [31744036323](https://github.com/tenstorrent/tt-metal/actions/runs/31744036323) appeared
+to run a stale definition from a branch, and `main` has no port workflow at all, so dispatch seemed to
+be ignoring the ref. What actually happened is in its `headSha`: `3afb236207d`, the commit *before* the
+fix under test, created 15 seconds after that fix was committed. The dispatch raced the push, GitHub
+resolved the branch to the tip it knew, and an entire agent run was spent proving the old code still
+failed. `workflow_dispatch --ref <branch>` does run the file from that branch. Confirm
+`git rev-parse origin/<branch>` matches local HEAD before dispatching and this cannot recur.
 
 Three things follow, and each has bitten or would have:
 
@@ -290,6 +311,65 @@ Worth knowing, because it means these paths are no longer speculative:
 - `ttnn.untilize` has no golden, so the golden check warns and passes, as designed.
 - A cold build on CIv2 takes about 12 minutes, so a failed run costs roughly 25 minutes to reach the
   same point again. It is worth reading ahead for the next failure rather than fixing one at a time.
+
+## Two things the ledger and the generator were quietly getting wrong
+
+Both were found on 2026-08-14 while sizing `tilize` before spending device time on it, and both had
+been silently wrong for the whole `untilize` effort.
+
+### A port is a transliteration of one generator commit, and the pin has to say which
+
+`PORT_CODEGEN_REF` named `codegen_agentic_port`, a branch. Read fresh on every attempt, a resumed run
+vendors kernels from a generator newer than the host code the previous attempt was written against.
+
+This is what the `untilize` failures were. `untilize.yaml` records `ported_codegen_commit: 7f2930ff`,
+and main's merged `writer_untilize_interleaved.cpp` reads three compile-time args and includes no
+`rm_shard_split.h`. The same template on today's branch takes a shard-split contract wanting that
+header and two further arguments. The port had one foot in each, which compiles, routes, and writes
+uncorrelated data on 76 of 112 cases -- and for a day it read as a kernel bug, because nothing in the
+harness could say which generator the port was a transliteration of.
+
+The pin now travels in the branch's own commit trailer, read before the generator checkout so the
+checkout takes it. Attempt 1 has no trailer and establishes the pin by recording what its floating ref
+resolved to. Only a full sha counts, so a branch published by the older harness -- whose trailer holds
+the branch *name* -- correctly reads as unpinned rather than silently resolving to today's tip.
+
+### The sweep grid was a different grid every time it was expanded
+
+Upstream suites build their shapes with `gen_shapes(start, end, interval, num_samples)`, which draws
+each shape with `random.randint`, unseeded, while `parameters` is evaluated at import. The *count* is
+stable, because the try budget is ten times the sample count. The shapes are not, and `case_id` is the
+point's position in the grid.
+
+So two expansions agreed on every identifier and disagreed about which tensor each one named, and three
+things were standing on that:
+
+- The prototype pass set and the correctness band are separate `measure.py` processes in the same job,
+  neither handed a ledger. `codegen_untilize[57]` passing in the pass set excused a port failure on a
+  different shape entirely -- a confident, wrong attribution, in the one place whose comment promises
+  the only safe way to be wrong is too harsh.
+- The no-progress chain stop compared this attempt's failing count against the last one's, which were
+  two counts over two different case sets.
+- `measure.prototype_key`'s `ledger_sig` hashes the case ids, so it could not notice any of it.
+
+`ledger.py` now seeds per op before the import. The existing "expansion is deterministic" test could
+never have caught this, because its fake grid holds literal shapes; the replacement redraws on every
+access the way an import does, and was checked to fail when the seed is removed.
+
+### While in there: the input memory config is not an axis anything measures
+
+`_signature` deduplicates on `[shape, dtype, layout, kwargs]`, and `kwargs` comes from the manifest's
+`vector_map`, which for both `untilize` and `tilize` maps only the *output* memory config. The sweeps
+vary `input_a_memory_config` across DRAM and L1, so the ledger collapses that axis by half -- correctly,
+because `measure.make_input` passes no `memory_config` at all and every input lands in the default. The
+collapse is honest; the gap behind it is real. **No op is measured with an L1-resident input**, and the
+DRAM/L1 columns in every perf table so far are output configs. Fixing it means teaching `make_input`
+the input config and roughly doubling the ledger, which is why it is written down rather than done.
+
+It also means `tilize`'s ledger is about 166 cases -- 96 nightly, 16 `codegen_dtype`, 54
+`broaden_suite` -- against `untilize`'s 184, and not the 332 the raw grid suggests. So no cap is needed,
+and capping would have been the wrong instinct anyway: the correctness and prototype bands are uncapped
+on purpose, and a partial prototype pass set cannot attribute a failure to the generator.
 
 ## Checkout was the slowest thing in the pipeline, and it is not our fault
 
