@@ -29,6 +29,40 @@ def _kernel_source(name):
     return (KERNEL_DIR / name).read_text()
 
 
+def test_production_switches_ship_in_their_optimal_state():
+    """Every lever ON, every classification ablation OFF — the shipped config.
+
+    `LEVERS` / `ABLATE` are module-level dicts the bench mutates to build the
+    counterfactual arms. Production must be the all-ON / all-OFF corner: an
+    ablated arm produces deliberately WRONG output, and an OFF lever ships a
+    measured-slower kernel. Pin the defaults so a stray edit (or a bench arm
+    left behind in the file) cannot become the shipped behaviour.
+    """
+    assert pd.ABLATE == {"compute": 0, "dm": 0}, f"classification ablation is live: {pd.ABLATE}"
+    off = {name: value for name, value in pd.LEVERS.items() if value != 1}
+    assert not off, f"lever(s) shipped in their OFF (counterfactual) arm: {off}"
+
+
+def test_cb_geometry_has_a_single_source():
+    """The CB page/byte formula lives once, in cb_pages()/cb_bytes().
+
+    Every consumer — the L1 ceiling inside derive_blocking(), the depth-2
+    fallback, and both CBDescriptor sizes — reads those two functions, so
+    turning CB_DEPTH / NT_BLK / WT_CHUNK lands in exactly one place. Pinned
+    because a restated formula silently drops a knob (NT_BLK did, before it was
+    routed through cb_bytes()).
+    """
+    assert pd.cb_pages(2, 8) == 2 * pd.NT_BLK * 8
+    assert pd.cb_bytes(2, 8, 2048, 2048) == pd.cb_pages(2, 8) * (2048 + 2048)
+    # the L1 ceiling must scale with NT_BLK: a per-tile-column cost that ignored
+    # it would let a raised NT_BLK overflow the budget it was checked against.
+    assert pd.cb_bytes(2, 1, 2048, 2048) == 2 * pd.NT_BLK * 4096
+
+    source = Path(pd.__file__).read_text()
+    body = source.split("def create_program_descriptor")[1]
+    assert "cb_depth * NT_BLK" not in body, "CB page formula restated outside cb_pages()"
+
+
 def test_b12_multicast_is_structurally_absent():
     """B12 (multicast): no operand is read by more than one core, ever.
 

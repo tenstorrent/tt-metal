@@ -1,0 +1,975 @@
+{
+ "note": "Trimmed for the repo's 500 KB file limit: `by_category` keeps the first 10 cells per category plus per-category axis-value histograms and, for xfail_expected, the blocking-axis breakdown. The untrimmed report (1.2 MB, every nodeid + axes dict) is written by `python3 -m eval.verify_supported <results_dir> ttnn.operations.tilize --output <results_dir>/verifier_report.json` and lives in the eval results dir.",
+ "summary": {
+  "total": 1889,
+  "supported_pass": 102,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 246,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 24,
+  "invalid_skipped": 568,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 949
+ },
+ "counts_by_category": {
+  "supported_pass": 102,
+  "invalid_skipped": 568,
+  "xfail_expected": 246,
+  "xfail_other": 24,
+  "no_axes_found": 949
+ },
+ "xfail_expected_blocking_axes": {
+  "orientation=ROW_MAJOR & out_scheme=HEIGHT_SHARDED & shard_api=legacy_2d": 30,
+  "<inside SUPPORTED: matched an EXCLUSION>": 30,
+  "orientation=ROW_MAJOR & out_scheme=nd & shard_api=nd": 24,
+  "dtype=UINT32 & output_dtype=UINT32": 20,
+  "dtype=UINT8 & output_dtype=UINT8": 20,
+  "orientation=ROW_MAJOR & shard_api=legacy_2d": 12,
+  "orientation=ROW_MAJOR & out_scheme=WIDTH_SHARDED & shard_api=legacy_2d": 6,
+  "orientation=COL_MAJOR & out_scheme=BLOCK_SHARDED & shard_api=legacy_2d": 6,
+  "rank=0": 6,
+  "orientation=ROW_MAJOR & shard_api=nd": 6,
+  "orientation=ROW_MAJOR & out_scheme=HEIGHT_SHARDED & shard_api=nd": 6,
+  "orientation=ROW_MAJOR & out_scheme=nd & shard_api=legacy_2d": 6,
+  "tile_height=16": 6,
+  "tile_height=1": 6,
+  "orientation=ROW_MAJOR & out_scheme=WIDTH_SHARDED & shard_api=legacy_2d & tile_height=8": 6,
+  "orientation=COL_MAJOR & out_scheme=HEIGHT_SHARDED & shard_api=legacy_2d": 6,
+  "orientation=COL_MAJOR & out_scheme=WIDTH_SHARDED & shard_api=legacy_2d": 6,
+  "dtype=UINT32 & orientation=ROW_MAJOR & out_scheme=HEIGHT_SHARDED & output_dtype=UINT32 & shard_api=legacy_2d": 5,
+  "dtype=UINT8 & orientation=ROW_MAJOR & out_scheme=HEIGHT_SHARDED & output_dtype=UINT8 & shard_api=legacy_2d": 5,
+  "dtype=UINT32 & orientation=ROW_MAJOR & out_scheme=nd & output_dtype=UINT32 & shard_api=nd": 4,
+  "dtype=UINT8 & orientation=ROW_MAJOR & out_scheme=nd & output_dtype=UINT8 & shard_api=nd": 4,
+  "dtype=UINT32 & orientation=ROW_MAJOR & output_dtype=UINT32 & shard_api=legacy_2d": 2,
+  "dtype=UINT8 & orientation=ROW_MAJOR & output_dtype=UINT8 & shard_api=legacy_2d": 2,
+  "dtype=UINT32 & orientation=ROW_MAJOR & out_scheme=WIDTH_SHARDED & output_dtype=UINT32 & shard_api=legacy_2d": 1,
+  "dtype=UINT8 & orientation=ROW_MAJOR & out_scheme=WIDTH_SHARDED & output_dtype=UINT8 & shard_api=legacy_2d": 1,
+  "dtype=UINT32 & orientation=COL_MAJOR & out_scheme=BLOCK_SHARDED & output_dtype=UINT32 & shard_api=legacy_2d": 1,
+  "dtype=UINT8 & orientation=COL_MAJOR & out_scheme=BLOCK_SHARDED & output_dtype=UINT8 & shard_api=legacy_2d": 1,
+  "dtype=UINT32 & output_dtype=UINT32 & rank=0": 1,
+  "dtype=UINT8 & output_dtype=UINT8 & rank=0": 1,
+  "dtype=UINT32 & orientation=ROW_MAJOR & output_dtype=UINT32 & shard_api=nd": 1,
+  "dtype=UINT8 & orientation=ROW_MAJOR & output_dtype=UINT8 & shard_api=nd": 1,
+  "dtype=UINT32 & orientation=ROW_MAJOR & out_scheme=HEIGHT_SHARDED & output_dtype=UINT32 & shard_api=nd": 1,
+  "dtype=UINT8 & orientation=ROW_MAJOR & out_scheme=HEIGHT_SHARDED & output_dtype=UINT8 & shard_api=nd": 1,
+  "dtype=UINT32 & orientation=ROW_MAJOR & out_scheme=nd & output_dtype=UINT32 & shard_api=legacy_2d": 1,
+  "dtype=UINT8 & orientation=ROW_MAJOR & out_scheme=nd & output_dtype=UINT8 & shard_api=legacy_2d": 1,
+  "dtype=UINT32 & output_dtype=UINT32 & tile_height=16": 1,
+  "dtype=UINT8 & output_dtype=UINT8 & tile_height=16": 1,
+  "dtype=UINT32 & output_dtype=UINT32 & tile_height=1": 1,
+  "dtype=UINT8 & output_dtype=UINT8 & tile_height=1": 1,
+  "dtype=UINT32 & orientation=ROW_MAJOR & out_scheme=WIDTH_SHARDED & output_dtype=UINT32 & shard_api=legacy_2d & tile_height=8": 1,
+  "dtype=UINT8 & orientation=ROW_MAJOR & out_scheme=WIDTH_SHARDED & output_dtype=UINT8 & shard_api=legacy_2d & tile_height=8": 1,
+  "dtype=UINT32 & orientation=COL_MAJOR & out_scheme=HEIGHT_SHARDED & output_dtype=UINT32 & shard_api=legacy_2d": 1,
+  "dtype=UINT8 & orientation=COL_MAJOR & out_scheme=HEIGHT_SHARDED & output_dtype=UINT8 & shard_api=legacy_2d": 1,
+  "dtype=UINT32 & orientation=COL_MAJOR & out_scheme=WIDTH_SHARDED & output_dtype=UINT32 & shard_api=legacy_2d": 1,
+  "dtype=UINT8 & orientation=COL_MAJOR & out_scheme=WIDTH_SHARDED & output_dtype=UINT8 & shard_api=legacy_2d": 1
+ },
+ "by_category": {
+  "supported_pass": [
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "FLOAT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT8_B-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT8_B",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "FLOAT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT8_B-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "BFLOAT8_B",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "FLOAT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT8_B-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT8_B",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "passed"
+   }
+  ],
+  "invalid_skipped": [
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "UINT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "UINT8",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "UINT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "UINT8",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "FLOAT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT8_B-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "BFLOAT8_B",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT8",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "FLOAT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "skipped"
+   }
+  ],
+  "xfail_expected": [
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT32",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=False]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "UINT8",
+     "use_multicore": false,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "UINT8",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_l1-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_l1",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-alignment=tile_aligned-buffer=dram_to_l1-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "UINT8",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_l1",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-alignment=tile_aligned-buffer=l1_to_l1-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "l1_to_l1",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-alignment=tile_aligned-buffer=l1_to_l1-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "UINT8",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "l1_to_l1",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=2-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 2,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT8-in_layout=ROW_MAJOR-in_tile_height=none-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=2-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "UINT8",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 2,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "ROW_MAJOR",
+     "in_tile_height": "none"
+    },
+    "status": "xfail"
+   }
+  ],
+  "xfail_other": [
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "FLOAT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT8_B-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT8_B",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "FLOAT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=FLOAT32-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT8_B-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "output_dtype": "BFLOAT8_B",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT32-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=UINT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT32",
+     "output_dtype": "UINT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=UINT8-in_layout=TILE-in_tile_height=32-orientation=none-out_scheme=interleaved-output_dtype=UINT8-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=8-use_multicore=True]",
+    "axes": {
+     "dtype": "UINT8",
+     "output_dtype": "UINT8",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 8,
+     "in_layout": "TILE",
+     "in_tile_height": 32
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=TILE-in_tile_height=1-orientation=none-out_scheme=interleaved-output_dtype=BFLOAT16-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "BFLOAT16",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "TILE",
+     "in_tile_height": 1
+    },
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x128x256-alignment=tile_aligned-buffer=dram_to_dram-double_buffer=True-dtype=BFLOAT16-in_layout=TILE-in_tile_height=1-orientation=none-out_scheme=interleaved-output_dtype=FLOAT32-pad_mode=none-pad_value=none-rank=4-shard_api=none-tile_height=32-use_multicore=True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "output_dtype": "FLOAT32",
+     "use_multicore": true,
+     "shard_api": "none",
+     "out_scheme": "interleaved",
+     "buffer": "dram_to_dram",
+     "rank": 4,
+     "double_buffer": true,
+     "pad_mode": "none",
+     "pad_value": "none",
+     "alignment": "tile_aligned",
+     "orientation": "none",
+     "tile_height": 32,
+     "in_layout": "TILE",
+     "in_tile_height": 1
+    },
+    "status": "skipped"
+   }
+  ],
+  "no_axes_found": [
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_test[tilize_args0-input_shapes0]",
+    "test_name": "test_tilize_test[tilize_args0-input_shapes0]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_test[tilize_args0-input_shapes1]",
+    "test_name": "test_tilize_test[tilize_args0-input_shapes1]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_test[tilize_args0-input_shapes2]",
+    "test_name": "test_tilize_test[tilize_args0-input_shapes2]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[False-shape0]",
+    "test_name": "test_tilize_fp32_truncation[False-shape0]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[False-shape1]",
+    "test_name": "test_tilize_fp32_truncation[False-shape1]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[True-shape0]",
+    "test_name": "test_tilize_fp32_truncation[True-shape0]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[True-shape1]",
+    "test_name": "test_tilize_fp32_truncation[True-shape1]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_row_major_to_width_sharded[shard_core_grid0-shard_shape0-tensor_shape0-DataType.BFLOAT16]",
+    "test_name": "test_tilize_row_major_to_width_sharded[shard_core_grid0-shard_shape0-tensor_shape0-DataType.BFLOAT16]",
+    "status": "failed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+    "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+    "status": "failed"
+   },
+   {
+    "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+    "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+    "status": "failed"
+   }
+  ]
+ }
+}

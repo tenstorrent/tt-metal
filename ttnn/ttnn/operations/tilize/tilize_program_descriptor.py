@@ -104,6 +104,22 @@ def _div_up(a, b):
     return -(-a // b)
 
 
+def cb_pages(cb_depth, wt_chunk):
+    """Pages per streaming CB — THE single source for the CB geometry.
+
+    A function of the three block knobs only (``CB_DEPTH``, ``NT_BLK``,
+    ``WT_CHUNK``), never of ``WT`` / ``NT_H`` / any tensor dimension. Both CB
+    descriptors, ``derive_blocking()``'s L1 ceiling and the depth fallback all
+    read this, so turning a knob lands in exactly one place.
+    """
+    return cb_depth * NT_BLK * wt_chunk
+
+
+def cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes):
+    """L1 bytes held by the two streaming CBs together, from ``cb_pages()``."""
+    return cb_pages(cb_depth, wt_chunk) * (in_tile_bytes + out_tile_bytes)
+
+
 def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth):
     """The three block knobs — single source of truth (op_design.md §1.4).
 
@@ -116,7 +132,10 @@ def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth
     * ``NT_H >= NUM_CORES`` implies ``n_chunks == 1``, i.e. the wide-shape
       machinery is inert on tall shapes (byte-identical to a pure height split).
     """
-    per_chunk_tile = cb_depth * (in_tile_bytes + out_tile_bytes)
+    # Bytes both CBs hold per tile-column of chunk width — read from cb_bytes()
+    # so the ceiling can never drift from the CB sizing below (it carries the
+    # NT_BLK factor too, which a hand-written formula here would have dropped).
+    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes)
     wt_cap = max(1, min(FAST_TILIZE_MAX_W, CB_L1_BUDGET // per_chunk_tile))
 
     n_want = max(1, _div_up(num_cores, nt_h))  # grid-fill floor
@@ -185,7 +204,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         wt_chunk, n_chunks, num_blocks_total = wt, 1, nt_h
 
     # never OOM: fall back to depth-1 rather than exceed the L1 budget
-    while cb_depth > 1 and cb_depth * wt_chunk * (in_tile_bytes + out_tile_bytes) > CB_L1_BUDGET:
+    # (same cb_bytes() source as derive_blocking's ceiling and the CBs below)
+    while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes) > CB_L1_BUDGET:
         cb_depth -= 1
 
     (
@@ -203,12 +223,13 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     # ========== 3. CIRCULAR BUFFERS =======================================
     # Both CBs are sized CB_DEPTH * NT_BLK * WT_CHUNK pages — a function of the
-    # knobs only, never of WT / NT_H / any tensor dimension.
-    cb_pages = cb_depth * NT_BLK * wt_chunk
+    # knobs only, never of WT / NT_H / any tensor dimension. cb_pages() is the
+    # one place that formula lives.
+    pages_per_cb = cb_pages(cb_depth, wt_chunk)
     tile_descriptor = ttnn.TileDescriptor(tile_h, tile_w)
 
     cb_input_sticks_descriptor = ttnn.CBDescriptor(
-        total_size=cb_pages * in_tile_bytes,
+        total_size=pages_per_cb * in_tile_bytes,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -220,7 +241,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         ],
     )
     cb_output_tiles_descriptor = ttnn.CBDescriptor(
-        total_size=cb_pages * out_tile_bytes,
+        total_size=pages_per_cb * out_tile_bytes,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(

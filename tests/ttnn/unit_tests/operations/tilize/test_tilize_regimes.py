@@ -95,7 +95,7 @@ def test_tall_shape_keeps_the_pure_height_split(device):
 
 def test_cb_footprint_is_bounded_in_w(device):
     """No CB is a function of a whole-op dimension: L1 stays under the budget as W grows."""
-    from ttnn.operations.tilize.tilize_program_descriptor import CB_L1_BUDGET
+    from ttnn.operations.tilize.tilize_program_descriptor import CB_L1_BUDGET, cb_bytes
 
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
@@ -103,7 +103,9 @@ def test_cb_footprint_is_bounded_in_w(device):
 
     for w in (64, 2048, 16384, 65536):
         wt_chunk, _, _ = derive_blocking(1, w // 32, in_tile_bytes, out_tile_bytes, num_cores, 2)
-        l1 = 2 * wt_chunk * (in_tile_bytes + out_tile_bytes)
+        # cb_bytes() is the ONE source for the footprint — asserting against a
+        # hand-rewritten formula here would let the two drift apart.
+        l1 = cb_bytes(2, wt_chunk, in_tile_bytes, out_tile_bytes)
         assert l1 <= CB_L1_BUDGET, f"W={w}: CB footprint {l1} exceeds the budget"
 
 

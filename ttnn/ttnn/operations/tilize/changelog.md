@@ -172,3 +172,70 @@ is emitted but has no bench arm), **E22** (whole-model, out of scope).
 
 Run-to-run spread across the four sessions in this phase was ≤3% on every row —
 that is the noise band any later "win" has to clear.
+
+---
+
+## Phase 0 — Verification (verifier pass)
+
+- **Date**: 2026-08-14
+- **What was done**: code review against `op_design.md` §1 (Blocking Model) and
+  `eval/prompts/tilize.txt` `## Rules`; registry-conformance + INVALID audit; full
+  golden run + `eval.verify_supported`; precision baseline authored and measured;
+  refinement queue written. Report: `verification_report.md`. Artifacts:
+  `verifier_report.json` (this directory — trimmed to fit the repo's 500 KB file limit;
+  summary + per-category counts + the xfail blocking-axis histogram + sample cells),
+  `op_requirements.md`.
+- **SUPPORTED at Phase 0** (unchanged by this pass — no drift to fix):
+  `dtype=[bfloat16, float32]`, `output_dtype=[bfloat16, float32, bfloat8_b]`,
+  `use_multicore=[False, True]`, `double_buffer=[False, True]`,
+  `buffer=[dram_to_dram, dram_to_l1, l1_to_l1, l1_to_dram]`, `rank=[2,3,4,5]`,
+  `pad_mode=[none, auto, explicit]`, `pad_value=[none, zero, positive, negative]`,
+  `alignment=[tile_aligned, w_non_aligned, h_non_aligned, hw_non_aligned]`,
+  `tile_height=[32]`, `in_layout=[ROW_MAJOR]`, `in_tile_height=[none]`,
+  `shard_api=[none]`, `out_scheme=[interleaved]`, `orientation=[none]`;
+  2 EXCLUSIONS (bf8b × padded modes; bf16→fp32 × non-zero fill).
+- **Accuracy achieved** (`test_tilize_precision_baseline.py`, 4 shapes × 4 dtype pairs):
+  no-cast paths are **bit-exact** — bf16→bf16 and fp32→fp32 give
+  `PCC=1.000000, max_abs=0, mean_abs=0, rms=0`, got/true ratio identically 1.0 at every shape
+  (this is the strongest possible result for a byte-permutation op and confirms the fp32
+  `fp32_dest_acc_en` + `UnpackToDestFp32` configuration). Cast paths carry only representation
+  error: `fp32→bf16` PCC=0.999998, max_abs=3.1e-2, mean_abs=2.2e-3, rel_rms=3.3e-3;
+  `bf16→bf8b` PCC=0.999971, max_abs=4.7e-2, mean_abs=7.1e-3, rel_rms=9.3e-3. Error is
+  shape-independent, as a permutation requires.
+- **Golden suite at Phase 0** (per `verifier_report.json`): `supported_pass=102`,
+  **`supported_fail=0`, `xpass_drift=0`, `xfail_wrong_mode=0`**, `xfail_expected=246`
+  (216 unbuilt axes + 30 EXCLUSIONS cells), `invalid_skipped=568`, 24 retile cells
+  arch-skipped (Blackhole-only, correct on this Wormhole box). Whole golden directory:
+  344 passed / 155 failed / 2 errors / 884 skipped — every one of the 155 failures is an
+  `UnsupportedAxisValue` raised by `validate()` (106 sharding, 29 integer dtype, 8 rank-0/misc),
+  i.e. queued axes rather than defects; the 2 errors are a grader-harness conflict
+  (`pytestmark use_module_device` + a `device_params`-parametrized trace test) that never
+  reaches the op.
+- **Issues encountered / fixed in this pass**:
+  1. **DRY / collapsed-knob fix** — the CB-footprint formula was restated in three places, twice
+     *without* the `NT_BLK` factor (`derive_blocking()`'s L1 ceiling and the never-OOM depth
+     fallback), so turning that knob (lamp L3 / the trid-double-issue perf lever) would have
+     silently overflowed the budget it was checked against. Now `cb_pages()` / `cb_bytes()` are
+     the single source and all consumers read them; no behavioural change at `NT_BLK == 1`
+     (verifier categories identical before and after).
+  2. Same formula restated a fourth time inside `test_cb_footprint_is_bounded_in_w` — now
+     asserts against `cb_bytes()`.
+  3. New guard `test_cb_geometry_has_a_single_source` (pins fix 1).
+  4. New guard `test_production_switches_ship_in_their_optimal_state` — nothing previously
+     pinned that `ABLATE` is all-zero and `LEVERS` all-ON in the shipped config, even though an
+     ablation arm produces deliberately wrong output.
+  5. No SUPPORTED drift to repair (`xpass_drift = 0`, `supported_fail = 0`).
+  - Advisories left as notes (see report): `fp32 → bf16` packs by **truncation**, not
+    round-to-nearest (ratio entirely below 1.0, ≈1 bf16 ulp; inside the allowed cast tolerance,
+    ruled out as a scale bug via the ratio spread) and no pack-rounding knob is exposed;
+    `tt_npe.sh` is absent from this checkout, so the prompt's tt-npe pin could not be produced.
+- **Tests added**: `test_tilize_precision_baseline.py` (17 cells),
+  `test_tilize_levers.py::test_production_switches_ship_in_their_optimal_state`,
+  `test_tilize_levers.py::test_cb_geometry_has_a_single_source`. Acceptance suite now
+  **95 passed** (`scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/tilize/`).
+- **Refinement queue**: 6 entries in `op_requirements.md` at the 2:1 generality:perf cadence —
+  R1 sharded same-spec + crossover (knob-turn, lamp L1), R2 cross-spec reshard + padded sharded
+  (scheme-change, lamp L2), **R3 perf** (A3+B10 bank-adjacent readers + per-reader VCs, the
+  recorded ~35% gap to the 92%-of-DRAM-peak recipe; B8 trid double-issue as the `NT_BLK>1`
+  knob-turn), R4 integer dtypes + rank 0 + both EXCLUSIONS lifted, R5 tiny tiles + retile,
+  **R6 perf completeness audit** (Mode D, run-closing).
