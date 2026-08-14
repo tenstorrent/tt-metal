@@ -497,3 +497,7 @@ XTTS runs as a **tier-3** model on single Blackhole P150 (`bh_p150b_civ2`):
 `test_tt_eval_traced_long`) so CI does not pull whisper-large-v3, UTMOS or ECAPA2. Timeouts cover the
 first-run download of the ~1.9 GB checkpoint. Warm, the deselected PCC suite is ~9 min and the e2e
 entry ~2 min. Both entries are filed under `team: shield`.
+
+The long chunked eval still carries local gates (`LONG_CER_MAX = 0.05`, `LONG_SECS_MIN = 0.55` in
+`tests/pcc/test_tt_trace.py`) for when it is run by hand. Device-OP perf and the ISL-latency sweep
+are also local-only: tier 3 has no sweep pipeline, and device-OP perf exists only at tier 1.
