@@ -1538,3 +1538,328 @@ present in `tilize_noc.hpp`). `_bench_tilize.py` +14 arms: the `read_state` on/o
 4 regimes × 2 dtypes plus the gather, the B0 smallest-regime triple-repeat, the `write_state`
 sweep across 3 output page sizes plus both B0 arms, the `precomp_index` on/off pair, and the
 two L4 headroom ablations. Probes `probe_036/037/038.py` (lever correctness) are preserved.
+
+---
+
+## Perf 1 — tournament round 1 of 2
+
+- **Date**: 2026-08-14
+- **Type**: perf (no SUPPORTED change; `verify_supported` categories are untouched)
+- **Status**: complete. All 6 floated ideas measured; **3 graduated, 3 measured WINs deferred to
+  Perf 2, 0 nulls-only outcomes**. Golden `test_golden.py` + `test_regression.py`
+  **372 passed, 0 failed, 2 xfailed** — unchanged. `verify_levers --report`: 27 of 29 closed,
+  **possibly-unlocked: none**.
+
+### What was reused
+
+`derive_blocking()` and every knob it derives, the `LEVERS` / `PARKED_LEVERS` / `ABLATE`
+counterfactual registries, `_bench_tilize.py`'s `_measure()` harness and its whole cumulative bench
+set, the split-DM ablation, and the R_ALIGNED / R_PAD / R_RETILE × P_ACCESSOR / P_LOCAL_SHARD regime
+selectors. No plan path was added or removed. The compute kernel is byte-identical apart from its
+instrumentation.
+
+### Added: permanent per-stage instrumentation
+
+New `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` — `MaybeDeviceZoneScope`, a durable alias for
+`DeviceZoneScopedN` that compiles to nothing when the profiler is off. All three kernels now carry
+**split** zones (`reader_reserve` / `reader_issue` / `reader_barrier` / `reader_helper`,
+`retile_stage_issue` / `retile_stage_barrier` / `retile_permute`, `writer_wait` / `writer_stamp` /
+`writer_issue` / `writer_barrier`, `compute_tilize`). **This instrumentation is permanent** — the
+header states the contract. Zones were placed so a *starved* stage is distinguishable from an
+*expensive* one, and so the NoC issue cost is separate from the barrier.
+
+Two honesty notes about the numbers below:
+
+1. **The bench runs with `TT_METAL_DEVICE_PROFILER=1`, so the zones are live in every "after" number
+   and were absent from every pre-Perf-1 number.** Measured cost: **~100 ns per kernel**, which is
+   3.4% of the 3 µs smallest regime and invisible on the large ones. Compiling the macro out and
+   re-running the same session gives `d_smallest` 2,977 (vs 3,078), `a_square` 86,082 (vs 87,596),
+   `b_wide_short` 12,867 (vs 12,906) — i.e. the production build pays none of it.
+2. `reader_helper` and `compute_tilize` wrap library helpers that own their own CB handshake, so
+   those two numbers are **occupancy**, not payload. Every ranking below is confirmed by cumulative
+   ablation, never by a zone number alone.
+
+### Step 1 — the measured breakdown
+
+**Focus-shape selection.** `eval/golden_tests/tilize/feature_spec.py` has **no perf-flagged entry**
+(no `LOOSE_CASES`, no `attention:` note, no `expected_math_util`) — its `INPUTS` are deliberately tiny
+and its own comment says the perf work belongs in a separate grid-filling bench. So the focus shapes
+were **free-selected by measured headroom**, one representative per distinct kernel path.
+
+Per-stage `MaybeDeviceZoneScope`, ns per core, bf16, one fresh-cache run each:
+
+| plan | wall | hottest stage | next | verdict |
+|---|---|---|---|---|
+| **retile 32→8** `[1,1,1024,1024]` | 100,201 | `retile_permute` (NCRISC) **85,718 (86%)** | `retile_stage_barrier` 8,111 | reader **L1-copy-bound** |
+| **widening pad** `[1,1,1024,2048]`→`[1,1,2048,2048]` bf16→fp32 | 386,280 | `writer_stamp` (BRISC) **172,898 (45%)** | `writer_issue` 36,199 | **stamp-bound** |
+| **crossover** `[1,1,2048,256]`→H×8 | 15,059 | `reader_helper` (NCRISC) **13,587 (90%)** | `writer_wait` 13,667 = idle | **read-bound**, BRISC 91% idle |
+| **reshard** `[1,1,1024,256]` W×2→H×8 | 19,410 | `reader_issue` **16,917 (87%)** | `reader_barrier` **319** | read-bound |
+| **a_square** `[1,1,2048,2048]` | 85,813 | `compute_tilize` ~52k/TRISC (occupancy) | `writer_wait` 42,204 | at the pure-copy floor |
+| **b_wide_short** `[1,1,32,16384]` | 13,894 | `writer_wait` 6,927 | `reader_issue` 2,166 | see below |
+| **shard same-spec** `[1,1,2048,256]` H×8 | 5,090 | `compute_tilize` ~3.9k/TRISC | `writer_wait` 3,807 | compute-bound |
+
+**Cumulative ablation** (payloads peeled off together, ending with *every* payload stubbed at once —
+the only run from which an "it's all overhead" verdict is permitted):
+
+| plan | full | −read | −read −compute | ALL stubbed | attribution |
+|---|---|---|---|---|---|
+| crossover | 14,934 | 5,014 | 1,727 | 1,737 | read 66%, compute 22%, write ~0, sync 12% |
+| reshard | 19,446 | 2,995 | 1,235 | 1,221 | **read 85%**, compute 9%, sync 6% |
+| retile 32→8 | 100,011 | 16,582 | 15,168 | 1,766 | **reader 83%**, write 13%, sync 2% |
+| b_wide_short | 13,830 | 9,243 | 9,694 | 1,018 | read 4,590 + write 8,680 + sync 1,020 |
+
+**The b_wide_short row is the round's most useful single measurement.** Its exclusive stage costs
+*sum* to the wall (14,290 vs 13,830) — the signature of **zero read/write overlap**, because the split
+lands exactly one block on each of 64 cores and there is no next block to overlap against. Its ideal
+is `max(read, write) + floor` ≈ 9,700, a 1.4× gap that no amount of making either half faster can
+reach.
+
+**Ranked, roofline-gated bottlenecks.** `a_square` and `c_multiblock` were **gated OUT**: Refinement 3
+measured a pure DRAM→DRAM copy of the same tensors at 87,710 / 174,772 ns on this box, and the op runs
+at or below that, so no idea was spent on them. Final ranking: (1) retile face permutation,
+(2) the padded widening-cast stamp, (3) the destination-local read (crossover + reshard),
+(4) b_wide_short's missing overlap.
+
+### Step 2 — the portfolio (6 ideas, seeded from the ledger)
+
+The ledger's own "ranked remaining opportunities" were read first and are the direct source of ideas
+1–4; its "possibly unlocked" section was empty and its `applied` rows were not re-floated. Idea 6 is
+the one row this round chose to **re-open**: A0 was closed on the full-grid question, but never on
+the `NT_H == 1` topology where the full grid produces one block per core.
+
+| # | idea | target stage | tier | ledger link |
+|---|---|---|---|---|
+| 1 | `retile_permute` — kill the 32 B face-row copy loop (coalesce / direct-to-tile / NoC loopback) | retile reader | T3 | ledger opportunity #2 |
+| 2 | `pad_stamp` — stamp one tile and replicate / re-source instead of per-element stores | writer stamp | T2 | ledger opportunity #3 |
+| 3 | `split_reader` — both DM RISCs issue reads on a destination-local plan (design lamp L4) | crossover + reshard read | T3 | ledger opportunity #1 |
+| 4 | `gather_issue` — cheaper/fewer transactions in the cross-core L1 gather | reshard read | T2 | — |
+| 5 | `read_inflight` — more bytes in flight per read barrier (L3 / B8 / C16 on *this* topology) | crossover read | T2 | B8's premise re-checked |
+| 6 | `oneblock_overlap` — trade core count for blocks/core at fixed transfer size | b_wide_short | T1 | **A0 re-opened** |
+
+Ideas 3, 4 and 5 deliberately **overlap** (all three attack the same read stage from different
+angles); ideas 1 and 2 are independent. Overlap was resolved at aggregation, never among subagents.
+
+### Step 3–4 — per-idea verdicts (all measured; WINS *and* the nulls inside them)
+
+| idea | verdict | measured | domain |
+|---|---|---|---|
+| **1 `retile_permute`** | **WIN** | best arm `direct_dram` 99,849 → **23,806 (4.19×)**; graduated arm `noc_loopback` 99,849 → **41,902 (2.38×)** | loopback: everywhere, no exception. direct: `incorrect` on a casting retile, `inexpressible` below DRAM alignment |
+| | *null inside it* | coalescing the CPU copy into 256 B runs: 99,849 → 108,583 (**0.92×**) and a non-volatile copy 100,277 (**flat**) — the cost is rv32 store COUNT, not loop overhead | — |
+| **2 `pad_stamp`** | **WIN** | 386,749 → **142,761 (2.71×)**; padded local shard 366,475 → **22,487 (16.3×)** | everywhere `out_fill` is on; flat (and mechanism deleted) where the target has no whole pad tile |
+| | *null inside it* | widening the store: flat within ±0.5% on all 8 geometries | — |
+| | *incorrect inside it* | the per-CB-slot stamp cache corrupted **1,048,576 of 4,194,304** padded positions — compute repacks every byte of the slot each block | disqualified by measurement, not argument |
+| **3 `split_reader`** | **WIN** (deferred) | shared-NOC0+trid **1.51–1.64×** on the DRAM crossover; 50/50 dual-NoC **1.73–1.78×** on the L1 gather and small plans; 3:1 weighted **1.15–1.25×** with *no* predicate | destination-local plans only; **0.80× measured regression** on an interleaved destination (BRISC is not free there) |
+| **4 `gather_issue`** | **WIN** (deferred) | `strip` (one transfer per (block, source shard)) 17,633 → **14,553 (1.21×)**; **1.97×** on the gated W×4→H×8 plan | the cross-core gather; `inexpressible` when the block width is not a whole multiple of the source shard width |
+| | *null inside it* | hoisting the address math: **NULL** at 8 destination cores (a genuine 1.62× RISC-side win, entirely absorbed by fabric contention) | — |
+| **5 `read_inflight`** | **WIN** (deferred) | `ahead1_nt1_d3` (issue-ahead 1 over trids + CB depth 3) **1.19×** crossover, **1.24×** tall, **1.13–1.16×** fp32; flat on 64-core interleaved and 1-block/core | no exceptions measured over 100+ bit-exact arms |
+| | *nulls inside it* | `NT_BLK>1` alone marginal and **0.93× at NT_BLK=8**; deeper CB alone **NULL**; the op's existing two-slot B8 **0.75× at fp32** on this topology | — |
+| **6 `oneblock_overlap`** | **WIN** | **1.039–1.052×** on `[1,1,32,16384]` (15-round interleaved A/B, ~4σ) | predicate over the blocking; regressions outside it measured at 0.968× / 0.706× / 0.949× |
+| | *null/control inside it* | halving `WT_CHUNK` on the full grid instead: **0.908×** — the transfer-size floor reconfirmed. Sub-block streaming inside one block: **inexpressible** (the tilize helper's block contract) | — |
+
+### Step 4 — how the overlap was resolved
+
+Ideas 3, 4 and 5 all attack the read stage and **cannot all graduate as measured**:
+
+- **3 vs 5** — both restructure the crossover read. 3 is faster there (1.51× vs 1.19×) but needs a
+  second input CB, a compute-side CB alternation and a source-type predicate, *and* carries a measured
+  0.80× regression on interleaved destinations. 5 has no predicate and no measured regression anywhere.
+  Their combination (two readers each running issue-ahead) is **unmeasured**, so it is not a
+  graduation candidate this round.
+- **3 vs 4** — both attack the reshard read; 3 is faster (1.78× vs 1.21×).
+- **4** additionally needs a compute-side contract change (strip-major CB slots) that its bench, which
+  has **no compute kernel at all**, did not exercise — so its whole-op figure (~16.5 µs predicted) is a
+  prediction, not a measurement.
+
+The three are therefore carried to Perf 2 with their numbers and integration notes intact, and this
+round graduated the three non-conflicting winners (1, 2, 6) that touch disjoint stages.
+
+### Step 5 — what graduated, and how widely
+
+**1. Retile face move → local NoC loopback.** ONE unqualified path, **no predicate, no dual path**.
+`copy_l1_words` — the rv32 32-bit-store L1→L1 copy — is **deleted** from `tilize_fill.hpp`. The faster
+4.19× direct-to-output-tile form was *not* taken precisely because it would have required a four-way
+dispatch (`out_dtype == in_dtype` + a DRAM-alignment predicate); the graduated form is cast-safe and
+alignment-free, which is worth 1.8× of foregone speed for one path instead of four.
+
+**2. Whole-pad tiles from a pre-stamped scratch tile.** Applies to every `out_fill` cell. Two things
+the measurement forced: the scratch fill is **lazy** (stamping it at kernel start cost +4.3 µs on a
+6.7 µs op), and the `pad_scratch` predicate is derived **once on the host** and passed as a CT arg so
+the CB allocation and the kernel branch cannot drift. Where the target has no whole pad tile the whole
+mechanism — including its L1 page — is compiled out and those cells are byte-identical to before.
+
+**3. Core halving on one-block-per-core shapes.** Predicate stated over the **blocking**, not over
+shapes. **Two carve-outs, each earned by a measured regression found by the guard-set re-measure**, and
+both written in the exception polarity (`if (cannot) legacy else new`):
+
+| carve-out | measured reason |
+|---|---|
+| `R_RETILE` | `[1,1,1024,1024]` 1→32: 68,125 → 111,618 ns (**0.61×**) — the payload is a local L1 permutation, not DRAM traffic |
+| `out_tile_bytes < 128` | `tile_h=1` on `[1,1,2048,2048]`: 249,507 → 267,661 ns (**0.93×**) — the write is transaction-rate bound per core |
+
+`tile_h=8` (512 B pages) is **flat** and therefore stays *in* the unified path, as does every untested
+regime. B8's read-side trid is turned off on this path only (measured: read-half off 1.052×, write-half
+off 0.995×).
+
+### Whole-op before → after (profiler ON in both columns unless noted)
+
+| row | R6 | **Perf 1** | Δ |
+|---|---|---|---|
+| **retile 32→8** `[1,1,1024,1024]` | 99,448 | **42,017** | **−58% (2.37×)** |
+| **retile 32→16** | 101,303 | **43,495** | **−57% (2.33×)** |
+| **retile 1→32** | 124,784 | **69,139** | **−45% (1.80×)** |
+| **widening pad** `[1,1,1024,2048]`→`[1,1,2048,2048]` | 385,227 | **141,271** | **−63% (2.73×)** |
+| `b_wide_short` `[1,1,32,16384]` bf16 | 13,268 | **12,991** | −2.1% (A/B vs lever-off: 1.030×) |
+| `a_square` `[1,1,2048,2048]` bf16 / fp32 | 87,790 / 177,717 | 86,866 / 177,106 | −1.1% / flat |
+| `c_multiblock` `[1,1,8192,1024]` bf16 / fp32 | 170,328 / 362,748 | 171,897 / 362,584 | +0.9% / flat |
+| `d_smallest` `[1,1,32,64]` bf16 | 2,920 | 3,118 → **2,977 zones off** | +2.0% profiler-off |
+| crossover `[1,1,2048,256]`→H×8 | 14,771 | 15,063 | +2.0% |
+| reshard `[1,1,1024,256]` W×2→H×8 | 18,468 | 19,863 | +7.6%, see below |
+| padded → local shard `[1,1,2040,256]` | 22,523 | 22,221 | −1.3% |
+| shard same-spec `[1,1,2048,256]` H×8 | 4,920 | 5,090 | +3.5% |
+| uint32 / uint8 `a_square` | 180,030 / 43,907 | 174,203 / 44,662 | −3.2% / +1.7% |
+| `tile_h` 32 / 16 / 8 / 1 on `a_square` | 85,711 / 87,866 / 97,730 / 242,942 | 86,287 / 88,677 / 97,247 / 252,279 | flat / flat / flat / +3.8% |
+
+The reshard / crossover-small / `tile_h=1` rows sit above the ±3% band and are **attributed, not
+waved away**: the `overlap_cores` A/B shows the lever is flat on all of them after the carve-out
+(`tile_h=1` 252,279 vs 249,929 lever-off), and the residue is the ~100 ns/kernel zone cost plus these
+rows' own documented spread. No graduated change touches the R_PAD gather path at all.
+
+### Guard-set no-regression result
+
+One representative per distinct kernel path × layout × placement, each A/B'd against the graduated
+lever forced off:
+
+| guard row | lever ON | lever OFF | verdict |
+|---|---|---|---|
+| `a_square` interleaved DRAM→DRAM | 86,866 | 86,842 | flat |
+| `b_wide_short` (the target) | 12,991 | 13,383 | **1.030× win** |
+| `c_multiblock` | 173,762 | 170,327 | flat (in band) |
+| `d_smallest` (B0) | 3,135 | 3,108 | flat |
+| `tile_h=1` (tiny tile) | 252,279 | 249,929 | flat *after* the carve-out |
+| `tile_h=8` (tiny tile) | 97,247 | 95,703 | flat |
+| retile 32→8 / 32→16 / 1→32 | 42,156 / 44,090 / 69,139 | 41,720 / 44,040 / 69,283 | flat |
+
+Golden: `test_golden.py` + `test_regression.py` **372 passed, 593 skipped, 2 xfailed, 0 failed**.
+`test_golden_main_tests.py -k nd_sharded` fails **11 / passes 96** — *identical on the pre-Perf-1
+tree*, verified by checking out `05535d839b` and re-running; likewise
+`test_translated.py::…_49107` (`No core coordinate found at (8,0)`) and the trace-mode case
+(`Kernels cannot be placed on dispatch cores`). All three are device-grid portability, pre-existing,
+and untouched by this round.
+
+### Ranked remaining opportunities (carried to Perf 2 — measured, not speculated)
+
+1. **`split_reader` on destination-local plans — 1.51–1.78×, measured, three schemes.** The largest
+   number in the tournament. Needs a second input CB + compute-side CB alternation. Pick the flavor by
+   source type: shared-NOC_0 + per-RISC trid on a DRAM source at volume, dedicated dual-NoC 50/50 on an
+   L1 gather, or 3:1 weighted (1.15–1.25×) if a predicate-free form is wanted. **Hard exclusion:**
+   interleaved destinations (0.80×). Artifact: `perf_experiments/split_reader/`.
+   *Load-bearing finding:* the two DM RISCs are **not** interchangeable issuers — the same read work on
+   BRISC/NOC_1 is **2.2× slower** than on NCRISC/NOC_0 at DRAM volume, which Metal itself encodes as
+   `preferred_noc_for_dram_read() = NOC_0`.
+2. **`read_inflight` issue-ahead — 1.19–1.26×, no exceptions.** The broadest-domain win left. Make the
+   issue-ahead loop the one `R_ALIGNED` reader and raise `CB_DEPTH` to `ahead + 2`; note that
+   `wt_cap()`/`derive_blocking()` read `cb_depth`, so the L1-tight cells must be re-checked.
+   Artifact: `perf_experiments/read_inflight/`.
+3. **`gather_issue` strip — 1.21× / 1.97×.** Needs compute to tilize `slices` sub-blocks per strip;
+   bounded at ≤ ~200 ns. Artifact: `perf_experiments/gather_issue/`.
+4. **The retile's direct-to-output-tile form — 4.19× vs the 2.38× graduated here.** Requires
+   `out_dtype == in_dtype` plus a DRAM-alignment predicate, with the alignment-free `direct_tile_noc`
+   arm (3.75×) as the fallback. Artifact: `perf_experiments/retile_permute/`.
+5. **The crossover's read transaction size.** A probe found the same 128 KB/core moves in 12,089 ns as
+   512 B pages but **5,627 ns as 2 KB pages (2.1×)** — a bigger lever than anything graduated, blocked
+   today by the DRAM-interleaved source page layout.
+
+### Two mechanism corrections this round produced (both refute something previously written down)
+
+1. **`reader_issue` ≫ `reader_barrier` does NOT prove "RISC-bound on transaction count".**
+   `noc_async_read` back-pressures *inside* the issue loop when the fabric is saturated, so the stall
+   is charged to the issue zone and the barrier reads empty. The identical per-core issue loop costs
+   10,711 ns with 1 destination core and 17,633 ns with 8 — the extra 6.9 µs is contention. The gather
+   is bound by a shared ~33–36 GB/s L1-egress ceiling, not by issue work. Only a destination-core-count
+   probe separates the two; the zone split alone cannot. **This corrects Step 1's own reading of the
+   reshard row** and is the reason `gather_issue`'s "hoist the address math" sub-idea measured null.
+2. **The retile's face copy is bound by rv32 store COUNT, not loop overhead.** Coalescing into 8×
+   longer runs with the same store count was 0.92×; making the copy non-volatile was flat. That is why
+   the graduation moves the copy off the RISC entirely rather than making the loop tighter.
+
+### Side finding reported upstream (not fixed here)
+
+On a **sharded output with an explicit beyond-tile-round `output_padded_shape`**, `tilize()`'s trailing
+`ttnn.reshape` returns a tensor whose `to_torch_with_padded_shape()` reports the tile-rounded logical
+shape rather than the requested target, while the kernels demonstrably ran the full target. A view
+bug, invisible to the current golden suite. This is a **generality/correctness** item, not a perf one.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| *(none covers it)* — an L1→L1 block move; would belong to a `dataflow_kernel_lib` local-copy family | capability | `ttnn/cpp/ttnn/kernel_lib/` has no local L1→L1 block-move helper at all, which is why the op carried its own `copy_l1_words`. What is needed is a move that can be issued **through the NoC's loopback path** rather than as rv32 stores, so several moves are in flight — for a strided face permutation, i.e. `n` runs of `run_bytes` from a strided source into a strided destination, with the caller owning one barrier for the batch. | 99,849 (rv32 `copy_l1_words`) | 41,902 (`noc_async_read(get_noc_addr(local), …)`) | `kernels/tilize_reader.cpp:513` |
+| `dataflow_kernel_lib::write_sticks_after_untilize` | capability | Still the only writer in this family and still the inverse direction (it de-interleaves tiles into row-major **sticks**); our destination pages are whole TILE pages. Perf 1 adds a second, new gap on top: the writer now wants to source a page from a **different L1 address than the CB slot** (the pre-stamped pad tile), which no page-writer helper signature admits — they all assume the payload is the CB slot being drained. | n/a (cannot express) | 141,271 | `kernels/tilize_writer.cpp:392` |
+
+Both bypasses carry their justification as a kernel-head/site comment so the verifier's helper-usage
+pass will not revert them.
+
+### Lever ledger — regenerated
+
+`python3 -m eval.verify_levers ttnn/ttnn/operations/tilize/lever_ledger.json --report`:
+
+### Completeness ledger — `master.md` Part 2, all 29 levers
+
+| lever | status | evidence | reason |
+|---|---|---|---|
+| **A0** | applied | on 12,991 / off 13,383 ns — lever saves 2.9% @ `['[', '1', ',', '1', ',', '3', '2', ',', '1', '6', '3', '8', '4', ']', ' ', 'b', 'f', '1', '6', ' ', '(', 'i', 'n', '-', 's', 'e', 's', 's', 'i', 'o', 'n', ' ', 'A', '/', 'B', ';', ' ', 's', 'u', 'b', 'a', 'g', 'e', 'n', 't', ' ', '1', '5', '-', 'r', 'o', 'u', 'n', 'd', ' ', 'i', 'n', 't', 'e', 'r', 'l', 'e', 'a', 'v', 'e', 'd', ' ', 'A', '/', 'B', ':', ' ', '1', '3', ',', '0', '6', '6', ' ', 'v', 's', ' ', '1', '3', ',', '5', '7', '8', ',', ' ', '~', '4', ' ', 's', 'i', 'g', 'm', 'a', ')']`, knob `overlap_cores` | RE-MEASURED at Perf 1 on the NT_H == 1 topology, which A0's phase-0 closure did not cover. The full grid is still used everywhere A0 originally measured it (that arm, knob `w_split`, is unchanged and still 4.12x). What P |
+| **A1** | measured-no-payoff | on 92,859 / off 95,146 ns — lever saves 2.4% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6']`, knob `row_wise` | split_work_to_cores(row_wise=True) is kept (design-binding, costs nothing), but on this interleaved DRAM path the round-robin page->bank mapping makes core placement irrelevant: the delta is inside the 2-3% noise band on |
+| **A2** | applied | on 1,402 / off 5,257 ns — lever saves 73.3% @ `[1, 1, 512, 64]`, knob `zero_copy` | Refinement 1: the sharded path launches on exactly the cores that hold shards, in shard order (ttnn.get_optimal_worker_cores_for_sharded_tensor), instead of the whole compute grid — a core with no shard would have nothin |
+| **A3** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_a3_one_reader_one_bank_is_not_expressible_on_an_interleaved_source` | One reader <-> one bank cannot be expressed for an INTERLEAVED ROW_MAJOR source, for any bank count. An interleaved page lives in bank `page_id % num_banks`; tilize's work unit is a tile-row = TILE_H CONSECUTIVE source s |
+| **A4** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_a4_no_cliff_core_width` | There is no cliff core to specialize: n_chunks is snapped to an exact divisor of WT, so every block is the same width, and the block-count remainder is absorbed by split_work_to_cores' two groups running the SAME kernel  |
+| **B0** | applied | on 2,889 / off 2,942 ns — lever saves 1.8% @ `['[', '1', ',', '1', ',', '3', '2', ',', '6', '4', ']', ' ', 'b', 'f', '1', '6']`, knob `block_write` | Every per-core-overhead lever is counterfactualed on the SMALLEST regime (d_smallest, [1,1,32,64] = 2 tiles on 2 cores) as well as the large ones. B7's win is 8-14% on the large regimes and inside noise on the smallest — |
+| **B5** | applied | on 173,311 / off 177,432 ns — lever saves 2.3% @ `['[', '1', ',', '1', ',', '8', '1', '9', '2', ',', '1', '0', '2', '4', ']', ' ', 'b', 'f', '1', '6']`, knob `page_write` | Writes are whole TILE pages (one noc_async_write per page); reads are whole sticks whenever n_chunks == 1 and a contiguous WT_CHUNK*32*elem byte range otherwise. The OFF arm splits each page into two half-page transactio |
+| **B6** | applied | on 13,478 / off 13,605 ns — lever saves 0.9% @ `['[', '1', ',', '1', ',', '3', '2', ',', '1', '6', '3', '8', '4', ']', ' ', 'b', 'f', '1', '6', ',', ' ', '5', '1', '2', ' ', 'B', ' ', 'r', 'e', 'a', 'd', 's', ' ', '(', '5', '-', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'm', 'e', 'd', 'i', 'a', 'n', 's', ')']`, knob `read_one_packet` | The custom aligned reader takes noc_async_read_one_packet whenever the per-stick transfer fits NOC_MAX_BURST_SIZE (512 B) — which is exactly the wide/short regime's 512 B read. It never loses (it is compile-time inert ab |
+| **B7** | applied | on 170,508 / off 194,762 ns — lever saves 12.5% @ `['[', '1', ',', '1', ',', '8', '1', '9', '2', ',', '1', '0', '2', '4', ']', ' ', 'b', 'f', '1', '6']`, knob `block_write` | One noc_async_write_barrier per BLOCK (WT_CHUNK pages), not per transaction; the reader's per-block barrier is the library helper's. |
+| **B8** | measured-no-payoff | on 86,530 / off 85,930 ns — lever COSTS 0.7% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6', ',', ' ', 'b', 'o', 't', 'h', ' ', 'h', 'a', 'l', 'v', 'e', 's', ' ', 'o', 'f', 'f', ' ', '(', '5', '-', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'm', 'e', 'd', 'i', 'a', 'n', 's', ')']`, knob `read_trid` | [write-side twin knob: write_trid — arms test_bench_lever_write_trid_off / test_bench_lever_both_trid_off] Trid double-issue is BUILT on both halves (reader and writer): block i's transfers are issued before block i-1's  |
+| **B9** | applied | on 93,626 / off 246,415 ns — lever saves 62.0% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6']`, knob `noc_split` | Reader on ReaderConfigDescriptor (NCRISC/NOC0), writer on WriterConfigDescriptor (BRISC/NOC1). The OFF arm swaps them. |
+| **B10** | measured-no-payoff | on 86,136 / off 85,720 ns — lever COSTS 0.5% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6', ' ', '(', '5', '-', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'm', 'e', 'd', 'i', 'a', 'n', 's', ')']`, knob `read_vc` | Spreading read requests over NUM_READ_VCS unicast VCs is neutral on the grid-filling square and a LOSS on the wide/short shape. 64 readers already spread over the whole grid, reading pages that round-robin over every DRA |
+| **B11** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_b11_every_transaction_is_dram_aligned` | Misalignment cannot occur: the read chunk is WT_CHUNK*32*elem and the write is a whole tile page, both structurally multiples of the 32 B DRAM alignment for every supported dtype. |
+| **B12** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_b12_multicast_is_structurally_absent` | tilize is a pure permutation of byte positions: every input byte belongs to exactly one block on exactly one core under either split axis. There is no reuse-shared operand and no dependent axis, so nothing is ever read b |
+| **B13** | measured-no-payoff | on 3,292 / off 2,935 ns — lever COSTS 12.2% @ `['[', '1', ',', '1', ',', '3', '2', ',', '6', '4', ']', ' ', 'b', 'f', '1', '6', ' ', '(', 't', 'h', 'e', ' ', 'B', '0', ' ', 's', 'm', 'a', 'l', 'l', 'e', 's', 't', ' ', 'r', 'e', 'g', 'i', 'm', 'e', ';', ' ', 'm', 'e', 'd', 'i', 'a', 'n', 's', ' ', 'o', 'f', ' ', '3', ',', ' ', 'n', 'o', 'n', '-', 'o', 'v', 'e', 'r', 'l', 'a', 'p', 'p', 'i', 'n', 'g', ')']`, knob `read_state` | [write-side twin knob: write_state - arms test_bench_lever_write_state_on / test_bench_lever_write_state_off / test_bench_lever_write_state_smallest_{on,off}] BUILT on BOTH halves and swept across transaction size, which |
+| **C14** | applied | on 1,402 / off 5,257 ns — lever saves 73.3% @ `[1, 1, 512, 64]`, knob `zero_copy` | Refinement 1: both CBs are placed ON the resident L1 shard via ttnn.cb_descriptor_from_sharded_tensor when the shard spec matches the blocking, so the reader publishes pages it never fetched and the writer drains pages i |
+| **C15** | applied | on 1,402 / off 5,257 ns — lever saves 73.3% @ `[1, 1, 512, 64]`, knob `zero_copy` | Refinement 1 accepts L1-sharded input and/or output, so the DRAM leg disappears on the sharded side(s): a same-spec sharded call touches DRAM zero times (both CBs alias their shard) and a crossover keeps only the interle |
+| **C16** | measured-no-payoff | on 86,457 / off 86,579 ns — lever saves 0.1% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6', ',', ' ', '4', ' ', 'b', 'l', 'o', 'c', 'k', 's', '/', 'c', 'o', 'r', 'e', ' ', '(', '5', '-', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'm', 'e', 'd', 'i', 'a', 'n', 's', ')']`, knob `double_buffer` | Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget — but they buy nothing measurable, and Refinement 3 established WHY, refuting Phase 0 |
+| **C17** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_c17_in_place_is_structurally_impossible` | The input is ROW_MAJOR and the output TILE — different byte orderings of the same values, so the op can never alias one buffer onto the other. |
+| **D18** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_d18_accessor_args_are_compile_time_by_construction` | The lever is APPLIED and its counterfactual is UNBUILDABLE, which is why this is a structural closure rather than a measurement. TensorAccessorArgs can emit part of its address-gen description as COMMON RUNTIME args inst |
+| **D19** | deferred | predicted 1.0% | Refinement 6 re-examined this and left it OPEN on purpose rather than manufacturing a device-side counterfactual for a host-side lever. The honest statement is that the lever is applied and unmeasured in the units this o |
+| **D20** | measured-no-payoff | on 93,626 / off 92,225 ns — lever COSTS 1.5% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6']`, knob `regime_select` | The compile-time reader-regime selector (R_ALIGNED vs R_PAD, keyed on the pad region actually being non-empty) IS kept — it is a design contract (§5.1: pad_mode='auto' on an aligned input must not take the pad reader) —  |
+| **D21** | measured-no-payoff | on 2,850 / off 2,899 ns — lever saves 1.7% @ `['[', '1', ',', '1', ',', '3', '2', ',', '6', '4', ']', ' ', 'b', 'f', '1', '6', ' ', '(', 't', 'h', 'e', ' ', 'B', '0', ' ', 's', 'm', 'a', 'l', 'l', 'e', 's', 't', ' ', 'r', 'e', 'g', 'i', 'm', 'e', ' ', '-', ' ', 't', 'h', 'e', ' ', 'o', 'n', 'l', 'y', ' ', 'o', 'n', 'e', ' ', 'w', 'h', 'e', 'r', 'e', ' ', '4', ' ', 'd', 'i', 'v', 'i', 's', 'i', 'o', 'n', 's', ' ', 'c', 'o', 'u', 'l', 'd', ' ', 'm', 'a', 't', 't', 'e', 'r', ')']`, knob `precomp_index` | BUILT and measured. The host already precomputed each core's block RANGE; what was left was the per-block decomposition b -> (row = b % nt_h, chunk = b / nt_h), which the kernel recomputed every block. The ON arm takes t |
+| **E22** | deferred | predicted 0.0% | Re-read at the run-closing audit and unchanged. The one thing worth carrying forward: the smallest regime (d) runs at a ~660 ns dispatch/sync floor on 2 tiles of work, so a MODEL that calls tilize on small tensors is exa |
+| **F23** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f27_no_math_fidelity_sensitive_op` | The rule F23 protects (never downgrade a precision knob the CALLER supplied) cannot be violated here: tilize exposes no ComputeKernelConfig, so there is no caller-supplied precision knob. The one precision decision the o |
+| **F24** | measured-no-payoff | on 65,253 / off 64,981 ns — lever COSTS 0.4% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'b', 'f', '1', '6', ' ', '-', '>', ' ', 'b', 'f', 'l', 'o', 'a', 't', '8', '_', 'b', ' ', '(', 'a', 'n', 'd', ' ', '[', '1', ',', '1', ',', '3', '2', ',', '6', '4', ']', ' ', 'f', 'o', 'r', ' ', 't', 'h', 'e', ' ', 'B', '0', ' ', 's', 'm', 'a', 'l', 'l', 'e', 's', 't', '-', 'r', 'e', 'g', 'i', 'm', 'e', ' ', 'c', 'h', 'e', 'c', 'k', ':', ' ', '2', ',', '9', '3', '0', ' ', 'v', 's', ' ', '3', ',', '0', '0', '8', ')']`, knob `pack_fast` | bfp8_pack_precise ships at its CHEAP setting (False = the fast, truncating block-float packer) and the expensive arm was measured for the first time this phase. Both directions are inside the noise band on this op: fast  |
+| **F25** | applied | on 191,169 / off 192,594 ns — lever saves 0.7% @ `['[', '1', ',', '1', ',', '2', '0', '4', '8', ',', '2', '0', '4', '8', ']', ' ', 'f', 'p', '3', '2']`, knob `fp32_dest` | fp32_dest_acc_en (+ UnpackToDestFp32 on the input CB) is enabled ONLY when the datums really are 32-bit on both sides (fp32 -> fp32), which is exactly F25's rule. It is what makes that transition bit-exact rather than tf |
+| **F26** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f26_lossless_fp32_tilize_is_never_requested` | A lossless unpack path buys nothing downstream of an FPU phase, and tilize IS one: the tiled output is re-read through SrcA/SrcB by every FPU consumer. The kernel always requests Fp32Mode::Fast. |
+| **F27** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f27_no_math_fidelity_sensitive_op` | tilize performs NO arithmetic — the LLK reinterprets byte positions. There is no multiply whose math_fidelity could be lowered, and the compute kernel calls no fidelity-sensitive API. |
+
+**End state:** 27 of 29 levers closed with evidence (2 open). Generated from `tilize/lever_ledger.json` by `eval.verify_levers --report`.
+
+### Ranked remaining opportunities
+
+| # | lever | status | predicted | regime / follow-up |
+|---|---|---|---|---|
+| 1 | **D19** | deferred | 1.0% | D19's payoff is HOST dispatch time (a cached program re-patches only the base address), and this op's bench measures DEVICE KERNEL ns, where it is 0 by construction. Closing it needs a host-side timin |
+| 2 | **E22** | deferred | 0.0% | Whole-model concern (Metal Trace + multiple command queues + events). Revisit when tilize is measured INSIDE a model rather than standalone: trace removes per-op host dispatch and CQ1 overlaps input I |
+
+### Possibly unlocked — negative closures measured under an older topology
+
+None — every negative closure was judged on the topology the op has now.
+
+
+**Rows this round wrote:** **A0** only — re-measured on the `NT_H == 1` topology with both arms
+(`on_ns` 12,991 / `off_ns` 13,383, `knob: overlap_cores`, `phase: "Perf 1"`, full `topology` block).
+The other five ideas are **not catalog levers** (L4 `split_reader` has no catalog ID; the retile
+permutation, the pad stamp and the gather strip have none) and correctly get no rows — they live in
+this changelog. No other phase's row was downgraded or deleted; B8's Refinement-6 null stands and this
+round only records, under A0, that B8's read half is a loss at exactly two blocks per core.
+
+**One infrastructure note for the next round.** `eval.verify_levers` derives its `kernels` topology
+key by globbing `**/kernels/**/*.cpp` under the op root, which swept up the subagents'
+`perf_experiments/*/kernels/` and made **all 17 negative closures report as "possibly unlocked"** —
+17 false candidates aimed straight at Perf 2's cheapest-candidate section. The experiment directories
+now use `experiment_kernels/`, and `--report` is back to *"Possibly unlocked — None"*.
