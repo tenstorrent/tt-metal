@@ -1,7 +1,7 @@
 # tt-llk blaze promotions — OPEN work
 
 > **What this is.** The remaining tt-llk test work for the blaze->tt-metal `experimental/`
-> promotions (#52709, #52713, #52727). **5 items remain: 4 not started, 1 attempted and
+> promotions (#52709, #52713, #52727). **5 items remain: 3 not started, 2 attempted and
 > reverted.** Completed work has been moved out to
 > **`BLAZE_PROMOTION_TESTS_DONE.md`** — check there before starting anything, since three
 > of the plans below were already corrected by what those tests measured on silicon.
@@ -23,7 +23,7 @@
 
 | # | Item | PR | Est. | Notes |
 |---|------|----|------|-------|
-| 1 | `mul_reduce_scalar_chunked_tile` — extend `test_mul_reduce_scalar.py` | #52709 | ~1 d | **§3.** Highest value left: genuinely new code, not a reconciliation |
+| 1 | `mul_reduce_scalar_chunked_tile` — new driver, not an extension | #52709 | ~1 d spent, not done | **§3. Attempted and reverted — read §3 before retrying.** Driver written and compiling; result is ~5-30x high and unexplained |
 | 2 | `rmsnorm` bcast-scalar dest-reuse — new file | #52709 | ~2 d | **§4** |
 | 3 | plain `custom_mm` matmul — new file | #52727 | ~2 d | **§8.** Also settles the `ct ∈ {7,9,11}` doc question |
 | 4 | `top32_rm` — new file, two modes | #52713 | ~3-4 d | **§6.** Largest single effort; also the only coverage for the 7 newly-promoted SFPU wrappers |
@@ -80,7 +80,77 @@ nothing for all four.
 
 ---
 
-## 3. OPEN #1 — `mul_reduce_scalar_chunked_tile` (extend `test_mul_reduce_scalar.py`)
+## 3. OPEN #1 — `mul_reduce_scalar_chunked_tile` (ATTEMPTED AND REVERTED)
+
+> **Status: a working driver exists in history but was reverted — it produced a wrong
+> answer that was not diagnosed.** Do not start from scratch; start from what is below.
+
+### What was built
+
+`tests/sources/mul_reduce_scalar_chunked_test.cpp` + `test_mul_reduce_scalar_chunked.py`,
+as a **separate driver rather than an extension** of `mul_reduce_scalar_test.cpp` — the
+chunked form needs per-batch unpack/math interleaving and an SFPU accumulator, so branching
+the existing 54-variant driver would have put all of it at risk for no benefit. That call
+still looks right.
+
+It **compiled cleanly across all 38 variants** and ran without hanging. The scaffolding is
+sound and worth recovering:
+
+- `CHUNKED_REDUCE` template parameter emitting `DST_CAPACITY` / `CHUNK_NUM_TILES`, plus
+  `REDUCE_SCALER`. Both compile-time on purpose, so the same constexpr
+  `batch_size` / `num_batches` / `last_batch_size` arithmetic the compute API performs runs
+  in the driver too, `static_assert`s included.
+- `params.h` must be included at **file scope**, not just inside each TRISC block: the
+  generated `DST_CAPACITY` / `CHUNK_NUM_TILES` constants arrive through it, and the
+  constexpr batch decomposition needs them before any `#ifdef LLK_TRISC_*`.
+- The accumulator fold uses `test_utils::call_binary_sfpu_operation<DST_SYNC, ...,
+  BinaryOp::ADD, 32, 0>(ACCUMULATOR, 0, ACCUMULATOR, VectorMode::RC)` from
+  `helpers/include/sfpu_operations.h`, with a matching `..._init` before the loop.
+- Tile-count sweep targeting the batch boundaries rather than sampling uniformly:
+  `dst_capacity + 1`, `2 * batch_size`, `2 * batch_size + 1` (the off-by-one canary,
+  `last_batch_size == 1`), `3 * batch_size - 1`.
+
+### Why it was reverted
+
+Every bf16-output variant returned a scalar **5x to 30x larger than golden** — e.g.
+`num_tiles=3, dst_capacity=2`: device `42496.0` vs golden `1498.3`. Not a clean multiple of
+anything (`num_batches`, `batch_size`, tile count), which is what makes it interesting: a
+simple double-count or a missing clear would show as an integer ratio.
+
+**Ruled out — do not re-investigate these:**
+
+- *The accumulator fill.* First hypothesis was that `fill_tile(accumulator, 0.0f)` was
+  reaching only part of the slot, leaving stale DEST in the lanes the SFPU add later reads.
+  Real bug in the first draft, and worth knowing for any future driver: the compute API's
+  `fill_tile` is `_calculate_fill_` at **`VectorMode::RC`, 8 iterations** (whole tile),
+  whereas the `RC_custom` / 2-iteration form used to stage the reduce scaler covers only a
+  small region — the two are not interchangeable. Fixing it changed the output **not at
+  all**, byte for byte, so the accumulator was not the cause.
+- *A stale build.* Verified the corrected source was what compiled.
+
+**Remaining suspects, in the order worth trying:**
+
+1. **Packing `DEST[ACCUMULATOR]` under the reduce mask.** The working non-chunked driver
+   packs `DEST[0]`; this one packs the reserved slot with
+   `_llk_pack_reduce_mask_config_<REDUCE_SCALAR>` active. If the mask interacts with
+   `set_dst_write_addr(tile_index)` such that a non-zero tile index is not honoured, the
+   packed datum is not the accumulator at all. **Cheapest decisive check:** pack `DEST[0]`
+   instead and see whether the number moves. If it does not, the pack path is the problem.
+2. **The SFPU add's DEST addressing.** `VectorMode::RC` walks four faces advancing the
+   dst-write counter; whether `dst_index_out == dst_index_in0 == ACCUMULATOR` aliases
+   correctly across that walk is unverified. Try a single-face `VectorMode` and 8 iterations.
+3. **Per-batch state restore.** The driver re-inits the multiply and the unpack for
+   `batch > 0`, matching the API's own `if (batch > 0)` guard, but the reduce phase may
+   consume more state than those two inits restore.
+
+A useful bisect before any of that: run with `dst_capacity = 2` and `num_tiles = 3`
+(`batch_size = 1`, three single-tile batches) and compare against three separate
+non-chunked runs. That isolates the cross-batch accumulation from the reduce itself.
+
+### Original plan
+
+The sweep design below still stands; only the driver is unfinished.
+
 
 This is the single riskiest piece of new code in #52709: it is not a promoted header at all but a genuinely
 new compute-API composition, with non-trivial host-side arithmetic:
