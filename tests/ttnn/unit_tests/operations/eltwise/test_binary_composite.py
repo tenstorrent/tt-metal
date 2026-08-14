@@ -908,7 +908,9 @@ SITU_GLU_ULP = 6
 SITU_GLU_BF16_PCC = 0.999
 SITU_GLU_BFP8_PCC = 0.99
 
-# One case per intermediate-memory branch, also covering both dtypes.
+# Numerics on both sides of the L1/DRAM intermediate split, also covering both dtypes. The
+# assertions below check the output placement and the values, not which branch ran -- output
+# placement is pinned to the input's for both.
 SITU_GLU_CASES = [
     (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
     (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared expert (6144) > 3072 -> DRAM
@@ -934,7 +936,7 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
 
     is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
     # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
-    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 1e-3))
+    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
     max_abs = tt_res.to(torch.float32).abs().max().item()
     assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
@@ -943,6 +945,23 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     else:
         assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
         assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+def test_situ_glu_l1_intermediates_fall_back(device):
+    # 8192 tokens at the routed-expert width is ~48 MB per intermediate and three are live at the
+    # peak, which does not fit L1. Forcing the L1 branch on hidden alone made this a hard
+    # allocator failure instead of a DRAM fallback.
+    shape = ttnn.Shape([1, 1, 8192, 3072])
+    gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    up = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.situ_glu(gate, up, SITU_GLU_BETA1, SITU_GLU_BETA2)
+
+    assert out.memory_config().buffer_type == gate.memory_config().buffer_type
+    gate.deallocate()
+    up.deallocate()
+    out.deallocate()
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")

@@ -253,7 +253,9 @@ def _golden_function_situ_glu(gate, up, beta1, beta2, *args, **kwargs):
     u = up.to(torch.float32)
     situ_a = beta1 * torch.tanh(g / beta1) * torch.sigmoid(g)
     up_half = beta2 * torch.tanh(u / beta2)
-    return (situ_a * up_half).to(gate.dtype)
+    # Stays fp32, like the other goldens here: rounding it to the input dtype would make a ULP
+    # comparison measure the golden's own rounding as much as the kernel's error.
+    return situ_a * up_half
 
 
 ttnn.attach_golden_function(ttnn.situ_glu, golden_function=_golden_function_situ_glu)

@@ -2801,7 +2801,9 @@ SOFTCAP_FLUSH_FLOOR = 1e-30
 SOFTCAP_ULP = 2
 SOFTCAP_BF16_PCC = 0.9999
 SOFTCAP_BFP8_PCC = 0.999
-SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
+# The beta bound is exact in fp32, but the pack rounds to nearest, so a beta that is not
+# bf16-representable can come back up to half a bf16 ULP high. 2**-8 keeps this beta-independent.
+SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 2**-8, ttnn.bfloat8_b: 5e-2}
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
@@ -2869,7 +2871,7 @@ def test_softcap_bfloat16_full_domain(device):
     result = ttnn.to_torch(ttnn.softcap(tt_in, SOFTCAP_BETA))
 
     max_abs = result.to(torch.float32).abs().max().item()
-    fd_bound = SOFTCAP_BETA * (1.0 + 1e-3)
+    fd_bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn.bfloat16])
     assert max_abs <= fd_bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {fd_bound:.4f}"
     assert not torch.isnan(result).any(), "finite input produced NaN"
 

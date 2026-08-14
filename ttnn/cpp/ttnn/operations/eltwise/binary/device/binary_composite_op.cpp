@@ -886,9 +886,26 @@ Tensor bias_gelu(
         resolved_sub_core_grids);
 }
 
-// At/below this width the intermediates fit in L1, skipping the DRAM round-trip between
-// the composed ops. 3072 is the K3 routed-expert moe_intermediate_size.
+// At/below this width the intermediates are worth keeping in L1: it skips the DRAM round-trip
+// between the composed ops. 3072 is the K3 routed-expert moe_intermediate_size.
 constexpr uint32_t SITU_GLU_L1_MAX_HIDDEN = 3072;
+
+// Width alone does not bound the intermediates -- their size is the whole volume. Three are
+// live at the peak (softcap(gate) and sigmoid(gate) are still alive when their multiply
+// allocates situ_a), and an interleaved-L1 buffer that does not fit is a hard allocator
+// failure rather than a DRAM fallback, so the token count has to be checked too.
+constexpr uint64_t SITU_GLU_L1_PEAK_INTERMEDIATES = 3;
+// Fraction of total L1 the intermediates may claim, leaving room for the ops' CBs.
+constexpr uint64_t SITU_GLU_L1_BUDGET_NUM = 3;
+constexpr uint64_t SITU_GLU_L1_BUDGET_DEN = 4;
+
+static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
+    const auto& allocator = gate.device()->allocator();
+    const uint64_t l1_total = static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
+                              allocator->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.buffer()->size();
+    return peak * SITU_GLU_L1_BUDGET_DEN <= l1_total * SITU_GLU_L1_BUDGET_NUM;
+}
 
 Tensor situ_glu(
     const Tensor& gate,
@@ -901,9 +918,12 @@ Tensor situ_glu(
     // softcap precomputes 1/beta, so zero would emit inf.
     TT_FATAL(beta1 != 0.0f && beta2 != 0.0f, "situ_glu: beta1 and beta2 must be non-zero");
 
-    const std::optional<MemoryConfig> interm_mem = gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN
-                                                       ? std::optional<MemoryConfig>(ttnn::L1_MEMORY_CONFIG)
-                                                       : output_mem_config;
+    // Sharded inputs keep the ops' own placement: interleaved-L1 intermediates against a sharded
+    // input would add an unshard/reshard round-trip, which is the opposite of the point here.
+    const bool use_l1 =
+        !gate.is_sharded() && gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN && situ_glu_intermediates_fit_l1(gate);
+    const std::optional<MemoryConfig> interm_mem =
+        use_l1 ? std::optional<MemoryConfig>(ttnn::L1_MEMORY_CONFIG) : output_mem_config;
 
     Tensor situ_a = ttnn::multiply(
         ttnn::softcap(gate, beta1, interm_mem),

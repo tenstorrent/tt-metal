@@ -26,7 +26,10 @@ namespace ckernel {
  * and is only available on the compute engine.
  *
  * The output is bounded by beta: near-linear for |x| << beta, saturating smoothly at
- * +/-beta rather than truncating. +/-Inf clamps to +/-beta; NaN does not propagate.
+ * +/-beta rather than truncating. +/-Inf clamps to +/-beta; NaN does not propagate and
+ * -0.0 returns +0.0, both as in tanh_tile.
+ * The bound is exact in fp32; a bf16 pack rounds to nearest, so a beta that is not
+ * bf16-representable can come back up to half a bf16 ULP above beta.
  *
  * beta is passed as an fp32 bit pattern, with its reciprocal precomputed by the
  * caller so the kernel performs no division.

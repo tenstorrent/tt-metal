@@ -57,7 +57,7 @@ def _coverage_inputs(num_tiles, seed=0):
     return gate[perm].to(torch.bfloat16), up[perm].to(torch.bfloat16)
 
 
-def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest):
+def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0):
     num_tiles = gate_t.numel() // TILE_ELEMS
     shape = [1, num_tiles, 32, 32]
 
@@ -123,7 +123,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest):
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/situ_glu.cpp",
             core_ranges=core,
-            compile_time_args=[num_tiles],
+            compile_time_args=[num_tiles, dst_out],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),
@@ -137,17 +137,20 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest):
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu SFPU op is implemented for Blackhole only")
 @pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
 @pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
-def test_situ_glu_sfpu(device, in_name, fp32_dest):
+# out_tile_idx aliasing the gate operand is what an expert kernel does; a separate dst slot is
+# what catches a kernel that ignores out_tile_idx.
+@pytest.mark.parametrize("dst_out", [0, 2], ids=["out_aliases_gate", "out_separate"])
+def test_situ_glu_sfpu(device, in_name, fp32_dest, dst_out):
     in_dtype, page_bytes = IN_DTYPES[in_name]
     num_tiles = 8
     gate_t, up_t = _coverage_inputs(num_tiles)
 
     golden = situ_glu_reference(gate_t, up_t)
-    actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest)
+    actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out)
 
     is_bfp8 = in_name == "bfp8_b"
     # |situ_a| <= beta_gate, |up_half| <= beta_up -> |result| <= their product.
-    bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if is_bfp8 else 1e-3))
+    bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if is_bfp8 else 2**-8))
     assert actual.to(torch.float32).abs().max().item() <= bound
 
     g = golden.to(torch.float32)
