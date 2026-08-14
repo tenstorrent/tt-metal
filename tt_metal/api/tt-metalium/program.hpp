@@ -20,6 +20,8 @@ namespace detail {
 class ProgramImpl;
 }  // namespace detail
 
+using ProgramId = std::uint64_t;
+
 class Program {
 public:
     Program();
@@ -43,8 +45,8 @@ public:
     // These are often used in tracing and testing.
     //////////////////////////////
 
-    void set_runtime_id(std::uint64_t id);
-    std::uint64_t get_runtime_id() const;
+    void set_runtime_id(ProgramId id);
+    ProgramId get_runtime_id() const;
 
     //////////////////////////////
     // Buffer related functions:

@@ -43,8 +43,6 @@
 
 namespace tt::tt_metal {
 
-using ProgramId = std::uint64_t;
-
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
