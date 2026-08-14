@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 from models.tt_transformers.tt.model_config import parse_optimizations
 
 
@@ -20,7 +22,9 @@ def pytest_addoption(parser):
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )
     parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
-    parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
+    # type=dict cannot parse a command-line string, so the option was write-only until now;
+    # accept a JSON object, e.g. --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    parser.addoption("--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding")
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )

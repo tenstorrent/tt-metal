@@ -288,6 +288,10 @@
     # HF_HOME and generate the weight cache at TT_CACHE_PATH; warm re-runs are faster.
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1"
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-32"
+    # The greedy CI config takes the argmax fast path and never reaches top-k (see #52928), so
+    # run once with k=1/p=0.5/temp=1: still deterministic, but p not in {0, 1} declines the
+    # fast path and exercises the 4-way vocab split every decode step.
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-0.6b
   model_family: Qwen
   skus:
@@ -305,6 +309,10 @@
     # HF_HOME and generate the weight cache at TT_CACHE_PATH; warm re-runs are faster.
     pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1"
     pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-32"
+    # The greedy CI config takes the argmax fast path and never reaches top-k (see #52928), so
+    # run once with k=1/p=0.5/temp=1: still deterministic, but p not in {0, 1} declines the
+    # fast path and exercises the 4-way vocab split every decode step.
+    pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-1.7b
   model_family: Qwen
   skus:
