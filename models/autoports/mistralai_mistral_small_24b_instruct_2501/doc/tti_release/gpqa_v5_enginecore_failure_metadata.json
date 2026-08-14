@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-14T13:39:18Z",
+  "classification": "source-level async decode/page-table boundary lag after scheduler preemption",
+  "root_exception": "ValueError: slot 0 has no page for decode position 1632",
+  "hardware_health_after_exit": {
+    "tt_smi_local_boards_visible": 4,
+    "tt_smi_local_boards_resettable": 4,
+    "arc_erisc_ethernet_error_markers": 0,
+    "tt_triage_capture": "not applicable: process exited from a Python ValueError rather than hanging"
+  },
+  "scheduler": {
+    "running": 20,
+    "waiting": 12,
+    "preemptions_before_failing_step": 10,
+    "preempted_request_count_in_failing_step": 1,
+    "kv_cache_usage": 0.9478672985781991,
+    "active_all_token_ids_lengths": [
+      1631, 1754, 1355, 2821, 1529, 1320, 1388, 1469, 1530, 1581,
+      1183, 1758, 1606, 1404, 1414, 1103, 1899, 1266, 2017, 1642
+    ],
+    "active_num_computed_tokens": [
+      1631, 1754, 1354, 2821, 1528, 1319, 1387, 1469, 1529, 1581,
+      1182, 1757, 1606, 1403, 1413, 1102, 1898, 1265, 2016, 1642
+    ],
+    "active_num_output_tokens": [
+      515, 606, 5, 609, 25, 29, 32, 585, 80, 612,
+      102, 126, 586, 190, 220, 220, 225, 243, 272, 362
+    ],
+    "new_block_rows": {"18": [711]},
+    "failing_row": {
+      "row": 0,
+      "scheduler_all_token_ids_length": 1631,
+      "scheduler_num_computed_tokens": 1631,
+      "scheduler_new_blocks": null,
+      "device_decode_position": 1632,
+      "block_size": 32
+    }
+  },
+  "active_request_id_sha256": [
+    "8a2370414c61b5186c2a87eea7264b0808bb4a1d7ca42957383bf20fff44894e",
+    "2b841b5118dc2b05536ff268894775aca8c8371eb2ee0b46327c32d42f6a75cc",
+    "4070f4795f33bd84dc8e4a6891b56b916e1407f30bdbd87e64bc79ee82c9bbeb",
+    "d2e292657d48c4d48bcc143a026a8efe9ca749b393f90c10f5cdd6b45d48f498",
+    "7eb7a1db3f0d2c82983b1385ea57bc9c2ade16b40c72767673674df1e0ff3cf5",
+    "fbcdd52d8e208b777712df2d22c1e89ff81cbe306c3799938743f18b0833be11",
+    "071f6d3a0e5c47ef3abf97128096b54025e7e8f5a0777480129a00a085cbc36f",
+    "ab6a031e58c816e7cecce04ba906b13671b11ae2b205094a722fa182362b419f",
+    "80bfa8da5a8945ae021ce9425523761a072e7d3171e44e135ab8fd8b0b9a7d66",
+    "44c03e3b8c98da5d0009574c1e1096dd7b974e5ba59a9993d302ac5939630b27",
+    "c4eca0843774f07957d2d245d431f0465d362cda59a753601f53dda697a39870",
+    "944bec5f65ee62402497def0b322d1cb2f62f5dc7e90baa41c001df68e20cf0e",
+    "c42879a3b1d3f0cda93b71a323f5005924cc21f973e98d55e1140a5f8aab4ed3",
+    "1e389fecc5f3ec6bca0ce9fe77200182d4e7044f287cd5e5a6da2768fae6fb68",
+    "c716368544a7b2faa3aba785c70c26cd18ca4462eae93135fe13fd466e802924",
+    "ae6ea3ac41a45b8a023d876cf789c7a088ece5dc9f9357ca81e036c85c006748",
+    "f6c61cfbe92aa8e6cbdb0bb91b9324abb82e0d61060d1b0c1e72369d2493a5e2",
+    "d18a40911ab222e4541fc0431c4cb35ea9ee9126121ec8047665afd459a34fa9",
+    "14dcf908742e43012b23c6491dcfd1a1c26ebbf2716f50d808b3511533b3585e",
+    "76ed279f2e72e15f224216ac4ce34eb6ce3a38049c19be0641b4afcc7b51cb7f"
+  ],
+  "preempted_request_id_sha256": [
+    "202e2e3d06190ba0d4be815580d7ab126524fa190d8aff29016ede3a1cd88acc"
+  ],
+  "contains_prompt_text_or_token_ids": false
+}

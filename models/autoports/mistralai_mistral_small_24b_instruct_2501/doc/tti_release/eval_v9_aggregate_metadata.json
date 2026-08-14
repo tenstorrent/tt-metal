@@ -1,0 +1,46 @@
+{
+  "run": "release_v9",
+  "mode": "ci-nightly",
+  "server_geometry": {
+    "device": "P300X2",
+    "max_num_seqs": 32,
+    "max_model_len": 32768,
+    "block_size": 32,
+    "engine_seed": 9472,
+    "sample_on_device_mode": "all",
+    "fabric_config": "FABRIC_1D"
+  },
+  "ifeval": {
+    "completed": 109,
+    "requested": 109,
+    "prompt_level_strict_acc": 0.6972477064220184,
+    "inst_level_strict_acc": 0.7853107344632768,
+    "prompt_level_loose_acc": 0.7247706422018348,
+    "inst_level_loose_acc": 0.8192090395480226,
+    "mean_percent": 75.6635,
+    "acceptance_floor_percent": 78.755,
+    "results_sha256": "560b28a5f05b2fbb41334f7e876e4d1243f1bc801c409fb2a6c5c5dde4f79e5f"
+  },
+  "gpqa": {
+    "completed": 90,
+    "requested": 90,
+    "exact_match_strict": 0.24444444444444444,
+    "exact_match_flexible": 0.3888888888888889,
+    "correct_flexible": 35,
+    "acceptance_floor_percent": 40.3,
+    "answers_short_of_floor": 2,
+    "preemptions": 13,
+    "results_sha256": "3d5f4fbad2f5b5f8420bd1aeb073dc9f4fe970f07ac1b58e4ba1fea6746adc9b"
+  },
+  "operational_result": {
+    "health_http": 200,
+    "request_or_transport_errors": 0,
+    "page_or_slot_errors": 0,
+    "enginecore_or_fatal_errors": 0
+  },
+  "log_sha256": {
+    "client_release_v9.log": "133cf082b76a5c90793cccd7b9906e549c2628d2a8e63d49ef58002dc62c92a7",
+    "server_release_v9.log": "c1382f9daae613f7955daa287af838c1b19f2d2f7eeb84851eeb36431087d6be"
+  },
+  "privacy": "Aggregate metrics and hashes only; raw eval samples and completions are not copied."
+}

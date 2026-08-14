@@ -1,0 +1,18 @@
+{
+  "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "prompt_source": "runtime_tasks/gpqa_main_official/gpqa_main_official_cot_n_shot.yaml",
+  "fewshot_count": 5,
+  "chat_rendered_chars": 4599,
+  "chat_rendered_sha256": "ee8eea218b02ed3e51cbc63b1fdf627e71e2ee7865da666374d66431faa69219",
+  "chat_rendered_token_count": 1285,
+  "chat_rendered_strict_marker_count": 5,
+  "chat_rendered_think_prompt_count": 6,
+  "same_prompt_bare_target_token_count": 1265,
+  "format_repair_token_delta": 20,
+  "format_repair_token_inflation_percent": 1.581,
+  "heldout_target_shape_valid": true,
+  "raw_prompt_or_answer_text_stored": false
+}

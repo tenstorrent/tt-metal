@@ -1,0 +1,102 @@
+{
+    "metadata": {
+        "model_name": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "device": "P300X2",
+        "generated_at": "2026-08-14T17:51:45+00:00",
+        "report_id": "mistralai__Mistral-Small-24B-Instruct-2501_2026-08-14T175145+0000",
+        "workflow": "benchmarks",
+        "server_mode": "API",
+        "run_command": "python run_workflows.py --model Mistral-Small-24B-Instruct-2501 --workflow benchmarks --device p300x2 --service-port 8000 --server-url http://127.0.0.1 --tools vllm --runtime-model-spec-json /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v9/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_15-56-55_id_autoport_mistral-small-24b-instruct-2501_p300x2_7efNyisP.json --output-dir /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v9_benchmark_fixed",
+        "runtime_model_spec_json": "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v9/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_15-56-55_id_autoport_mistral-small-24b-instruct-2501_p300x2_7efNyisP.json",
+        "model_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2",
+        "model_repo": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "1529e332a1c37937a682ba04b77e7dc3418f2589",
+        "vllm_commit": "6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e",
+        "model_impl": "mistral-small-24b-2501-autoport"
+    },
+    "sections": [
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 1272.7378,
+                "p50_ttft": 1273.2918,
+                "p99_ttft": 1276.2073,
+                "mean_tpot_ms": 19.1886,
+                "mean_e2el_ms": 3709.6875,
+                "tps_decode_throughput": 34.502,
+                "request_throughput": 0.2695,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1,
+                "target_checks": {
+                    "functional": {
+                        "ttft": 1400.0,
+                        "ttft_ratio": 0.9090984285714286,
+                        "ttft_check": 2,
+                        "tput_user": 50.0,
+                        "tput_user_ratio": 1.0422855236963613,
+                        "tput_user_check": 2,
+                        "tput": 32.0,
+                        "tput_ratio": 1.0781875,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 17:51:45"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "FUNCTIONAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "NA",
+                "total": 1,
+                "passed": 0,
+                "failed": 0,
+                "na": 1,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \ud83d\udfe8 `NA` (0/1 passed, 1 NA)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+}

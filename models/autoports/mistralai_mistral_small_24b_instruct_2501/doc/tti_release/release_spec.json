@@ -1,0 +1,87 @@
+{
+  "model_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2",
+  "impl": {
+    "impl_id": "mistral_small_24b_2501_autoport",
+    "impl_name": "mistral-small-24b-2501-autoport",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501"
+  },
+  "hf_model_repo": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "model_name": "Mistral-Small-24B-Instruct-2501",
+  "inference_engine": "vLLM",
+  "device_type": "P300X2",
+  "device_model_spec": {
+    "device": "P300X2",
+    "max_concurrency": 32,
+    "max_context": 32768,
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 128,
+        "osl": 128,
+        "max_concurrency": 1,
+        "num_prompts": 8,
+        "task_type": "text",
+        "targets": {
+          "functional": {
+            "ttft_ms": 1400.0,
+            "tput_user": 50.0,
+            "tput": 32.0,
+            "tolerance": 0.05
+          }
+        }
+      }
+    ],
+    "vllm_args": {
+      "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+      "block_size": "32",
+      "max_model_len": "32768",
+      "max_num_seqs": "32",
+      "max_num_batched_tokens": "32768",
+      "max-log-len": "32",
+      "seed": "9472",
+      "additional_config": "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 200000000, \"fabric_config\": \"FABRIC_1D\"}}"
+    },
+    "override_tt_config": {
+      "sample_on_device_mode": "all",
+      "trace_region_size": 200000000,
+      "fabric_config": "FABRIC_1D"
+    },
+    "env_vars": {
+      "MESH_DEVICE": "P300x2",
+      "ARCH_NAME": "blackhole",
+      "TT_MISTRAL_TEXT_VER": "mistral_small_24b_autoport"
+    },
+    "known_issues": [
+      {
+        "workflow_type": "EVALS",
+        "task_name": "meta_ifeval",
+        "reason": "P300X2 v9 completed 109/109 IFEval samples without request, transport, or server errors and scored 75.6635 versus the unchanged 78.755 acceptance floor; task-scoped methodology/quality waiver pending reference alignment."
+      },
+      {
+        "workflow_type": "EVALS",
+        "task_name": "meta_gpqa_cot",
+        "reason": "P300X2 v9 completed 90/90 GPQA samples through 13 preemptions without request, transport, page-allocation, or server errors and scored 38.8889 flexible-extract versus the unchanged 40.3 acceptance floor (two answers short); task-scoped quality waiver pending reference alignment."
+      }
+    ]
+  },
+  "tt_metal_commit": "1529e332a1c37937a682ba04b77e7dc3418f2589",
+  "vllm_commit": "6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e",
+  "hf_weights_repo": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "model_type": "LLM",
+  "status": "FUNCTIONAL",
+  "has_builtin_warmup": true,
+  "cli_args": {
+    "model": "Mistral-Small-24B-Instruct-2501",
+    "workflow": "release",
+    "device": "p300x2",
+    "docker_server": false,
+    "local_server": false,
+    "service_port": "8000",
+    "server_url": "http://127.0.0.1",
+    "disable_trace_capture": true,
+    "no_auth": true,
+    "skip_system_sw_validation": true,
+    "limit_samples_mode": "ci-nightly"
+  }
+}
