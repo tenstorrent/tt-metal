@@ -162,7 +162,7 @@ class TtAttention:
         # the "largest even split" default picks: the same k-reduction-shape
         # effect measured on down_proj applies here. Per call at bf8_b:
         # default 0.0528 / 32c 0.0379 / 16c 0.0251 / 8c 0.0314 / 4c 0.0535 ms.
-        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]), max_cores=48)
+        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]), max_cores=16)
         self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
         self.q_plan = build_plan(device, int(self.wq.shape[-2]), int(self.wq.shape[-1]))
         # 48 cores for the fused QKV, re-swept after the projections were fused:
