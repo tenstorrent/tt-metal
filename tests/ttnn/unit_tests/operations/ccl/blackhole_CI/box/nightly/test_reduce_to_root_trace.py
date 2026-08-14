@@ -9,6 +9,7 @@ from loguru import logger
 from tracy import signpost
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.common.utility_functions import skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
@@ -85,6 +86,24 @@ def compute_reference_reduce_to_root(
         m_final_cores.append(m_final)
 
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
+
+
+# Tolerances for bfloat16 with exponentials.
+RTOL = 0.01
+ATOL = 0.06
+PCC = 0.99
+
+
+def assert_output_matches(name, output, reference, context=""):
+    """Element-wise closeness plus PCC, so a systematic shift and a few corrupted elements both fail."""
+    suffix = f" {context}" if context else ""
+    assert torch.allclose(
+        output, reference, rtol=RTOL, atol=ATOL
+    ), f"{name} tensor output does not match reference{suffix}"
+
+    passing, message = comp_pcc(reference, output, PCC)
+    logger.info(f"{name} tensor{suffix}: {message}")
+    assert passing, f"{name} tensor output failed PCC check{suffix}: {message}"
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -308,27 +327,12 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     out_s_root = out_s_torch[root_device_idx]
     out_m_root = out_m_torch[root_device_idx]
 
-    # Tolerances for bfloat16 with exponentials
-    rtol = 0.01
-    atol = 0.06
+    # S and M only carry a meaningful value in the first column of each core's shard.
+    cols_to_check = [i * 32 for i in range(num_cores)]
 
-    # Check L tensor
-    l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
-    assert l_match, "L tensor output does not match reference after trace execution"
-
-    # Check S tensor (only column 0)
-    s_cols_to_check = [i * 32 for i in range(8)]
-    s_output_col0 = out_s_root[:, s_cols_to_check]
-    s_ref_col0 = s_ref[:, s_cols_to_check]
-    s_match = torch.allclose(s_output_col0, s_ref_col0, rtol=rtol, atol=atol)
-    assert s_match, "S tensor output does not match reference after trace execution"
-
-    # Check M tensor (only column 0)
-    m_cols_to_check = [i * 32 for i in range(8)]
-    m_output_col0 = out_m_root[:, m_cols_to_check]
-    m_ref_col0 = m_ref[:, m_cols_to_check]
-    m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
-    assert m_match, "M tensor output does not match reference after trace execution"
+    assert_output_matches("L", out_l_root, l_ref, "after trace execution")
+    assert_output_matches("S", out_s_root[:, cols_to_check], s_ref[:, cols_to_check], "after trace execution")
+    assert_output_matches("M", out_m_root[:, cols_to_check], m_ref[:, cols_to_check], "after trace execution")
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -427,14 +431,8 @@ def test_reduce_to_root_auto_intermediate(bh_2d_mesh_device):
     out_s_root = ttnn.to_torch(out_s, mesh_composer=composer)[root_device_idx]
     out_m_root = ttnn.to_torch(out_m, mesh_composer=composer)[root_device_idx]
 
-    rtol = 0.01
-    atol = 0.06
     cols_to_check = [i * 32 for i in range(num_cores)]
 
-    assert torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol), "L tensor output does not match reference"
-    assert torch.allclose(
-        out_s_root[:, cols_to_check], s_ref[:, cols_to_check], rtol=rtol, atol=atol
-    ), "S tensor output does not match reference"
-    assert torch.allclose(
-        out_m_root[:, cols_to_check], m_ref[:, cols_to_check], rtol=rtol, atol=atol
-    ), "M tensor output does not match reference"
+    assert_output_matches("L", out_l_root, l_ref)
+    assert_output_matches("S", out_s_root[:, cols_to_check], s_ref[:, cols_to_check])
+    assert_output_matches("M", out_m_root[:, cols_to_check], m_ref[:, cols_to_check])
