@@ -14,7 +14,7 @@ from tracy import signpost
 
 import ttnn
 
-from ....models.transformers.transformer_flux2 import Flux2Modulation, Flux2Transformer
+from ....models.transformers.transformer_flux2 import Flux2Transformer
 from ....parallel.config import DiTGParallelConfigNoCFG, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
@@ -41,47 +41,6 @@ class ModelLocationGenerator(Protocol):
         download_dir_suffix: str = "",
     ) -> str:
         ...
-
-
-# TODO: Fix shape compatibility
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        pytest.param((1, 8), id="1x8"),
-        pytest.param((4, 8), id="4x8"),
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
-    tp_axis = 1
-
-    batch_size = 2
-    sequence_length = 4096
-    size = 6144
-    mod_param_sets = 2
-
-    torch_model = diffusers.models.transformers.transformer_flux2.Flux2Modulation(size, mod_param_sets)
-    torch_model.eval()
-
-    tt_model = Flux2Modulation(size, mod_param_sets=mod_param_sets, device=mesh_device, tp_axis=tp_axis)
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-
-    torch.manual_seed(0)
-    inp = torch.randn([batch_size, sequence_length, size])
-    tt_inp = tensor.from_torch(inp, device=mesh_device)
-
-    logger.info("running Torch model...")
-    with torch.no_grad():
-        out = torch_model.forward(inp)
-    out = [o2 for o1 in out for o2 in o1]  # flatten
-
-    logger.info("running TT model...")
-    tt_out = tt_model.forward(tt_inp)
-
-    for out1, tt_out1 in zip(out, tt_out, strict=True):
-        tt_out_torch1 = tensor.to_torch(tt_out1, mesh_axes=[..., tp_axis])
-        assert_quality(out1, tt_out_torch1, pcc=0.99998, relative_rmse=0.009)
 
 
 @pytest.mark.parametrize(
@@ -186,6 +145,7 @@ def test_transformer(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     spatial_seq_len = height * width // 16**2
@@ -204,6 +164,7 @@ def test_transformer(
 
     tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
     tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    tt_embedded_prompt = tt_model.context_embedder(tt_prompt)
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
     tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
 
@@ -215,6 +176,10 @@ def test_transformer(
     )
     tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device)
     tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device)
+    tt_combined_rope = (
+        ttnn.concat([tt_spatial_rope_cos, tt_prompt_rope_cos], dim=2),
+        ttnn.concat([tt_spatial_rope_sin, tt_prompt_rope_sin], dim=2),
+    )
 
     logger.info("running Torch model...")
     with torch.no_grad():
@@ -232,11 +197,12 @@ def test_transformer(
     signpost("t_start")
     tt_output = tt_model.forward(
         spatial=tt_spatial,
-        prompt=tt_prompt,
+        embedded_prompt=tt_embedded_prompt,
         timestep=tt_timestep,
         guidance=tt_guidance,
         spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        combined_rope=tt_combined_rope,
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
     )
@@ -383,6 +349,7 @@ def test_transformer_profile(
 
     tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
     tt_prompt = tensor.from_torch(prompt, device=mesh_device, mesh_axes=prompt_mesh_axes)
+    tt_embedded_prompt = tt_model.context_embedder(tt_prompt)
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
     tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
 
@@ -398,15 +365,20 @@ def test_transformer_profile(
     tt_prompt_rope_sin = tensor.from_torch(
         prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
     )
+    tt_combined_rope = (
+        ttnn.concat([tt_spatial_rope_cos, tt_prompt_rope_cos], dim=2),
+        ttnn.concat([tt_spatial_rope_sin, tt_prompt_rope_sin], dim=2),
+    )
 
     # warmup
     tt_model.forward(
         spatial=tt_spatial,
-        prompt=tt_prompt,
+        embedded_prompt=tt_embedded_prompt,
         timestep=tt_timestep,
         guidance=tt_guidance,
         spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        combined_rope=tt_combined_rope,
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
         compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
@@ -415,11 +387,12 @@ def test_transformer_profile(
     signpost("t_start")
     tt_output = tt_model.forward(
         spatial=tt_spatial,
-        prompt=tt_prompt,
+        embedded_prompt=tt_embedded_prompt,
         timestep=tt_timestep,
         guidance=tt_guidance,
         spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        combined_rope=tt_combined_rope,
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
         compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything

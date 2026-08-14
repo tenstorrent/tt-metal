@@ -26,7 +26,7 @@ from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, F
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import fast_device_to_host, float_to_uint8
+from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch
 from ...utils.tracing import StateTensor, traced_function
 from .prompt_encoder import PromptEncoder
 
@@ -38,13 +38,15 @@ if TYPE_CHECKING:
 
 class Flux2TransformerState:
     def __init__(self) -> None:
-        self._tt_prompt_embeds = StateTensor()
+        self._tt_embedded_prompt = StateTensor()
         self._tt_latents_step = StateTensor()
         self._tt_guidance = StateTensor()
         self._tt_spatial_rope_cos = StateTensor()
         self._tt_spatial_rope_sin = StateTensor()
         self._tt_prompt_rope_cos = StateTensor()
         self._tt_prompt_rope_sin = StateTensor()
+        self._tt_combined_rope_cos = StateTensor()
+        self._tt_combined_rope_sin = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_sigma_difference = StateTensor()
 
@@ -207,6 +209,14 @@ class Flux2Pipeline:
         self.ts._tt_prompt_rope_sin.update(
             prompt_rope_sin.unsqueeze(0).unsqueeze(0), False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
         )
+        # The single blocks run on the concatenated [spatial | prompt] sequence and need the matching
+        # rope. It only depends on the ids, so concat once here instead of every denoising step.
+        self.ts._tt_combined_rope_cos.update(
+            ttnn.concat([self.ts.tt_spatial_rope_cos, self.ts.tt_prompt_rope_cos], dim=2), False
+        )
+        self.ts._tt_combined_rope_sin.update(
+            ttnn.concat([self.ts.tt_spatial_rope_sin, self.ts.tt_prompt_rope_sin], dim=2), False
+        )
 
         self.warmup(warmup_info="e2e warmup")  # E2E warmup. Preallocate buffers
         if trace_warmup:  # warmup for trace capture
@@ -364,17 +374,18 @@ class Flux2Pipeline:
         shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
         latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
-        # Shard the prompt sequence across SP (like spatial) when enabled, so per-block matmuls
-        # run on 1/sp of the prompt tokens; attention gathers prompt q/k/v for the joint SDPA.
-        prompt_embeds_mesh_axes = [None, sp_axis, None] if self._shard_prompt else None
-        self.ts._tt_prompt_embeds.update(
-            prompt_embeds, traced, mesh_axes=prompt_embeds_mesh_axes, device=self._mesh_device
-        )
         self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
         self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
 
         logger.info("denoising...")
         self._prepare_transformer()
+
+        # The prompt is fixed for the whole generation, so run its input projection once here
+        # instead of once per denoising step.
+        prompt_embeds_mesh_axes = [None, sp_axis, None] if self._shard_prompt else None
+        tt_prompt_embeds = from_torch(prompt_embeds, device=self._mesh_device, mesh_axes=prompt_embeds_mesh_axes)
+        self.ts._tt_embedded_prompt.update(self.transformer.context_embedder(tt_prompt_embeds), traced)
+        ttnn.deallocate(tt_prompt_embeds)
 
         with profiler("denoising", profiler_iteration) if profiler else nullcontext():
             for i, t in enumerate(tqdm.tqdm(timesteps)):
@@ -397,12 +408,13 @@ class Flux2Pipeline:
 
                     self._step(
                         spatial=self.ts.tt_latents_step,
-                        prompt=self.ts.tt_prompt_embeds,
+                        embedded_prompt=self.ts.tt_embedded_prompt,
                         timestep=self.ts.tt_timestep,
                         guidance=self.ts.tt_guidance,
                         sigma_difference=self.ts.tt_sigma_difference,
                         spatial_rope=(self.ts.tt_spatial_rope_cos, self.ts.tt_spatial_rope_sin),
                         prompt_rope=(self.ts.tt_prompt_rope_cos, self.ts.tt_prompt_rope_sin),
+                        combined_rope=(self.ts.tt_combined_rope_cos, self.ts.tt_combined_rope_sin),
                         spatial_sequence_length=spatial_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
@@ -467,22 +479,24 @@ class Flux2Pipeline:
         self,
         *,
         spatial: ttnn.Tensor,
-        prompt: ttnn.Tensor,
+        embedded_prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor,
         sigma_difference: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        combined_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
     ) -> None:
         noise_pred = self.transformer.forward(
             spatial=spatial,
-            prompt=prompt,
+            embedded_prompt=embedded_prompt,
             timestep=timestep,
             guidance=guidance,
             spatial_rope=spatial_rope,
             prompt_rope=prompt_rope,
+            combined_rope=combined_rope,
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=prompt_sequence_length,
         )

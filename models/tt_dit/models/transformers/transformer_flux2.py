@@ -13,16 +13,11 @@ import ttnn
 from ...blocks.attention_opt import Attention
 from ...blocks.transformer_block_opt import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import (
-    ColParallelLinear,
-    Linear,
-    RowParallelLinear,
-    prepare_chunked_linear_output,
-    prepare_weight_for_concatenated_input,
-)
+from ...layers.linear import ColParallelLinear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
+from ...utils.tensor import prepare_weight_for_concatenated_input
 
 if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
@@ -30,29 +25,18 @@ if TYPE_CHECKING:
     from ...utils.padding import PaddingConfig
 
 
-class Flux2Modulation(Module):
-    def __init__(self, dim: int, *, mod_param_sets: int, tp_axis: int | None, device: ttnn.MeshDevice) -> None:
-        super().__init__()
-
-        self.linear = ColParallelLinear(
-            dim, dim * 3 * mod_param_sets, bias=False, mesh_axis=tp_axis, mesh_device=device, chunks=3 * mod_param_sets
-        )
-
-        self._mod_param_sets = mod_param_sets
-        self._tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
-
-    def forward(self, x: torch.Tensor, *, skip_act_fn: bool = False) -> tuple[torch.Tensor, ...]:
-        assert len(x.shape) == 3
-
-        if not skip_act_fn:
-            x = ttnn.silu(x)
-
-        return self.linear(x)
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        prepare_chunked_linear_output(
-            state, prefix="linear", device_count=self._tp_factor, chunks=3 * self._mod_param_sets
-        )
+# Every time-embedding projection in the transformer consumes the same `time_embed`, so they are
+# merged into one chunked matmul. This table is the single source of truth for that merge: the
+# checkpoint prefix each group comes from, how many chunks it contributes, and which of its chunks
+# are `scale` (those get the consumers' `+1` folded into the bias). Row order here is the chunk
+# order of the merged weight, which is also the order `forward` unpacks.
+_TIME_MOD_SOURCES = (
+    ("double_stream_modulation_img.linear", 6, (1, 4)),  # (shift, scale, gate) x attn, ff
+    ("double_stream_modulation_txt.linear", 6, (1, 4)),
+    ("single_stream_modulation.linear", 3, (1,)),  # (shift, scale, gate)
+    ("norm_out.linear", 2, (0,)),  # (scale, shift)
+)
+_TIME_MOD_CHUNKS = sum(count for _, count, _ in _TIME_MOD_SOURCES)
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -282,8 +266,15 @@ class Flux2Transformer(Module):
             for i in range(num_single_layers)
         )
 
-        self.time_embed_out = ColParallelLinear(
-            inner_dim, 2 * inner_dim, bias=False, mesh_device=device, mesh_axis=tp_axis
+        # One matmul for every modulation consumer; see _TIME_MOD_SOURCES. The bias carries the
+        # consumers' `+1` on each scale chunk (see _prepare_torch_state).
+        self.time_mod = ColParallelLinear(
+            inner_dim,
+            _TIME_MOD_CHUNKS * inner_dim,
+            bias=True,
+            mesh_device=device,
+            mesh_axis=tp_axis,
+            chunks=_TIME_MOD_CHUNKS,
         )
 
         self.norm_out = DistributedLayerNorm(
@@ -295,22 +286,43 @@ class Flux2Transformer(Module):
             ccl_manager=ccl_manager,
         )
 
-        self.proj_out = Linear(inner_dim, out_channels, bias=False, mesh_device=device)
-
-        self.double_stream_modulation_img = Flux2Modulation(inner_dim, mod_param_sets=2, tp_axis=tp_axis, device=device)
-        self.double_stream_modulation_txt = Flux2Modulation(inner_dim, mod_param_sets=2, tp_axis=tp_axis, device=device)
-        self.single_stream_modulation = Flux2Modulation(inner_dim, mod_param_sets=1, tp_axis=tp_axis, device=device)
+        self.proj_out = RowParallelLinear(
+            inner_dim,
+            out_channels,
+            bias=False,
+            mesh_device=device,
+            mesh_axis=tp_axis,
+            ccl_manager=ccl_manager,
+        )
 
         self.device = device
         self._ccl_manager = ccl_manager
         self._tp_axis = tp_axis
         self._tp_factor = parallel_config.tensor_parallel.factor
+        self._inner_dim = inner_dim
         self.pc = parallel_config
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        rename_substate(state, "norm_out.linear", "time_embed_out")
+        # Merge the four time-embedding projections into `time_mod` by stacking their rows in
+        # _TIME_MOD_SOURCES order. Leave the weight absent (reported as a missing key) rather than
+        # build a partial one if any source is missing.
+        weights = [state.pop(f"{prefix}.weight", None) for prefix, _, _ in _TIME_MOD_SOURCES]
+        assert not any(
+            [state.pop(f"{prefix}.bias", None) is not None for prefix, _, _ in _TIME_MOD_SOURCES]
+        ), "merged time-embedding projection assumes bias-free sources"
+        if all(w is not None for w in weights):
+            state["time_mod.weight"] = torch.cat(weights, dim=0)
+            # Synthesise the bias that carries the consumers' `+1` on each scale chunk.
+            state["time_mod.bias"] = torch.cat(
+                [
+                    torch.full([self._inner_dim], 1.0 if i in scale_indices else 0.0)
+                    for _, count, scale_indices in _TIME_MOD_SOURCES
+                    for i in range(count)
+                ]
+            )
+        prepare_chunked_linear_output(state, prefix="time_mod", device_count=self._tp_factor, chunks=_TIME_MOD_CHUNKS)
+
         rename_substate(state, "norm_out.norm", "norm_out")
-        prepare_chunked_linear_output(state, prefix="time_embed_out", device_count=self._tp_factor, chunks=2)
 
         for i in range(len(self.transformer_blocks)):
             prefix = f"transformer_blocks.{i}."
@@ -329,11 +341,12 @@ class Flux2Transformer(Module):
     def forward(
         self,
         spatial: ttnn.Tensor,
-        prompt: ttnn.Tensor,
+        embedded_prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        combined_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         compute_prompt_output: bool = False,
@@ -342,11 +355,16 @@ class Flux2Transformer(Module):
 
         Args:
             spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, in_channels].
-            prompt: Tensor with shape [batch_size, prompt_sequence_length, joint_attention_dim].
+            embedded_prompt: `context_embedder` applied to the prompt, with shape
+                [batch_size, prompt_sequence_length, inner_dim / tp_factor]. Applied by the caller
+                rather than here because the prompt is constant across denoising steps.
             timestep: Tensor with shape [batch_size, 1].
             guidance: Optional tensor with shape [batch_size, 1].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
+            combined_rope: spatial_rope and prompt_rope concatenated on the sequence dim, for the
+                single blocks. Supplied by the caller rather than built here because it is constant
+                across denoising steps.
             spatial_sequence_length: int.
             prompt_sequence_length: int.
             compute_prompt_output: bool. Whether to compute the prompt output. Final prompt output is typically unused.
@@ -355,38 +373,18 @@ class Flux2Transformer(Module):
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
-        double_stream_mod_img = self.double_stream_modulation_img(time_embed, skip_act_fn=True)
-        shift_attn_i, scale_attn_i, gate_attn_i, shift_ff_i, scale_ff_i, gate_ff_i = double_stream_mod_img
-        double_stream_mod_img = (
-            shift_attn_i,
-            scale_attn_i + 1,
-            ttnn.typecast(gate_attn_i, ttnn.bfloat16),
-            shift_ff_i,
-            scale_ff_i + 1,
-            ttnn.typecast(gate_ff_i, ttnn.bfloat16),
-        )
-
-        double_stream_mod_txt = self.double_stream_modulation_txt(time_embed, skip_act_fn=True)
-        shift_attn_t, scale_attn_t, gate_attn_t, shift_ff_t, scale_ff_t, gate_ff_t = double_stream_mod_txt
-        double_stream_mod_txt = (
-            shift_attn_t,
-            scale_attn_t + 1,
-            ttnn.typecast(gate_attn_t, ttnn.bfloat16),
-            shift_ff_t,
-            scale_ff_t + 1,
-            ttnn.typecast(gate_ff_t, ttnn.bfloat16),
-        )
-
-        single_stream_mod = self.single_stream_modulation(time_embed, skip_act_fn=True)
-        shift, scale, gate = single_stream_mod
-        single_stream_mod = (
-            ttnn.typecast(shift, ttnn.bfloat16),
-            ttnn.typecast(scale + 1, ttnn.bfloat16),
-            ttnn.typecast(gate, ttnn.bfloat16),
-        )
+        # One matmul for every modulation consumer, emitting bf16 with the `+1` already folded into
+        # each scale chunk, so the tuples below are directly in the (shift, 1 + scale, gate) form
+        # the blocks expect — no per-chunk add or typecast. Slices follow _TIME_MOD_SOURCES:
+        # img(6), txt(6), single(3), norm_out(2).
+        time_mod = self.time_mod(time_embed, dtype=ttnn.bfloat16)
+        double_stream_mod_img = tuple(time_mod[0:6])
+        double_stream_mod_txt = tuple(time_mod[6:12])
+        single_stream_mod = tuple(time_mod[12:15])
+        norm_out_scale, norm_out_shift = time_mod[15], time_mod[16]
 
         spatial = self.x_embedder(spatial)
-        prompt = self.context_embedder(prompt)
+        prompt = embedded_prompt
 
         for i, block in enumerate(self.transformer_blocks, start=1):
             spatial, prompt = block.forward(
@@ -409,9 +407,6 @@ class Flux2Transformer(Module):
 
         # prep pre concatenated data
         spatial_prompt_concat = ttnn.concat([spatial, prompt], dim=1)
-        combined_cos_rope = ttnn.concat([spatial_rope[0], prompt_rope[0]], dim=2)
-        combined_sin_rope = ttnn.concat([spatial_rope[1], prompt_rope[1]], dim=2)
-        combined_rope = (combined_cos_rope, combined_sin_rope)
         spatial_size = spatial.shape[1]
         spatial_prompt_sequence_length = spatial_sequence_length + prompt_sequence_length
         for i, block in enumerate(self.single_transformer_blocks, start=1):
@@ -430,17 +425,10 @@ class Flux2Transformer(Module):
             # if i % 6 == 0:
             #     ttnn.ReadDeviceProfiler(spatial.device())
 
-        spatial = spatial_prompt_concat if compute_prompt_output else spatial_prompt_concat[:, :spatial_size, :]
+        spatial = spatial_prompt_concat if compute_prompt_output else spatial_prompt_concat  # [:, :spatial_size, :]
 
-        time_embed_proj = self.time_embed_out(time_embed)
-        [scale, shift] = ttnn.chunk(time_embed_proj, 2, dim=-1)
-        scale = ttnn.typecast(scale + 1, ttnn.bfloat16)
-        shift = ttnn.typecast(shift, ttnn.bfloat16)
-
-        spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale, dynamic_bias=shift), 0)
-
-        spatial = self._ccl_manager.all_gather_persistent_buffer(
-            spatial, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True
+        spatial = ttnn.squeeze(
+            self.norm_out(ttnn.unsqueeze(spatial, 0), dynamic_weight=norm_out_scale, dynamic_bias=norm_out_shift), 0
         )
 
-        return self.proj_out(spatial)
+        return self.proj_out(spatial, gather_output=True)

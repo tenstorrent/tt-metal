@@ -596,6 +596,7 @@ class RowParallelLinear(Module):
         use_persistent_buffer: bool = True,
         default_block_size: tuple = None,
         dtype=None,
+        gather_output: bool = False,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -633,9 +634,15 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
+            # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
+            dim = -2 if gather_output else -1
             output = self.ccl_manager.reduce_scatter(
-                output, dim=-1, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
+            if gather_output:
+                output = self.ccl_manager.all_gather(
+                    output, dim=dim, mesh_axis=self.mesh_axis, use_hyperparams=True, use_persistent_buffer=True
+                )
 
         return output
 

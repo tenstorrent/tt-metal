@@ -13,6 +13,7 @@ from ..layers.linear import ColParallelLinear, prepare_chunked_linear_output
 from ..layers.module import Module
 from ..layers.normalization import DistributedLayerNorm
 from ..utils.substate import rename_substate
+from ..utils.tensor import as_bf16
 from .attention_opt import Attention
 
 if TYPE_CHECKING:
@@ -328,9 +329,9 @@ class TransformerBlock(Module):
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
 
         # NOTE: workaround - addcmul is less accurate with fp32 gate input
-        spatial_gate_attn = ttnn.typecast(spatial_gate_attn, dtype=ttnn.bfloat16)
+        spatial_gate_attn = as_bf16(spatial_gate_attn)
         if prompt_gate_attn is not None:
-            prompt_gate_attn = ttnn.typecast(prompt_gate_attn, dtype=ttnn.bfloat16)
+            prompt_gate_attn = as_bf16(prompt_gate_attn)
 
         spatial, prompt_attn = self.attn.forward(
             sequence_1=spatial_normed,
@@ -357,7 +358,7 @@ class TransformerBlock(Module):
             0,
         )
 
-        spatial_gate_ff = ttnn.typecast(spatial_gate_ff, dtype=ttnn.bfloat16)
+        spatial_gate_ff = as_bf16(spatial_gate_ff)
         if is_ring:
             spatial = self.ff.forward_fused_addcmul(
                 spatial_normed,
@@ -391,7 +392,7 @@ class TransformerBlock(Module):
             0,
         )
 
-        prompt_gate_ff = ttnn.typecast(prompt_gate_ff, dtype=ttnn.bfloat16)
+        prompt_gate_ff = as_bf16(prompt_gate_ff)
         if is_ring:
             prompt = self.ff_context.forward_fused_addcmul(
                 prompt_normed,
