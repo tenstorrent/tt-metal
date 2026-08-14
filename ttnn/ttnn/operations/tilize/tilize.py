@@ -186,7 +186,7 @@ SUPPORTED = {
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
     "rank": [0, 2, 3, 4, 5],
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
-    "tile_height": [32],
+    "tile_height": [32, 16, 8, 4, 2, 1],
     "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
     "in_tile_height": ["none"],
     "pad_mode": ["none", "auto", "explicit"],
@@ -375,6 +375,40 @@ def _canonicalize(
     )
 
 
+def _allocate_output(shape, dtype, memory_config, tile, device):
+    """Allocate the TILE-layout output carrying the REQUESTED tile geometry.
+
+    `ttnn.allocate_tensor_on_device(shape, dtype, layout, device, mem_config)`
+    has no `tile=` parameter, so it always builds the default 32x32 tile — which
+    silently ignores a tiny-tile request (`tile=ttnn.Tile([16, 32])`) and lands
+    the kernels' tiny pages in a 32-row buffer. The TensorSpec overload does
+    carry the tile, so the geometry has ONE source (`plan.tile_h/tile_w`) across
+    the output tensor spec, the CB `TileDescriptor` and `derive_blocking()`.
+
+    Verified equivalent to the shape/dtype/layout overload at the default
+    geometry for all four placements (interleaved, legacy 2-D, ND), so this is
+    one path, not a tiny-tile branch.
+    """
+    shape = ttnn.Shape(shape)
+    if not memory_config.is_sharded():
+        spec = ttnn.TensorSpec(shape, dtype, ttnn.TILE_LAYOUT, buffer_type=memory_config.buffer_type, tile=tile)
+    elif memory_config.shard_spec is not None:
+        spec = ttnn.TensorSpec(
+            shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+            memory_config.memory_layout,
+            memory_config.shard_spec,
+            memory_config.buffer_type,
+            tile,
+        )
+    else:
+        spec = ttnn.TensorSpec(
+            shape, dtype, ttnn.TILE_LAYOUT, memory_config.nd_shard_spec, memory_config.buffer_type, tile
+        )
+    return ttnn.allocate_tensor_on_device(spec, device)
+
+
 def _placement_spec(memory_config):
     """Project a MemoryConfig onto the scenario-dict placement spec the taggers read."""
     buffer_type = memory_config.buffer_type
@@ -534,12 +568,12 @@ def tilize(
     # The device buffer is allocated at the PADDED target so the kernels write
     # whole tiles; the logical view is restored below (zero-copy reshape) so the
     # output keeps the input's logical shape, as the contract demands.
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(plan.target),
+    output_tensor = _allocate_output(
+        plan.target,
         plan.out_dtype,
-        ttnn.TILE_LAYOUT,
-        device,
         plan.out_memory_config,
+        ttnn.Tile([plan.tile_h, plan.tile_w]),
+        device,
     )
 
     program_descriptor = create_program_descriptor(input_tensor, output_tensor, plan)

@@ -206,3 +206,13 @@
 {"source":"run_safe_pytest","pid":344913,"started_at_ms":1786723301527,"wait_ms":1,"run_ms":16171,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_surface.py","exit_code":0}
 {"source":"run_safe_pytest","pid":345660,"started_at_ms":1786723322236,"wait_ms":2,"run_ms":14431,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
 {"source":"run_safe_pytest","pid":346085,"started_at_ms":1786723336675,"wait_ms":3,"run_ms":14437,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"event": "phase", "phase": "refinement_4", "state": "end", "at_ms": 1786723387720}
+{"event": "phase", "phase": "refinement_4_build", "state": "start", "at_ms": 1786723388123}
+{"event": "phase", "phase": "refinement_4_build", "state": "end", "at_ms": 1786723391975}
+{"event": "phase", "phase": "refinement_4_golden", "state": "start", "at_ms": 1786723391975}
+{"source":"eval_test_runner","pid":348290,"started_at_ms":1786723391978,"wait_ms":2639,"run_ms":78431,"test_path":"eval/golden_tests/tilize/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_4_golden", "state": "end", "at_ms": 1786723473051}
+{"source":"run_safe_pytest","pid":353370,"started_at_ms":1786723478550,"wait_ms":2,"run_ms":14110,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","exit_code":0}
+{"event": "phase", "phase": "refinement_5", "state": "start", "at_ms": 1786723492677}
+{"source":"tt-probe","pid":355482,"started_at_ms":1786723703441,"wait_ms":177,"run_ms":15946,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":355816,"started_at_ms":1786723751534,"wait_ms":197,"run_ms":21034,"test_path":"tilize","exit_code":0}
