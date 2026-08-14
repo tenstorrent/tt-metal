@@ -883,6 +883,78 @@ for _entry, _want in [
     )
 
 # --------------------------------------------------------------------------------------------
+# The generator pin. `untilize` was ported against a `codegen_agentic_port` that had moved: the merged
+# port's writer takes three compile-time args, the branch's template wants `rm_shard_split.h` and two
+# more, and 76 of 112 cases wrote uncorrelated data. Nothing in the harness could have said which
+# generator the port was a transliteration of, so nothing could say the two had diverged.
+
+_pin = next(
+    (s for s in _frontmatter["steps"] if s["name"].startswith("Pin the generator")),
+    None,
+)
+check("the generator is pinned to a commit", _pin is not None)
+
+_names = [s["name"] for s in _frontmatter["steps"]]
+if _pin:
+    check(
+        "before the generator is checked out, so the checkout takes the pin",
+        _names.index(_pin["name"]) < _names.index("Checkout tt-dm-codegen"),
+        "pinning after the checkout would name a commit the run is not using",
+    )
+    # Run against the real shell: a pin that silently accepts a branch name would check the generator
+    # out at the branch, which is the bug this exists to prevent, and would look like it worked.
+    _read = _pin["run"]
+    for _trailer, _want in [
+        ("7f2930ff75da8e4731e7d5cf7d730a77aaec3b62", True),
+        ("codegen_agentic_port", False),  # what an older harness wrote there
+        ("", False),  # a hand-written branch
+        ("7f2930ff", False),  # abbreviated: not what the trailer carries, so not a pin
+    ]:
+        _got = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'pinned="$1"\n'
+                'if printf "%s" "$pinned" | grep -Eq "^[0-9a-f]{40}$"; then echo PIN; else echo NOPIN; fi',
+                "_",
+                _trailer,
+            ],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        check(
+            f"a trailer of {_trailer[:20] or '(empty)'!r} is {'a pin' if _want else 'not a pin'}",
+            (_got == "PIN") is _want,
+            f"got {_got}",
+        )
+    check(
+        "and the pin is read out of the branch's own commit, not an input",
+        "Port-generator" in _read and "git log -1" in _read,
+    )
+
+_resolve_pin = _resolve["run"]
+check(
+    "a floating ref is replaced by the commit the checkout produced",
+    "git -C .codegen rev-parse HEAD" in _resolve_pin and "PORT_CODEGEN_REF=$codegen_sha" in _resolve_pin,
+    "without this, attempt 1 never establishes a pin for attempt 2 to inherit",
+)
+check(
+    "and a pin the checkout did not honour stops the run",
+    "::error::asked for generator" in _resolve_pin,
+    "silently transliterating a generator nobody chose is the failure being prevented",
+)
+_dispatch_src = (Path(__file__).resolve().parent / "dispatch.py").read_text()
+check(
+    "the pin reaches the trailer the next attempt reads",
+    "TRAILER_PREFIX}generator: {args.codegen_ref}" in _dispatch_src,
+    "the chain state is the only thing carrying it across runs",
+)
+check(
+    "and reaches the measure job, whose own generator checkout must match",
+    '"codegen-ref": args.codegen_ref' in _dispatch_src,
+)
+
+# --------------------------------------------------------------------------------------------
 # The agent job runs in-cluster now, and CIv2 sends loopback through the restricted proxy. gh-aw polls
 # its own mcp-scripts server over `localhost:3000` to decide it is ready, so without the exemption the
 # job dies before the agent exists -- and the error it dies with blames the server, which was fine.

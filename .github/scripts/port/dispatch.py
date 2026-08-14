@@ -750,6 +750,12 @@ def publish(api: Api, repo: Path, work: Path, remote: str, token_file: Path, arg
     tip and needs nothing else -- no run id, no report artifact, no attempt count from a human. That
     is what makes a branch self-describing, and what makes a branch someone wrote by hand resumable on
     exactly the same terms as one this pipeline wrote.
+
+    `Port-generator` is load-bearing rather than informational: the workflow checks the generator out
+    at whatever commit it names, so the next attempt transliterates the same generator this one did.
+    It holds a full sha because `--codegen-ref` is resolved to one before any dispatch, and the pin
+    step ignores anything that is not, which is how a branch published by an older harness -- whose
+    trailer holds the branch *name* -- correctly reads as unpinned.
     """
     if not args.branch:
         log("publish: no branch to publish to; nothing to do")

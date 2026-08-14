@@ -20,14 +20,19 @@ description: |
   V1 scope: one op, one arch (N150), `workflow_dispatch` only.
 
 on:
-  # Prototype shakedown only. `workflow_dispatch` resolves against the default branch, so this
-  # workflow cannot be started that way until it lands on main -- the push trigger is how v1 gets
-  # exercised before then. Remove it when this merges; every input falls back to its default on a
-  # push, which is why the defaults are duplicated inline throughout.
+  # `workflow_dispatch` is how a run is normally started, and it does resolve against the ref it is
+  # handed: run 31744036323 ran this file from `ebanerjee/port-untilize` while `main` carried no copy
+  # of it at all. What it does not do is wait for a push. That run took the branch tip as GitHub knew
+  # it 15 seconds before the fix under test landed, and spent an agent proving the old code still
+  # failed -- which was read at the time as dispatch ignoring the ref. Confirm
+  # `git rev-parse origin/<branch>` matches local HEAD before dispatching, and this cannot recur.
   #
-  # Note that `port-measure.yaml`, which this job dispatches to, needs no such accommodation and no
-  # merge either: it triggers on the push of the scratch ref, and a push event runs the workflow
-  # file from the pushed commit.
+  # The push trigger is kept for the scratch ref, which is a way to exercise a change without a
+  # dispatch. Every input falls back to its default on a push, which is what the `env:` block below
+  # is for.
+  #
+  # `port-measure.yaml`, which this job dispatches to, needs neither: it triggers on the push of the
+  # scratch ref, and a push event runs the workflow file from the pushed commit.
   push:
     branches: [ebanerjee/port-op-dryrun]
   workflow_dispatch:
@@ -260,6 +265,35 @@ steps:
           || { echo "::error::$(basename "$f") did not copy faithfully"; exit 1; }
       done
 
+  # A port is a transliteration of one commit of the generator, but `PORT_CODEGEN_REF` names a branch,
+  # and a branch moves. Read afresh on every attempt, a resumed run vendors kernels from a generator
+  # newer than the host code the previous attempt wrote against, and nothing in the harness says so.
+  #
+  # That is not hypothetical. `untilize.yaml` records `ported_codegen_commit: 7f2930ff`, and main's
+  # merged writer template reads three compile-time args with no `rm_shard_split.h`; the branch's
+  # template has since grown a shard-split contract wanting that header and two more arguments. A
+  # port straddling the two is wrong in a way that reads as a kernel bug rather than a pin problem.
+  #
+  # So the pin travels with the branch. The previous attempt wrote it into its own commit trailer and
+  # this reads it back, before the checkout below, so the checkout takes it. A fresh branch has no
+  # trailer and falls through to the branch name, which the resolve step then replaces with the
+  # commit it actually got -- attempt 1 establishes the pin, every later attempt inherits it.
+  #
+  # Only a full sha is accepted. A branch published before this existed carries the branch *name* in
+  # that trailer, which is not a pin and must not be treated as one.
+  - name: Pin the generator to the commit this port was written against
+    run: |
+      pinned=$(git log -1 --format='%(trailers:key=Port-generator,valueonly=true,unfold=true)' \
+        2>/dev/null | tr -d '[:space:]')
+      if printf '%s' "$pinned" | grep -Eq '^[0-9a-f]{40}$'; then
+        echo "PORT_CODEGEN_REF=$pinned" >> $GITHUB_ENV
+        echo "generator pinned to $pinned, carried by this branch's commit trailer"
+      elif [ -n "$pinned" ]; then
+        echo "this branch names $pinned, which is not a commit; pinning to $PORT_CODEGEN_REF instead"
+      else
+        echo "no pin on this branch; $PORT_CODEGEN_REF resolves to a commit in the step after next"
+      fi
+
   # Read-only, credentials not persisted: the agent must never be able to push to the generator
   # repo, and the port only ever reads from it. `actions/checkout` cannot place a repo outside the
   # workspace, so it lands in a dotted directory that is then excluded from tt-metal's index --
@@ -290,6 +324,25 @@ steps:
       # HEAD, which is what makes the guard judge only the work this run adds rather than everything
       # the previous run committed.
       echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      # Attempt 1 establishes the generator pin: whatever the branch pointed at when this run checked
+      # it out. From here every consumer names the commit rather than the branch -- the dispatch
+      # params, the measure job's own generator checkout, the prototype pass set's cache key, and the
+      # trailer the next attempt reads back. That is what makes a chain of attempts transliterate one
+      # generator instead of a sequence of them.
+      codegen_sha=$(git -C .codegen rev-parse HEAD)
+      if printf '%s' "$PORT_CODEGEN_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+        # A pin was asked for, so the checkout should have produced exactly it. If it did not, the run
+        # is about to transliterate a generator nobody chose.
+        if [ "$codegen_sha" != "$PORT_CODEGEN_REF" ]; then
+          echo "::error::asked for generator $PORT_CODEGEN_REF but .codegen is at $codegen_sha"
+          exit 1
+        fi
+        echo "generator held at its pin, $codegen_sha"
+      else
+        echo "PORT_CODEGEN_REF=$codegen_sha" >> $GITHUB_ENV
+        echo "generator pinned to $codegen_sha, resolved from $PORT_CODEGEN_REF"
+      fi
 
       # `category` was an input with a default of `data_movement`, which is right for one op. It is not
       # a choice: the op's directory is already in the tree, and the manifest already says which one.
@@ -883,6 +936,10 @@ whether the thing is faster.
 Open it as a draft, describing:
 
 - **What changed** — the file list and the shape of the port, including the generated routing test.
+- **Which generator** — the tt-dm-codegen commit this port transliterates, from
+  `git -C .codegen rev-parse HEAD`. A reviewer cannot check a transliteration against the generator
+  without knowing which generator, and that branch moves: a merged port and a fresh one can disagree
+  about a kernel's argument contract simply because they were written months apart.
 - **Why this is, or is not, faster** — the mechanism, grounded in source. Name the specific native
   cost that is avoided and the generated design choice that avoids it. Do not claim causality you
   cannot point at, and do not write "codegen is faster." A verdict short of `win` gets the same
