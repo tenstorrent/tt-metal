@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "config_id": "full_attention_bfp4_lofi",
+  "base_policy": {"full_attention": "final_cumulative", "linear_attention": "linear_final"},
+  "weight_groups": {
+    "full_attention_qkv": "BFP4_B",
+    "full_attention_o": "BFP4_B",
+    "linear_attention_internal": "BFP4_B",
+    "linear_input_projection": "BFP4_B",
+    "linear_output_projection": "BFP4_B",
+    "mlp_gate_up": "BFP4_B",
+    "mlp_down": "BFP4_B"
+  },
+  "layer_exceptions": [],
+  "compute_fidelities": {
+    "full_attention_sdpa": "LoFi",
+    "full_attention_qkv": "LoFi",
+    "full_attention_o": "LoFi",
+    "linear_attention_internal": "LoFi",
+    "linear_input_projection": "LoFi",
+    "linear_output_projection": "LoFi",
+    "linear_recurrent": "HiFi2",
+    "mlp": "LoFi"
+  },
+  "activation_residual_dtype": "BF16",
+  "ccl_dtype": {"token_mixer": "BF16", "mlp": "BF16"},
+  "kv_cache_dtype": "BFP8_B",
+  "linear_recurrent_state_dtype": "BFP8_B",
+  "logits_sampling": {
+    "lm_head_weight_dtype": "BFP8_B",
+    "lm_head_output_dtype": "BFP8_B",
+    "lm_head_compute_fidelity": "HiFi2",
+    "sampling_logits_dtype": "BFP8_B",
+    "sampled_token_dtype": "UINT32"
+  }
+}

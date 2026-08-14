@@ -5,8 +5,33 @@ from pathlib import Path
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.generator import Qwen36Generator
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
+from models.autoports.qwen_qwen3_6_27b.tt.precision_config import load_precision_config, safe_baseline_config
 
 ROOT = Path("models/autoports/qwen_qwen3_6_27b")
+
+
+def test_precision_config_is_strict_and_resolves_runtime_policy():
+    config = load_precision_config(safe_baseline_config())
+    full = config.policy_for(0, "full_attention")
+    linear = config.policy_for(1, "linear_attention")
+    assert full.attention_weight_dtype == ttnn.bfloat16
+    assert full.cache_dtype == ttnn.bfloat8_b
+    assert full.qkv_fidelity == ttnn.MathFidelity.HiFi2
+    assert full.mlp_fidelity == ttnn.MathFidelity.LoFi
+    assert linear.linear_input_weight_dtype == ttnn.bfloat4_b
+    assert linear.linear_recurrent_state_dtype == ttnn.bfloat8_b
+    assert config.ccl_dtype("token_mixer") == ttnn.bfloat16
+
+
+def test_precision_config_rejects_ignored_sampling_assumption():
+    raw = safe_baseline_config()
+    raw["logits_sampling"]["sampled_token_dtype"] = "BF16"
+    try:
+        load_precision_config(raw)
+    except ValueError as error:
+        assert "UINT32" in str(error)
+    else:
+        raise AssertionError("an unsupported sampler token dtype must not be silently ignored")
 
 
 def test_context_contract_matches_public_prefill_limit():

@@ -1,0 +1,543 @@
+{
+  "batch": 32,
+  "categories": {
+    "measured_peak_warmed_trace_workspace": {
+      "allocated_payload_bytes_per_device": 1970176,
+      "requested_bytes_per_device": 1969152
+    },
+    "selected_tp4_weights_override": {
+      "allocated_payload_bytes_per_device": 11832541184,
+      "requested_bytes_per_device": 11832539648
+    },
+    "state_linear_convolution_state": {
+      "allocated_payload_bytes_per_device": 251658240,
+      "requested_bytes_per_device": 251658240
+    },
+    "state_linear_recurrent_state": {
+      "allocated_payload_bytes_per_device": 320864256,
+      "requested_bytes_per_device": 320864256
+    }
+  },
+  "context": 262144,
+  "device_ids": [
+    3,
+    2,
+    1,
+    0
+  ],
+  "elapsed_seconds": 1.1763720670714974,
+  "error": "TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false\ninfo:\nOut of Memory: Not enough space to allocate 2281701376 B DRAM buffer across 8 banks, where each bank needs to store 285212672 B, but bank size is 4268341376 B (allocated: 4117794816 B, free: 150546560 B, largest free block: 150546560 B)\nbacktrace:\n --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x94c381) [0x74f77c14c381]\n --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&)\n --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)\n --- tt::tt_metal::Buffer::allocate_impl()\n --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)\n --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)\n --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)\n --- tt::tt_metal::MeshTensor::allocate_on_device(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec const&, tt::tt_metal::TensorTopology const&)\n --- tt::tt_metal::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)\n --- ttnn::empty(tt::tt_metal::Shape const&, tt::tt_metal::DataType const&, tt::tt_metal::Layout const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&)\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7fa7ef) [0x74f77f1fa7ef]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7fac9e) [0x74f77f1fac9e]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x74f77ed15575]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1ac8a22]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x18c68da]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1ac8a22]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x18c68da]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(PyEval_EvalCode+0xde) [0x18931a0]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x18b12c9]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1a2b145]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x1a2af06]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1a2ac10]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1a2ab1d]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1ae1fe3]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x198c298]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x198c0ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x74f77fcae1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x74f77fcae28b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_start+0x29) [0x19a4a69]\n",
+  "error_type": "RuntimeError",
+  "fabric_opened": false,
+  "memory_views": {
+    "after_layer_00_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2147035264,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16970448896,
+        "total_bytes_allocated_per_bank": 2121306112,
+        "total_bytes_free": 17176282112,
+        "total_bytes_free_per_bank": 2147035264,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2147035264,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16970448896,
+        "total_bytes_allocated_per_bank": 2121306112,
+        "total_bytes_free": 17176282112,
+        "total_bytes_free_per_bank": 2147035264,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2147035264,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16970448896,
+        "total_bytes_allocated_per_bank": 2121306112,
+        "total_bytes_free": 17176282112,
+        "total_bytes_free_per_bank": 2147035264,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2147035264,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16970448896,
+        "total_bytes_allocated_per_bank": 2121306112,
+        "total_bytes_free": 17176282112,
+        "total_bytes_free_per_bank": 2147035264,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_01_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1576609920,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21533851648,
+        "total_bytes_allocated_per_bank": 2691731456,
+        "total_bytes_free": 12612879360,
+        "total_bytes_free_per_bank": 1576609920,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1576609920,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21533851648,
+        "total_bytes_allocated_per_bank": 2691731456,
+        "total_bytes_free": 12612879360,
+        "total_bytes_free_per_bank": 1576609920,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1576609920,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21533851648,
+        "total_bytes_allocated_per_bank": 2691731456,
+        "total_bytes_free": 12612879360,
+        "total_bytes_free_per_bank": 1576609920,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1576609920,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21533851648,
+        "total_bytes_allocated_per_bank": 2691731456,
+        "total_bytes_free": 12612879360,
+        "total_bytes_free_per_bank": 1576609920,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_02_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1006184576,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26097254400,
+        "total_bytes_allocated_per_bank": 3262156800,
+        "total_bytes_free": 8049476608,
+        "total_bytes_free_per_bank": 1006184576,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1006184576,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26097254400,
+        "total_bytes_allocated_per_bank": 3262156800,
+        "total_bytes_free": 8049476608,
+        "total_bytes_free_per_bank": 1006184576,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1006184576,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26097254400,
+        "total_bytes_allocated_per_bank": 3262156800,
+        "total_bytes_free": 8049476608,
+        "total_bytes_free_per_bank": 1006184576,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1006184576,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26097254400,
+        "total_bytes_allocated_per_bank": 3262156800,
+        "total_bytes_free": 8049476608,
+        "total_bytes_free_per_bank": 1006184576,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_03_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 435759232,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 30660657152,
+        "total_bytes_allocated_per_bank": 3832582144,
+        "total_bytes_free": 3486073856,
+        "total_bytes_free_per_bank": 435759232,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 435759232,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 30660657152,
+        "total_bytes_allocated_per_bank": 3832582144,
+        "total_bytes_free": 3486073856,
+        "total_bytes_free_per_bank": 435759232,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 435759232,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 30660657152,
+        "total_bytes_allocated_per_bank": 3832582144,
+        "total_bytes_free": 3486073856,
+        "total_bytes_free_per_bank": 435759232,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 435759232,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 30660657152,
+        "total_bytes_allocated_per_bank": 3832582144,
+        "total_bytes_free": 3486073856,
+        "total_bytes_free_per_bank": 435759232,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_measured_peak_warmed_trace_workspace": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2717460608,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12407046144,
+        "total_bytes_allocated_per_bank": 1550880768,
+        "total_bytes_free": 21739684864,
+        "total_bytes_free_per_bank": 2717460608,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2717460608,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12407046144,
+        "total_bytes_allocated_per_bank": 1550880768,
+        "total_bytes_free": 21739684864,
+        "total_bytes_free_per_bank": 2717460608,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2717460608,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12407046144,
+        "total_bytes_allocated_per_bank": 1550880768,
+        "total_bytes_free": 21739684864,
+        "total_bytes_free_per_bank": 2717460608,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2717460608,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12407046144,
+        "total_bytes_allocated_per_bank": 1550880768,
+        "total_bytes_free": 21739684864,
+        "total_bytes_free_per_bank": 2717460608,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_selected_tp4_weights_override": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2789273728,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11832541184,
+        "total_bytes_allocated_per_bank": 1479067648,
+        "total_bytes_free": 22314189824,
+        "total_bytes_free_per_bank": 2789273728,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2789273728,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11832541184,
+        "total_bytes_allocated_per_bank": 1479067648,
+        "total_bytes_free": 22314189824,
+        "total_bytes_free_per_bank": 2789273728,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2789273728,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11832541184,
+        "total_bytes_allocated_per_bank": 1479067648,
+        "total_bytes_free": 22314189824,
+        "total_bytes_free_per_bank": 2789273728,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2789273728,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11832541184,
+        "total_bytes_allocated_per_bank": 1479067648,
+        "total_bytes_free": 22314189824,
+        "total_bytes_free_per_bank": 2789273728,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_state_linear_convolution_state": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2757816448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12084199424,
+        "total_bytes_allocated_per_bank": 1510524928,
+        "total_bytes_free": 22062531584,
+        "total_bytes_free_per_bank": 2757816448,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2757816448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12084199424,
+        "total_bytes_allocated_per_bank": 1510524928,
+        "total_bytes_free": 22062531584,
+        "total_bytes_free_per_bank": 2757816448,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2757816448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12084199424,
+        "total_bytes_allocated_per_bank": 1510524928,
+        "total_bytes_free": 22062531584,
+        "total_bytes_free_per_bank": 2757816448,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2757816448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12084199424,
+        "total_bytes_allocated_per_bank": 1510524928,
+        "total_bytes_free": 22062531584,
+        "total_bytes_free_per_bank": 2757816448,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_state_linear_recurrent_state": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2717708416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12405063680,
+        "total_bytes_allocated_per_bank": 1550632960,
+        "total_bytes_free": 21741667328,
+        "total_bytes_free_per_bank": 2717708416,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2717708416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12405063680,
+        "total_bytes_allocated_per_bank": 1550632960,
+        "total_bytes_free": 21741667328,
+        "total_bytes_free_per_bank": 2717708416,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2717708416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12405063680,
+        "total_bytes_allocated_per_bank": 1550632960,
+        "total_bytes_free": 21741667328,
+        "total_bytes_free_per_bank": 2717708416,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2717708416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12405063680,
+        "total_bytes_allocated_per_bank": 1550632960,
+        "total_bytes_free": 21741667328,
+        "total_bytes_free_per_bank": 2717708416,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "at_failure": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 150546560,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 32942358528,
+        "total_bytes_allocated_per_bank": 4117794816,
+        "total_bytes_free": 1204372480,
+        "total_bytes_free_per_bank": 150546560,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 150546560,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 32942358528,
+        "total_bytes_allocated_per_bank": 4117794816,
+        "total_bytes_free": 1204372480,
+        "total_bytes_free_per_bank": 150546560,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 150546560,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 32942358528,
+        "total_bytes_allocated_per_bank": 4117794816,
+        "total_bytes_free": 1204372480,
+        "total_bytes_free_per_bank": 150546560,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 150546560,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 32942358528,
+        "total_bytes_allocated_per_bank": 4117794816,
+        "total_bytes_free": 1204372480,
+        "total_bytes_free_per_bank": 150546560,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "opened": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      }
+    ]
+  },
+  "mesh_shape": [
+    1,
+    4
+  ],
+  "mode": "worker",
+  "pid": 3979445,
+  "schema_version": 1,
+  "success": false,
+  "traceback": "Traceback (most recent call last):\n  File \"/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/multichip_capacity_probe.py\", line 183, in _worker\n    ttnn.empty(\n  File \"/home/mvasiljevic/tt-metal/ttnn/ttnn/decorators.py\", line 473, in __call__\n    result = self.function(*function_args, **function_kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false\ninfo:\nOut of Memory: Not enough space to allocate 2281701376 B DRAM buffer across 8 banks, where each bank needs to store 285212672 B, but bank size is 4268341376 B (allocated: 4117794816 B, free: 150546560 B, largest free block: 150546560 B)\nbacktrace:\n --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x94c381) [0x74f77c14c381]\n --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&)\n --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)\n --- tt::tt_metal::Buffer::allocate_impl()\n --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)\n --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)\n --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)\n --- tt::tt_metal::MeshTensor::allocate_on_device(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec const&, tt::tt_metal::TensorTopology const&)\n --- tt::tt_metal::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)\n --- ttnn::empty(tt::tt_metal::Shape const&, tt::tt_metal::DataType const&, tt::tt_metal::Layout const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&)\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7fa7ef) [0x74f77f1fa7ef]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7fac9e) [0x74f77f1fac9e]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x74f77ed15575]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1ac8a22]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x18c68da]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1ac8a22]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x18c68da]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(PyEval_EvalCode+0xde) [0x18931a0]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x18b12c9]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1a2b145]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x1a2af06]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1a2ac10]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1a2ab1d]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x1ae1fe3]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x198c298]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python() [0x198c0ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x74f77fcae1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x74f77fcae28b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python(_start+0x29) [0x19a4a69]\n\n"
+}

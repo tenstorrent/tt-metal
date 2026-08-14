@@ -22,6 +22,7 @@ from transformers import AutoConfig
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.multichip_decoder import TARGET_MESH_SHAPE, MultichipDecoder
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import _dram_weight_memory_config, _l1_width_memory_config
+from models.autoports.qwen_qwen3_6_27b.tt.precision_config import load_precision_config
 
 
 def _replicate(value, mesh, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -89,12 +90,13 @@ class Qwen36Model:
         page_size: int = 64,
         num_layers: int | None = None,
         layer_indices: list[int] | None = None,
-        lm_head_dtype=ttnn.bfloat8_b,
+        precision_config=None,
     ):
         if tuple(mesh_device.shape) != TARGET_MESH_SHAPE:
             raise ValueError(f"Qwen3.6 full model preserves the decoder's TP4 mesh {TARGET_MESH_SHAPE}")
         self.mesh_device, self.config = mesh_device, config
         self.batch, self.max_context, self.page_size = batch, max_context, page_size
+        self.precision_config = load_precision_config(precision_config)
         if layer_indices is not None and num_layers is not None:
             raise ValueError("specify num_layers or layer_indices, not both")
         selected_layers = (
@@ -136,17 +138,17 @@ class Qwen36Model:
                 chunk,
                 mesh_device,
                 -1,
-                dtype=lm_head_dtype,
+                dtype=self.precision_config.lm_head_weight_dtype,
                 memory_config=_dram_weight_memory_config(mesh_device, k=int(config.hidden_size), n=width),
             )
             for chunk, width in zip(chunk_weights, self.lm_head_chunk_sizes)
         ]
-        self.lm_head_dtype = lm_head_dtype
+        self.lm_head_dtype = self.precision_config.lm_head_output_dtype
         self.lm_head_local_vocab = local_vocab
         self.lm_head_cores = mesh_device.dram_grid_size().x
         self.lm_head_compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=self.precision_config.lm_head_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -162,6 +164,9 @@ class Qwen36Model:
                 max_context=max_context,
                 page_size=page_size,
                 candidate="default",
+                policy_override=self.precision_config.policy_for(i, config.layer_types[i]),
+                ccl_token_mixer_dtype=self.precision_config.ccl_dtype("token_mixer"),
+                ccl_mlp_dtype=self.precision_config.ccl_dtype("mlp"),
             )
             for i in selected_layers
         ]
@@ -172,6 +177,45 @@ class Qwen36Model:
             ]
             for layer in self.layers
         ]
+        print("PRECISION_CONFIG", json.dumps(self.precision_summary(), sort_keys=True, default=str))
+
+    def precision_summary(self):
+        """Return the exact policy consumed by this constructed runtime."""
+        layers = []
+        for layer in self.layers:
+            p = layer.policy
+            layers.append(
+                {
+                    "layer_idx": layer.layer_idx,
+                    "layer_kind": layer.layer_kind,
+                    "attention_weight_dtype": str(p.attention_weight_dtype),
+                    "mlp_gate_up_dtype": str(p.mlp_gate_up_dtype),
+                    "mlp_down_dtype": str(p.mlp_down_dtype),
+                    "cache_dtype": str(p.cache_dtype),
+                    "attention_fidelity": str(p.attention_fidelity),
+                    "qkv_fidelity": str(p.qkv_fidelity or p.attention_fidelity),
+                    "o_fidelity": str(p.o_fidelity or p.attention_fidelity),
+                    "mlp_fidelity": str(p.mlp_fidelity),
+                    "linear_input_weight_dtype": str(p.linear_input_weight_dtype),
+                    "linear_input_fidelity": str(p.linear_input_fidelity),
+                    "linear_output_weight_dtype": str(p.linear_output_weight_dtype),
+                    "linear_output_fidelity": str(p.linear_output_fidelity),
+                    "linear_recurrent_state_dtype": str(p.linear_recurrent_state_dtype),
+                    "linear_recurrent_fidelity": str(p.linear_recurrent_fidelity),
+                    "ccl_token_mixer_dtype": str(layer.ccl_token_mixer_dtype),
+                    "ccl_mlp_dtype": str(layer.ccl_mlp_dtype),
+                }
+            )
+        return {
+            "precision_config": self.precision_config.summary(),
+            "activation_residual_dtype": str(self.precision_config.activation_residual_dtype),
+            "lm_head_weight_dtype": str(self.precision_config.lm_head_weight_dtype),
+            "lm_head_output_dtype": str(self.lm_head_dtype),
+            "lm_head_fidelity": str(self.precision_config.lm_head_fidelity),
+            "sampling_logits_dtype": str(self.lm_head_dtype),
+            "sampled_token_dtype": str(ttnn.uint32),
+            "layers": layers,
+        }
 
     def bind_kv_cache(self, kv_cache):
         """Bind caller-owned persistent cache/state tensors for low-level serving."""
@@ -241,7 +285,12 @@ class Qwen36Model:
         ttnn.deallocate(mask)
 
     def embed_tokens(self, token_ids):
-        return ttnn.embedding(token_ids, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        return ttnn.embedding(
+            token_ids,
+            self.embedding,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.precision_config.activation_residual_dtype,
+        )
 
     def terminal_forward(self, hidden_states, *, pad_decode_rows: bool = False):
         logical_rows = hidden_states.shape[-2]
