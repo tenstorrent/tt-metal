@@ -535,6 +535,49 @@ PREFILL_MCAST_GRID_X = None
 #: Left ``False``, and the knob is kept so the comparison is one flag away.
 DECODE_FUSED_ACTIVATION = False
 
+#: Core count the decode SwiGLU multiply runs on, or ``None`` to leave it on the
+#: MLP gate/up output grid.
+#:
+#: That multiply carries the SFPU SiLU (:data:`DECODE_FUSED_ACTIVATION` measured
+#: folding it into the matmul as 4.4 % slower), and an SFPU transcendental costs
+#: time per *tile per core*: on the shipped 16-core grid it is **18.0 us** in the
+#: full-model decode profile, against **1.9 us** for a plain 6656-wide residual add
+#: on the same grid.  It is the largest non-matmul row in the decode layer.
+#:
+#: The obvious lever -- give ``mlp_gate``/``mlp_up`` a wider output grid -- is not
+#: available: the DRAM-sharded matmul requires ``K_tiles % cores == 0`` (*"in DRAM
+#: sharded Matmul we don't have support for un-even sharding currently. K: 208,
+#: per_core_K: 11"*), so the gate/up core count must divide ``6656/32 = 208`` and
+#: ``mlp_down``'s input must divide ``5120/32 = 160``; 16 is the largest count in
+#: both sets (8, 13, 16, 26, 52, 104) and (8, 10, 16, 20, 32, 40, 80).  This knob
+#: is the other way round: reshard the two operands onto a wider grid for the
+#: multiply alone and reshard the product back for ``mlp_down``, paying three
+#: reshards to divide the SFPU work.
+#:
+#: Measured on the reduced two-layer full-model build, traced logits-only decode,
+#: min of 3 rounds x 32 replays, one invocation
+#: (``doc/optimized_full_model/logs/decode_ab_swiglu.log``); every arm is PCC
+#: 1.000000 against the shipped grid and picks the same token:
+#:
+#: ==================  ==============  ==========
+#: gate/up mul grid    ms / 2 layers   delta
+#: ==================  ==============  ==========
+#: 16 (no reshard)     1.5375          --
+#: 20                  1.5408          +0.21 %
+#: 32                  1.5357          -0.12 %
+#: 40                  1.5306          -0.45 %
+#: **80**              **1.5248**      **-0.83 %**
+#: ==================  ==============  ==========
+#:
+#: 80 is the largest core count that divides the 160-tile intermediate width, and
+#: the per-round spread is +-0.0005 ms, so the ordering is ~60x the noise.  The
+#: saving is per layer, so on the 52-layer model it is 26x the 2-layer delta.
+#:
+#: The ``mlpN`` family -- moving the gate/up *matmul* output grid instead -- is the
+#: cheaper-looking version of this and it is not available: ``mlp8`` is the only
+#: other legal count and it measured 1.5781 (+2.6 %).
+DECODE_SWIGLU_MUL_CORES: int | None = 80
+
 #: Row count up to which the four hidden-size prefill RMSNorms run width-sharded
 #: in L1 instead of DRAM interleaved, and the core count they use.
 #:
@@ -846,15 +889,33 @@ class _OptimizedMLP(LightweightModule):
             x_sharded, self.gate, role="mlp_gate", rows=rows, activation=ttnn.UnaryOpType.SILU
         )
         up = dec._decode_projection(x_sharded, self.up, role="mlp_up", rows=rows)
+        out_memcfg = gate.memory_config()
+        wide = DECODE_SWIGLU_MUL_CORES
+        if wide is not None:
+            # See :data:`DECODE_SWIGLU_MUL_CORES`: three reshards to spread the SFPU
+            # SiLU over more cores.  ``mlp_down``'s ``in0_block_w`` is derived from
+            # the *gate/up* grid, so the product has to come back to it.
+            wide_memcfg = dec._sharded_memcfg(rows, int(gate.shape[-1]), wide)
+            gate_w = ttnn.to_memory_config(gate, wide_memcfg)
+            ttnn.deallocate(gate)
+            up_w = ttnn.to_memory_config(up, wide_memcfg)
+            ttnn.deallocate(up)
+            gate, up, mul_memcfg = gate_w, up_w, wide_memcfg
+        else:
+            mul_memcfg = out_memcfg
         hidden = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[] if fused else [ttnn.UnaryOpType.SILU],
             dtype=self.activation_dtype,
-            memory_config=gate.memory_config(),
+            memory_config=mul_memcfg,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+        if wide is not None:
+            narrow = ttnn.to_memory_config(hidden, out_memcfg)
+            ttnn.deallocate(hidden)
+            hidden = narrow
         out = dec._decode_projection(hidden, self.down, role="mlp_down", rows=rows)
         ttnn.deallocate(hidden)
         return out

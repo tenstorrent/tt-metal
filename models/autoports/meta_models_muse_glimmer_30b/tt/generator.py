@@ -89,6 +89,7 @@ import ttnn
 # ``importlib.util.spec_from_file_location`` under a synthetic module name and no
 # package, so ``from .model import ...`` raises *"attempted relative import with no
 # known parent package"* before the generator is ever constructed.
+from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import TILE_SIZE
 from models.autoports.meta_models_muse_glimmer_30b.tt.model import (
     DECODE_ROWS,
     GENERATOR_CACHE,
@@ -156,6 +157,32 @@ class GeneratorConfig:
     #: goes stale silently and forces a source edit every time it is re-measured, which
     #: then puts this file's mtime after the artifacts it describes.
     topk_split_to_power_of_2: bool = True
+    #: Trace the prefill, keyed by padded prompt length.  **Off** by default, and the
+    #: default is the interesting part.
+    #:
+    #: Batch-1 prefill on this mesh is *host-issue* bound, not device bound: 4122 ttnn
+    #: dispatches at 9-60 us of host issue each, measured at 54.9 ms of issue against
+    #: 55.1 ms to drain, and no collective implementation or persistent-buffer variant
+    #: moves the per-call cost (12 arms, ``doc/optimized_full_model/ccl_host_probe.json``).
+    #: Tracing is the only mechanism that removes host issue, and it works: on the real
+    #: 52-layer build a warmed replay is **44.96 ms against 59.80 ms eager (1.33x)** and
+    #: **bit-identical** to it, coexisting with the decode and sampling traces and
+    #: retaining 3.3 MB of DRAM per device at 128 rows
+    #: (``doc/optimized_full_model/prefill_trace_probe.json``).
+    #:
+    #: It is off by default because the graph is shaped by the *padded* row count, so one
+    #: trace serves one 32-row bucket, and capture costs ~98 ms against a ~15 ms
+    #: per-replay saving -- payback after ~7 prefills of the same bucket. That is a win
+    #: for a caller whose prompt lengths repeat or are bucketed and a loss for one whose
+    #: lengths do not, and the generator cannot tell which it is. A serving stage that
+    #: buckets prompt lengths should turn it on and raise
+    #: :attr:`prefill_trace_max_entries` to its bucket count; DRAM per entry scales with
+    #: the padded row count.
+    prefill_trace: bool = False
+    #: How many padded-length buckets may hold a prefill trace at once.  Lengths beyond
+    #: this fall back to the eager path rather than evicting -- releasing a trace and its
+    #: retained intermediates mid-request is a bigger hazard than a slower prefill.
+    prefill_trace_max_entries: int = 1
     decoder_kwargs: dict = field(default_factory=dict)
 
 
@@ -289,6 +316,16 @@ class MuseGlimmerGenerator(Generator):
         # during trace capture"*.
         self._trace_id: int | None = None
         self._trace_logits: ttnn.Tensor | None = None
+        #: ``padded_len -> {"id", "tokens", "page_table", "logits", "page_rows"}`` for the
+        #: opt-in prefill trace; see :attr:`GeneratorConfig.prefill_trace`.
+        self._prefill_traces: dict[int, dict] = {}
+        #: KV-cache buffer addresses the prefill traces were captured over; see
+        #: :meth:`_kv_cache_signature`.
+        self._prefill_trace_cache_sig: tuple = ()
+        #: Set once a cache move has forced a release.  Prefill tracing then stays off for
+        #: the life of this generator; see
+        #: :meth:`_invalidate_prefill_traces_if_cache_moved`.
+        self._prefill_trace_retired = False
         self._device_inputs: dict[str, ttnn.Tensor] = {}
         self._prev_page_table: torch.Tensor | None = None
         self._needs_reseed = True
@@ -442,6 +479,17 @@ class MuseGlimmerGenerator(Generator):
         # (its own internal pad is a no-op) and every padded row is exactly zero
         # rather than uninitialised DRAM.  The junk-free K/V those rows write past
         # ``prompt_len`` is never read: decode starts at ``cur_pos = prompt_len``.
+        if (
+            self.gen_config.prefill_trace
+            and not self._prefill_trace_retired
+            and not return_all_logits
+            and user_id == 0
+            and prompt_len <= config.prefill_chunk_size
+        ):
+            traced = self._prefill_traced(token_ids, page_table=page_table)
+            if traced is not None:
+                return traced
+
         tt_tokens, padded_len = model.prefill_tokens_to_device(token_ids)
         tt_page_table = model.page_table_to_device(page_table)
         embedded = model.embed_prefill(tt_tokens)
@@ -456,6 +504,176 @@ class MuseGlimmerGenerator(Generator):
         ttnn.deallocate(hidden)
         ttnn.deallocate(tt_page_table)
         return logits, model.row_within_tile(prompt_len - 1)
+
+    # --------------------------------------------------- the opt-in prefill trace
+
+    def _prefill_traced(self, token_ids: Sequence[int], *, page_table: torch.Tensor):
+        """``(logits, row_in_tile)`` from a replayed prefill trace, or ``None``.
+
+        Returns ``None`` -- so the caller takes the eager path -- when this padded
+        length has no trace and the cache is full.
+
+        The graph bakes in the padded row count, ``user_id=0``, ``start_pos=0`` and the
+        last-token tile-row slice.  That slice is a property of the *bucket* rather than
+        the prompt: for a prompt of length ``L`` in ``(R-32, R]`` the tile row holding
+        ``L-1`` starts at ``R-32`` for every ``L`` in the bucket, so one trace serves all
+        32 of them and only ``row_within_tile`` differs, which is host arithmetic:
+        ``row_within_tile(L-1) = (L-1) % 32`` and the tile the trace returns starts at
+        ``R-32``, so ``(L-1) % 32 == (L-1) - (R-32)`` for every ``L`` in the bucket.  The
+        ids past ``L`` are the zero-embedding pad id, exactly as on the eager path, and
+        the junk-free K/V they write past the logical length is never read because decode
+        starts at ``cur_pos = L``.
+
+        The returned logits are a **clone**, not the trace's persistent output: callers
+        deallocate what ``_prefill_user`` hands them, and handing over a buffer the next
+        replay writes into would be a use-after-free waiting for a second request.
+        """
+        model = self.model
+        length = len(token_ids)
+        padded_len = ((length + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+        rows = model.normalize_page_table(page_table)
+        entry = self._prefill_traces.get(padded_len)
+        if entry is None:
+            if len(self._prefill_traces) >= self.gen_config.prefill_trace_max_entries:
+                return None
+            entry = self._capture_prefill_trace(token_ids, padded_len=padded_len, page_rows=rows)
+
+        # These two counters are the *prefill*'s, and with this path on they are no
+        # longer zero-per-decode-token: one token refresh and one trace replay per
+        # request.  The steady-state decode counter assertions
+        # (``test_steady_state_decode_does_no_per_token_host_work``, the fallback audit)
+        # are stated for the default arm, where this path is off; nothing in the decode
+        # loop changes either way.
+        host_tokens, _ = model.prefill_tokens_to_device(token_ids, device=False)
+        ttnn.copy_host_to_device_tensor(host_tokens, entry["tokens"])
+        self.counters["token_refreshes"] += 1
+        if not torch.equal(entry["page_rows"], rows):
+            ttnn.copy_host_to_device_tensor(model.page_table_to_device(rows, device=False), entry["page_table"])
+            entry["page_rows"] = rows.clone()
+            self.counters["page_table_refreshes"] += 1
+        ttnn.execute_trace(self.mesh_device, entry["id"], cq_id=0, blocking=True)
+        self.counters["trace_replays"] += 1
+        logits = ttnn.clone(entry["logits"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits, model.row_within_tile(length - 1)
+
+    def _capture_prefill_trace(self, token_ids: Sequence[int], *, padded_len: int, page_rows: torch.Tensor) -> dict:
+        """Allocate this bucket's persistent inputs, warm every program, then capture."""
+        model = self.model
+        tokens, _ = model.prefill_tokens_to_device(token_ids)
+        tt_page_table = model.page_table_to_device(page_rows)
+        last = padded_len - 1
+
+        def forward():
+            hidden = model.embed_prefill(tokens)
+            out = model.prefill_forward(hidden, page_table=tt_page_table, user_id=0)
+            logits = model.prefill_logits(out, last_token_index=last)
+            ttnn.deallocate(out)
+            return logits
+
+        # Warm compile: trace capture cannot compile programs, and this path's
+        # ``ttnn.slice`` offsets and program configs are baked into the program hash.
+        ttnn.deallocate(forward())
+        ttnn.synchronize_device(self.mesh_device)
+        self.counters["synchronizations"] += 1
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        logits = forward()
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        self.counters["synchronizations"] += 1
+        entry = {
+            "id": trace_id,
+            "tokens": tokens,
+            "page_table": tt_page_table,
+            "logits": logits,
+            "page_rows": page_rows.clone(),
+        }
+        self._prefill_traces[padded_len] = entry
+        self._prefill_trace_cache_sig = self._kv_cache_signature()
+        logger.info(
+            f"MuseGlimmerGenerator: captured a prefill trace for padded_len={padded_len} "
+            f"({len(self._prefill_traces)}/{self.gen_config.prefill_trace_max_entries} buckets)"
+        )
+        return entry
+
+    def _kv_cache_signature(self) -> tuple:
+        """Identity of the *currently bound* KV cache, for prefill-trace invalidation.
+
+        A prefill trace bakes in the device addresses of the cache buffers it writes, so
+        it survives a rebind to the **same** buffers and must not survive a rebind to
+        different ones.  ``kv_cache is not None`` cannot tell those apart, and getting
+        that wrong is expensive in the direction that matters: a serving caller threading
+        the same external handles on every request would recapture per request (98 ms
+        capture plus a 45 ms replay against a 60 ms eager prefill), i.e. the flag would
+        make the path it is advertised for ~83 ms/request *slower*.  Addresses rather
+        than ``id()`` because a freed Python wrapper's id can be reused.
+        """
+        sig = []
+        for layer in self.model.layers:
+            for cache in (layer.k_cache, layer.v_cache):
+                try:
+                    sig.append(int(cache.buffer_address()))
+                except Exception:  # noqa: BLE001 -- no address exposed: fall back to identity
+                    sig.append(id(cache))
+        return tuple(sig)
+
+    def _invalidate_prefill_traces_if_cache_moved(self) -> None:
+        """Release the prefill traces only when the bound cache buffers actually changed."""
+        if not self._prefill_traces:
+            return
+        if self._kv_cache_signature() == self._prefill_trace_cache_sig:
+            return
+        # Release, and then stay off.  Recapturing here would work -- the tokens match --
+        # but releasing a prefill trace and then building and running *another* model on
+        # the same mesh in the same process trips a fabric ERISC watcher assert
+        # (``subordinate_erisc detected invalid NOC command buffer state ...
+        # fabric_erisc_router.cpp`` on acteth core 29-25).  The four isolated arms of
+        # ``doc/optimized_full_model/bench/prefill_trace_release_probe.py`` -- capture,
+        # release, recapture, clone-cache -- are each watcher-clean, so this is a
+        # cross-generator interaction rather than a defect in the release itself; see the
+        # stage README's limitation on it.  Retiring after the first release keeps the
+        # shipped opt-in path to *at most one* release per generator and never recaptures
+        # after one, which is the smallest exposure to it that still serves the caller the
+        # flag is for: a serving adapter binds its cache once and then reuses it.
+        logger.warning(
+            "MuseGlimmerGenerator: the KV cache was rebound to different buffers; releasing the "
+            "prefill traces and retiring prefill tracing for this generator (prefill falls back to "
+            "the eager path). Bind the cache before the first prefill to keep it."
+        )
+        self._release_prefill_traces()
+        self._prefill_trace_retired = True
+
+    def _release_prefill_traces(self) -> None:
+        """Drop every prefill trace.  Their KV-cache addresses are baked in, so this is
+        mandatory whenever the cache is rebound to *different* buffers.
+
+        The synchronisation is not defensive tidiness.  A prefill trace contains fabric
+        collectives, and releasing it -- then freeing the buffers it referenced -- while
+        the fabric may still have work in flight trips a watcher assert on the ethernet
+        router: *"subordinate_erisc detected invalid NOC command buffer state before
+        starting the next kernel (write-capable NOC packet tags must be zero so implicit
+        transaction ID users start with transaction ID 0). Current kernel:
+        fabric_erisc_router.cpp"* on ``acteth core virtual(x=29,y=25)``.  That is what the
+        first watcher run of this path did
+        (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``); draining first is
+        the fix, and it is verified by re-running the same watcher case.  It is outside
+        any steady-state loop -- releases happen at a cache rebind or at teardown.
+        """
+        if self._prefill_traces:
+            ttnn.synchronize_device(self.mesh_device)
+            self.counters["synchronizations"] += 1
+        for padded_len, entry in list(self._prefill_traces.items()):
+            try:
+                ttnn.release_trace(self.mesh_device, entry["id"])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"failed to release the prefill trace for {padded_len}: {exc}")
+            ttnn.synchronize_device(self.mesh_device)
+            for key in ("tokens", "page_table", "logits"):
+                try:
+                    ttnn.deallocate(entry[key])
+                except Exception:  # noqa: BLE001
+                    pass
+        self._prefill_traces.clear()
+        self._prefill_trace_cache_sig = ()
 
     def prefill_forward(
         self,
@@ -480,6 +698,10 @@ class MuseGlimmerGenerator(Generator):
         the model's ``blocks_per_seq``, so it is normalised rather than trusted.
         """
         self.model.set_kv_cache(kv_cache)
+        # Bind first, then invalidate only if the buffers actually moved: a serving
+        # caller threading the *same* external cache every request must keep its traces.
+        if kv_cache is not None:
+            self._invalidate_prefill_traces_if_cache_moved()
         tokens = tokens if isinstance(tokens, torch.Tensor) else torch.tensor(tokens)
         if tokens.dim() == 1:
             tokens = tokens.reshape(1, -1)
@@ -678,6 +900,8 @@ class MuseGlimmerGenerator(Generator):
         them, so the next call's restage simply overwrites the increment.
         """
         self.model.set_kv_cache(kv_cache)
+        if kv_cache is not None:
+            self._invalidate_prefill_traces_if_cache_moved()
         self._allocate_device_inputs()
         if self._sampling_params is None:
             self._apply_sampling_params(sampling_params)
@@ -862,6 +1086,7 @@ class MuseGlimmerGenerator(Generator):
         self._staged_positions = torch.zeros(DECODE_ROWS, dtype=torch.int64)
 
     def teardown(self) -> None:
+        self._release_prefill_traces()
         if self._trace_id is not None:
             try:
                 ttnn.release_trace(self.mesh_device, self._trace_id)
@@ -1019,6 +1244,8 @@ def _cache_key(mesh_device: ttnn.MeshDevice, gen_config: GeneratorConfig) -> tup
         gen_config.max_top_k,
         gen_config.pad_logits_to_power_of_2,
         gen_config.topk_split_to_power_of_2,
+        gen_config.prefill_trace,
+        gen_config.prefill_trace_max_entries,
         tuple(sorted((str(k), str(v)) for k, v in gen_config.decoder_kwargs.items())),
     )
 
@@ -1052,6 +1279,8 @@ def build_generator(model_dir: str | Path, mesh_device: ttnn.MeshDevice, **kwarg
         max_top_k=int(kwargs.pop("max_top_k", 32)),
         pad_logits_to_power_of_2=bool(kwargs.pop("pad_logits_to_power_of_2", False)),
         topk_split_to_power_of_2=bool(kwargs.pop("topk_split_to_power_of_2", True)),
+        prefill_trace=bool(kwargs.pop("prefill_trace", False)),
+        prefill_trace_max_entries=int(kwargs.pop("prefill_trace_max_entries", 1)),
         decoder_kwargs=dict(kwargs.pop("decoder_kwargs", {})),
     )
     reuse = bool(kwargs.pop("reuse", True))

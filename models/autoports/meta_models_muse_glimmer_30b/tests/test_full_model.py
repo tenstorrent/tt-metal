@@ -31,6 +31,8 @@ import pytest
 import torch
 
 import ttnn
+from models.autoports.meta_models_muse_glimmer_30b.tt import model as model_mod
+from models.autoports.meta_models_muse_glimmer_30b.tt import optimized_decoder as dec_mod
 from models.autoports.meta_models_muse_glimmer_30b.tt.generator import (
     DEFAULT_TRACE_REGION_SIZE,
     MuseGlimmerGenerator,
@@ -804,3 +806,273 @@ def test_all_layers_fit_the_advertised_context(mesh):
         assert host == tokens, (host, tokens)
     finally:
         generator.teardown()
+
+
+# ------------------------------------------- optimized-full-model stage contracts
+#
+# The three decode-path changes the optimized-full-model stage ships. Each one is
+# a *layout* change with no arithmetic in it, so what needs pinning is that the
+# layout is the one claimed and that the numbers did not move.
+
+
+def test_lm_head_softcap_runs_in_l1_and_matches_the_dram_form(generator):
+    """The softcap runs on the matmul's own shard, and is the same tensor either way.
+
+    ``LM_HEAD_SOFTCAP_IN_L1`` moves ``tanh`` and the scalar multiply off a
+    DRAM-interleaved ``[1, 1, 32, 50688]`` tensor and onto the width-sharded L1
+    output the matmul already produced.  The shard is padded (975 columns per core
+    is not a tile multiple), so this also pins that no padded lane survives into
+    the logits the sampler sees.
+    """
+    model = generator.model
+    head = model.lm_head
+    assert head.softcap_in_l1 is True
+    assert model_mod.LM_HEAD_SOFTCAP_IN_L1 is True
+
+    hidden = ttnn.from_torch(
+        torch.randn(1, 1, DECODE_ROWS, HIDDEN, generator=torch.Generator().manual_seed(5)).to(torch.bfloat16),
+        device=generator.mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=model.boundary_memcfg(DECODE_ROWS),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(generator.mesh_device),
+    )
+    try:
+        shipped = model.logits_to_torch(head.forward(hidden))
+        head.softcap_in_l1 = False
+        dram = model.logits_to_torch(head.forward(hidden))
+    finally:
+        head.softcap_in_l1 = True
+        ttnn.deallocate(hidden)
+    assert shipped.shape == dram.shape == (DECODE_ROWS, VOCAB)
+    # bf16 in, bf16 out, same two ops in the same order: bit-identical.
+    assert torch.equal(shipped, dram), (shipped - dram).abs().max()
+    assert torch.isfinite(shipped).all()
+    assert shipped.abs().max() <= head.softcap + 1e-3
+
+
+@pytest.mark.parametrize("token", [7, 0, VOCAB - 1])
+def test_decode_embedding_gathers_straight_into_the_boundary_layout(generator, token):
+    """The sharded-output gather returns the boundary layout *and* the same values.
+
+    The layout assertion is the cheap half.  The half that matters is that an async
+    all-gather writing width-sharded L1 returns what the DRAM-interleaved gather plus
+    ``interleaved_to_sharded`` returned -- the decoder stage rejected persistent CCL
+    buffers on an intermittent *first-use* fault in this same op family, so a new
+    output-layout contract on it gets a value comparison, repeated, not just a shape
+    check.  Three token ids because the gather's payload is the embedding row, and
+    row 0 and the last real row exercise the two ends of the table.
+    """
+    model = generator.model
+    assert model_mod.EMBED_DECODE_GATHER_SHARDED is True
+    boundary = model.boundary_memcfg(DECODE_ROWS)
+    tokens = model.tokens_to_device([token] * DECODE_ROWS)
+
+    def to_host(tensor):
+        source = tensor if not tensor.is_sharded() else ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+        host = ttnn.to_torch(ttnn.get_device_tensors(source)[0])
+        if source is not tensor:
+            ttnn.deallocate(source)
+        return host.reshape(DECODE_ROWS, HIDDEN)
+
+    try:
+        # The interleaved reference, gathered the way the full-model stage did it.
+        reference = model._embed(tokens)
+        try:
+            assert reference.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            want = to_host(reference)
+        finally:
+            ttnn.deallocate(reference)
+        # Repeated, because the failure mode this guards against is intermittent.
+        for attempt in range(4):
+            gathered = model._embed(tokens, memory_config=boundary)
+            try:
+                assert gathered.is_sharded()
+                assert gathered.memory_config() == boundary
+                assert tuple(gathered.shape)[-1] == HIDDEN
+                got = to_host(gathered)
+            finally:
+                ttnn.deallocate(gathered)
+            assert torch.equal(got, want), (attempt, (got - want).abs().max())
+    finally:
+        ttnn.deallocate(tokens)
+
+
+def test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one(generator):
+    """The SwiGLU reshard is on, and the MLP's public output layout is unchanged.
+
+    ``DECODE_SWIGLU_MUL_CORES`` spreads the SFPU SiLU over 80 cores and reshards
+    the product back, so ``mlp_down``'s input is still the gate/up grid. What that
+    must not do is change the layer's boundary contract, which is what this checks
+    on the real decode step.
+    """
+    assert dec_mod.DECODE_SWIGLU_MUL_CORES == 80
+    assert 5120 // 32 % dec_mod.DECODE_SWIGLU_MUL_CORES == 0, "the wide grid must divide the intermediate width"
+    model = generator.model
+    boundary = model.boundary_memcfg(DECODE_ROWS)
+    hidden = ttnn.from_torch(
+        torch.randn(1, 1, DECODE_ROWS, HIDDEN, generator=torch.Generator().manual_seed(11)).to(torch.bfloat16) * 0.05,
+        device=generator.mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=boundary,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(generator.mesh_device),
+    )
+    layer = model.layers[0]
+    try:
+        out = layer.mlp.decode_forward(hidden, DECODE_ROWS)
+        try:
+            assert out.memory_config() == boundary
+            assert tuple(out.shape) == (1, 1, DECODE_ROWS, HIDDEN)
+            values = ttnn.to_torch(
+                ttnn.get_device_tensors(ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG))[0]
+            )
+            assert torch.isfinite(values.to(torch.float32)).all()
+        finally:
+            ttnn.deallocate(out)
+    finally:
+        ttnn.deallocate(hidden)
+
+
+def test_prefill_trace_is_opt_in_and_matches_the_eager_path(mesh):
+    """The opt-in prefill trace: same tokens, one bucket, eager fallback beyond it.
+
+    Prefill on this mesh is host-issue bound (see
+    ``doc/optimized_full_model/README.md``), and a trace is the only thing that removes
+    host issue.  It is off by default because one trace serves one 32-row bucket and
+    capture costs ~98 ms, so this pins three things a caller turning it on depends on:
+    the traced prompt returns exactly what the eager path returned, a *different*
+    padded length past ``prefill_trace_max_entries`` still works (through the eager
+    path), and a non-tile-aligned prompt inside the traced bucket is served by it.
+    """
+    clear_generator_cache()
+    eager = build_generator(MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, layer_indices=REDUCED_LAYERS, reuse=False)
+    prompt = _prompt(128, seed=41)
+    unaligned = _prompt(120, seed=41)[:120]
+    other = _prompt(256, seed=41)
+    try:
+        want = eager.generate(prompt_token_ids=prompt, max_new_tokens=4, enable_trace=True)
+        eager.reset()
+        want_unaligned = eager.generate(prompt_token_ids=unaligned, max_new_tokens=3, enable_trace=True)
+        eager.reset()
+        want_other = eager.generate(prompt_token_ids=other, max_new_tokens=3, enable_trace=True)
+        assert eager._prefill_traces == {}, "the prefill trace must be off by default"
+    finally:
+        eager.teardown()
+        eager.model.deallocate()
+        clear_generator_cache()
+
+    traced = build_generator(
+        MODEL_DIR,
+        mesh,
+        max_seq_len=REDUCED_MAX_SEQ,
+        layer_indices=REDUCED_LAYERS,
+        reuse=False,
+        prefill_trace=True,
+    )
+    try:
+        got = traced.generate(prompt_token_ids=prompt, max_new_tokens=4, enable_trace=True)
+        assert list(traced._prefill_traces) == [128], traced._prefill_traces
+        assert got == want, (got, want)
+
+        # A second call on the same bucket replays rather than recaptures.
+        traced.reset()
+        again = traced.generate(prompt_token_ids=prompt, max_new_tokens=4, enable_trace=True)
+        assert again == want, (again, want)
+        assert list(traced._prefill_traces) == [128]
+
+        # 120 tokens pad to the same 128-row bucket, so the trace serves them and only
+        # the row within the tile differs -- which is host arithmetic.
+        traced.reset()
+        assert traced.generate(prompt_token_ids=unaligned, max_new_tokens=3, enable_trace=True) == want_unaligned
+        assert list(traced._prefill_traces) == [128]
+
+        # A different bucket past the cache bound falls back to eager rather than evicting.
+        traced.reset()
+        assert traced.generate(prompt_token_ids=other, max_new_tokens=3, enable_trace=True) == want_other
+        assert list(traced._prefill_traces) == [128]
+    finally:
+        traced.teardown()
+        assert traced._prefill_traces == {}, "teardown must release every prefill trace"
+        traced.model.deallocate()
+        clear_generator_cache()
+
+
+def test_prefill_trace_survives_rebinding_the_same_external_cache(mesh):
+    """The serving path: the same external KV cache every request must not recapture.
+
+    ``prefill_forward(kv_cache=...)`` is the API a vLLM adapter drives, and it is the
+    caller the prefill trace is advertised for.  Invalidating on ``kv_cache is not None``
+    rather than on the cache *moving* would release and recapture the trace every
+    request -- 98 ms of capture plus a 45 ms replay against a 60 ms eager prefill, i.e.
+    the flag would make that caller ~83 ms/request slower.  This pins the identity
+    comparison: same handles -> one capture and then replays; different handles -> the
+    traces go, because their baked addresses no longer point at the caller's cache.
+    """
+    clear_generator_cache()
+    generator = build_generator(
+        MODEL_DIR,
+        mesh,
+        max_seq_len=REDUCED_MAX_SEQ,
+        layer_indices=REDUCED_LAYERS,
+        reuse=False,
+        prefill_trace=True,
+    )
+    prompt = _prompt(96, seed=53)
+    try:
+        own = generator.model.kv_cache  # the model's own pairs, threaded back in as a caller would
+        first = generator.prefill_forward(torch.tensor([prompt]), kv_cache=own, prompt_lens=[len(prompt)])
+        assert list(generator._prefill_traces) == [96], generator._prefill_traces
+        captured = dict(generator._prefill_traces)
+        signature = generator._prefill_trace_cache_sig
+        assert signature, "the capture must record the cache it was captured over"
+
+        # Same handles, three more requests: the trace ids must not change.
+        for _ in range(3):
+            generator.reset()
+            again = generator.prefill_forward(torch.tensor([prompt]), kv_cache=own, prompt_lens=[len(prompt)])
+            assert {k: v["id"] for k, v in generator._prefill_traces.items()} == {
+                k: v["id"] for k, v in captured.items()
+            }, "rebinding the same cache must not release the prefill trace"
+            assert torch.equal(again.argmax(dim=-1), first.argmax(dim=-1))
+        assert generator._prefill_trace_cache_sig == signature
+
+        # A cache bound to *different* buffers must release them -- the baked addresses
+        # would otherwise write the old buffers and the caller would read zeros -- and
+        # then *retire* prefill tracing for this generator rather than recapturing, which
+        # is what keeps the shipped path to at most one release (see
+        # ``_invalidate_prefill_traces_if_cache_moved`` for the fabric-ERISC reason).
+        moved = [
+            [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())]
+            for k, v in own
+        ]
+        try:
+            generator.reset()
+            out = generator.prefill_forward(torch.tensor([prompt]), kv_cache=moved, prompt_lens=[len(prompt)])
+            assert generator._prefill_traces == {}, "a moved cache must release every prefill trace"
+            assert generator._prefill_trace_retired is True, "and must retire prefill tracing"
+            assert generator._prefill_trace_cache_sig == ()
+            # The request still succeeds, through the eager path, with the same prediction.
+            assert torch.equal(out.argmax(dim=-1), first.argmax(dim=-1))
+            # ...and a later request does not recapture.
+            generator.reset()
+            generator.prefill_forward(torch.tensor([prompt]), kv_cache=moved, prompt_lens=[len(prompt)])
+            assert generator._prefill_traces == {}
+        finally:
+            # Order matters, and getting it wrong is what the watcher caught: the
+            # recaptured trace holds the *moved* cache's buffer addresses, so freeing
+            # those buffers while it still exists is a use-after-free.  It shows up as
+            # ``subordinate_erisc detected invalid NOC command buffer state ...
+            # fabric_erisc_router.cpp`` on acteth core 29-25, not as a wrong number
+            # (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``; the four
+            # isolated arms of ``bench/prefill_trace_release_probe.py`` are clean, which
+            # is what localised it to this cleanup rather than to the release path).
+            generator._release_prefill_traces()
+            generator.model.set_kv_cache(own)
+            for pair in moved:
+                for tensor in pair:
+                    ttnn.deallocate(tensor)
+    finally:
+        generator.teardown()
+        generator.model.deallocate()
+        clear_generator_cache()

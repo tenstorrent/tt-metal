@@ -144,6 +144,36 @@ LM_HEAD_FIDELITY = ttnn.MathFidelity.LoFi
 LM_HEAD_FP32_ACC = False
 LM_HEAD_OUTPUT_DTYPE = ttnn.bfloat16
 
+#: Run the tanh softcap in the layout the LM-head matmul produced, rather than
+#: after converting the logits to DRAM interleaved.
+#:
+#: The full-model stage's order was matmul -> ``sharded_to_interleaved`` -> ``tanh``
+#: -> ``multiply``, which put both elementwise ops on a DRAM-interleaved
+#: ``[1, 1, 32, 50688]`` bf16 tensor: 3.24 MB read and written twice over, for
+#: **17.7 us** (``tanh``) plus **19.1 us** (``multiply``) in the committed
+#: full-model decode profile.  Doing them on the matmul's own width-sharded L1
+#: output and converting **once**, at the end, is the same three tensors of
+#: arithmetic with the DRAM round trip removed.
+#:
+#: The shard is padded -- ``50688 / 52 = 975`` columns is not a tile multiple, so
+#: ``width_sharded_l1`` rounds each core to 992 and the last 896 columns of the
+#: shard set are pad.  That is safe for this pair specifically: ``tanh`` is bounded
+#: on every input including NaN-free garbage, the scalar multiply keeps it bounded,
+#: and ``sharded_to_interleaved`` reconstructs the logical width, so no padded lane
+#: can reach the sampler.  ``test_lm_head_softcap_layout_is_equivalent`` pins the
+#: equivalence on the device rather than on this argument.
+LM_HEAD_SOFTCAP_IN_L1 = True
+
+#: Gather the *decode* embedding straight into the decoder's boundary layout.
+#:
+#: A decode step's embedding is one tile row, and its all-gather wrote DRAM
+#: interleaved and was immediately followed by ``interleaved_to_sharded`` into the
+#: 16-core width-sharded L1 boundary spec.  ``all_gather_async`` takes an output
+#: ``memory_config``, so the conversion can be the collective's own output layout.
+#: Prefill is untouched: it needs the interleaved form, and its gather is the
+#: chunk-and-clone path of :data:`EMBED_GATHER_CHUNK_ROWS`.
+EMBED_DECODE_GATHER_SHARDED = True
+
 #: Embedding table dtype.  ``ttnn.embedding`` needs a ROW_MAJOR table, which rules
 #: out the block-float formats: they only exist in TILE layout.
 EMBED_DTYPE = ttnn.bfloat16
@@ -493,9 +523,13 @@ class _LMHead(LightweightModule):
         device_grid: ttnn.CoreCoord,
         compute_kernel_config: Any,
         output_dtype: ttnn.DataType = LM_HEAD_OUTPUT_DTYPE,
+        softcap_in_l1: bool | None = None,
     ) -> None:
         super().__init__()
         self.output_dtype = output_dtype
+        # Read at construction rather than bound as a default argument, so an A/B
+        # harness can flip the module constant between builds.
+        self.softcap_in_l1 = LM_HEAD_SOFTCAP_IN_L1 if softcap_in_l1 is None else softcap_in_l1
         if matmul not in ("dram_sharded", "mcast1d"):
             raise ValueError(f"lm_head matmul must be 'dram_sharded' or 'mcast1d', got {matmul!r}")
         self.weight = weight
@@ -569,14 +603,23 @@ class _LMHead(LightweightModule):
         )
         if owned:
             ttnn.deallocate(hidden_in)
-        if logits.is_sharded():
+        if not self.softcap_in_l1 and logits.is_sharded():
             interleaved = ttnn.sharded_to_interleaved(logits, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(logits)
             logits = interleaved
-        capped = ttnn.tanh(logits)
+        memcfg = logits.memory_config()
+        capped = ttnn.tanh(logits, memory_config=memcfg)
         ttnn.deallocate(logits)
-        scaled = ttnn.multiply(capped, self.softcap)
+        scaled = ttnn.multiply(capped, self.softcap, memory_config=memcfg)
         ttnn.deallocate(capped)
+        if scaled.is_sharded():
+            # The sampler's per-device index arithmetic assumes DRAM-interleaved
+            # vocab shards, so the conversion is a contract rather than a choice.
+            # It is one op here instead of one op plus two DRAM-interleaved
+            # elementwise passes; see :data:`LM_HEAD_SOFTCAP_IN_L1`.
+            interleaved = ttnn.sharded_to_interleaved(scaled, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(scaled)
+            scaled = interleaved
         return scaled
 
 
@@ -1014,7 +1057,9 @@ class MuseGlimmerModel(LightweightModule):
             _MODEL_CCL_SEMAPHORES[key] = sems
         return sems
 
-    def _all_gather_async(self, tensor: ttnn.Tensor, *, dim: int = 3) -> ttnn.Tensor:
+    def _all_gather_async(
+        self, tensor: ttnn.Tensor, *, dim: int = 3, memory_config: ttnn.MemoryConfig | None = None
+    ) -> ttnn.Tensor:
         """All-gather with semaphores this model owns rather than per-program ones.
 
         ``ttnn.all_gather`` leaves one global semaphore in ``L1_SMALL`` per
@@ -1029,7 +1074,7 @@ class MuseGlimmerModel(LightweightModule):
             dim=dim,
             multi_device_global_semaphore=sems["ag"],
             barrier_semaphore=sems["ag_barrier"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
             topology=CCL_TOPOLOGY,
         )
         ttnn.deallocate(tensor)
@@ -1037,7 +1082,7 @@ class MuseGlimmerModel(LightweightModule):
 
     # ------------------------------------------------------------ embeddings
 
-    def _embed(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+    def _embed(self, tokens: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
         """``[1, n]`` uint32 token ids -> replicated ``[1, 1, n, hidden]`` bf16.
 
         Each device looks its own quarter of the hidden dimension up locally, so
@@ -1059,7 +1104,7 @@ class MuseGlimmerModel(LightweightModule):
         # A decode step is one tile row, where the gather is reproducible as issued
         # and the step is traced and at its latency floor: leave it exactly alone.
         if rows <= TERMINAL_ROWS:
-            return self._all_gather_async(local4)
+            return self._all_gather_async(local4, memory_config=memory_config)
 
         pieces: list[ttnn.Tensor] = []
         for offset in range(0, rows, EMBED_GATHER_CHUNK_ROWS):
@@ -1084,7 +1129,7 @@ class MuseGlimmerModel(LightweightModule):
         """Token id whose embedding row is exactly zero; see :data:`EMBED_PAD_ROWS`."""
         return self.config.vocab_size
 
-    def prefill_tokens_to_device(self, token_ids: Sequence[int]) -> tuple[ttnn.Tensor, int]:
+    def prefill_tokens_to_device(self, token_ids: Sequence[int], *, device: bool = True) -> tuple[ttnn.Tensor, int]:
         """``(ids, padded_len)`` for a prompt of any logical length.
 
         The ids are padded up to a tile boundary with :attr:`embed_pad_id`, so the
@@ -1097,15 +1142,17 @@ class MuseGlimmerModel(LightweightModule):
         padded_len = ((length + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
         ids = torch.full((1, padded_len), self.embed_pad_id, dtype=torch.int32)
         ids[0, :length] = torch.tensor(list(token_ids), dtype=torch.int32)
-        tensor = ttnn.from_torch(
-            ids,
-            device=self.mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        return tensor, padded_len
+        kwargs: dict[str, Any] = {
+            "layout": ttnn.ROW_MAJOR_LAYOUT,
+            "dtype": ttnn.uint32,
+            "mesh_mapper": ttnn.ReplicateTensorToMesh(self.mesh_device),
+        }
+        if device:
+            # ``device=False`` returns the host form, which is what a traced prefill
+            # copies into its persistent token input before replay.
+            kwargs["device"] = self.mesh_device
+            kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.from_torch(ids, **kwargs), padded_len
 
     def embed_prefill(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         """Prefill embeddings: DRAM-interleaved, which is layer 0's prefill input."""
@@ -1123,10 +1170,15 @@ class MuseGlimmerModel(LightweightModule):
         Handing layer 0 the boundary layout also skips its entry
         ``interleaved_to_sharded``.
         """
-        embedded = self._embed(tokens)
         program_config, memory_config = self._decode_norm_configs(TERMINAL_ROWS)
-        sharded = ttnn.interleaved_to_sharded(embedded, memory_config)
-        ttnn.deallocate(embedded)
+        if EMBED_DECODE_GATHER_SHARDED:
+            # The gather's own output layout *is* the boundary spec, so the
+            # ``interleaved_to_sharded`` the DRAM-interleaved form needed is gone.
+            sharded = self._embed(tokens, memory_config=memory_config)
+        else:
+            embedded = self._embed(tokens)
+            sharded = ttnn.interleaved_to_sharded(embedded, memory_config)
+            ttnn.deallocate(embedded)
         normed = self.embed_norm.sharded_forward(sharded, program_config, memory_config)
         ttnn.deallocate(sharded)
         return normed
