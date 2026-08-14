@@ -43,6 +43,7 @@ while [[ $# -gt 0 ]]; do
         --report-dir) REPORT_DIR="$2"; shift 2 ;;
         --collect-to) COLLECT_TO="$2"; shift 2 ;;
         --nodeids) NODEIDS="$2"; shift 2 ;;
+        TTNOP_*=*|CHIP_ARCH=*) export "$1"; shift ;;
         *) echo "ttnop: unknown option $1" >&2; exit 4 ;;
     esac
 done
@@ -52,16 +53,14 @@ if [[ ${#TESTS[@]} -eq 0 && -z "$NODEIDS" ]]; then
     exit 4
 fi
 
-# Resolve while we are still in the caller's directory: sweep.py resolves
-# TTNOP_REPORT_DIR against the pytest process's cwd, which the cd below makes
-# $PYTHON_TESTS, so a relative --report-dir would land a level up from where
-# the caller (and CI's artifact glob) expects it.
+# Resolve before the cd below so a relative --report-dir stays under ttnop/.
 mkdir -p "$REPORT_DIR"
+[[ "$REPORT_DIR" = /* ]] || REPORT_DIR="$HERE/$REPORT_DIR"
 REPORT_DIR="$(cd "$REPORT_DIR" && pwd)"
 export TTNOP_REPORT_DIR="$REPORT_DIR"
 
-# Where workers publish progress and the supervisor keeps its resume list. Wiped
-# per invocation: a stale done-log would silently skip the whole sweep.
+# Heartbeat / resume state. Wiped per invocation so a stale done-log cannot
+# skip the whole sweep.
 STATE_DIR="${TTNOP_STATE_DIR:-$REPORT_DIR/.state}"
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
@@ -77,19 +76,7 @@ FILTER_ARGS=()
 [[ -n "$MARKERS" ]] && FILTER_ARGS+=(-m "$MARKERS")
 XDIST_ARGS=()
 [[ "$DEVICE_JOBS" -gt 1 ]] && XDIST_ARGS=(-n "$DEVICE_JOBS")
-# Per-test reporting is priced per case, and a sweep is tens of thousands of them:
-# in run 31714492632 the compile phase alone streamed ~82k lines in six minutes,
-# all of it "SKIPPED (compiling)". pytest-sugar prints two full lines per test
-# under xdist where the default reporter prints one character; classic style drops
-# the progress counter that is redrawn after every one of them; and log_cli (on by
-# default in pytest.ini) replays every loguru record the harness emits. None of it
-# survives as something a human reads afterwards. Progress comes from supervise.py
-# instead, which counts the done-log every few minutes.
-#
-# run_ttsim_regression.sh warns against these overrides, but that applies to its
-# --forked run, where they emptied pytest-forked's child output out of the junit
-# <system-out> it reports from. The sweep is xdist-only and its findings come from
-# report.append() in-process, so nothing here reads back through capture.
+# Progress comes from supervise.py. These keep pytest from flooding the log.
 QUIET_ARGS=(-p no:sugar -o console_output_style=classic -o log_cli=false)
 
 echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
@@ -112,8 +99,6 @@ if [[ -z "$NODEIDS" ]]; then
     echo ">> [2/3] collecting"
     NODEIDS="$(mktemp /tmp/ttnop-nodeids-XXXXXX)"
     trap '[[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
-    # Quiet here is about the grep as much as the volume: it keeps stdout to bare
-    # node ids, so nothing decorated can sneak past the '::' filter into the list.
     python3 -m pytest --collect-only -q --compile-consumer \
         "${QUIET_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
         | grep '::' > "$NODEIDS" || true
@@ -131,19 +116,12 @@ exec 9>"$DEVICE_LOCK"
 flock 9
 echo ">> [3/3] sweeping"
 started=$SECONDS
-# A found race turns the case red, so exit 1 is a result, not a crash: report the
-# timing either way and pass the code on. The supervisor rides out a wedged card by
-# resetting and resuming, and reports that separately by exiting 75, so a caller can
-# tell "found races" from "the card stopped answering" from "the sweep never ran" (70).
+# Exit 1 = races found (a result). The supervisor resets a wedged card and
+# resumes; it exits 75 for that, and 70 if the sweep never produced junit.xml.
 status=0
 supervise_nodeids "$NODEIDS" --compile-consumer \
     "${QUIET_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
 
-# The supervisor writes junit.xml as its last act, so a missing one means it never
-# reached the end. Worth checking separately because pytest exits 1 for "some tests
-# failed" and python exits 1 for "the script raised", and the caller cannot tell
-# those apart: a sweep that died on an import in 0.06s returned exactly what a sweep
-# that ran for six hours and found races returns, and CI passed it as a clean shard.
 if [[ ! -f "$REPORT_DIR/junit.xml" ]]; then
     echo ">> ttnop: sweep did not complete — no junit.xml in $REPORT_DIR" >&2
     status=70

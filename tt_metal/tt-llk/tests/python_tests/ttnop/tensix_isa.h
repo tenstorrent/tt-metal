@@ -82,12 +82,7 @@ constexpr std::uint32_t TT_REPLAY_LOAD_MODE = 0x1u;
 constexpr unsigned TT_REPLAY_LEN_SHIFT      = 4;
 constexpr std::uint32_t TT_REPLAY_LEN_MASK  = 0x3ffu;
 
-// ---------------------------------------------------------------------------
-// Derived helpers
-// ---------------------------------------------------------------------------
-
-// A .text word is a Tensix instruction iff its low two bits are not 0b11, which is
-// the RV32 "uncompressed" marker (LLK/Metal builds never enable the C extension).
+// A .text word is a Tensix instruction iff its low two bits are not 0b11
 inline bool is_tensix_word(std::uint32_t word)
 {
     return (word & 3u) != 3u;
@@ -105,6 +100,12 @@ constexpr std::uint32_t FILLER_TTI_NOP = 0x08000000u; // TTI_NOP
 constexpr std::uint32_t FILLER_SFPNOP  = 0x3C000002u; // SFPNOP
 constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000009u; // UNPACR_NOP unpacker 0 / SrcA
 constexpr std::uint32_t FILLER_UNPACR1 = 0x0E000009u; // UNPACR_NOP unpacker 1 / SrcB
+
+// The only filler that costs the RISC a cycle without also costing the Tensix
+// front-end one, so it is the only one that can shift a RISC MMIO write against
+// the backend unit that consumes it. Plain RV32 `addi x0, x0, 0` which is what
+// asm volatile("nop") assembles to.
+constexpr std::uint32_t FILLER_RISC_NOP = 0x00000013u;
 
 // Two STALLWAITs that bound an SFPU block — pack sfpnop here instead of tti:
 //   start: STALLWAIT(STALL_SFPU, MATH)    // _llk_math_eltwise_sfpu_start_ — stall SFPU until math is done

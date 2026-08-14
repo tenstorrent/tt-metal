@@ -263,7 +263,15 @@ class Perturber:
         for scan in self.scans.values():
             injector.cave_for(scan)
 
-        variants = sweep_module.plan(self.config, self.scans)
+        # z_state/reconfig has no result buffer; the body asserts TensixState.
+        # risc_nop is the only filler that shifts a RISC cfg write.
+        saved = self.config.filler, self.config.threads
+        if "z_state/reconfig/" in item.nodeid:
+            self.config.filler = "risc_nop"
+        try:
+            variants = sweep_module.plan(self.config, self.scans)
+        finally:
+            self.config.filler, self.config.threads = saved
         if not variants:
             return []
         if self.verbose:
@@ -343,7 +351,14 @@ def pytest_runtest_call(item):
         unwatch()
 
     # A test that was already red tells us nothing about timing.
-    if outcome.excinfo is not None or not perturber.baseline.worth_sweeping():
+    if outcome.excinfo is not None:
+        _hb().mark_done(item.nodeid)
+        return
+    # Reconfig tests compare TensixState in the body, so they have no result
+    # buffer; still sweep them if the baseline loaded ELFs.
+    if not perturber.baseline.worth_sweeping() and not (
+        perturber.baseline.saw_load and "z_state/reconfig/" in item.nodeid
+    ):
         _hb().mark_done(item.nodeid)
         return
     failures = perturber.sweep(item)

@@ -58,8 +58,9 @@ def scan(elf: str, mode: str = "sync") -> Scan:
     if key in _cache:
         return _cache[key]
 
-    if not SCANNER.exists():
-        _build()
+    # Always ask make: a binary built before a filler or opcode was added is worse
+    # than a missing one, because it answers with a stale table instead of failing.
+    _build()
     out = subprocess.run(
         [str(SCANNER), "--mode", mode, elf], capture_output=True, text=True, check=True
     ).stdout

@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 # Every count up to the cave's capacity. A race often only opens inside a narrow
 # band of delays, so sampling powers of two walks straight past it.
 DEFAULT_DELAYS = f"1-{DEFAULT_MAX_DELAY}"
-FILLER_NAMES = ("tti_nop", "sfpnop", "unpacr0", "unpacr1")
+FILLER_NAMES = ("tti_nop", "sfpnop", "unpacr0", "unpacr1", "risc_nop")
 
 
 @dataclass(frozen=True)

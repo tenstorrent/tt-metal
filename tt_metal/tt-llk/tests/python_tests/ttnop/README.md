@@ -35,11 +35,15 @@ nothing is reloaded, which is what makes sweeping all 100 counts affordable.
 
 A nop only widens a window if it retires on the unit whose timing is in
 question. `TTI_NOP` advances the RISC and the front-end together, so it cannot
-open a RISC-MMIO-vs-unpacker gap at all.
+open a RISC-MMIO-vs-unpacker gap at all; `risc_nop` is the one that can, because
+it costs the RISC a cycle while the backend keeps draining its instruction FIFO.
+The two therefore perturb in opposite directions and are both worth trying at
+the same site.
 
 | filler | word | retires on |
 | --- | --- | --- |
-| `tti_nop` | `0x08000000` | RISC + front-end (default) |
+| `tti_nop` | `0x08000000` | RISC + front-end |
+| `risc_nop` | `0x00000013` | RISC alone (RV32 `addi x0, x0, 0`) |
 | `sfpnop` | `0x3C000002` | SFPU |
 | `unpacr0` | `0x0C000009` | unpacker 0 / SrcA |
 | `unpacr1` | `0x0E000009` | unpacker 1 / SrcB |
@@ -48,8 +52,17 @@ Only pure `UNP_NOP` mode is ever used. `ZEROSRC`, `SET_DVALID` and `NEGINFSRC`
 have side effects on the source registers and would corrupt data rather than
 delay it.
 
-Under the `auto` policy, unpack-thread sync sites get an unpacker nop, SFPU
-sites get the SFPU nop, and everything else gets the generic nop.
+Under the `auto` policy every site is tried with `tti_nop` and `risc_nop`, plus
+whichever unit-retired nop applies: an unpacker nop on unpack-thread sync sites,
+the SFPU nop on SFPU sites. So an unpack sync site costs three variants per
+delay (four when the unpacker census came back empty) and a math site two, or
+three at an SFPU site.
+
+`risc_nop` is the weakest filler per count — one core cycle, against an
+`UNPACR_NOP` that occupies the unpacker itself — and the instruction FIFO can
+absorb the first few outright while the RISC is still running ahead of it. Expect
+it to fail in a cliff rather than a band, and if a site looks immune to it,
+suspect the delay range before concluding the site is clean.
 
 **Picking the unpacker by counting UNPACR in `.text` does not work.** LLK
 records both SrcA and SrcB UNPACRs into the MOP/replay buffer before any runtime
