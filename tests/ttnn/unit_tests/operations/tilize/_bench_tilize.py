@@ -542,3 +542,46 @@ def test_bench_lever_custom_reader_off(device, regime, dtype_name):
         levers=dict(read_trid=0, read_vc=0, read_one_packet=0),  # -> library helper
         label=f"library_reader/{regime}/{dtype_name}",
     )
+
+
+@pytest.mark.parametrize("regime", ["a_square", "b_wide_short", "c_multiblock"])
+@pytest.mark.parametrize(
+    "ablate, name",
+    [({"dm_read": 1}, "no_reads"), ({"dm_write": 1}, "no_writes")],
+    ids=["no_reads", "no_writes"],
+)
+def test_bench_ablation_dm_halves(device, regime, ablate, name):
+    """Which NoC HALF binds? Reader and writer are one pipeline, so a reader-side
+    lever only has a writer twin worth building if the write half is on the
+    critical path. Payload removed one half at a time, all synchronization kept."""
+    _measure(device, SHAPES[regime], ttnn.bfloat16, ablate=ablate, label=f"ablate:{name}/{regime}")
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_write_trid_off(device, regime, dtype_name):
+    """master.md B8, WRITE side — the reader lever's twin. OFF = one plain write
+    barrier per block, so the write NoC drains at every block boundary. The
+    split-DM ablation put the WRITE half on the critical path (it is the slower
+    of the two halves on every real-work regime), which is why this twin exists."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(write_trid=0),
+        label=f"write_trid=0/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_both_trid_off(device, regime, dtype_name):
+    """Both halves of B8 off together — reader and writer are one pipeline, so
+    the pair is measured together as well as separately."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_trid=0, write_trid=0),
+        label=f"both_trid=0/{regime}/{dtype_name}",
+    )

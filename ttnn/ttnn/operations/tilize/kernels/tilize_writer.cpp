@@ -50,7 +50,16 @@ void kernel_main() {
     // Lever `page_write` (master.md B5): 1 = one whole tile PAGE per transaction
     // (optimal), 0 = two half-page transactions (the sub-page-scatter OFF arm).
     constexpr uint32_t page_write = get_compile_time_arg_val(9);
-    constexpr auto dst_args = TensorAccessorArgs<10>();
+    // Lever `write_trid` (master.md B8, WRITE side — the twin of the reader's
+    // read_trid). 1 = block i's writes are issued BEFORE block i-1's barrier, so
+    // a write is always in flight across the block boundary; 0 = barrier then
+    // issue, which drains the write NoC at every block. The split-DM ablation
+    // (Refinement 3) put the WRITE half on the critical path — it is the slower
+    // of the two on every real-work regime (a: 59.5 vs 43.9 us) — which is why
+    // this twin exists at all. The host only sets it when the output CB is
+    // EXACTLY two blocks deep and every write is a whole page.
+    constexpr uint32_t write_trid = get_compile_time_arg_val(10);
+    constexpr auto dst_args = TensorAccessorArgs<11>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block = get_arg_val<uint32_t>(1);
@@ -75,17 +84,69 @@ void kernel_main() {
 
     const auto accessor = TensorAccessor(dst_args, dst_addr);
 
-    for (uint32_t i = 0; i < num_blocks; ++i) {
-        uint32_t first_page;
+    // block index -> first destination TILE page, per work assignment.
+    auto first_page_of = [&](uint32_t i) -> uint32_t {
         if constexpr (work_mode == 1 /* W_REGION */) {
             const uint32_t r = i / n_chunks;  // tile-row within the region
-            first_page = (tile_row0 + r) * wt + tile_col0 + (i - r * n_chunks) * wt_chunk;
+            return (tile_row0 + r) * wt + tile_col0 + (i - r * n_chunks) * wt_chunk;
         } else {
             const uint32_t block = start_block + i;
             const uint32_t wc = block / nt_h;   // W-chunk-major block ordering
             const uint32_t row = block % nt_h;  // tile-row this block produces
-            first_page = row * wt + wc * wt_chunk;
+            return row * wt + wc * wt_chunk;
         }
+    };
+
+    if constexpr (write_trid) {
+        // ── B8 WRITE-side double-issue ───────────────────────────────────
+        // The output CB is exactly two blocks deep (host precondition), so the
+        // read pointer alternates between two fixed slots and no wrap
+        // arithmetic is needed; cb_wait_front still provides all flow control.
+        // noc_async_write_set_trid tags the write command buffer, and plain
+        // noc_async_write leaves NOC_PACKET_TAG alone — so whole TILE pages
+        // (> NOC_MAX_BURST_SIZE, hence not expressible with the one-packet
+        // *_with_trid API) still carry the id.
+        constexpr uint32_t slot_bytes = wt_chunk * out_tile_bytes;
+        const uint32_t slot_base = get_read_ptr(cb_output_tiles);
+        uint32_t slot = 0, trid_issue = 1, trid_wait = 1;
+        bool in_flight = false;
+
+        for (uint32_t i = 0; i < num_blocks; ++i) {
+            const uint32_t first_page = first_page_of(i);
+            // The still-unbarriered in-flight block AND this one.
+            cb_wait_front(cb_output_tiles, in_flight ? 2 * wt_chunk : wt_chunk);
+            uint32_t l1_addr = slot_base + slot * slot_bytes;
+
+            noc_async_write_set_trid(trid_issue);
+            for (uint32_t k = 0; k < wt_chunk; ++k) {
+                noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
+                l1_addr += out_tile_bytes;
+            }
+            slot ^= 1;
+            trid_issue ^= 3;  // alternate 1 <-> 2
+
+            if (in_flight) {
+                noc_async_write_barrier_with_trid(trid_wait);
+                cb_pop_front(cb_output_tiles, wt_chunk);
+                trid_wait ^= 3;
+            }
+            in_flight = true;
+        }
+        noc_async_write_barrier_with_trid(trid_wait);  // drain the last block
+        cb_pop_front(cb_output_tiles, wt_chunk);
+        // MANDATORY: put the command buffer's packet tag back to 0 before the
+        // kernel exits. brisck.cc:91 asserts `ncrisc_noc_packet_tags_cleared`
+        // (it reads NOC_PACKET_TAG on the WR / WR_REG / AT command buffers), so
+        // a left-behind trid halts the core in firmware AFTER kernel_main
+        // returns — which presents as a whole-grid hang at waypoint NKFW, not
+        // as a CB deadlock. (The read cmd buf is not in that check, which is why
+        // only the write side trips it.)
+        noc_async_write_set_trid(0);
+        return;
+    }
+
+    for (uint32_t i = 0; i < num_blocks; ++i) {
+        const uint32_t first_page = first_page_of(i);
 
         cb_wait_front(cb_output_tiles, wt_chunk);
         uint32_t l1_addr = get_read_ptr(cb_output_tiles);

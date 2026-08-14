@@ -310,6 +310,11 @@ void kernel_main() {
                 }
                 noc_async_read_barrier_with_trid(trid_wait);  // drain the last block
                 cb_push_back(cb_input_sticks, wt_chunk);
+                // Leave the command buffer's packet tag at 0 for the next
+                // kernel (the writer's twin MUST do this — brisck.cc:91 asserts
+                // it on the write cmd bufs; the read cmd buf is not in that
+                // check, but the hygiene is the same).
+                noc_async_read_set_trid(0);
             } else {
                 for (uint32_t i = 0; i < num_blocks; ++i) {
                     const uint32_t block = start_block + i;

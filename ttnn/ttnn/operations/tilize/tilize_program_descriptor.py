@@ -138,6 +138,10 @@ W_REGION = 1
 #                      floor, so a grid-filling shape lands ONE block per core
 #                      and read/compute/write cannot overlap (Refinement 3;
 #                      this is what made master.md C16 read as a no-payoff).
+#   write_trid    0 -> one plain write barrier per block (no double-issue), i.e.
+#                      the write NoC drains between blocks (master.md B8, WRITE
+#                      side — the reader lever's twin; the split-DM ablation put
+#                      the write half on the critical path).
 #   read_trid     0 -> one plain read barrier per block (no double-issue), i.e.
 #                      the NoC drains between blocks (master.md B8 off arm).
 #   read_vc       0 -> every reader issues on the default read VC
@@ -161,6 +165,7 @@ LEVERS = {
     "xfer_gate": 1,
     "pipeline": 1,
     "read_trid": 1,
+    "write_trid": 1,
     # master.md B10 ships PARKED at its byte-identical default (every reader on
     # the default request VC). Measured over 5-sample medians on Wormhole B0 it
     # is neutral on the grid-filling square (86,136 vs 85,720 ns) and a 2.6% LOSS
@@ -199,6 +204,11 @@ NUM_READ_VCS = 4
 ABLATE = {
     "compute": 0,  # 1 -> compute does the CB handshake but no tilize_block
     "dm": 0,  # 1 -> reader/writer issue no NoC transfers
+    # The two DM halves separately (Refinement 3): reader and writer are one
+    # pipeline, so attributing the wall to a half is what says whether a
+    # reader-side lever even has a writer twin worth building.
+    "dm_read": 0,  # 1 -> reader issues no NoC reads (writer untouched)
+    "dm_write": 0,  # 1 -> writer issues no NoC writes (reader untouched)
 }
 
 
@@ -695,6 +705,16 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     read_one_packet = int(aligned_accessor_read and LEVERS["read_one_packet"])
     read_trid = int(aligned_accessor_read and trid_ok and LEVERS["read_trid"])
     read_vc_enable = int(aligned_accessor_read and LEVERS["read_vc"])
+    # B8's WRITE twin. Same two-slot CB precondition, and every write must be a
+    # whole page (the page_write OFF arm splits them, and an ablated arm issues
+    # none), so those two arms fall back to the plain barrier-per-block loop.
+    write_trid = int(
+        out_placement == P_ACCESSOR
+        and trid_ok
+        and LEVERS["write_trid"]
+        and LEVERS["page_write"]
+        and not (ABLATE["dm"] or ABLATE["dm_write"])
+    )
 
     # -- reader (NCRISC / NOC0) --
     reader_ct_args = [
@@ -710,7 +730,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         n_img_in,
         w_in_bytes,
         elem_in,
-        ABLATE["dm"],
+        ABLATE["dm"] or ABLATE["dm_read"],
         src_page_bytes,
         src_row_pages,
         read_one_packet,
@@ -729,8 +749,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         n_chunks,
         out_tile_bytes,
         LEVERS["block_write"],
-        ABLATE["dm"],
+        ABLATE["dm"] or ABLATE["dm_write"],
         LEVERS["page_write"],
+        write_trid,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 

@@ -43,7 +43,7 @@ def test_production_switches_ship_in_their_optimal_state():
     this op (Refinement 3 parked master.md B10 there). Each entry carries its
     number, so parking stays a measurement and never becomes a shrug.
     """
-    assert pd.ABLATE == {"compute": 0, "dm": 0}, f"classification ablation is live: {pd.ABLATE}"
+    assert not any(pd.ABLATE.values()), f"classification ablation is live: {pd.ABLATE}"
     off = {name: value for name, value in pd.LEVERS.items() if value != 1}
     assert set(off) == set(pd.PARKED_LEVERS), (
         f"lever(s) shipped in their OFF (counterfactual) arm without a measured "
