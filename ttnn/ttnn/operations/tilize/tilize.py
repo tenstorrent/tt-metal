@@ -185,6 +185,15 @@ EXCLUSIONS = [
     # up yet (a future refinement could enable it).
     {"output_dtype": ttnn.bfloat8_b, "pad_mode": "auto"},
     {"output_dtype": ttnn.bfloat8_b, "pad_mode": "explicit"},
+    # Padding + a WIDENING cast. The fill is materialized into the input CB, so
+    # it is necessarily packed in the INPUT element format (op_design.md §10 —
+    # packing it in output_dtype is garbage the moment a cast is requested).
+    # A fill that is inexact in bf16 (any value that is not bf16-representable)
+    # therefore lands as the bf16-rounded value in an fp32 output, while the
+    # oracle expects the fp32 value. Exact fills (zero) are unaffected, so only
+    # the non-zero buckets are refused.
+    {"dtype": ttnn.bfloat16, "output_dtype": ttnn.float32, "pad_value": "positive"},
+    {"dtype": ttnn.bfloat16, "output_dtype": ttnn.float32, "pad_value": "negative"},
 ]
 
 
@@ -335,21 +344,29 @@ def _placement_spec(memory_config):
     )
 
 
-def _scenario_from_call(input_tensor, plan):
-    """The scenario dict the golden suite would have written for this call."""
+def _scenario_from_call(
+    input_tensor, out_memory_config, *, tile_h, pad_mode, pad_value, use_multicore, use_double_buffer
+):
+    """The scenario dict the golden suite would have written for this call.
+
+    Built from the RAW call arguments, not from a canonical plan: the support
+    gate has to run *before* the shape-legality checks, so that an out-of-
+    rectangle cell (e.g. a rank the op does not build yet) is refused as an
+    unsupported axis value rather than by a shape ValueError raised earlier.
+    """
     in_spec, in_api = _placement_spec(input_tensor.memory_config())
-    out_spec, out_api = _placement_spec(plan.out_memory_config)
+    out_spec, out_api = _placement_spec(out_memory_config)
     shard_api = "none" if (in_api == "none" and out_api == "none") else (in_api if in_api != "none" else out_api)
     return {
-        "input_shape": plan.in_shape,
-        "use_multicore": plan.use_multicore,
-        "use_double_buffer": plan.use_double_buffer,
+        "input_shape": list(input_tensor.shape),
+        "use_multicore": bool(use_multicore),
+        "use_double_buffer": bool(use_double_buffer),
         "shard_api": shard_api,
         "in": in_spec,
         "out": out_spec,
-        "pad_mode": plan.pad_mode,
-        "pad_value": plan.pad_value,
-        "tile_height": plan.tile_h,
+        "pad_mode": pad_mode,
+        "pad_value": pad_value,
+        "tile_height": tile_h,
         "in_layout": input_tensor.layout,
         "in_tile_height": "none"
         if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -373,20 +390,36 @@ def validate(
     pad_value=None,
     tile=None,
 ):
-    """Runtime support gate. Returns the canonical plan for the entry point."""
-    plan = _canonicalize(
-        input_tensor,
-        memory_config,
-        dtype,
-        use_multicore,
-        use_double_buffer,
-        output_padded_shape,
-        pad_value,
-        tile,
-    )
+    """Runtime support gate. Returns the canonical plan for the entry point.
 
-    scenario = _scenario_from_call(input_tensor, plan)
-    axes = {"dtype": input_tensor.dtype, "output_dtype": plan.out_dtype}
+    Order matters: the SUPPORTED / EXCLUSIONS gate runs on axis values projected
+    straight from the raw call, BEFORE the shape-legality checks in
+    `_canonicalize()`. Otherwise a cell outside the rectangle (say a rank the op
+    does not build yet) would be refused by a shape ValueError instead of the
+    typed support refusal the registry contract promises.
+    """
+    # --- axis values, cheaply (no shape legality decided here) ---
+    tile_h = int((tile if tile is not None else ttnn.Tile([32, DEFAULT_TILE_WIDTH])).tile_shape[0])
+    if output_padded_shape is None and pad_value is None:
+        pad_mode = "none"
+    elif output_padded_shape is None:
+        pad_mode = "auto"
+    else:
+        pad_mode = "explicit"
+
+    scenario = _scenario_from_call(
+        input_tensor,
+        memory_config if memory_config is not None else input_tensor.memory_config(),
+        tile_h=tile_h,
+        pad_mode=pad_mode,
+        pad_value=pad_value,
+        use_multicore=use_multicore,
+        use_double_buffer=use_double_buffer,
+    )
+    axes = {
+        "dtype": input_tensor.dtype,
+        "output_dtype": dtype if dtype is not None else input_tensor.dtype,
+    }
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((scenario,), axes)
 
@@ -400,7 +433,17 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
 
-    return plan
+    # 3. Inside the rectangle — now the call's own legality (shapes, pad target).
+    return _canonicalize(
+        input_tensor,
+        memory_config,
+        dtype,
+        use_multicore,
+        use_double_buffer,
+        output_padded_shape,
+        pad_value,
+        tile,
+    )
 
 
 # ---------------------------------------------------------------------------

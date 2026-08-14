@@ -35,6 +35,34 @@ the writer are raw dataflow, justified in-file by design §7 rejections 1–2 (t
 library reader cannot fill, and `write_sticks_after_untilize` is the inverse
 direction).
 
+### Golden suite (informational — the acceptance suite is the phase gate)
+
+`eval/golden_tests/tilize/test_golden.py`: **102 passed, 246 xfail (strict), 592
+skipped (INVALID), 0 failed.** Every xfail is an axis this phase deliberately did
+not build (sharded placement, integer dtypes, tiny tiles, retile) or one of the
+two EXCLUSIONS below.
+
+Two gate fixes came out of that run:
+
+1. **Gate order.** `validate()` now projects the axes from the RAW call and runs
+   SUPPORTED/EXCLUSIONS *before* `_canonicalize()`'s shape-legality checks.
+   Previously a rank-0 (scalar) cell hit `ValueError: output_padded_shape ... must
+   have the same rank as the input` before the `rank` axis was ever consulted, so
+   an out-of-rectangle cell was refused with the wrong exception type instead of
+   the typed `UnsupportedAxisValue` the registry contract promises.
+2. **EXCLUSION: padding + a widening cast with a non-zero fill.** The fill is
+   materialized into the input CB, so it is necessarily packed in the INPUT
+   element format (design §10 — packing it in `output_dtype` is garbage the
+   moment a cast is requested). For `bfloat16 -> float32` that means a fill which
+   is inexact in bf16 (e.g. 10.2) lands as 10.1875 in an fp32 output while the
+   oracle expects 10.2 — measured as exactly the 0.0125 ATOL delta the cell
+   reported. Zero fills are exact and stay supported. Refinement candidate: give
+   the pad path a second fill word in the OUTPUT format applied after the cast.
+
+`eval/golden_tests/tilize/test_regression.py` fails 12/27 — every one on an axis
+outside the Phase-0 rectangle (int32/uint16 dtypes, legacy/nd sharding). That file
+carries no xfail machinery, so those are the expected "future refinement" reds.
+
 ### Perf gate
 
 Box: Wormhole B0, 8×8 compute grid, AICLK 1000 MHz (measured 0.985 GHz).
