@@ -5,17 +5,50 @@ Date: 2026-08-14 UTC
 How this autoport is dispatched through `tenstorrent/tt-shield`, what had to change
 to make that possible, and what is verified versus still open.
 
-## First dispatch
+## Dispatch history
+
+| Run | Workflow | Outcome |
+| --- | --- | --- |
+| [31801765378](https://github.com/tenstorrent/tt-shield/actions/runs/31801765378) | `spec_tests` | build succeeded, tests failed: no applicable suites |
+| [31807380436](https://github.com/tenstorrent/tt-shield/actions/runs/31807380436) | `benchmarks` | reuses the built image, skips the build |
+
+### Do not use `spec_tests` for this model
+
+Run 31801765378 reached the hardware runner and then failed with
 
 ```text
-run:    https://github.com/tenstorrent/tt-shield/actions/runs/31801765378
-name:   gemma-4-31B | bh-qb-ge | spec_tests | mvasiljevic/fast-models-fast/gemma4-31b
-                                            | mvasiljevic/fast-models-fast/gemma4-31b
+No spec test suites match model='gemma-4-31B' device='p300x2' — skipping spec_tests.
+⏭  task=spec_tests no-op rc=0
+No blocks accumulated — cannot generate report.
+❌ command=workflow rc=1 error=no_blocks
 ```
 
-Progress at time of writing: `resolve-shas` success, `determine-server-type`
-success, `build-tt-inference-server` in progress. Comparable QB2 runs take
-1h25m to 3h52m.
+`test_module/test_suites/llm.json` defines spec-test matrices for only
+`qwen3_32b`, `llama_3_1_8b`, `llama_70b_family`, and `gpt_oss_20b`. **No Gemma
+variant has spec-test suites**, including `gemma-4-31B-it`, which is already in
+nightly CI on this device. The workflow treats zero selected suites as a failure
+rather than a skip, so `spec_tests` cannot pass for this model family until
+suites are added. Use `benchmarks`, `evals`, or `release`.
+
+### What run 31801765378 did establish
+
+- `determine-server-type` resolved `gemma-4-31B` with `impl-of-model=default` to
+  the `gemma4_31b_autoport` impl via the P300X2 spec's `default_impl`. This
+  confirms the prod spec entry was both necessary and sufficient for model
+  resolution.
+- **`build-tt-inference-server` succeeded**, building tt-metal at this branch's
+  head even though the branch is ~1,900 commits behind main. The branch-age
+  concern did not materialise for the image build.
+- The built image is
+  `ghcr.io/tenstorrent/tt-shield/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.19.0-e4297d3bc2f10056adf81f50fd94fbd08cd3f5e1-bf98d55-94771201217`.
+  It encodes the **dispatch-resolved** commits (this branch's tt-metal head and
+  vLLM `dev` = `bf98d55`), not the prod spec's `vllm_commit: 6b4a3a7`. So the
+  dispatch inputs drive what is built and the spec pins affect image naming and
+  validation only. Convenient: `bf98d55` is exactly the vLLM commit everything
+  was verified against locally.
+- Passing that image as `-f docker-image=...` on a re-dispatch skips
+  `resolve-shas` and the build entirely, turning a 1-4 hour run into just the
+  hardware phase.
 
 ## What tt-shield is
 
