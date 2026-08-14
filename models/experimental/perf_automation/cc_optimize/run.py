@@ -2710,6 +2710,11 @@ def _llm_child_alive(pgid: int) -> bool:
     return False
 
 
+# Defined by perf_mcp, which emits them; named here so the watchdog can recognise a cooling child.
+_COOL_BEGIN = "PERF_MCP_COOLING_BEGIN"
+_COOL_END = "PERF_MCP_COOLING_END"
+
+
 def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
     """Let the board cool BEFORE any device subprocess, not just before a measurement.
 
@@ -2825,11 +2830,27 @@ def _run_device_proc(
 
             _buf: list = []
             _act = [time.monotonic()]
+            # COOLING IS NOT WORK, AND IT IS NOT A HANG. A thermal wait runs inside this subprocess,
+            # so on 2026-08-14 the tool cooled the board, the cooling ate the wall-clock budget, and
+            # this watchdog killed it at 1716 s as "likely a device wedge" -- then reset the device,
+            # which is what actually broke it. The child brackets every thermal wait with these
+            # markers; time spent between them is credited back, so a board that takes an hour to
+            # cool costs an hour of waiting and none of the op's budget.
+            _cool = {"in": False, "since": 0.0, "total": 0.0}
+
+            def _cool_total():
+                extra = (time.monotonic() - _cool["since"]) if _cool["in"] else 0.0
+                return _cool["total"] + extra
 
             def _pump():
                 try:
                     for _ln in proc.stdout:
                         _buf.append(_ln)
+                        if _COOL_BEGIN in _ln and not _cool["in"]:
+                            _cool["in"], _cool["since"] = True, time.monotonic()
+                        elif _COOL_END in _ln and _cool["in"]:
+                            _cool["total"] += time.monotonic() - _cool["since"]
+                            _cool["in"] = False
                         if not capture:
                             _sys.stdout.write(_ln)
                             _sys.stdout.flush()
@@ -2848,7 +2869,10 @@ def _run_device_proc(
                 time.sleep(5)
                 now = time.monotonic()
                 cpu = _tree_cpu_jiffies(proc.pid)
-                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid)
+                # A cooling child is idle ON PURPOSE: it is sleeping against a thermometer, so it
+                # burns no CPU and prints only when the temperature moves. Both of this loop's
+                # liveness signals read that as a wedge, which is exactly wrong.
+                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid) or _cool["in"]
                 last_cpu = cpu
                 if moved:
                     max_gap = max(max_gap, now - last_progress)
@@ -2862,7 +2886,7 @@ def _run_device_proc(
                         flush=True,
                     )
                     raise subprocess.TimeoutExpired(cmd, limit)
-                if now - start >= timeout_s:
+                if now - start - _cool_total() >= timeout_s:
                     raise subprocess.TimeoutExpired(cmd, timeout_s)
             rc = proc.returncode
             _pt.join(timeout=30)

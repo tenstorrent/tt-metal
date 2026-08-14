@@ -2759,8 +2759,26 @@ _THERMAL_MARGIN_C = float(os.environ.get("PERF_MCP_THERMAL_MARGIN_C", "3"))
 # produced nothing. This target is ABSOLUTE and the wait is not abandoned on a timer: a retry is
 # only worth taking from a genuinely cold board, and if the board never gets there the run should
 # say so rather than burn attempts at 800 MHz.
+# WAITING FOR PHYSICS IS NOT WORK. The parent watchdog kills a device subprocess on wall clock, and
+# a thermal wait happens INSIDE that subprocess -- so on 2026-08-14 the tool cooled the board, the
+# cooling consumed the budget, and it killed itself at 1716 s for "likely a device wedge". The board
+# was not wedged; the reset that kill triggered is what actually broke it. These markers bracket
+# every thermal wait so the watchdog can stop its clock instead of counting a cooldown as a hang.
+_COOL_BEGIN = "PERF_MCP_COOLING_BEGIN"
+_COOL_END = "PERF_MCP_COOLING_END"
+
+
+def _cooling_marker(which):
+    print(which, file=sys.stderr, flush=True)
+
+
 _COOLDOWN_TO_C = float(os.environ.get("PERF_MCP_COOLDOWN_TO_C", "60"))
-_COOLDOWN_MAX_S = float(os.environ.get("PERF_MCP_COOLDOWN_MAX_S", "1800"))
+# NO TIMER ON COOLING. A board cools at the rate it cools; a deadline on that is a guess about
+# physics, and the only thing it can do is cut the wait short and hand back a hot board. What IS
+# evidence is the trend: a board still dropping will get there, and a board that has not moved in
+# _COOLDOWN_PLATEAU_S is not cooling -- it has found its floor (this chassis idles at 79C) and no
+# amount of further waiting changes that. So: wait as long as progress continues, stop when it stops.
+_COOLDOWN_PLATEAU_S = float(os.environ.get("PERF_MCP_COOLDOWN_PLATEAU_S", "600"))
 _COOLDOWN_POLL_S = float(os.environ.get("PERF_MCP_COOLDOWN_POLL_S", "20"))
 
 # Fallback only. The real detector is agent.probes.detect_overheat, which already existed for the
@@ -2839,26 +2857,40 @@ def _cooldown_after_clamp(target_c: float = 0.0) -> tuple:
         file=sys.stderr,
         flush=True,
     )
-    while time.time() - t0 < _COOLDOWN_MAX_S:
-        time.sleep(_COOLDOWN_POLL_S)
-        cur = _read_die_temp_c()
-        if cur is None:
-            return True, None  # telemetry we cannot read must not become a board we refuse to use
-        if cur <= target:
-            print(
-                "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
-                file=sys.stderr,
-                flush=True,
-            )
-            return True, cur
-        if last is None or abs(cur - last) >= 1.0:
-            print(
-                "  [thermal-gate] cooling: %.1fC (target %.1fC, %.0fs elapsed)" % (cur, target, time.time() - t0),
-                file=sys.stderr,
-                flush=True,
-            )
-            last = cur
-    return False, last
+    _cooling_marker(_COOL_BEGIN)
+    try:
+        best, best_t = last, time.time()
+        while True:
+            time.sleep(_COOLDOWN_POLL_S)
+            cur = _read_die_temp_c()
+            if cur is None:
+                return True, None  # telemetry we cannot read is not a board we refuse to use
+            if cur <= target:
+                print(
+                    "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return True, cur
+            # PROGRESS, NOT A CLOCK, decides whether to keep waiting.
+            if best is None or cur < best - 0.5:
+                best, best_t = cur, time.time()
+                print(
+                    "  [thermal-gate] cooling: %.1fC (target %.1fC, %.0fs elapsed)" % (cur, target, time.time() - t0),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            elif time.time() - best_t >= _COOLDOWN_PLATEAU_S:
+                print(
+                    "  [thermal-gate] board has sat at %.1fC for %.0fs and is no longer cooling -- that "
+                    "is its floor in this chassis, so the %.1fC target is unreachable"
+                    % (cur, time.time() - best_t, target),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return False, cur
+    finally:
+        _cooling_marker(_COOL_END)
 
 
 def _record_thermal_observation(start_temp_c, clamped):
@@ -2970,6 +3002,15 @@ def _wait_for_thermal_headroom():
         file=sys.stderr,
         flush=True,
     )
+    _cooling_marker(_COOL_BEGIN)
+    try:
+        return _headroom_poll(t0, limit, cur)
+    finally:
+        _cooling_marker(_COOL_END)
+
+
+def _headroom_poll(t0, limit, cur):
+    """The polling half of _wait_for_thermal_headroom, split out so the wait can be bracketed."""
     while time.time() - t0 < _THERMAL_WAIT_S:
         time.sleep(_THERMAL_POLL_S)
         cur = _read_die_temp_c()
@@ -3037,9 +3078,9 @@ def _measure_full_pipeline_guarded():
                 return (
                     None,
                     None,
-                    "board did not cool to %.1fC within %.0fs after a clamped reading (reached %s); "
+                    "board stopped cooling at %s, above the %.1fC needed for an unclamped reading; "
                     "measuring again would only produce another clamped number"
-                    % (_COOLDOWN_TO_C, _COOLDOWN_MAX_S, ("%.1fC" % _cool_c) if _cool_c else "unknown"),
+                    % (("%.1fC" % _cool_c) if _cool_c else "an unknown temperature", _COOLDOWN_TO_C),
                     None,
                 )
             continue

@@ -54,9 +54,10 @@ def test_a_board_already_cold_is_not_delayed(monkeypatch):
 
 
 def test_a_board_that_never_cools_stops_the_run_instead_of_retrying_hot(monkeypatch):
-    """This board idles at 79C. If 60C is unreachable the tool must SAY SO, not measure at 800 MHz."""
+    """This board idles at 79C. Once it stops falling, 60C is unreachable and the tool must SAY SO
+    rather than measure at 800 MHz. No timer decides this -- the temperature not moving does."""
     mcp = _mcp(monkeypatch, [95.0, 90.0, 82.0, 79.0, 79.0, 79.0])
-    monkeypatch.setattr(mcp, "_COOLDOWN_MAX_S", 0.05)
+    monkeypatch.setattr(mcp, "_COOLDOWN_PLATEAU_S", 0.0)  # it has stopped falling; that is the signal
     monkeypatch.setattr(mcp.time, "sleep", lambda _s: None)
     ok, reached = mcp._cooldown_after_clamp()
     assert not ok, "gave the retry a green light from a board that never reached the target"
