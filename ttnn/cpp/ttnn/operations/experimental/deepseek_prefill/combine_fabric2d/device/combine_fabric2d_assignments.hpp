@@ -37,11 +37,20 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
     const std::vector<uint32_t>& ring_chip_ids, uint32_t my_row, uint32_t num_links);
 
 // Relay chunks a stream receives, which is also how many its upstream neighbour emits into this stream's
-// quarter. Equals (own forwarding) + (re-forwarded), so upstream writer and downstream reader agree on a
-// quarter's chunk count without exchanging anything.
+// share of the forwarding buffer. Equals (own forwarding) + (re-forwarded), so upstream writer and
+// downstream reader agree on the chunk count without exchanging anything.
+//
+// A chunk arriving at C in one direction is one (source, destination) pair whose path passes through C and
+// continues. Summing over upstream distance k >= 1 the movements from that source whose distance exceeds k
+// gives sum_{k=1..m-1} (m-k) = m(m-1)/2 for m = extent/2. That is the worse of the two directions — the one
+// not carrying the diametrically-opposite chip needs only (m-1)(m-2)/2 — and every stream is sized alike.
 constexpr uint32_t relay_chunks_per_stream(uint32_t ring_extent) {
     const uint32_t m = ring_extent / 2;
     return m * (m - 1) / 2;
+}
+
+constexpr uint32_t relay_chunks_per_mesh(uint32_t ring_extent, uint32_t num_links) {
+    return relay_chunks_per_stream(ring_extent) * stream_count(num_links);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
