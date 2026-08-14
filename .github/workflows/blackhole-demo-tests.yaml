@@ -15,7 +15,6 @@ on:
         type: choice
         options:
           - all
-          - mochi
           - z-image-turbo
       system-type:
         description: "Select system type to test"
