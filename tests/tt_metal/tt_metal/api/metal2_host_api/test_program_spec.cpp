@@ -46,7 +46,6 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include "impl/hal/hal.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/context/metal_context.hpp"                // MetalContext::instance().hal() for scope resolution

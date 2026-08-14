@@ -16,7 +16,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>  // HalMemType, for the borrowed-DFB per-bank sizing check
-#include "impl/hal/hal.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt-metalium/allocator.hpp>
