@@ -100,9 +100,6 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
 
 # --- Kimi-K3 LatentMoE ---------------------------------------------------------------------------
-# Own command constant rather than a variant of the DeepSeek ones: K3 has its own test function
-# (test_kimi_k3_moe), and its ids are already model-scoped, so the long "not linear-8 and not
-# mesh-4x2 ..." exclusion chain the shared test_ds_moe ids need is unnecessary here.
 _K3_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe"
 _CMD_K3_8X4 = f"pytest {_K3_TEST_PATH} -k 'fabric2d-mesh-8x4 and kimi_k3-5k-perf'"
 
@@ -122,14 +119,8 @@ def test_kimi_k3_moe_perf_galaxy():
     run_model_device_perf_test_with_merge(
         command=_CMD_K3_8X4,
         # Measured 2026-08-07 on bh-glx-120-c04u02 (8x4, DDR 14000 -- sub-nominal, so
-        # adjust_margin_for_ddr_speed doubles the 3% margin to 6%). Mean of two consecutive runs,
-        # 12_922_557 and 12_927_147, which agree to 0.036%. Signpost-filtered and device-row-merged.
-        # Split at this shape: Matmul 2_196 us, CCL 1_042 us, Other 9_687 us -- the block is
-        # dominated by the dispatch/combine/top-k path, not by the latent projections.
-        #
-        # Superseded the earlier 28_872_936, which was 3200 tokens/chip on FABRIC_1D. Dropping to
-        # the 5K production shape cut the sequence 5x but the time only 2.2x, because the per-block
-        # fixed costs and the CCLs do not scale with sequence.
+        # adjust_margin_for_ddr_speed doubles the 3% margin to 6%). Dispatch/combine/top-k dominates:
+        # Matmul 2_196 us, CCL 1_042 us, Other 9_687 us.
         expected_device_perf_ns_per_iteration=12_924_852,
         subdir="kimi_k3_moe",
         model_name="kimi_k3_moe_glx_8x4",

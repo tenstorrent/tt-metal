@@ -172,8 +172,7 @@ def run_model(
     # weights-type suffix a perf run would persist placeholder (≈zero) expert
     # weights that a later PCC run loads as "complete" — producing all-zero
     # expert outputs (PCC=0). Keep the two cohorts in separate directories.
-    # LatentMoE resolution (Kimi-K3). Mirrors TtMoe's own defaulting so this test and the module can
-    # never disagree about what "no latent space" means.
+    # Mirrors TtMoe's own defaulting, so the two cannot disagree on what "no latent space" means.
     routed_emb = emb_dim if routed_emb_dim is None else routed_emb_dim
     shared_hidden = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
     use_latent = routed_emb != emb_dim
@@ -184,11 +183,8 @@ def run_model(
     # Base dir is env-overridable so concurrent users don't collide on a single shared /tmp path
     # (the default /tmp/{variant}_moe_cache is world-visible but owner-writable → cross-user EACCES).
     _moe_cache_base = os.environ.get("DS_MOE_CACHE_DIR", f"/tmp/{variant.name}_moe_cache")
-    # Every dim that shapes a cached tensor goes in the key, UNCONDITIONALLY -- not gated on
-    # use_latent. routed_emb and shared_hidden are independent knobs, so gating them on the latent
-    # flag would give a (shared_hidden != hidden_dim, no latent) case the same directory as the plain
-    # case and let it load a differently-shaped shared-expert cache as its own. Cache filenames carry
-    # dtype and layout but NOT shape, so that mismatch is a silent wrong-weights load.
+    # Every dim that shapes a cached tensor goes in the key unconditionally: filenames carry dtype
+    # and layout but not shape, so a colliding key is a silent wrong-weights load.
     moe_cache_dir = Path(
         f"{_moe_cache_base}/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_"
         f"{emb_dim}emb_{hidden_dim}hid_{routed_emb}rout_{shared_hidden}sh_{weights_type}"
@@ -224,8 +220,7 @@ def run_model(
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
-        # LatentMoE projections. Distinct fixed seed for the same reason as above: each tensor must
-        # be a pure function of (shape, seed) so a perf-built cache matches the PCC reference.
+        # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
         profiler.end("weights_creation")
 
@@ -343,9 +338,8 @@ def run_model(
             latent_weights=latent_weights,
             latent_use_norm=latent_use_norm,
             rms_norm_eps=rms_norm_eps,
-            # SiLU on both sides. The device has no SiTU kernel yet (#51335), so comparing against a
-            # SiTU reference would measure the missing activation rather than this dataflow. SiTU
-            # parity is covered host-side in test_moe_reference_comparison.py.
+            # SiLU on both sides: the device has no SiTU kernel yet (#51335), and comparing against a
+            # SiTU reference would measure that gap rather than this dataflow.
             activation="silu",
         )
         profiler.end("torch_moe_creation")
@@ -472,26 +466,15 @@ def run_model(
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
     if use_latent:
-        # Checked BEFORE routed_output so a LatentMoE failure is attributed to the right stage:
-        # routed_output bundles the reduce, the latent norm and the up-projection, whereas this
-        # isolates everything up to and including the reduce.
-        #
-        # 0.965 rather than routed_output's shared 0.96: this bar is K3-only, so it can be tied to
-        # K3's own measured value (0.969778) instead of the cross-model floor. ~0.005 of margin,
-        # against two consecutive runs that agreed to all six digits -- loose enough for run-to-run
-        # noise, tight enough that a real accumulation regression cannot hide under it.
+        # Checked before routed_output, which bundles the reduce, the latent norm and the
+        # up-projection; this isolates everything up to and including the reduce. 0.965 sits ~0.005
+        # under K3's measured 0.969778.
         dense_checks.insert(1, (
             "latent_routed_output", tt_intermediates.latent_routed_output,
             torch_intermediates.latent_routed_output, get_tp_mesh_composer(mesh_device), 0.965,
         ))
-        # The other side of the latent boundary: post down-projection, pre-dispatch. Composed with the
-        # SP composer, not the TP one -- to_latent() all-gathers on the TP axis so this tensor is
-        # replicated across columns, not sharded.
-        #
-        # 0.998 against a measured 0.999882: a single matmul on bf8 weights, so it is near-exact and
-        # a tight bar costs nothing. Its real value is attribution -- it says the ~0.03 the block
-        # loses is all downstream of the down-projection, and a to_latent()-side defect can no longer
-        # hide inside a latent_routed_output miss.
+        # Post down-projection, pre-dispatch. Composed with the SP composer: to_latent() all-gathers
+        # on the TP axis, so this tensor is replicated across columns rather than sharded.
         dense_checks.insert(1, (
             "latent_input", tt_intermediates.latent_input,
             torch_intermediates.latent_input, get_sp_mesh_composer(mesh_device), 0.998,
@@ -905,14 +888,8 @@ def test_kimi_moe(
 # Kimi-K3 LatentMoE
 # ---------------------------------------------------------------------------
 #
-# Capacity factor 5 carries over from Kimi-K2.6, and that is a deliberate choice rather than a
-# copy-paste: the two K3 shape changes push the dispatch buffer in opposite directions and very nearly
-# cancel. Row width halves (7168 -> 3584 latent) while token slots double (top-8 -> top-16), so
-# per-chip dispatch BYTES are roughly unchanged. Note compute_constants sizes the buffer in TOKENS and
-# ignores num_experts_per_tok entirely (init_helpers.py:491-493, TODO #41293), so the doubled top-k
-# does NOT flow into sizing automatically -- the token count per chip really does double, from
-# dgs*seq*8*12/384 to dgs*seq*16*28/896. Slots double, bytes per slot halve. Verified on device
-# via the per-chip overflow check that TtMoe.forward logs on the PCC path.
+# Capacity factor 5 carries over from Kimi-K2.6: K3 halves the row width (7168 -> 3584 latent) and
+# doubles the token slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -928,10 +905,8 @@ def test_kimi_moe(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
-        # The 8x4 anchor is FABRIC_2D: it is the only K3 MoE config CI runs, and the rest of the K3
-        # blaze coverage (MLA, MLA perf) is already 2D, so keeping this leg on 1D would have been the
-        # one fabric outlier in the pipeline. The smaller meshes above stay 1D -- they are local
-        # proxies no pipeline selects, and 2D routing on a single-row mesh is meaningless.
+        # Loudbox proxy for local bring-up; no pipeline selects it. TP stays 4 as on the 8x4 anchor:
+        # at TP=1 the shared expert is unsharded and its gate matmul's CBs exceed L1.
         pytest.param(
             (2, 4),
             {
@@ -951,8 +926,6 @@ def test_kimi_moe(
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             },
-            # Unconditional: every K3 param above is skipif(not is_blackhole()), so this leg is
-            # Blackhole-only and there is no arch left that would want a different link count.
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),

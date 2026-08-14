@@ -488,12 +488,9 @@ def _tt_moe_from_kimi_block(blk, cfg, *, seq_len, dispatch_group_size, capacity_
     [
         # The checkpoint's real combination.
         ("situ", True),
-        # What the device runs until #51335 lands a SiTU kernel; validating it here means the SiLU
-        # reference the device is compared against is itself checked against upstream.
+        # What the device runs until #51335 lands a SiTU kernel.
         ("silu", True),
-        # latent_moe_use_norm=False is upstream's OWN default (configuration_kimi_k3.py) even though
-        # K3's checkpoint sets it true, so the norm-less branch is reachable config, not hypothetical.
-        # Covered so a wrong tensor being dropped on that path cannot pass unnoticed.
+        # Upstream's own default, even though K3's checkpoint sets it true.
         ("situ", False),
     ],
     ids=["situ", "silu", "situ-no-latent-norm"],
@@ -529,12 +526,9 @@ def test_kimi_k3_latent_moe_reference_pcc(activation, latent_use_norm):
     dispatch_group_size = 1
 
     # Size the dispatch buffer from the actual worst case rather than a magic number.
-    # get_gate_outputs pads every expert's token count up to a TILE_SIZE boundary before the cumsum
-    # that produces expert_region_offsets (init_helpers.py:401-402), so the buffer must hold the
-    # dispatched tokens PLUS up to TILE_SIZE-1 padding per expert. Underestimating this overflows the
-    # buffer with an IndexError inside TorchDispatchModule rather than a useful message -- which is
-    # exactly how test_moe_reference_pcc above currently fails (256 experts at capacity 8 needs ~16k
-    # slots but allocates 8192).
+    # get_gate_outputs pads each expert's token count up to a TILE_SIZE boundary, so the buffer must
+    # hold the dispatched tokens plus up to TILE_SIZE-1 padding per expert; underestimating it
+    # overflows inside TorchDispatchModule with a bare IndexError.
     worst_case_tokens = seq_len * num_experts_per_tok + n_routed_experts * (ttnn.TILE_SIZE - 1)
     capacity_factor = -(-worst_case_tokens // (dispatch_group_size * seq_len))  # ceil-div
 

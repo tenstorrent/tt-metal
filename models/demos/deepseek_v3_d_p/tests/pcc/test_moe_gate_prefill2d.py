@@ -61,12 +61,8 @@ GATE_MODELS = {
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
 
-# Per-chip sequence every gate case runs at, overriding each model's TtMoEGateConfig default. 640 is
-# the production target and the depth the MoE tests drive the gate at, and it clears K3's L1 ceiling
-# (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP), which from_model_cfg still enforces on top of this.
-# Applied at construction, not by assigning config.sp_dim afterwards: __post_init__ re-keys the tuned
-# matmul program configs by sp_dim, so a later assignment turns every lookup into a miss and silently
-# drops the gate matmul to TTNN's default tiling.
+# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig re-keys
+# its tuned matmul configs by sp_dim, so assigning it afterwards silently drops to default tiling.
 GATE_SP_DIM = 640
 
 
@@ -120,9 +116,7 @@ class _RealGateSource(NamedTuple):
     key_prefix_template: str
 
 
-# Models for which real router weights can be loaded. Anything absent from this map falls back to
-# seeded random weights, which is fine: this test checks device-vs-reference parity, and real weights
-# only make the routing distribution (and so the top-k tie pattern) realistic.
+# Models with loadable real router weights; anything absent falls back to seeded random weights.
 _REAL_GATE_SOURCES = {
     "deepseek_v3": _RealGateSource(
         env_var="DEEPSEEK_V3_HF_MODEL",
@@ -133,8 +127,7 @@ _REAL_GATE_SOURCES = {
         hf_repo="deepseek-ai/DeepSeek-V3",
         key_prefix_template=GATE_KEY_PREFIX_DEEPSEEK,
     ),
-    # K3's router is the one MoE tensor group the checkpoint leaves unquantized, so it can be read
-    # directly. ~12.8 MB out of 1.5 TB via a prefix-filtered safe_open.
+    # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
         fallbacks=(str(KIMI_K3_CHECKPOINT),),
@@ -421,9 +414,8 @@ def test_forward_pass(
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
-    # Real gate weights, where a checkpoint is reachable for this model. DeepSeek-V3's weights can't
-    # be reshaped to other expert counts or activations, so that path stays pinned to 256 experts +
-    # sigmoid; K3 loads its own 896-expert router.
+    # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
+    # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
     use_real_weights = (
         gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
     ) or gate_model == "kimi_k3"
@@ -431,10 +423,7 @@ def test_forward_pass(
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
 
-    # The real gate INPUT comes from the DeepSeek-V3 prefill trace, so it is only meaningful for that
-    # model; K3 uses real weights with synthetic input. (A K3 MoE-input trace does exist under
-    # golden/structured_traces/kimi_k3_100k_vllm, but it was captured from a 5-layer SLIM checkpoint
-    # whose weights are not staged, so pairing it with these weights would be misleading.)
+    # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
     use_real = gate_model == "deepseek_v3" and use_real_weights
 
     n_sp_devices = mesh_device.shape[0]
@@ -537,12 +526,8 @@ def test_forward_pass(
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.93
-        # Per-model relaxation of the device-mode scores bar only. The shared 0.93 assumes top-k
-        # selection is mostly stable under device precision; at high expert counts it is not, because
-        # sigmoid over many experts leaves the 16th and 17th scores near-tied, so a small matmul
-        # difference swaps a pick and moves the weight vector a lot. That shows up as recall passing
-        # (its 0.95 bar tolerates ~0.8 differing picks per token) while scores misses -- which is
-        # exactly K3's failure signature. Models that declare no override keep 0.93.
+        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
+        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
         scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
 
     _validate_gate(
