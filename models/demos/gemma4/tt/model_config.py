@@ -23,7 +23,7 @@ from loguru import logger
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
-import ttnn
+from models.demos.gemma4.tt.precision import dtype_to_str
 
 _RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
 
@@ -321,7 +321,7 @@ class Gemma4ModelArgs:
         """
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
-        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
+        dtype_str = dtype_to_str(dtype)
         shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
         if shape is not None and shape[0] * shape[1] > 1:
             return _resolve_mesh_qualified_weight_cache(self.model_cache_path, dtype_str, shape)
@@ -385,7 +385,7 @@ class Gemma4AssistantArgs:
     def weight_cache_path(self, dtype, mesh_shape=None):
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
-        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
+        dtype_str = dtype_to_str(dtype)
         shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
         # Assistant caches use a distinct prefix; mirror target mesh qualification.
         if shape is not None and shape[0] * shape[1] > 1:
