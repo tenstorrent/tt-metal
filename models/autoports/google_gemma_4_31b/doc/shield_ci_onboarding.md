@@ -80,7 +80,8 @@ prove no hang exists, and a genuine one would now present as a stall instead of 
 `reference_config`, and the runtime spec JSON **only under `--dev-mode`**.
 Without it the container uses the image's baked copies, so a change to the
 entrypoint or to a model spec needs a fresh image; only passing different
-dispatch inputs can reuse one. That is why run 31824560569 rebuilds.
+dispatch inputs can reuse one. That is why runs 31824560569 and 31832502684
+each rebuilt after a spec or entrypoint change.
 
 ### Do not use `spec_tests` for this model
 
@@ -139,7 +140,7 @@ gh workflow run on-dispatch.yml --repo tenstorrent/tt-shield \
   -f model=Llama-3.1-8B-Instruct \
   -f runner-label=bh-qb-ge \
   -f device-type=p300x2 \
-  -f workflow=spec_tests \
+  -f workflow=benchmarks \
   -f impl-of-model=default \
   -f tt-metal-git-ref=mvasiljevic/fast-models-fast/gemma4-31b \
   -f inference-server-git-ref=mvasiljevic/fast-models-fast/gemma4-31b \
@@ -154,7 +155,9 @@ gh workflow run on-dispatch.yml --repo tenstorrent/tt-shield \
 - `impl-of-model=default` because `gemma4_31b_autoport` is not in tt-shield's
   dropdown; the P300X2 spec sets `default_impl: true`. Confirmed working:
   `determine-server-type` resolved on the first dispatch.
-- Escalate `workflow` in order: `spec_tests`, `benchmarks`, `evals`, `release`.
+- Use `benchmarks` first, then `evals`, then `release`. Do **not** use
+  `spec_tests`: no Gemma variant has spec-test suites, so it fails with
+  `error=no_blocks` (see below).
 - Omit `docker-image` — the autoport must be baked in, so the pinned public
   image (`0.18.0-c49bb76-6b4a3a7`) cannot be reused: `c49bb76` predates
   `models/autoports/google_gemma_4_31b`.
