@@ -115,171 +115,34 @@ constexpr Thread get_thread()
 template <Thread T = detail::get_thread(), typename... Vs>
 static inline void configure(Vs&&... values)
 {
-    state_operand_impl<ApiClass::Configure, T>(*state, std::forward<Vs>(values)...);
+    detail::configure<T>(*state, std::forward<Vs>(values)...);
 }
 
 template <Thread T = detail::get_thread(), typename... Vs>
 static inline void reconfigure(Vs&&... values)
 {
-    state_operand_impl<ApiClass::Reconfigure, T>(*state, std::forward<Vs>(values)...);
+    detail::reconfigure<T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
 static inline void init(Vs&&... values)
 {
-    state_operation_impl<ApiClass::Initialize, Op, T>(*state, std::forward<Vs>(values)...);
+    detail::init<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
 static inline void execute(Vs&&... values)
 {
-    state_operation_impl<ApiClass::Execute, Op, T>(*state, std::forward<Vs>(values)...);
+    detail::execute<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
 static inline void uninit(Vs&&... values)
 {
-    state_operation_impl<ApiClass::Uninitialize, Op, T>(*state, std::forward<Vs>(values)...);
+    detail::uninit<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 #if 0
-// DISABLED. The pre-refactor surface: the per-Exu configure/check hooks, the operation_init/check/
-// uninit trio keyed on the old Operation enum, the thread_* context helpers, and the zone RAII types.
-// All of it is written against State<T>, SanitizerState and the Operation enum, none of which exist
-// any more, and all of it routes into the legacy region of impl.h that is disabled for the same
-// reason.
-//
-// Disabled rather than deleted because the behaviour still has to be carried over -- the context
-// tracking and the reporting in particular, which the guarded entry points above do not yet do.
-//
-// sstanisic todo: port onto the new state model and re-enable, or delete once output.h is rewritten.
-
-// Goes in LLK_LIB in HWConfigure and HWReconfig
-// State set + no hw config within kernel check
-template <bool reconfig = false>
-static inline void unpack_operand_configure(
-    State<bool> dst_acc_en,
-    State<std::uint32_t> src_fmt_A,
-    State<std::uint32_t> src_fmt_B,
-    State<std::uint32_t> dst_fmt_A,
-    State<std::uint32_t> dst_fmt_B,
-    State<std::uint32_t> face_height_A,
-    State<std::uint32_t> face_height_B,
-    State<std::uint32_t> num_faces_A,
-    State<std::uint32_t> num_faces_B)
-{
-    if constexpr (!reconfig)
-    {
-        fsm_configure_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC]);
-    }
-    else
-    {
-        fsm_reconfigure_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC]);
-    }
-
-    unpack_operand_configure_impl<reconfig>(
-        sanitizer->context.unpack,
-        sanitizer->operand.unpack,
-        dst_acc_en,
-        src_fmt_A,
-        src_fmt_B,
-        dst_fmt_A,
-        dst_fmt_B,
-        face_height_A,
-        face_height_B,
-        num_faces_A,
-        num_faces_B);
-}
-
-// State set + no hw config within kernel check
-template <bool reconfig = false>
-static inline void math_operand_configure(State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
-{
-    if constexpr (!reconfig)
-    {
-        fsm_configure_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC]);
-    }
-    else
-    {
-        fsm_reconfigure_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC]);
-    }
-
-    math_operand_configure_impl<reconfig>(sanitizer->context.math, sanitizer->operand.math, math_fmt_A, math_fmt_B);
-}
-
-// State set + no hw config within kernel check
-template <bool reconfig = false>
-static inline void pack_operand_configure(
-    State<bool> dest_acc_en,
-    State<std::uint32_t> src_fmt,
-    State<std::uint32_t> dst_fmt,
-    State<std::uint32_t> face_height,
-    State<std::uint32_t> tile_width,
-    State<std::uint32_t> num_faces,
-    State<bool> partial_face,
-    State<bool> narrow_tile)
-{
-    if constexpr (!reconfig)
-    {
-        fsm_configure_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC]);
-    }
-    else
-    {
-        fsm_reconfigure_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC]);
-    }
-
-    pack_operand_configure_impl<reconfig>(
-        sanitizer->context.pack, sanitizer->operand.pack, dest_acc_en, src_fmt, dst_fmt, face_height, tile_width, num_faces, partial_face, narrow_tile);
-}
-
-// Goes in LLK_LIB in Init, Execute and Uninit
-// No state set, just check that non x arguments match the stored ones
-static inline void unpack_operand_check(
-    State<bool> dst_acc_en,
-    State<std::uint32_t> src_fmt_A,
-    State<std::uint32_t> src_fmt_B,
-    State<std::uint32_t> dst_fmt_A,
-    State<std::uint32_t> dst_fmt_B,
-    State<std::uint32_t> face_height_A,
-    State<std::uint32_t> face_height_B,
-    State<std::uint32_t> num_faces_A,
-    State<std::uint32_t> num_faces_B)
-{
-    unpack_operand_check_impl(
-        sanitizer->context.unpack,
-        sanitizer->operand.unpack,
-        dst_acc_en,
-        src_fmt_A,
-        src_fmt_B,
-        dst_fmt_A,
-        dst_fmt_B,
-        face_height_A,
-        face_height_B,
-        num_faces_A,
-        num_faces_B);
-}
-
-// No state set, just check that non x arguments match the stored ones
-static inline void math_operand_check(State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
-{
-    math_operand_check_impl(sanitizer->context.math, sanitizer->operand.math, math_fmt_A, math_fmt_B);
-}
-
-// No state set, just check that non x arguments match the stored ones
-static inline void pack_operand_check(
-    State<bool> dest_acc_en,
-    State<std::uint32_t> src_fmt,
-    State<std::uint32_t> dst_fmt,
-    State<std::uint32_t> face_height,
-    State<std::uint32_t> tile_width,
-    State<std::uint32_t> num_faces,
-    State<bool> partial_face,
-    State<bool> narrow_tile)
-{
-    pack_operand_check_impl(
-        sanitizer->context.pack, sanitizer->operand.pack, dest_acc_en, src_fmt, dst_fmt, face_height, tile_width, num_faces, partial_face, narrow_tile);
-}
-
 // Goes in LLK_LIB in Init
 // Store operation type and save arguments
 template <Operation op, typename... Ts>

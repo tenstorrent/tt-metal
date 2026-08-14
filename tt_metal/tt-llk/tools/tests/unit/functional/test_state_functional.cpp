@@ -101,5 +101,25 @@ int main()
     assert(state.equal(StateVal<Alu::Fmt>(9u)));
     assert(!state.equal(StateVal<Alu::Fmt>(7u)));
 
+    Alu::Struct snap;
+    Alu::Struct operand;
+
+    assert(snap.subset_of(operand));
+
+    operand.update(StateVal<Alu::Fmt>(7u));
+    assert(snap.subset_of(operand));
+
+    snap.update(StateVal<Alu::Fmt>(7u));
+    assert(snap.subset_of(operand));
+
+    snap.update(StateVal<Alu::En>(true));
+    assert(!snap.subset_of(operand));
+
+    operand.update(StateVal<Alu::En>(false));
+    assert(!snap.subset_of(operand));
+
+    operand.update(StateVal<Alu::En>(true));
+    assert(snap.subset_of(operand));
+
     return 0;
 }

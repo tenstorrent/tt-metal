@@ -7,232 +7,476 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
+#include <type_traits>
+#include <variant>
 
-// Disabled with the legacy hooks below, the only code here that asserted. Keeping it would make this
-// layer depend on common/llk_assert.h, which reaches for metal's api/debug/assert.h unless
-// ENABLE_LLK_ASSERT_ONLY is set -- a build-mode coupling the guards do not need. Restore with the hooks.
-// #include "llk_assert.h"
 #include "sanitizer/operation.h"
-// Disabled with the legacy hooks below, which are its only caller. output.h is still written
-// against the removed State<T> / OperationState / Operation types, and it reaches for metal's
-// device_print.h and ckernel.h -- so including it would make this arch-independent layer depend
-// on both an unported interface and an arch-specific one. Restore together with the hooks.
-// #include "sanitizer/output.h"
 #include "sanitizer/types.h"
 
 namespace llk::san
 {
 
-// =======================================================================================
-// State routing
-// =======================================================================================
-//
-// Reached only from the guarded entry points in api.h, and only once their guards have passed.
-// Everything here may therefore assume what those guards establish: every argument is a
-// StateVal over a real field, its group is of the right family, and the calling thread drives
-// that group's Exu. None of it is re-checked, and none of it is checked defensively -- a guard
-// that had to be repeated here would be a guard that could disagree with itself.
-
 namespace detail
 {
 
-// The one place the mapping from Exu to storage lives. Selection is by the group's Exu rather
-// than by the calling thread, which is what lets a single TRISC1 call carry Fpu and Sfpu fields
-// to their two different slots.
-template <Exu E>
-static inline auto& exu_state(State& state)
+// Named state_assert() rather than assert() because <cassert> defines assert as a function-like
+// macro, and a kernel is free to include it before this header.
+//
+// sstanisic todo: this is where the reporting lands once output.h is ported -- see the note above the
+// legacy region at the bottom of this header. Until then a failed check is an unresolved symbol.
+void state_assert(bool condition, const char* message);
+
+// -------
+// Defects
+// -------
+
+enum class OperandDefect : std::uint32_t
 {
-    if constexpr (E == Exu::Unpack)
+    None,
+    NotThreadSupported,
+    NotTypeParams,
+    NotOperandParams,
+    NotNativeParams
+};
+
+enum class OperationDefect : std::uint32_t
+{
+    None,
+    NotThreadSupported,
+    NotTypeOperation,
+    NotNativeOperation,
+    NotListedOperation,
+    NotTypeParams,
+    NotOwnOperationParams,
+    NotOwnOperandParams
+};
+
+template <typename Defect>
+constexpr Defect first_defect(std::initializer_list<Defect> defects)
+{
+    for (const Defect defect : defects)
     {
-        return state.unpack;
+        if (defect != Defect::None)
+        {
+            return defect;
+        }
     }
-    else if constexpr (E == Exu::Fpu)
-    {
-        return state.fpu;
-    }
-    else if constexpr (E == Exu::Sfpu)
-    {
-        return state.sfpu;
-    }
-    else
-    {
-        return state.pack;
-    }
+
+    return Defect::None;
 }
 
-// ---------------------------------------------------------------------------------------
-// Per-argument routing
-// ---------------------------------------------------------------------------------------
+// ---------------------------------------------
+// Operand family: configure() and reconfigure()
+// ---------------------------------------------
 
-// The destination is the StateStruct of the argument's own group, so a field can never land in a
-// struct that does not contain it. StateStruct::update() would reject that anyway, but as a compile
-// error inside this header rather than a message naming the API the caller used -- which is exactly
-// the second diagnostic the guards are arranged to prevent.
-//
-// A discarded parameter writes nothing. It exists so a PR hook can see the LLK parameter was
-// considered, not so it can be tracked, and it names no group to route by.
-template <typename V>
-static inline void operand_write(State& state, V&& value)
-{
-    if constexpr (!is_state_discard_v<V>)
-    {
-        exu_state<operand_of<val_group_t<V>>::exu>(state).operand.update(std::forward<V>(value));
-    }
-}
-
-// The named operation's record, created on first touch. Chosen once for the whole call, because the
-// operation is a template argument rather than something inferred from the arguments.
-template <typename Op>
-static inline auto& operation_record(State& state)
-{
-    auto& exu = exu_state<operation_of<Op>::exu>(state);
-
-    if (!std::holds_alternative<OperationExtended<Op>>(exu.operation))
-    {
-        exu.operation = OperationExtended<Op> {};
-    }
-
-    return std::get<OperationExtended<Op>>(exu.operation);
-}
-
-// One argument of an init()/execute()/uninit() call. The guards have established that exactly three
-// kinds reach here:
-//
-//   StateDiscard              nothing to do
-//   the operation's own field  written to the record
-//   an Operand field           snapshotted at init, compared against that snapshot afterwards
-//
-// Snapshot-and-compare is what catches an operand value that changed between the two halves of one
-// operation. The tilize hooks, for instance, restate unpack_dst_format, face_r_dim and num_faces at
-// execute; a disagreement there is a real bug that comparing against configure()'s record would miss,
-// because that record has not changed.
-template <ApiClass A, typename Op, typename Record, typename V>
-static inline void operation_write(Record& record, V&& value)
+template <Thread T, typename V>
+constexpr OperandDefect operand_parameter_defect()
 {
     if constexpr (is_state_discard_v<V>)
     {
-        return;
+        return OperandDefect::None;
     }
-    else if constexpr (std::is_same_v<val_group_t<V>, Op>)
+    else if constexpr (!is_state_value_v<V>)
     {
-        record.state.update(std::forward<V>(value));
+        return OperandDefect::NotTypeParams;
     }
-    else if constexpr (A == ApiClass::Initialize)
+    else if constexpr (!is_operand_v<val_group_t<V>>)
     {
-        record.snap.update(std::forward<V>(value));
+        return OperandDefect::NotOperandParams;
     }
     else
     {
-        // sstanisic todo: report the mismatch through output.h once it is ported off State<T>.
-        [[maybe_unused]] const bool matches = record.snap.equal(std::forward<V>(value));
+        return is_exu_native(operand_of<val_group_t<V>>::exu, T) ? OperandDefect::None : OperandDefect::NotNativeParams;
     }
 }
 
-} // namespace detail
-
-// =======================================================================================
-// Guarded entry points
-// =======================================================================================
-//
-// The rules and their diagnostics live here rather than in api.h, because api.h is arch specific and
-// none of this is: what a thread may be handed is a property of the sanitizer's own model, so it must
-// be stated once, in the arch-independent layer, and be identical for every target.
-//
-// api.h supplies only what is genuinely arch specific -- the thread the translation unit is compiled
-// for, and the per-thread state object -- and forwards.
-//
-// Wording is selected by ApiClass rather than composed, because a C++17 static_assert message must be
-// a literal. The conditions are shared; only the sentence differs, and it has to name the API the
-// caller actually wrote or it describes a function they never called. There is one defect per call,
-// so an assert against a rule that is not the one that broke is vacuously satisfied -- which is what
-// holds one mistake to one diagnostic; see the guards region in types.h for why the order is
-// load-bearing.
-
-// Operand family. configure() and reconfigure() differ only in the FSM transition they drive, which
-// is not ported yet, so for now both record the same thing and differ only in ApiClass.
-template <ApiClass A, Thread T, typename... Vs>
-static inline void state_operand_impl(State& state, Vs&&... values)
+template <Thread T, typename... Vs>
+constexpr OperandDefect operand_defect()
 {
-    static_assert(A == ApiClass::Configure || A == ApiClass::Reconfigure, "state_operand_impl serves configure() and reconfigure().");
-
-    using Defect = detail::OperandDefect;
-
-    constexpr Defect defect = detail::operand_defect<T, Vs...>();
-
-    if constexpr (A == ApiClass::Configure)
+    if constexpr (!is_thread_supported(T))
     {
-        static_assert(defect != Defect::Unsupported, "configure() is not supported on TRISC3.");
-        static_assert(defect != Defect::Params, "configure() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
-        static_assert(defect != Defect::Kind, "configure() only accepts Operand fields; Operation fields belong to init(), execute() and uninit().");
-        static_assert(defect != Defect::Native, "configure() was given a field whose Exu this thread does not drive.");
+        return OperandDefect::NotThreadSupported;
     }
     else
     {
-        static_assert(defect != Defect::Unsupported, "reconfigure() is not supported on TRISC3.");
-        static_assert(defect != Defect::Params, "reconfigure() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
-        static_assert(defect != Defect::Kind, "reconfigure() only accepts Operand fields; Operation fields belong to init(), execute() and uninit().");
-        static_assert(defect != Defect::Native, "reconfigure() was given a field whose Exu this thread does not drive.");
+        return first_defect<OperandDefect>({operand_parameter_defect<T, Vs>()...});
     }
+}
 
-    if constexpr (defect == Defect::None)
+// -------------------------------------------------
+// Operation family: init(), execute() and uninit()
+// -------------------------------------------------
+
+// One defect function for all three hooks: they accept exactly the same arguments -- the operation's
+// own fields, plus Operand fields of the operation's own Exu -- and differ only in what they do with
+// them, which field_update() and field_check() below decide.
+//
+// The Operand field is admitted so a hook can restate the operand values its LLK function was handed.
+// init() snapshots them; execute() and uninit() hold them against the configured state, which is what
+// catches an operand value drifting between the halves of one operation.
+template <typename Op, typename V>
+constexpr OperationDefect operation_parameter_defect()
+{
+    if constexpr (is_state_discard_v<V>)
     {
-        (detail::operand_write(state, std::forward<Vs>(values)), ...);
+        return OperationDefect::None;
+    }
+    else if constexpr (!is_state_value_v<V>)
+    {
+        return OperationDefect::NotTypeParams;
+    }
+    else if constexpr (is_operation_v<val_group_t<V>>)
+    {
+        return std::is_same_v<val_group_t<V>, Op> ? OperationDefect::None : OperationDefect::NotOwnOperationParams;
+    }
+    else
+    {
+        // A tracked field's group is an Operand or an Operation -- StateField admits nothing else.
+        return operand_of<val_group_t<V>>::exu == operation_of<Op>::exu ? OperationDefect::None : OperationDefect::NotOwnOperandParams;
+    }
+}
+
+template <typename Op, Thread T, typename... Vs>
+constexpr OperationDefect operation_defect()
+{
+    if constexpr (!is_thread_supported(T))
+    {
+        return OperationDefect::NotThreadSupported;
+    }
+    else if constexpr (!is_operation_v<Op>)
+    {
+        return OperationDefect::NotTypeOperation;
+    }
+    else if constexpr (!is_exu_native(operation_of<Op>::exu, T))
+    {
+        return OperationDefect::NotNativeOperation;
+    }
+    else if constexpr (!OperationUnion<operation_of<Op>::exu>::List::template contains<Op>())
+    {
+        return OperationDefect::NotListedOperation;
+    }
+    else
+    {
+        return first_defect<OperationDefect>({operation_parameter_defect<Op, Vs>()...});
+    }
+}
+
+// ------------
+// State access
+// ------------
+
+template <Exu E>
+static inline auto& exu_state(State& sanitizer)
+{
+    if constexpr (E == Exu::Unpack)
+    {
+        return sanitizer.unpack;
+    }
+    else if constexpr (E == Exu::Fpu)
+    {
+        return sanitizer.fpu;
+    }
+    else if constexpr (E == Exu::Sfpu)
+    {
+        return sanitizer.sfpu;
+    }
+    else if constexpr (E == Exu::Pack)
+    {
+        return sanitizer.pack;
+    }
+    else
+    {
+        static_assert(always_false_value_v<E>, "llk::san -> [FAULT] Unsupported Exu");
+    }
+}
+
+// -----------------
+// Operation helpers
+// -----------------
+
+// Seat Op on its Exu: reset every operation field and return the record for Op's own fields.
+// hoistable is copied out of the type here because init() is the only hook that can name it.
+template <typename Op>
+static inline typename Op::Struct& operation_set(State& sanitizer)
+{
+    auto& operation = exu_state<operation_of<Op>::exu>(sanitizer).operation;
+
+    operation.status    = OperationStatus::Initialized;
+    operation.hoistable = operation_of<Op>::hoistable;
+    operation.snapshot  = {};
+
+    return operation.specific.template emplace<typename Op::Struct>();
+}
+
+// The seated record for Op's own fields, or null when another operation (or none) is seated.
+template <typename Op>
+static inline typename Op::Struct* operation_get(State& sanitizer)
+{
+    return std::get_if<typename Op::Struct>(&exu_state<operation_of<Op>::exu>(sanitizer).operation.specific);
+}
+
+// ---------------
+// Operand context
+// ---------------
+
+// Record where an operand value was last written, per operand slot, so a mismatch can point at the
+// configure() that set it.
+template <typename F, Exu E>
+static inline void operand_context_update(ExuContext<E>& context)
+{
+    if constexpr (E == Exu::Unpack)
+    {
+        using Unpack = Operand<Exu::Unpack>;
+
+        if constexpr (count_of_v<F, Unpack::InputFormatA, Unpack::OutputFormatA, Unpack::FaceHeightA, Unpack::NumFacesA> == 1)
+        {
+            context.operand.unpack_a = context.current;
+        }
+        else if constexpr (count_of_v<F, Unpack::InputFormatB, Unpack::OutputFormatB, Unpack::FaceHeightB, Unpack::NumFacesB> == 1)
+        {
+            context.operand.unpack_b = context.current;
+        }
+
+        // DestWidth32 is shared by both operands and records no site (see #47440).
+    }
+    else if constexpr (E == Exu::Fpu)
+    {
+        context.operand.fpu = context.current;
+    }
+    else if constexpr (E == Exu::Sfpu)
+    {
+        context.operand.sfpu = context.current;
+    }
+    else if constexpr (E == Exu::Pack)
+    {
+        context.operand.pack = context.current;
+    }
+    else
+    {
+        static_assert(always_false_value_v<E>, "llk::san -> [FAULT] Unsupported Exu");
+    }
+}
+
+// --------------------
+// Field Update Wrapper
+// --------------------
+
+template <ApiClass A, typename T>
+static inline void field_update(State&, StateDiscard<T>)
+{
+}
+
+template <ApiClass A, typename F>
+static inline void field_update(State& sanitizer, const StateVal<F>& value)
+{
+    using G = field_group_t<F>;
+
+    if constexpr (is_operand_v<G>)
+    {
+        auto& exu = exu_state<operand_of<G>::exu>(sanitizer);
+
+        if constexpr (A == ApiClass::Configure || A == ApiClass::Reconfigure)
+        {
+            exu.operand.update(value);
+
+            operand_context_update<F>(exu.context);
+        }
+        else if constexpr (A == ApiClass::Initialize)
+        {
+            exu.operation.snapshot.update(value);
+        }
+        else
+        {
+            static_assert(always_false_value_v<A>, "llk::san -> [FAULT] execute() and uninit() check state, they do not update it");
+        }
+    }
+    else
+    {
+        static_assert(A == ApiClass::Initialize, "llk::san -> [FAULT] only init() writes Operation state");
+
+        auto* record = operation_get<G>(sanitizer);
+
+        // init() seats the record before folding its arguments, so null is a sanitizer fault.
+        state_assert(record != nullptr, "llk::san -> [FAULT] field_update() found no record for its own Operation");
+
+        if (record != nullptr)
+        {
+            record->update(value);
+        }
+    }
+}
+
+// -------------------
+// Field Check Wrapper
+// -------------------
+
+template <ApiClass A, typename T>
+static inline void field_check(State&, StateDiscard<T>)
+{
+}
+
+template <ApiClass A, typename F>
+static inline void field_check(State& sanitizer, const StateVal<F>& value)
+{
+    using G = field_group_t<F>;
+
+    if constexpr (is_operation_v<G>)
+    {
+        const auto* record = operation_get<G>(sanitizer);
+
+        state_assert(record != nullptr && record->equal(value), hook_text<A>::operation_mismatch);
+    }
+    else
+    {
+        state_assert(exu_state<operand_of<G>::exu>(sanitizer).operand.equal(value), hook_text<A>::operand_mismatch);
+    }
+}
+
+// ------------
+// Entry points
+// ------------
+
+template <Thread T, typename... Vs>
+static inline void configure(State& sanitizer, Vs&&... values)
+{
+    constexpr OperandDefect defect = operand_defect<T, Vs...>();
+
+    static_assert(defect != OperandDefect::NotThreadSupported, "configure() is not supported on TRISC3.");
+    static_assert(defect != OperandDefect::NotTypeParams, "configure() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
+    static_assert(
+        defect != OperandDefect::NotOperandParams, "configure() only accepts Operand fields; Operation fields belong to init(), execute() and uninit().");
+    static_assert(defect != OperandDefect::NotNativeParams, "configure() was given a field whose Exu this thread does not drive.");
+
+    if constexpr (defect == OperandDefect::None)
+    {
+        (field_update<ApiClass::Configure>(sanitizer, values), ...);
 
         // sstanisic todo: drive the FSM transition and set ExuState::previous per touched Exu.
     }
 }
 
-// Operation family. A nullary call -- uninit() legitimately is one -- still names its operation, so
-// it is still checked; that is the whole reason the operation is a template argument rather than
-// inferred from the arguments.
-template <ApiClass A, typename Op, Thread T, typename... Vs>
-static inline void state_operation_impl(State& state, Vs&&... values)
+template <Thread T, typename... Vs>
+static inline void reconfigure(State& sanitizer, Vs&&... values)
 {
+    constexpr OperandDefect defect = operand_defect<T, Vs...>();
+
+    static_assert(defect != OperandDefect::NotThreadSupported, "reconfigure() is not supported on TRISC3.");
+    static_assert(defect != OperandDefect::NotTypeParams, "reconfigure() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
     static_assert(
-        A == ApiClass::Initialize || A == ApiClass::Execute || A == ApiClass::Uninitialize, "state_operation_impl serves init(), execute() and uninit().");
+        defect != OperandDefect::NotOperandParams, "reconfigure() only accepts Operand fields; Operation fields belong to init(), execute() and uninit().");
+    static_assert(defect != OperandDefect::NotNativeParams, "reconfigure() was given a field whose Exu this thread does not drive.");
 
-    using Defect = detail::OperationDefect;
-
-    constexpr Defect defect = detail::operation_defect<Op, T, Vs...>();
-
-    if constexpr (A == ApiClass::Initialize)
+    if constexpr (defect == OperandDefect::None)
     {
-        static_assert(defect != Defect::Unsupported, "init() is not supported on TRISC3.");
-        static_assert(defect != Defect::NotAnOperation, "init() requires an Operation as its first template argument.");
-        static_assert(defect != Defect::NotNative, "init() was given an Operation whose Exu this thread does not drive.");
-        static_assert(defect != Defect::NotListed, "init() was given an Operation that its Exu's OperationList does not name.");
-        static_assert(defect != Defect::Params, "init() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
-        static_assert(defect != Defect::Kind, "init() only accepts its own Operation's fields and Operand fields of that Operation's Exu.");
-    }
-    else if constexpr (A == ApiClass::Execute)
-    {
-        static_assert(defect != Defect::Unsupported, "execute() is not supported on TRISC3.");
-        static_assert(defect != Defect::NotAnOperation, "execute() requires an Operation as its first template argument.");
-        static_assert(defect != Defect::NotNative, "execute() was given an Operation whose Exu this thread does not drive.");
-        static_assert(defect != Defect::NotListed, "execute() was given an Operation that its Exu's OperationList does not name.");
-        static_assert(defect != Defect::Params, "execute() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
-        static_assert(defect != Defect::Kind, "execute() only accepts its own Operation's fields and Operand fields of that Operation's Exu.");
-    }
-    else
-    {
-        static_assert(defect != Defect::Unsupported, "uninit() is not supported on TRISC3.");
-        static_assert(defect != Defect::NotAnOperation, "uninit() requires an Operation as its first template argument.");
-        static_assert(defect != Defect::NotNative, "uninit() was given an Operation whose Exu this thread does not drive.");
-        static_assert(defect != Defect::NotListed, "uninit() was given an Operation that its Exu's OperationList does not name.");
-        static_assert(defect != Defect::Params, "uninit() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
-        static_assert(defect != Defect::Kind, "uninit() only accepts its own Operation's fields and Operand fields of that Operation's Exu.");
-    }
-
-    if constexpr (defect == Defect::None)
-    {
-        auto& record = detail::operation_record<Op>(state);
-
-        (detail::operation_write<A, Op>(record, std::forward<Vs>(values)), ...);
-
-        // sstanisic todo: drive the FSM transition and set OperationExtended::status from A.
+        (field_update<ApiClass::Reconfigure>(sanitizer, values), ...);
     }
 }
+
+template <typename Op, Thread T, typename... Vs>
+static inline void init(State& sanitizer, Vs&&... values)
+{
+    constexpr OperationDefect defect = operation_defect<Op, T, Vs...>();
+
+    static_assert(defect != OperationDefect::NotThreadSupported, "init() is not supported on TRISC3.");
+    static_assert(defect != OperationDefect::NotTypeOperation, "init() requires an Operation as its first template argument.");
+    static_assert(defect != OperationDefect::NotNativeOperation, "init() was given an Operation whose Exu this thread does not drive.");
+    static_assert(defect != OperationDefect::NotListedOperation, "init() was given an Operation that its Exu's OperationList does not name.");
+    static_assert(defect != OperationDefect::NotTypeParams, "init() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
+    static_assert(defect != OperationDefect::NotOwnOperationParams, "init() only accepts its own Operation's fields.");
+    static_assert(defect != OperationDefect::NotOwnOperandParams, "init() only accepts Operand fields of its own Operation's Exu.");
+
+    if constexpr (defect == OperationDefect::None)
+    {
+        auto& exu = exu_state<operation_of<Op>::exu>(sanitizer);
+
+        operation_set<Op>(sanitizer);
+
+        (field_update<ApiClass::Initialize>(sanitizer, values), ...);
+
+        // Where the operation was seated, for later hooks' reports.
+        exu.context.operation = exu.context.current;
+    }
+}
+
+template <typename Op, Thread T, typename... Vs>
+static inline void execute(State& sanitizer, Vs&&... values)
+{
+    constexpr OperationDefect defect = operation_defect<Op, T, Vs...>();
+
+    static_assert(defect != OperationDefect::NotThreadSupported, "execute() is not supported on TRISC3.");
+    static_assert(defect != OperationDefect::NotTypeOperation, "execute() requires an Operation as its first template argument.");
+    static_assert(defect != OperationDefect::NotNativeOperation, "execute() was given an Operation whose Exu this thread does not drive.");
+    static_assert(defect != OperationDefect::NotListedOperation, "execute() was given an Operation that its Exu's OperationList does not name.");
+    static_assert(defect != OperationDefect::NotTypeParams, "execute() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
+    static_assert(defect != OperationDefect::NotOwnOperationParams, "execute() only accepts its own Operation's fields.");
+    static_assert(defect != OperationDefect::NotOwnOperandParams, "execute() only accepts Operand fields of its own Operation's Exu.");
+
+    if constexpr (defect == OperationDefect::None)
+    {
+        constexpr ApiClass hook = ApiClass::Execute;
+
+        auto& exu = exu_state<operation_of<Op>::exu>(sanitizer);
+
+        // Without the record there is nothing to compare against; checking against a foreign one
+        // would only invent failures.
+        if (operation_get<Op>(sanitizer) == nullptr)
+        {
+            state_assert(false, hook_text<hook>::not_initialized);
+            return;
+        }
+
+        (field_check<hook>(sanitizer, values), ...);
+
+        // Catches a reconfigure() between init() and here, whether or not the field is restated.
+        state_assert(exu.operation.snapshot.subset_of(exu.operand), hook_text<hook>::operand_drift);
+
+        // Advanced even on failure, so the state describes the sequence that actually ran.
+        exu.operation.status = OperationStatus::Executed;
+    }
+}
+
+// uninit() is execute()'s twin: the same arguments, the same checks, a different status left behind.
+// A nullary uninit<Op>() is still checked, because the operation is named rather than inferred.
+template <typename Op, Thread T, typename... Vs>
+static inline void uninit(State& sanitizer, Vs&&... values)
+{
+    constexpr OperationDefect defect = operation_defect<Op, T, Vs...>();
+
+    static_assert(defect != OperationDefect::NotThreadSupported, "uninit() is not supported on TRISC3.");
+    static_assert(defect != OperationDefect::NotTypeOperation, "uninit() requires an Operation as its first template argument.");
+    static_assert(defect != OperationDefect::NotNativeOperation, "uninit() was given an Operation whose Exu this thread does not drive.");
+    static_assert(defect != OperationDefect::NotListedOperation, "uninit() was given an Operation that its Exu's OperationList does not name.");
+    static_assert(defect != OperationDefect::NotTypeParams, "uninit() only accepts StateVal<StateField<Group, Type>> and StateDiscard<Type> arguments.");
+    static_assert(defect != OperationDefect::NotOwnOperationParams, "uninit() only accepts its own Operation's fields.");
+    static_assert(defect != OperationDefect::NotOwnOperandParams, "uninit() only accepts Operand fields of its own Operation's Exu.");
+
+    if constexpr (defect == OperationDefect::None)
+    {
+        constexpr ApiClass hook = ApiClass::Uninitialize;
+
+        auto& exu = exu_state<operation_of<Op>::exu>(sanitizer);
+
+        if (operation_get<Op>(sanitizer) == nullptr)
+        {
+            state_assert(false, hook_text<hook>::not_initialized);
+            return;
+        }
+
+        (field_check<hook>(sanitizer, values), ...);
+
+        state_assert(exu.operation.snapshot.subset_of(exu.operand), hook_text<hook>::operand_drift);
+
+        exu.operation.status = OperationStatus::Uninitialized;
+
+        // sstanisic todo: drive the FSM transition and set ExuState::previous. Sequencing errors (a
+        // second uninit(), an execute() after one) are not reported yet; the record is left seated so
+        // the FSM port can read it.
+    }
+}
+
+} // namespace detail
 
 // =======================================================================================
 // Legacy hooks -- DISABLED
@@ -249,8 +493,7 @@ static inline void state_operation_impl(State& state, Vs&&... values)
 // fails, which is what operand_assert / operation_assert / fsm_assert did here.
 //
 // sstanisic todo: port the reporting onto the new state model and re-enable, or delete this once
-// output.h is rewritten. Until then a mismatch is detected and silently dropped; see the todo in
-// operation_write above.
+// output.h is rewritten. Until then a runtime mismatch calls the undefined detail::state_assert.
 #if 0
 
 static inline void thread_init_impl(SanitizerState& sanitizer)

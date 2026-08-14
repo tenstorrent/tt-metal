@@ -111,13 +111,12 @@ int main()
 
 //--- two_rules_broken.cpp
 // A call that breaks two rules at once: one argument is not a StateVal at all, and the other is a
-// field this thread does not drive. Only the coarsest message is expected.
+// field this thread does not drive. Exactly one message is expected -- the first broken argument's.
 //
-// This is the case that makes the layering load-bearing, and it fails loudly without it. Unlayered,
-// configure()'s remaining static_asserts all fire, and the extra messages are worse than redundant:
-// the kind and native layers are false here only because the parameter layer is, so the caller is
-// told their Operation fields belong elsewhere when they passed no Operation field at all. Layering
-// is what keeps a diagnostic from describing a mistake that was not made.
+// This is the case that makes the per-argument chain load-bearing, and it fails loudly without it.
+// Each argument yields at most one defect, and the entry point reports one defect per call, so the
+// caller is never told their Operation fields belong elsewhere when they passed no Operation field
+// at all -- a diagnostic must not describe a mistake that was not made.
 #include "sanitizer/api.h"
 
 using namespace llk::san;

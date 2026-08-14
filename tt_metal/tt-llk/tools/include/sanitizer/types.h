@@ -27,6 +27,12 @@ namespace detail
 template <typename...>
 inline constexpr bool always_false_v = false;
 
+// The non-type counterpart, for the unreachable else of an if constexpr chain over a value -- an Exu
+// in practice. always_false_v<E> will not do there: E is a value where a type is expected, which is
+// ill-formed whether or not the branch is discarded.
+template <auto...>
+inline constexpr bool always_false_value_v = false;
+
 template <typename T>
 using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
 
@@ -175,26 +181,15 @@ constexpr bool is_operation_of_exu(Exu e)
 
 } // namespace detail
 
-// -----------------
-// OperationExtended
-// -----------------
+// ---------------
+// OperationStatus
+// ---------------
 
 enum class OperationStatus : std::uint32_t
 {
+    Uninitialized,
     Initialized,
-    Executed,
-    Uninitialized
-};
-
-/**
- * @brief Extended operation state (includes status and the operand state dependencies).
- */
-template <typename G>
-struct OperationExtended
-{
-    OperationStatus status;
-    typename G::Struct state;
-    typename Operand<G::exu()>::Struct snap;
+    Executed
 };
 
 // -------------
@@ -210,10 +205,13 @@ struct OperationExtended
 template <typename... Ops>
 struct OperationList
 {
-    using Variant = std::variant<std::monostate, OperationExtended<Ops>...>;
+    using Variant = std::variant<std::monostate, typename Ops::Struct...>;
 
     template <typename Op>
-    static constexpr bool contains = (std::is_same_v<Op, Ops> || ...);
+    static constexpr bool contains()
+    {
+        return (std::is_same_v<Op, Ops> || ...);
+    }
 };
 
 namespace detail
@@ -258,26 +256,35 @@ enum class ListDefect : std::uint32_t
     WrongExu
 };
 
+// Pattern-matched rather than taking the list by value: constructing a value would instantiate
+// OperationList and with it Variant, hard-erroring on a defective list before OperationUnion can
+// report it.
+template <Exu E, typename L>
+struct list_defect;
+
 template <Exu E, typename... Ops>
-constexpr ListDefect list_defect(OperationList<Ops...>)
+struct list_defect<E, OperationList<Ops...>>
 {
-    if constexpr (!(is_operation_v<Ops> && ...))
+    static constexpr ListDefect check()
     {
-        return ListDefect::NonOperation;
+        if constexpr (!(is_operation_v<Ops> && ...))
+        {
+            return ListDefect::NonOperation;
+        }
+        else if constexpr (!((count_of_v<Ops, Ops...> == 1) && ...))
+        {
+            return ListDefect::Duplicate;
+        }
+        else if constexpr (!(is_operation_of_exu<Ops>(E) && ...))
+        {
+            return ListDefect::WrongExu;
+        }
+        else
+        {
+            return ListDefect::None;
+        }
     }
-    else if constexpr (!((count_of_v<Ops, Ops...> == 1) && ...))
-    {
-        return ListDefect::Duplicate;
-    }
-    else if constexpr (!(is_operation_of_exu<Ops>(E) && ...))
-    {
-        return ListDefect::WrongExu;
-    }
-    else
-    {
-        return ListDefect::None;
-    }
-}
+};
 
 } // namespace detail
 
@@ -299,7 +306,9 @@ struct OperationUnion
 
     static constexpr bool is_list = detail::is_operation_list_v<Declared>;
 
-    static constexpr detail::ListDefect defect = detail::list_defect<E>(std::conditional_t<is_list, Declared, OperationList<>> {});
+    using Candidate = std::conditional_t<is_list, Declared, OperationList<>>;
+
+    static constexpr detail::ListDefect defect = detail::list_defect<E, Candidate>::check();
 
     static_assert(is_list, "ExuOperations<E>::type must be an OperationList<Ops...>.");
     static_assert(defect != detail::ListDefect::NonOperation, "ExuOperations may only list Operation<Exu, Hoistable> derivations.");
@@ -578,10 +587,19 @@ public:
             constexpr std::size_t idx = index<F>();
             return known.test(idx) && std::get<idx>(values) == rhs.value;
         }
-        else
-        {
-            return false;
-        }
+        __builtin_unreachable();
+    }
+
+    bool subset_of(const StateStructImpl& other) const
+    {
+        return subset_of(other, std::index_sequence_for<Fs...> {});
+    }
+
+private:
+    template <std::size_t... Is>
+    bool subset_of(const StateStructImpl& other, std::index_sequence<Is...>) const
+    {
+        return ((!known.test(Is) || (other.known.test(Is) && std::get<Is>(values) == std::get<Is>(other.values))) && ...);
     }
 };
 
@@ -627,224 +645,6 @@ constexpr bool is_thread_supported(Thread t)
     return is_exu_native(Exu::Unpack, t) || is_exu_native(Exu::Fpu, t) || is_exu_native(Exu::Sfpu, t) || is_exu_native(Exu::Pack, t);
 }
 
-/**
- * @brief Check if an Operand is native to a Thread.
- */
-template <typename G>
-constexpr bool is_operand_native(Thread t)
-{
-    if constexpr (is_operand_v<G>)
-    {
-        return is_exu_native(operand_of<G>::exu, t);
-    }
-    else
-    {
-        return false;
-    }
-}
-
-/**
- * @brief Check if an Operation is native to a Thread.
- */
-template <typename G>
-constexpr bool is_operation_native(Thread t)
-{
-    if constexpr (is_operation_v<G>)
-    {
-        return is_exu_native(operation_of<G>::exu, t);
-    }
-    else
-    {
-        return false;
-    }
-}
-
-/**
- * @brief Check if an Operand belongs to the same Exu as an Operation.
- */
-template <typename Op, typename G>
-constexpr bool is_operand_of_operation_exu()
-{
-    if constexpr (is_operation_v<Op> && is_operand_v<G>)
-    {
-        return operand_of<G>::exu == operation_of<Op>::exu;
-    }
-    else
-    {
-        return false;
-    }
-}
-
-// Asking it is not a nicety. Without this layer an unregistered operation reaches std::variant and
-// fails there instead -- five errors deep inside libstdc++, about __exactly_once and alternatives,
-// naming neither the operation nor the list it is missing from.
-template <typename G>
-constexpr bool is_operation_listed()
-{
-    if constexpr (is_operation_v<G>)
-    {
-        return OperationUnion<operation_of<G>::exu>::List::template contains<G>;
-    }
-    else
-    {
-        return false;
-    }
-}
-
-// ---------------------------------------------------------------------------------------
-// The guards
-// ---------------------------------------------------------------------------------------
-
-// Layered so that at most one rule can be the one that broke, and therefore at most one
-// static_assert at the entry point can speak. Layers run coarsest first, so a reader gets the most
-// general true statement about their mistake rather than a consequence of it.
-//
-// That ordering is about correctness, not tidiness: unlayered, a call carrying a bare int is also
-// told that its Operation fields belong elsewhere, because the kind layer is false only because the
-// parameter layer is.
-//
-// Each family answers with its first defect rather than a flag per rule, the same shape
-// detail::list_defect uses for a registration. The order then exists in exactly one place -- the
-// `if constexpr` chain -- so inserting a rule is one branch and one enumerator, and no second
-// spelling of the order can drift out of step with the first.
-//
-// The defect is the whole interface: an entry point asks for it once and writes one flat
-// static_assert per rule, `defect != <that rule>`, with no bookkeeping of its own. Each of those
-// reads "this rule holds, or an earlier one already broke", which falls out of there being a single
-// answer -- if an earlier layer broke, this layer's enumerator is not it, so its assert is
-// vacuously satisfied.
-//
-// Only the conditions live here. The wording stays at each entry point: a C++17 static_assert
-// message must be a literal, and each entry point accepts something different -- what configure()
-// rejects, init() requires.
-//
-// One note on totality. The questions below must still be total, and the region above explains why,
-// but the chains are no longer what depends on it: `else if constexpr` genuinely discards a later
-// fold, where the old `pN && (... && ...)` chain instantiated every fold regardless. Totality stays
-// load-bearing elsewhere -- list_defect asks is_operation_of_exu about entries that may not be
-// operations at all -- so nothing here licenses a question that hard-errors.
-
-// Every entry point accepts a tracked value or an explicit discard, and nothing else.
-template <typename V>
-constexpr bool is_admissible_parameter()
-{
-    return is_state_value_v<V> || is_state_discard_v<V>;
-}
-
-// -----------------------------------
-// Operand family: configure() and reconfigure()
-// -----------------------------------
-
-// A StateDiscard names no group, so the group layers pass it through explicitly.
-template <typename V>
-constexpr bool is_operand_field()
-{
-    return is_state_discard_v<V> || is_operand_v<val_group_t<V>>;
-}
-
-template <Thread T, typename V>
-constexpr bool is_native_field()
-{
-    return is_state_discard_v<V> || is_operand_native<val_group_t<V>>(T);
-}
-
-enum class OperandDefect : std::uint32_t
-{
-    None,
-    Unsupported,
-    Params,
-    Kind,
-    Native
-};
-
-// Every argument is an Operand field of an Exu this thread drives.
-template <Thread T, typename... Vs>
-constexpr OperandDefect operand_defect()
-{
-    if constexpr (!is_thread_supported(T))
-    {
-        return OperandDefect::Unsupported;
-    }
-    else if constexpr (!(is_admissible_parameter<Vs>() && ...))
-    {
-        return OperandDefect::Params;
-    }
-    else if constexpr (!(is_operand_field<Vs>() && ...))
-    {
-        return OperandDefect::Kind;
-    }
-    else if constexpr (!(is_native_field<T, Vs>() && ...))
-    {
-        return OperandDefect::Native;
-    }
-    else
-    {
-        return OperandDefect::None;
-    }
-}
-
-// ---------------------------------------------------
-// Operation family: init(), execute() and uninit()
-// ---------------------------------------------------
-
-// Each argument is either one of the named operation's own fields, or an Operand field of that
-// operation's own Exu. The latter is admitted so a hook can restate the operand values its LLK
-// function was handed: init() snapshots them and execute()/uninit() compare against the snapshot,
-// which is what catches an operand value drifting between the two halves of one operation.
-template <typename Op, typename V>
-constexpr bool is_own_field_or_operand()
-{
-    return is_state_discard_v<V> || std::is_same_v<val_group_t<V>, Op> || is_operand_of_operation_exu<Op, val_group_t<V>>();
-}
-
-enum class OperationDefect : std::uint32_t
-{
-    None,
-    Unsupported,
-    NotAnOperation,
-    NotNative,
-    NotListed,
-    Params,
-    Kind
-};
-
-// The operation is named as a template argument, so it is checked once here rather than inferred
-// from the arguments and then proved unambiguous. That is what removes the old "one call describes
-// one operation" layer entirely -- with the operation named, two operations' fields in one call is
-// simply an argument that is not this operation's.
-template <typename Op, Thread T, typename... Vs>
-constexpr OperationDefect operation_defect()
-{
-    if constexpr (!is_thread_supported(T))
-    {
-        return OperationDefect::Unsupported;
-    }
-    else if constexpr (!is_operation_v<Op>)
-    {
-        return OperationDefect::NotAnOperation;
-    }
-    else if constexpr (!is_operation_native<Op>(T))
-    {
-        return OperationDefect::NotNative;
-    }
-    else if constexpr (!is_operation_listed<Op>())
-    {
-        return OperationDefect::NotListed;
-    }
-    else if constexpr (!(is_admissible_parameter<Vs>() && ...))
-    {
-        return OperationDefect::Params;
-    }
-    else if constexpr (!(is_own_field_or_operand<Op, Vs>() && ...))
-    {
-        return OperationDefect::Kind;
-    }
-    else
-    {
-        return OperationDefect::None;
-    }
-}
-
 } // namespace detail
 
 // --------
@@ -885,41 +685,53 @@ struct OperandContext;
 template <>
 struct OperandContext<Exu::Unpack>
 {
-    UnwindContext configure_a;
-    UnwindContext configure_b;
+    UnwindContext unpack_a;
+    UnwindContext unpack_b;
 };
 
 template <>
 struct OperandContext<Exu::Fpu>
 {
-    UnwindContext configure;
+    UnwindContext fpu;
 };
 
 template <>
 struct OperandContext<Exu::Sfpu>
 {
-    UnwindContext configure;
+    UnwindContext sfpu;
 };
 
 template <>
 struct OperandContext<Exu::Pack>
 {
-    UnwindContext configure;
+    UnwindContext pack;
 };
 
 // -------------
-// ExuContext<G>
+// ExuContext<E>
 // -------------
 
-template <typename G>
+template <Exu E>
 struct ExuContext
 {
     std::size_t context_depth = 0;
     std::size_t silent_depth  = 0;
     UnwindContext current;
-    UnwindContext previous;
     UnwindContext operation;
-    OperandContext<G::exu()> operand;
+    OperandContext<E> operand;
+};
+
+// --------------------
+// OperationExtended<E>
+// --------------------
+
+template <Exu E>
+struct OperationExtended
+{
+    OperationStatus status;
+    Hoistable hoistable;
+    typename Operand<E>::Struct snapshot;
+    typename OperationUnion<E>::Struct specific;
 };
 
 // -------------
@@ -930,8 +742,9 @@ template <Exu E>
 struct ExuState
 {
     ApiClass previous;
-    typename OperationUnion<E>::Struct operation;
+    OperationExtended<E> operation;
     typename Operand<E>::Struct operand;
+    ExuContext<E> context;
 };
 
 } // namespace llk::san

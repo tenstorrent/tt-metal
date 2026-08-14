@@ -365,8 +365,6 @@ struct State
     ExuState<Exu::Fpu> fpu;
     ExuState<Exu::Sfpu> sfpu;
     ExuState<Exu::Pack> pack;
-
-    UnwindContext unwind; // This
 };
 
 } // namespace llk::san

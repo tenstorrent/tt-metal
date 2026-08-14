@@ -49,6 +49,7 @@
 // RUN: %{check} %t/operation_on_wrong_thread.cpp
 // RUN: %{check} %t/unregistered_operation.cpp
 // RUN: %{check} %t/foreign_operation_field.cpp
+// RUN: %{check} %t/foreign_operation_field_to_uninit.cpp
 // RUN: %{check} %t/foreign_exu_operand_to_init.cpp
 
 //--- valid_operand.cpp
@@ -79,6 +80,11 @@ int main()
 // The operation family on its owning thread: the operation's own fields, an Operand field of that
 // operation's Exu, a discard, and a nullary uninit.
 //
+// All three hooks take the same arguments, so the three calls below differ only in which one is being
+// exercised. uninit() restating the operation's own fields is the case worth watching: it is what lets
+// an operation torn down under different parameters than it was set up with be caught, and it is
+// checked at runtime in tests/unit/functional/test_hook_functional.cpp.
+//
 // Nullary is worth covering on its own. Every per-argument layer is a fold, and a fold over an empty
 // pack is vacuously true, so nothing but the thread and operation layers stand between uninit<Op>()
 // and acceptance -- which is exactly why the operation is named rather than inferred.
@@ -96,6 +102,7 @@ int main()
 {
     init<Tilize, Thread::TRISC0>(StateVal<Tilize::BlockCtDim>(2u), StateVal<Tilize::NarrowTile>(false), StateVal<Unp::FaceHeightA>(16u));
     execute<Tilize, Thread::TRISC0>(StateVal<Tilize::BlockCtDim>(2u), StateDiscard<std::uint32_t>(0u));
+    uninit<Tilize, Thread::TRISC0>(StateVal<Tilize::BlockCtDim>(2u), StateVal<Unp::FaceHeightA>(16u), StateDiscard<std::uint32_t>(0u));
     uninit<Tilize, Thread::TRISC0>();
     return 0;
 }
@@ -134,9 +141,8 @@ int main()
 
 //--- malformed_state_val_mixed.cpp
 // A malformed StateVal next to a well-formed field of a foreign Exu: two rules broken in one call,
-// and still exactly one diagnostic, the coarsest. The layering holds for a malformed StateVal the
-// same way it does for the bare int in two_rules_broken (test_thread_diagnostics.cpp) -- the native
-// layer is false here only because the parameter layer is, and must stay silent.
+// and still exactly one diagnostic -- the first broken argument's. A malformed StateVal is held to
+// one defect the same way the bare int in two_rules_broken (test_thread_diagnostics.cpp) is.
 #include "sanitizer/api.h"
 
 using namespace llk::san;
@@ -284,7 +290,7 @@ int main()
 
 using namespace llk::san;
 
-// expected-error@*:* {{init() only accepts its own Operation's fields and Operand fields of that Operation's Exu.}}
+// expected-error@*:* {{init() only accepts its own Operation's fields.}}
 
 int main()
 {
@@ -310,6 +316,23 @@ int main()
     return 0;
 }
 
+//--- foreign_operation_field_to_uninit.cpp
+// The membership rule again, on the hook that used to admit no Operation field at all. uninit() takes
+// the same arguments as init() and execute() -- see the uninit() calls in valid_operation.cpp -- so the
+// only Operation field it rejects is another operation's, and it has to be rejected with its own
+// hook's wording rather than init()'s.
+#include "sanitizer/api.h"
+
+using namespace llk::san;
+
+// expected-error@*:* {{uninit() only accepts its own Operation's fields.}}
+
+int main()
+{
+    uninit<OperationUnpackTilize, Thread::TRISC0>(StateVal<OperationUnpackUnary::BroadcastType>(0u));
+    return 0;
+}
+
 //--- foreign_exu_operand_to_init.cpp
 // An Operand field of an Exu other than the operation's own. On TRISC0 this is also a foreign Exu,
 // but the rule is narrower than the thread's ownership on purpose: the operation's snapshot has room
@@ -319,7 +342,7 @@ int main()
 
 using namespace llk::san;
 
-// expected-error@*:* {{init() only accepts its own Operation's fields and Operand fields of that Operation's Exu.}}
+// expected-error@*:* {{init() only accepts Operand fields of its own Operation's Exu.}}
 
 int main()
 {
