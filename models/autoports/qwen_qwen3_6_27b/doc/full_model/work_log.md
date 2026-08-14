@@ -502,3 +502,6 @@ reference prompt to S128 inside its chat-template controls before timing.
 A fresh read-only `$stage-review` inspected implementation ownership, context,
 accuracy, semantic-greedy tracing, allocator lifecycle, profiler, and every
 HF/TT qualitative output. Verdict: `clean-pass`; required work: none.
+
+Stage implementation and evidence commit: `42ff45ede5f` (local only; not
+pushed). The following documentation-only commit records this handoff SHA.
