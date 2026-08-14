@@ -2194,12 +2194,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         on_device_sampling=False,
+        skip_precompile=False,
     ):
         """Prepare and immediately capture the decode trace.
 
         Only safe when no other trace is live on the device. The demo path pre-captures via
         :meth:`warmup_model_decode` during warmup; this single-shot form is the fallback for callers that
         reach decode without having warmed up.
+
+        ``skip_precompile`` is forwarded to the prepare phase, where main's decode-bucketing callers use
+        it to state that the program cache is already warm for this variant.
         """
         return self._record_decode_trace_text(
             self._prepare_decode_trace_text(
@@ -2208,6 +2212,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 on_device_sampling=on_device_sampling,
+                skip_precompile=skip_precompile,
             )
         )
 
