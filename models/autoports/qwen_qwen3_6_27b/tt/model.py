@@ -20,22 +20,29 @@ from safetensors import safe_open
 from transformers import AutoConfig
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, MODEL_REVISION
 from models.autoports.qwen_qwen3_6_27b.tt.multichip_decoder import TARGET_MESH_SHAPE, MultichipDecoder
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import _dram_weight_memory_config, _l1_width_memory_config
 
 
 def _replicate(value, mesh, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     return ttnn.from_torch(
-        value.contiguous(), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh), dtype=dtype,
-        layout=layout, memory_config=memory_config,
+        value.contiguous(),
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
     )
 
 
 def _shard(value, mesh, dim, *, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     return ttnn.from_torch(
-        value.contiguous(), device=mesh, mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim), dtype=dtype,
-        layout=ttnn.TILE_LAYOUT, memory_config=memory_config,
+        value.contiguous(),
+        device=mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
     )
 
 
@@ -68,12 +75,21 @@ class SnapshotReader(Mapping[str, torch.Tensor]):
 
 
 class Qwen36Model:
+    PREFILL_STACK_CHUNK_SIZE = 32768
     """Text-only HF causal-LM path over the optimized TP4 decoder stack."""
 
     def __init__(
-        self, *, mesh_device, config, state_dict: Mapping[str, torch.Tensor], batch: int = 1,
-        max_context: int = 262144, page_size: int = 64, num_layers: int | None = None,
-        layer_indices: list[int] | None = None, lm_head_dtype=ttnn.bfloat8_b,
+        self,
+        *,
+        mesh_device,
+        config,
+        state_dict: Mapping[str, torch.Tensor],
+        batch: int = 1,
+        max_context: int = 262144,
+        page_size: int = 64,
+        num_layers: int | None = None,
+        layer_indices: list[int] | None = None,
+        lm_head_dtype=ttnn.bfloat8_b,
     ):
         if tuple(mesh_device.shape) != TARGET_MESH_SHAPE:
             raise ValueError(f"Qwen3.6 full model preserves the decoder's TP4 mesh {TARGET_MESH_SHAPE}")
@@ -81,7 +97,11 @@ class Qwen36Model:
         self.batch, self.max_context, self.page_size = batch, max_context, page_size
         if layer_indices is not None and num_layers is not None:
             raise ValueError("specify num_layers or layer_indices, not both")
-        selected_layers = list(range(int(config.num_hidden_layers if num_layers is None else num_layers))) if layer_indices is None else list(layer_indices)
+        selected_layers = (
+            list(range(int(config.num_hidden_layers if num_layers is None else num_layers)))
+            if layer_indices is None
+            else list(layer_indices)
+        )
         self.num_layers = len(selected_layers)
         if not selected_layers or min(selected_layers) < 0 or max(selected_layers) >= int(config.num_hidden_layers):
             raise ValueError("num_layers must select a non-empty prefix of the HF stack")
@@ -113,7 +133,10 @@ class Qwen36Model:
         ]
         self.lm_head_weights = [
             _shard(
-                chunk, mesh_device, -1, dtype=lm_head_dtype,
+                chunk,
+                mesh_device,
+                -1,
+                dtype=lm_head_dtype,
                 memory_config=_dram_weight_memory_config(mesh_device, k=int(config.hidden_size), n=width),
             )
             for chunk, width in zip(chunk_weights, self.lm_head_chunk_sizes)
@@ -122,19 +145,31 @@ class Qwen36Model:
         self.lm_head_local_vocab = local_vocab
         self.lm_head_cores = mesh_device.dram_grid_size().x
         self.lm_head_compute = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True,
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         self.layers = [
             MultichipDecoder.from_state_dict(
-                state_dict, hf_config=config, layer_idx=i, mesh_device=mesh_device,
-                batch=batch, max_context=max_context, page_size=page_size, candidate="default",
+                state_dict,
+                hf_config=config,
+                layer_idx=i,
+                mesh_device=mesh_device,
+                batch=batch,
+                max_context=max_context,
+                page_size=page_size,
+                candidate="default",
             )
             for i in selected_layers
         ]
         self.kv_cache = [
-            [layer.caches[name] for name in (("key", "value") if layer.layer_kind == "full_attention" else ("conv", "recurrent"))]
+            [
+                layer.caches[name]
+                for name in (("key", "value") if layer.layer_kind == "full_attention" else ("conv", "recurrent"))
+            ]
             for layer in self.layers
         ]
 
@@ -223,7 +258,8 @@ class Qwen36Model:
             projected = []
             for start in range(0, rows, ttnn.TILE_SIZE):
                 tile = ttnn.slice(
-                    hidden_states, (0, 0, start, 0),
+                    hidden_states,
+                    (0, 0, start, 0),
                     (1, self.batch, start + ttnn.TILE_SIZE, int(self.config.hidden_size)),
                 )
                 projected.append(self._project_lm_head_tile(tile))
@@ -272,7 +308,8 @@ class Qwen36Model:
             slot_outputs = []
             for slot in range(hidden_states.shape[1]):
                 slot_hidden = ttnn.slice(
-                    hidden_states, (0, slot, 0, 0),
+                    hidden_states,
+                    (0, slot, 0, 0),
                     (1, slot + 1, hidden_states.shape[-2], hidden_states.shape[-1]),
                 )
                 slot_outputs.append(self._project_lm_head_tile(slot_hidden))
@@ -288,7 +325,9 @@ class Qwen36Model:
         outputs = []
         for weight, width in zip(self.lm_head_weights, self.lm_head_chunk_sizes):
             chunk = ttnn.linear(
-                hidden_states, weight, dtype=self.lm_head_dtype,
+                hidden_states,
+                weight,
+                dtype=self.lm_head_dtype,
                 program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                     in0_block_w=1,
                     per_core_M=math.ceil(rows / ttnn.TILE_SIZE),
@@ -306,22 +345,116 @@ class Qwen36Model:
         return output
 
     def prefill_forward(
-        self, *, token_ids, page_table, current_positions, sequence_mask=None, conv_state_selectors=None,
-        return_hidden=False, logit_positions=None, cache_page_table=None,
+        self,
+        *,
+        token_ids,
+        page_table,
+        current_positions,
+        sequence_mask=None,
+        conv_state_selectors=None,
+        return_hidden=False,
+        logit_positions=None,
+        cache_page_table=None,
     ):
+        sequence = token_ids.shape[-1]
+        if sequence > self.PREFILL_STACK_CHUNK_SIZE and not return_hidden:
+            return self._prefill_forward_streaming(
+                token_ids=token_ids,
+                page_table=page_table,
+                current_positions=current_positions,
+                sequence_mask=sequence_mask,
+                conv_state_selectors=conv_state_selectors,
+                logit_positions=logit_positions,
+                cache_page_table=cache_page_table,
+            )
         hidden = self.embed_tokens(token_ids)
         # Embedding is [B,S,H]; the inherited decoder contract is [1,B,S,H].
         hidden = ttnn.reshape(hidden, (1, self.batch, token_ids.shape[-1], int(self.config.hidden_size)))
         for layer in self.layers:
             hidden = layer.prefill_forward(
-                hidden_states=hidden, page_table=page_table, current_positions=current_positions,
-                sequence_mask=sequence_mask, conv_state_selectors=conv_state_selectors,
+                hidden_states=hidden,
+                page_table=page_table,
+                current_positions=current_positions,
+                sequence_mask=sequence_mask,
+                conv_state_selectors=conv_state_selectors,
                 cache_page_table=cache_page_table,
             )
         if return_hidden:
             return hidden
         if logit_positions is not None:
             hidden = self.select_prefill_terminal_rows(hidden, logit_positions)
+        return self.terminal_forward(hidden)
+
+    def _prefill_forward_streaming(
+        self,
+        *,
+        token_ids,
+        page_table,
+        current_positions,
+        sequence_mask,
+        conv_state_selectors,
+        logit_positions,
+        cache_page_table,
+    ):
+        """Prefill long prompts without materializing a sequence-sized layer output.
+
+        Causal full attention and gated-delta recurrence both admit an ordered
+        chunk traversal.  Every chunk crosses the complete TP4 layer stack
+        before its residual is released; full-attention layers read prior K/V
+        from their paged caches and linear-attention layers carry their normal
+        conv/recurrent state.  The normal public path retains only each slot's
+        terminal prompt row.
+        """
+        if logit_positions is None:
+            raise ValueError("long streaming prefill returns terminal prompt logits only")
+        sequence = token_ids.shape[-1]
+        terminal_rows = [None] * self.batch
+        for start in range(0, sequence, self.PREFILL_STACK_CHUNK_SIZE):
+            end = min(start + self.PREFILL_STACK_CHUNK_SIZE, sequence)
+            token_chunk = ttnn.slice(token_ids, (0, start), (self.batch, end))
+            position_chunk = ttnn.slice(current_positions, (0, start), (self.batch, end))
+            hidden = self.embed_tokens(token_chunk)
+            hidden = ttnn.reshape(hidden, (1, self.batch, end - start, int(self.config.hidden_size)))
+            metadata_start = start // 64
+            metadata_end = math.ceil(end / 64)
+            masks = sequence_mask[metadata_start:metadata_end] if sequence_mask is not None else None
+            selectors = conv_state_selectors[metadata_start:metadata_end] if conv_state_selectors is not None else None
+            for layer in self.layers:
+                layer._prefill_chunk_start = start
+                previous = hidden
+                hidden = layer.prefill_forward(
+                    hidden_states=hidden,
+                    page_table=page_table,
+                    current_positions=position_chunk,
+                    sequence_mask=masks,
+                    conv_state_selectors=selectors,
+                    cache_page_table=cache_page_table,
+                )
+                if previous is not hidden:
+                    ttnn.deallocate(previous)
+            for slot, length in enumerate(logit_positions):
+                if terminal_rows[slot] is None and start < int(length) <= end:
+                    terminal_rows[slot] = ttnn.clone(
+                        ttnn.slice(
+                            hidden,
+                            (0, slot, int(length) - start - 1, 0),
+                            (1, slot + 1, int(length) - start, int(self.config.hidden_size)),
+                        ),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+            ttnn.deallocate(hidden)
+            ttnn.deallocate(token_chunk)
+            ttnn.deallocate(position_chunk)
+        if any(row is None for row in terminal_rows):
+            # Zero-length fixed slots are inactive.  Use a device zero row so
+            # the terminal keeps its ordinary fixed-batch contract.
+            exemplar = next((row for row in terminal_rows if row is not None), None)
+            if exemplar is None:
+                raise ValueError("streaming prefill requires at least one active prompt")
+            for slot, row in enumerate(terminal_rows):
+                if row is None:
+                    terminal_rows[slot] = ttnn.multiply(exemplar, 0.0)
+        hidden = ttnn.concat(terminal_rows, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return self.terminal_forward(hidden)
 
     def clear_prefill_request_state(self):
@@ -337,6 +470,7 @@ class Qwen36Model:
             layer._sequence_mask = None
             layer._conv_state_selectors = None
             layer._cache_page_table = None
+            layer._prefill_chunk_start = None
 
     def decode_forward(self, *, token_ids, page_table, current_positions, active_mask=None, return_hidden=False):
         # The common sampler writes token feedback as [1,1,1,32].  Keep that
@@ -353,7 +487,9 @@ class Qwen36Model:
         hidden = ttnn.reshape(hidden, (1, 1, self.batch, int(self.config.hidden_size)))
         for layer in self.layers:
             hidden = layer.decode_forward(
-                hidden_states=hidden, page_table=page_table, current_positions=current_positions,
+                hidden_states=hidden,
+                page_table=page_table,
+                current_positions=current_positions,
                 active_mask=active_mask,
             )
         return hidden if return_hidden else self.terminal_forward(hidden, pad_decode_rows=True)

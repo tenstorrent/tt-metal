@@ -1,0 +1,13 @@
+{
+  "sequence": 262144,
+  "prefill_shape": [
+    1,
+    1,
+    248320
+  ],
+  "prefill_finite": true,
+  "first_token": 248046,
+  "decode_shape": null,
+  "decode_finite": null,
+  "prefill_request_state_cleared": true
+}

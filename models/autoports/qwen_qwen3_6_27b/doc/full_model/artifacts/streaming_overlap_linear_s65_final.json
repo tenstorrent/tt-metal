@@ -1,0 +1,10 @@
+{
+  "sequence": 65,
+  "ordinary_first_token": 220,
+  "streamed_first_token": 220,
+  "prefill_pcc": 1.0,
+  "decode_pcc": 1.0,
+  "minimum_cache_pcc": 1.0,
+  "cache_tensors_compared": 8,
+  "prefill_top1_equal": true
+}

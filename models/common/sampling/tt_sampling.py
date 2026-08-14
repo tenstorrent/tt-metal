@@ -127,6 +127,19 @@ class TTSampling(LightweightModule):
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
+        self.force_argmax_active_rows = getattr(args, "force_argmax_active_rows", None)
+        # Inspection-only hook used by full-model AutoDebug probes.  Holding
+        # this reference makes the real CCL output observable without changing
+        # the reduction or copying logits through a different path.
+        self.debug_preserve_force_argmax_gather = False
+        self.debug_force_argmax_gather = None
+        if self.force_argmax_active_rows is not None:
+            self.force_argmax_active_rows = int(self.force_argmax_active_rows)
+            if not 1 <= self.force_argmax_active_rows <= self.max_batch_size:
+                raise ValueError(
+                    "force_argmax_active_rows must be in "
+                    f"[1, {self.max_batch_size}], got {self.force_argmax_active_rows}"
+                )
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
@@ -483,7 +496,22 @@ class TTSampling(LightweightModule):
                     num_workers_per_link=self.argmax_num_workers_per_link,
                     num_buffers_per_channel=2,
                 )
+                if self.debug_preserve_force_argmax_gather:
+                    self.debug_force_argmax_gather = x
             x_untilized = ttnn.untilize(x, use_multicore=True)
+            # Tile logits carry a tile-padded row extent through untilize.  A
+            # logical row slice made before untilize therefore still presents
+            # the argmax kernel with padded rows; the kernel combines that
+            # padded inner extent with logical volume and can compute zero
+            # outer work for B < 32.  Crop the row-major result instead.  This
+            # materializes exactly the serving slots and keeps the canonical
+            # padded output tensor available for direct token feedback.
+            if self.force_argmax_active_rows is not None and x_untilized.shape[-2] > self.force_argmax_active_rows:
+                x_untilized = ttnn.slice(
+                    x_untilized,
+                    (0, 0, 0, 0),
+                    (x_untilized.shape[0], x_untilized.shape[1], self.force_argmax_active_rows, x_untilized.shape[3]),
+                )
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,

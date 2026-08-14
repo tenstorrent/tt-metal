@@ -152,3 +152,147 @@ dominates. Full 64-layer result is 17.5168 t/s/u.
 Final profiler status: fixed and proven. Artifacts are
 `profile_reduced_v4`, `profile_candidate_greedy`, and
 `profile_active_row_greedy`.
+
+## Inactive KV/reset blocker re-verification
+
+- Hypothesis: the preserved B2/inactive-row failure is a current all-reduce
+  defect.
+  Experiment: on a healthy four-p300c TP4 mesh, run the same official-weight
+  one-layer B2 repro first with `active=[1,1]`, then with `active=[1,0]`, keeping
+  shapes, positions, page table, weights, and collectives identical.
+  Result: both controls pass.  The inactive case proves bitwise-unchanged K/V
+  for slot 1 on every rank and changed K/V for active slot 0.  The old sampled
+  all-reduce stack is therefore not a reproducible current-state blocker.
+  Verdict: refuted.
+  Evidence: `/tmp/qwen_full_attention_b2_all_active.log` and
+  `logs/full_attention_inactive_kv_final.log`.
+
+- Hypothesis: the source-only selective-reset/refill repair remains unproven at
+  the public wrapper boundary.
+  Experiment: run the reduced real wrapper with mixed S65/S63 prompts, one
+  inactive slot, common non-greedy sampling, inactive paged-KV snapshots,
+  selective linear-state reset, decode-before-refill rejection, refill, and
+  traced reuse while preserving the live peer.
+  Result: `FULL_MODEL_MIXED_SLOTS_OK [198, 220] [68, 63]
+  INACTIVE_KV_EXACT RESET_REUSE_OK`.
+  Verdict: verified.
+  Evidence: `logs/full_model_mixed_slots_reset_final.log`.
+
+## Active-row greedy feedback regression
+
+- Hypothesis: the active-row force-argmax optimization is correct because the
+  reduced profile returns the expected repeated token.
+  Experiment: rerun the all-layer AIME autoregressive path after that change.
+  Result: refuted.  The final path returned token 198 (newline) for all 100
+  steps and the degeneracy checker reported `near_empty_completion`.  A
+  reduced overwrite probe then seeded token 123 and proved both logical-width-1
+  and sliced-logits/canonical-output variants left `tt_out_tok` unchanged.
+  Evidence: `autoregressive_post_sampler/`,
+  `logs/check_degenerate_output_post_sampler.log`, and
+  `logs/feedback_overwrite_reduced_probe.log`.
+
+- Hypothesis: common force-argmax requires shape-exact canonical 32-row logits
+  and the canonical 32-slot persistent output in order to write feedback during
+  trace replay.
+  Experiment: restore unsliced sampler-ready logits and direct
+  `argmax(output_tensor=tt_out_tok)`, seed token 123 after capture, and replay.
+  Result: verified; token 123 is overwritten with 220.  The all-64-layer AIME
+  smoke then changes token every step and produces coherent text, beginning
+  `The problem asks for the total time`, rather than whitespace collapse.
+  Fix: `Qwen36Generator._sampling_logits` preserves the fixed-slot row shape;
+  the unproven shared argmax/pad/copy change was removed.
+  Verification: `logs/feedback_overwrite_shape_exact_probe.log` and
+  `autoregressive_feedback_shape_exact_smoke/` (HF IDs
+  `[198,8160,579,264,7047,1817,310,11290]`; TT IDs
+  `[198,760,3377,16561,364,279,2702,854]`).
+
+Correctness is restored, but the earlier profile shows canonical 32-row
+force-argmax cost is material.  This is not final performance signoff; a faster
+semantically greedy shape/layout contract must both overwrite feedback and win
+
+## Row-major active-row greedy repair
+
+- Root cause: cropping tile logits before `untilize` retained the tile-padded
+  row extent.  The row-major argmax implementation combines that padded inner
+  extent with logical volume, so B1 computed no outer work and left the
+  persistent token unchanged.
+- Fix: common `TTSampling` now accepts an opt-in
+  `force_argmax_active_rows`.  It performs the full-vocabulary TP all-gather,
+  untilizes, then materializes only the active row-major rows before semantic
+  argmax into the unchanged canonical `[1,1,1,32]` feedback tensor.  Existing
+  callers default to `None` and retain their old path.
+- Reduced trace evidence:
+  `logs/active_rm_crop_overwrite.log` seeds token 123 and observes sampler
+  overwrite to 220; `profile_active_rm_crop_overwrite.json` reports 228.38
+  t/s/u for the two-layer probe.  The all-64-layer S128 run
+  `profile_active_rm_crop_full_smoke.json` completed at 17.43 t/s/u with zero
+  host token/position/page-table refreshes and nonconstant sampled tokens.
+- AutoFix review found no B1 alias/lifetime source defect, but required exact
+  global-argmax comparison and B2 slot mapping rather than change-only proof.
+  `tests/full_model_perf.py --feedback-overwrite-probe` now checks exact
+  gathered-vocabulary argmax, and `tests/greedy_sampler_active_rows.py` is the
+  isolated B1/B2 canonical-output trace regression.  These strengthened gates
+  must pass before final stage completion.
+- Verification: `logs/greedy_sampler_active_rows_b2_final.log` passes a traced
+  TP4 B2 case with distinct exact global argmax tokens `[17,118]` on every
+  rank.  `logs/exact_argmax_reduced.log` passes the model-integrated check with
+  `expected_global_argmax=220`, `sampled=220`, `semantic_greedy=true`, and
+  direct overwrite of seed 123.  The aligned argmax writer leaves canonical
+  padding words outside the fixed-slot prefix unspecified; model decode slices
+  and consumes exactly the configured prefix.
+the matched reduced profile before stage completion.
+
+## All-layer semantic-greedy false blocker and resolution
+
+Historical chronology: the first all-64-layer S128 exact-greedy probes reported
+host argmax 1584 versus device token 5620, then host argmax 1552 versus device
+top-k token 5628.  Those results correctly triggered AutoFix isolation of
+large-width reduction, BFP8 reduction, output aliasing, TP4 gather, and tie
+policy; the speculative top-k implementation was removed.  The conclusion at
+that point that the sampler remained semantically wrong was subsequently
+refuted.
+
+Root cause: trace capture records the model graph but does not execute it.  The
+old probe composed its host oracle from persistent `_trace_logits` immediately
+after capture, so it read stale allocator contents while the sampler replay
+later consumed populated model output.  This was an oracle-ordering defect,
+not a gather, reduction, or sampled-token feedback defect.
+
+The corrected probe explicitly replays and synchronizes the model trace before
+reading `_trace_logits`.  `semantic_probe_populated_reduced.json` then reports
+seed 123 overwritten with the exact host global argmax 220
+(`semantic_greedy=true`).  The full-model gather instrumentation in
+`full_model_gather_debug.json` provides the decisive real-data evidence:
+
+- host-composed padded TP logits, all four captured async-all-gather outputs,
+  and all four eager gather outputs have the same top-1 token 248046 and the
+  same top-8 values and indices;
+- captured and eager sampling on the same `_trace_logits` addresses both write
+  token 248046; and
+- the sampler overwrites seed 123 with that exact semantic-greedy token.
+
+Finally, `full_model_perf_active_rm_final_128.json` passes the required
+all-64-layer S128/128 replay with `expected_global_argmax=248046`,
+`sampled=248046`, `semantic_greedy=true`, zero host token/position/page-table
+refreshes, and 17.4666 trace-verified token-out t/s/u.  The earlier mismatches
+remain useful historical evidence of the stale-buffer test bug, but they are
+not a current sampler blocker.
+
+## Maximum-context execution resolution
+
+Historical chronology: an all-layer public-wrapper S262,144 `--skip-decode`
+run initially appeared terminated when its tool session stopped returning
+output after about 56 minutes. Direct inspection subsequently proved PID
+3909674 remained alive under its parent shell. This was not evidence of a hard
+physical context limit. The successful S192,511 run spans 00:12:35 to
+02:00:10 (about 107 minutes 34 seconds); linear sequence scaling predicts about
+146 minutes 29 seconds for S262,144, well beyond the terminated run's lifetime.
+
+Resource evidence also refuted an OOM diagnosis: observed process RSS was
+4.19 GiB with 109 GiB available, cgroup `oom`, `oom_kill`, and `max` counters
+were all zero, the kernel journal contained no kill, and all four devices were
+healthy afterward. The focused runner now emits flushed elapsed-time/peak-RSS
+heartbeats for future runs. The original PID completed after about 144 minutes;
+`full_model_long_prefill_s262144_final.json` reports finite terminal logits,
+token 248046, and complete request-state cleanup. The duplicate detached
+launcher never entered Python/device work and was discarded.

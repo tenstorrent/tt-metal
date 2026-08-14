@@ -1,6 +1,6 @@
 {
   "hf_advertised_context": 262144,
-  "current_supported_context": 192511,
+  "current_supported_context": 262144,
   "schema_version": 1,
   "model_id": "Qwen/Qwen3.6-27B",
   "model_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
@@ -187,9 +187,9 @@
     "status": "implemented_and_physically_validated",
     "target_mesh": [1, 4],
     "tensor_parallel_size": 4,
-    "batch_1_supported_context": 192511,
+    "batch_1_supported_context": 262144,
     "batch_1_decode_cache_context": 262144,
-    "batch_1_supported_single_pass_prefill": 192511,
+    "batch_1_supported_single_pass_prefill": 262144,
     "decoder_resident_bytes_per_device": 10599141888,
     "token_embedding_bytes_per_device": 2542796800,
     "final_norm_bytes_per_device": 10240,
@@ -207,6 +207,19 @@
       "batch_1": "doc/full_model/artifacts/capacity/capacity_b1.json",
       "batch_32": "doc/full_model/artifacts/capacity/capacity_b32.json",
       "batch_1_trace_snapshot": "doc/full_model/artifacts/capacity_trace/capacity_b1_trace.json"
+    },
+    "full_stack_streaming_prefill": {
+      "chunk_tokens": 32768,
+      "largest_non_aligned_sequence_tested": 192511,
+      "maximum_aligned_sequence_tested": 262144,
+      "all_64_layers": true,
+      "prefill_finite": true,
+      "subsequent_decode_finite": true,
+      "request_state_cleared": true,
+      "artifacts": [
+        "doc/full_model/artifacts/full_model_long_prefill_s192511_final.json",
+        "doc/full_model/artifacts/full_model_long_prefill_s262144_final.json"
+      ]
     }
   },
   "layer_kinds": {
@@ -222,7 +235,7 @@
     }
   },
   "notes": [
-    "Public supported prompt/context is 192511, matching the generator's accepted prefill extent and the largest physically feasible tested full-layer prompt.",
-    "Decode cache allocation and absolute positions remain supported through 262144 for prompts at or below 192511 followed by generation; this is recorded separately and is not advertised as public prompt capacity."
+    "Public prompt/context accepts the HF-advertised 262144 tokens through bounded full-stack streaming prefill; exact-maximum all-64-layer execution completed with finite terminal logits and request-state cleanup.",
+    "Decode cache allocation and absolute positions remain supported through 262144."
   ]
 }

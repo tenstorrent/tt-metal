@@ -13,10 +13,11 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_REVISION
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
 from models.common.modules.tt_ccl import get_tt_ccl
-from models.common.readiness_check.contract import Generator as ReadinessGenerator, NextInputFn
+from models.common.readiness_check.contract import Generator as ReadinessGenerator
+from models.common.readiness_check.contract import NextInputFn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 
 
@@ -30,6 +31,7 @@ class SamplingArgs:
     sampling_all_gather_axis: int = 1
     sampling_dp: int = 1
     use_topk_logprobs: bool = False
+    force_argmax_active_rows: int | None = None
     model_config: dict = field(
         default_factory=lambda: {
             "SAMPLING_AG_CONFIG": {
@@ -46,22 +48,33 @@ class SamplingArgs:
 class Qwen36Generator(ReadinessGenerator):
     """Two-level generator with externally owned state and traced token-out."""
 
-    MAX_PREFILL_TOKENS = 192511
+    MAX_PREFILL_TOKENS = 262144
 
     def __init__(
-        self, *, model: Qwen36Model, mesh_device, tokenizer,
-        host_sampling_compatibility=False, force_argmax_greedy=True,
+        self,
+        *,
+        model: Qwen36Model,
+        mesh_device,
+        tokenizer,
+        host_sampling_compatibility=False,
+        force_argmax_greedy=True,
     ):
         self.model, self.mesh_device, self.tokenizer = model, mesh_device, tokenizer
         self.host_sampling_compatibility = bool(host_sampling_compatibility)
         self.kv_cache = model.kv_cache
         self.page_table_host = model.allocate_page_table()
         self._page_table = self._upload(self.page_table_host, dtype=ttnn.int32)
-        sampling_args = SamplingArgs(model.vocab_size, model.padded_vocab_size, model.batch)
+        sampling_args = SamplingArgs(
+            model.vocab_size,
+            model.padded_vocab_size,
+            model.batch,
+            force_argmax_active_rows=model.batch,
+        )
         sampling_args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = bool(force_argmax_greedy)
         self.sampling = SamplingGenerator(
             args=sampling_args,
-            mesh_device=mesh_device, tt_ccl=get_tt_ccl(mesh_device),
+            mesh_device=mesh_device,
+            tt_ccl=get_tt_ccl(mesh_device),
         )
         greedy = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
         self.sampling.reset_sampling_params(format_sampling_params(greedy, 32))
@@ -79,23 +92,33 @@ class Qwen36Generator(ReadinessGenerator):
         self._compat_position = None
         self._compat_logits = None
         self.trace_counters = {
-            "replays": 0, "token_host_refreshes": 0, "position_host_refreshes": 0,
-            "page_table_refreshes": 0, "readbacks": 0,
+            "replays": 0,
+            "token_host_refreshes": 0,
+            "position_host_refreshes": 0,
+            "page_table_refreshes": 0,
+            "readbacks": 0,
         }
         self._slots_requiring_prefill = set()
 
     def _upload(self, value, *, dtype=ttnn.uint32):
-        torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else (torch.int32 if dtype == ttnn.int32 else torch.uint32)
+        torch_dtype = (
+            torch.bfloat16 if dtype == ttnn.bfloat16 else (torch.int32 if dtype == ttnn.int32 else torch.uint32)
+        )
         value = value.to(torch_dtype).contiguous()
         return ttnn.from_torch(
-            value, device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device), dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            value,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _to_host_logits(self, logits):
         self.trace_counters["readbacks"] += 1
-        return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))[..., : self.model.vocab_size]
+        return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))[
+            ..., : self.model.vocab_size
+        ]
 
     def _check_state(self, page_table, kv_cache):
         if kv_cache is not None and kv_cache is not self.kv_cache:
@@ -104,8 +127,14 @@ class Qwen36Generator(ReadinessGenerator):
         return self._page_table if page_table is None else page_table
 
     def prefill_forward(
-        self, tokens: torch.Tensor, *, page_table, kv_cache, prompt_lens: List[int],
-        return_all_logits: bool = False, **kwargs: Any,
+        self,
+        tokens: torch.Tensor,
+        *,
+        page_table,
+        kv_cache,
+        prompt_lens: List[int],
+        return_all_logits: bool = False,
+        **kwargs: Any,
     ) -> torch.Tensor:
         page_table = self._check_state(page_table, kv_cache)
         batch, physical_len = tokens.shape
@@ -118,6 +147,11 @@ class Qwen36Generator(ReadinessGenerator):
             raise ValueError("logical prompt length is outside the supported context")
         if not any(prompt_lens):
             raise ValueError("prefill requires at least one active prompt")
+        if return_all_logits and physical_len > self.model.PREFILL_STACK_CHUNK_SIZE:
+            raise ValueError(
+                "return_all_logits is supported only through "
+                f"{self.model.PREFILL_STACK_CHUNK_SIZE} tokens; long streaming prefill returns terminal prompt logits"
+            )
         # Public lengths remain logical. Padding is masked by per-row positions;
         # returned logits are sliced back to the requested logical extent.
         token_tt = self._upload(tokens, dtype=ttnn.uint32)
@@ -154,8 +188,11 @@ class Qwen36Generator(ReadinessGenerator):
         logits = None
         try:
             logits = self.model.prefill_forward(
-                token_ids=token_tt, page_table=page_table, current_positions=position_tt,
-                sequence_mask=sequence_mask_tt, conv_state_selectors=selector_tensors,
+                token_ids=token_tt,
+                page_table=page_table,
+                current_positions=position_tt,
+                sequence_mask=sequence_mask_tt,
+                conv_state_selectors=selector_tensors,
                 logit_positions=None if return_all_logits else prompt_lens,
                 cache_page_table=cache_page_table,
             )
@@ -178,9 +215,7 @@ class Qwen36Generator(ReadinessGenerator):
             ttnn.deallocate(position_tt)
             if temporary_cache_page_table is not None:
                 ttnn.deallocate(temporary_cache_page_table)
-        self._slots_requiring_prefill.difference_update(
-            slot for slot, length in enumerate(prompt_lens) if length > 0
-        )
+        self._slots_requiring_prefill.difference_update(slot for slot, length in enumerate(prompt_lens) if length > 0)
         if return_all_logits:
             return host.reshape(batch, physical_len, -1)
         return host.reshape(batch, 1, -1)
@@ -189,7 +224,11 @@ class Qwen36Generator(ReadinessGenerator):
         self, tokens: torch.Tensor, start_pos: torch.Tensor, *, page_table, kv_cache, active_mask=None, **kwargs: Any
     ):
         page_table = self._check_state(page_table, kv_cache)
-        requested_active = torch.ones(self.model.batch, dtype=torch.bool) if active_mask is None else torch.as_tensor(active_mask).bool()
+        requested_active = (
+            torch.ones(self.model.batch, dtype=torch.bool)
+            if active_mask is None
+            else torch.as_tensor(active_mask).bool()
+        )
         blocked = sorted(slot for slot in self._slots_requiring_prefill if requested_active[slot])
         if blocked:
             raise RuntimeError(f"reset slots require prefill before decode: {blocked}")
@@ -216,9 +255,6 @@ class Qwen36Generator(ReadinessGenerator):
             ttnn.deallocate(active_mask_tt)
 
     def _capture_token_out_trace(self, first_token, start_pos, active_mask=None, page_table=None):
-        # Canonical common-sampler feedback buffer. Sampling writes one token
-        # per padded user along the last dimension; decode slices active slots
-        # from this same persistent tensor on device.
         tokens = torch.zeros((1, 1, 1, self.sampling.tt_sampling.max_batch_size), dtype=torch.uint32)
         first_tokens = torch.as_tensor(first_token, dtype=torch.uint32).reshape(-1)
         if first_tokens.numel() == 1:
@@ -233,19 +269,31 @@ class Qwen36Generator(ReadinessGenerator):
             raise ValueError("start_pos must be scalar or have one value per fixed slot")
         positions = torch.zeros((1, 1, 1, 32), dtype=torch.uint32)
         positions[0, 0, 0, : self.model.batch] = position_values
-        active = torch.ones(self.model.batch, dtype=torch.uint32) if active_mask is None else torch.as_tensor(active_mask, dtype=torch.uint32)
+        active = (
+            torch.ones(self.model.batch, dtype=torch.uint32)
+            if active_mask is None
+            else torch.as_tensor(active_mask, dtype=torch.uint32)
+        )
         if active.numel() != self.model.batch:
             raise ValueError("active_mask must have one value per fixed slot")
         self._trace_token = self._upload(tokens, dtype=ttnn.uint32)
         self._trace_position = ttnn.from_torch(
-            positions, device=self.mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            positions,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         active_positions = torch.zeros((1, 1, 1, 32), dtype=torch.uint32)
         active_positions[0, 0, 0, : self.model.batch] = active
         self._trace_active_mask = ttnn.from_torch(
-            active_positions, device=self.mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            active_positions,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._trace_active_state_mask = self._upload(active, dtype=ttnn.bfloat16)
         self._trace_page_table = self._page_table if page_table is None else page_table
@@ -266,7 +314,9 @@ class Qwen36Generator(ReadinessGenerator):
 
         # Exact warmup includes model, device position advance, and sampler.
         logits = self.model.decode_forward(
-            token_ids=self._trace_token, page_table=self._trace_page_table, current_positions=self._trace_position,
+            token_ids=self._trace_token,
+            page_table=self._trace_page_table,
+            current_positions=self._trace_position,
             active_mask=self._trace_active_state_mask,
         )
         ttnn.add(self._trace_position, self._trace_active_mask, output_tensor=self._trace_position)
@@ -276,7 +326,9 @@ class Qwen36Generator(ReadinessGenerator):
 
         self._decode_trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._trace_logits = self.model.decode_forward(
-            token_ids=self._trace_token, page_table=self._trace_page_table, current_positions=self._trace_position,
+            token_ids=self._trace_token,
+            page_table=self._trace_page_table,
+            current_positions=self._trace_position,
             active_mask=self._trace_active_state_mask,
         )
         self._trace_logits = self._sampling_logits(self._trace_logits)
@@ -297,13 +349,8 @@ class Qwen36Generator(ReadinessGenerator):
                 ttnn.copy(backup, tensor)
 
     def _sampling_logits(self, logits):
-        """Remove physical sampler-row padding for semantic force-argmax."""
-        if not self.sampling.tt_sampling.force_argmax_sampling or logits.shape[-2] == self.model.batch:
-            return logits
-        return ttnn.slice(
-            logits, (0, 0, 0, 0),
-            (1, 1, self.model.batch, logits.shape[-1]),
-        )
+        """Return sampler-ready logits with the proven fixed-slot row shape."""
+        return logits
 
     def _read_sampled_token(self):
         self.trace_counters["readbacks"] += 1
@@ -311,7 +358,13 @@ class Qwen36Generator(ReadinessGenerator):
         return int(value.reshape(-1)[0])
 
     def setup_token_out_decode(
-        self, tokens, positions, *, page_table=None, kv_cache=None, active_mask=None,
+        self,
+        tokens,
+        positions,
+        *,
+        page_table=None,
+        kv_cache=None,
+        active_mask=None,
         sampling_params: SamplingParams | None = None,
     ):
         """Public serving boundary for persistent split-trace token-out decode.
@@ -319,7 +372,11 @@ class Qwen36Generator(ReadinessGenerator):
         State is explicit at request setup; subsequent steps preserve tokens,
         positions, caches and an unchanged page table entirely on device.
         """
-        active_values = torch.ones(self.model.batch, dtype=torch.bool) if active_mask is None else torch.as_tensor(active_mask).bool()
+        active_values = (
+            torch.ones(self.model.batch, dtype=torch.bool)
+            if active_mask is None
+            else torch.as_tensor(active_mask).bool()
+        )
         blocked = sorted(slot for slot in self._slots_requiring_prefill if active_values[slot])
         if blocked:
             raise RuntimeError(f"reset slots require prefill before decode: {blocked}")
@@ -348,6 +405,11 @@ class Qwen36Generator(ReadinessGenerator):
         if page_table is not None:
             if not isinstance(page_table, torch.Tensor):
                 raise TypeError("changed page tables must be supplied as host torch tensors")
+            if self._trace_page_table is not self._page_table:
+                raise RuntimeError(
+                    "changed page-table refresh is unsupported for an externally owned captured device tensor; "
+                    "recapture with a host page table or omit page_table for unchanged ownership"
+                )
             self.refresh_page_table(page_table)
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
         self.sampling.sample(self._trace_logits, enable_trace=True, tt_out_tok=self._trace_token)
@@ -366,7 +428,7 @@ class Qwen36Generator(ReadinessGenerator):
         position_values = torch.as_tensor(positions, dtype=torch.uint32).reshape(-1)
         if position_values.numel() == 1:
             position_values = position_values.repeat(self.model.batch)
-        token_host = torch.zeros((1, 1, 1, self.sampling.tt_sampling.max_batch_size), dtype=torch.uint32)
+        token_host = torch.zeros((1, 1, 1, self._trace_token.shape[-1]), dtype=torch.uint32)
         token_host[0, 0, 0, : self.model.batch] = token_values
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(token_host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self._trace_token
@@ -403,8 +465,12 @@ class Qwen36Generator(ReadinessGenerator):
         if self._compat_trace_id is None:
             self._capture_compatibility_trace(token, position)
         else:
-            token_host = ttnn.from_torch(torch.tensor([[token]], dtype=torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            pos_host = ttnn.from_torch(torch.tensor([position], dtype=torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            token_host = ttnn.from_torch(
+                torch.tensor([[token]], dtype=torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            pos_host = ttnn.from_torch(
+                torch.tensor([position], dtype=torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
             ttnn.copy_host_to_device_tensor(token_host, self._compat_token)
             ttnn.copy_host_to_device_tensor(pos_host, self._compat_position)
             self.trace_counters["token_host_refreshes"] += 1
@@ -414,14 +480,22 @@ class Qwen36Generator(ReadinessGenerator):
         return self._to_host_logits(self._compat_logits).reshape(self.model.batch, -1)
 
     def generate(
-        self, prompt_token_ids: List[int], max_new_tokens: int, *, next_input: Optional[NextInputFn] = None,
-        enable_trace: bool = True, host_sampling_compatibility: bool | None = None, **kwargs: Any,
+        self,
+        prompt_token_ids: List[int],
+        max_new_tokens: int,
+        *,
+        next_input: Optional[NextInputFn] = None,
+        enable_trace: bool = True,
+        host_sampling_compatibility: bool | None = None,
+        **kwargs: Any,
     ) -> List[int]:
         if not enable_trace:
             raise ValueError("Qwen3.6 readiness decode requires enable_trace=True")
         if self.model.batch != 1:
             raise ValueError("high-level generate is the batch-1 API; use low-level fixed slots for mixed batches")
-        host_mode = self.host_sampling_compatibility if host_sampling_compatibility is None else host_sampling_compatibility
+        host_mode = (
+            self.host_sampling_compatibility if host_sampling_compatibility is None else host_sampling_compatibility
+        )
         self.reset()
         tokens = torch.tensor([prompt_token_ids], dtype=torch.long)
         prefill_logits = self.prefill_forward(
@@ -444,7 +518,9 @@ class Qwen36Generator(ReadinessGenerator):
             return output
 
         if next_input is not None:
-            raise ValueError("teacher forcing requires host_sampling_compatibility=True; optimized autoregressive mode is device-owned")
+            raise ValueError(
+                "teacher forcing requires host_sampling_compatibility=True; optimized autoregressive mode is device-owned"
+            )
         self._capture_token_out_trace(feed, len(prompt_token_ids))
         self._seed_token_out_trace(feed, len(prompt_token_ids))
         for _ in range(1, max_new_tokens):
@@ -486,27 +562,57 @@ class Qwen36Generator(ReadinessGenerator):
             ttnn.release_trace(self.mesh_device, self._compat_trace_id)
         self.sampling.reset_trace()
         self._decode_trace_id = self._compat_trace_id = None
-        self._trace_token = self._trace_position = self._trace_page_table = None
+
+        # These tensors are allocated before capture and remain ordinary DRAM
+        # allocations; releasing a trace drops captured programs/intermediates
+        # but does not release their persistent inputs.  Deallocate only the
+        # generator-owned tensors after both model and sampler traces have
+        # released every alias.  Identity deduplication makes this safe if a
+        # future compatibility path deliberately shares a persistent input.
+        owned_names = (
+            "_trace_token",
+            "_trace_position",
+            "_trace_active_mask",
+            "_trace_active_state_mask",
+            "_compat_token",
+            "_compat_position",
+        )
+        deallocated = set()
+        for name in owned_names:
+            tensor = getattr(self, name)
+            if tensor is not None and id(tensor) not in deallocated:
+                ttnn.deallocate(tensor)
+                deallocated.add(id(tensor))
+            setattr(self, name, None)
+
+        # The page table is generator- or caller-owned, while logits and
+        # sampled outputs are trace-owned.  Clear aliases without freeing them
+        # as ordinary tensors.
+        self._trace_page_table = None
         self._trace_logits = self._trace_sampled = None
         if self._trace_cache_backups is not None:
             for pair in self._trace_cache_backups:
                 for tensor in pair:
                     ttnn.deallocate(tensor)
         self._trace_cache_backups = None
-        self._compat_token = self._compat_position = self._compat_logits = None
+        self._compat_logits = None
 
     def teardown(self) -> None:
         self._release_traces()
 
 
 def build_generator(model_dir, mesh_device, **kwargs):
-    snapshot = Path(kwargs.pop("snapshot", Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION))
+    snapshot = Path(
+        kwargs.pop("snapshot", Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION)
+    )
     host_sampling_compatibility = kwargs.pop("host_sampling_compatibility", False)
     force_argmax_greedy = kwargs.pop("force_argmax_greedy", True)
     tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
     model = Qwen36Model.from_pretrained(mesh_device=mesh_device, snapshot=snapshot, **kwargs)
     return Qwen36Generator(
-        model=model, mesh_device=mesh_device, tokenizer=tokenizer,
+        model=model,
+        mesh_device=mesh_device,
+        tokenizer=tokenizer,
         host_sampling_compatibility=host_sampling_compatibility,
         force_argmax_greedy=force_argmax_greedy,
     )

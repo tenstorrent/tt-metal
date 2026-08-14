@@ -2,9 +2,9 @@ import inspect
 import json
 from pathlib import Path
 
+import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.generator import Qwen36Generator
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
-
 
 ROOT = Path("models/autoports/qwen_qwen3_6_27b")
 
@@ -29,11 +29,80 @@ def test_prefill_request_state_cleanup_clears_decoder_aliases():
 
     layer = Layer()
     for name in (
-        "_sequence_masks", "_conv_state_selector_chunks", "_sequence_mask",
-        "_conv_state_selectors", "_cache_page_table",
+        "_sequence_masks",
+        "_conv_state_selector_chunks",
+        "_sequence_mask",
+        "_conv_state_selectors",
+        "_cache_page_table",
     ):
         setattr(layer, name, object())
     model = Qwen36Model.__new__(Qwen36Model)
     model.layers = [layer]
     model.clear_prefill_request_state()
     assert all(value is None for name, value in vars(layer).items() if name.startswith("_"))
+
+
+def test_trace_release_deallocates_only_owned_persistent_inputs(monkeypatch):
+    calls = []
+
+    class Sampling:
+        def reset_trace(self):
+            calls.append(("sampling_reset",))
+
+    generator = Qwen36Generator.__new__(Qwen36Generator)
+    generator.mesh_device = object()
+    generator.sampling = Sampling()
+    generator._decode_trace_id = "decode"
+    generator._compat_trace_id = "compat"
+    shared_token = object()
+    generator._trace_token = shared_token
+    generator._trace_position = object()
+    generator._trace_active_mask = object()
+    generator._trace_active_state_mask = object()
+    # Exercise the double-free guard even though current production captures
+    # allocate compatibility inputs independently.
+    generator._compat_token = shared_token
+    generator._compat_position = object()
+    caller_page_table = object()
+    trace_logits = object()
+    compat_logits = object()
+    generator._trace_page_table = caller_page_table
+    generator._trace_logits = trace_logits
+    generator._trace_sampled = object()
+    generator._compat_logits = compat_logits
+    generator._trace_cache_backups = None
+
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: calls.append(("sync", mesh)))
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, trace_id: calls.append(("release", trace_id)))
+    monkeypatch.setattr(ttnn, "deallocate", lambda tensor: calls.append(("deallocate", tensor)))
+
+    generator._release_traces()
+
+    assert calls[:4] == [
+        ("sync", generator.mesh_device),
+        ("release", "decode"),
+        ("release", "compat"),
+        ("sampling_reset",),
+    ]
+    deallocated = [call[1] for call in calls if call[0] == "deallocate"]
+    assert len(deallocated) == 5
+    assert len({id(tensor) for tensor in deallocated}) == 5
+    assert shared_token in deallocated
+    assert caller_page_table not in deallocated
+    assert trace_logits not in deallocated
+    assert compat_logits not in deallocated
+    assert all(
+        getattr(generator, name) is None
+        for name in (
+            "_trace_token",
+            "_trace_position",
+            "_trace_active_mask",
+            "_trace_active_state_mask",
+            "_trace_page_table",
+            "_trace_logits",
+            "_trace_sampled",
+            "_compat_token",
+            "_compat_position",
+            "_compat_logits",
+        )
+    )
