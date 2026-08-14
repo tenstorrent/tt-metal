@@ -1896,3 +1896,90 @@ def test_group_norm_sharded_all_config(
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    # 1.0 is the exp() case, and the worst case for the back-correction this replaced (it drove the
+    # variance negative there, and rsqrt to 786430).
+    "padding_value",
+    [7.0, 1.0, -3.5, 0.5],
+)
+@pytest.mark.parametrize(
+    # grid_x is the M split. With grid_x=2 the batch spans two cores and only the second holds the
+    # padding row-tile; with grid_x=1 every core holds its own batch tail.
+    "grid_y, grid_x",
+    [(2, 1), (2, 2), (2, 4), (4, 2)],
+)
+@pytest.mark.parametrize(
+    # prebuilt_mask=True is what real code should do (free); False makes group_norm derive the
+    # second set per call (~4x slower), covered so the fallback cannot rot.
+    "prebuilt_mask",
+    [True, False],
+)
+def test_group_norm_sharded_dirty_padding(device, grid_y, grid_x, padding_value, prebuilt_mask):
+    # Mirror of test_group_norm_non_tile_aligned_garbage_padding_DRAM for the BLOCK-SHARDED path:
+    # supply non-zero tile padding and require the result to be independent of it.
+    #
+    # A host-side zero-fill of the input only worked interleaved, since fill_implicit_tile_padding
+    # corrupts a block-sharded tensor whose padding tail sits on the last M-core. In-kernel masking
+    # never touches the input, so it covers block-sharded too.
+    if device.core_grid.x < grid_x or device.core_grid.y < grid_y:
+        pytest.skip(f"device grid too small for {grid_x}x{grid_y}")
+
+    torch.manual_seed(0)
+    N, C, HW, G, padded = 1, 256, 100, 32, 128
+    grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
+
+    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
+    ref = ref.permute(0, 2, 3, 1).reshape(N, 1, HW, C)
+
+    buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
+    buf[:, :, :HW, :] = real
+    buf[:, :, HW:, :] = padding_value  # dirty padding, as reshape / slice / exp would leave
+
+    tt = ttnn.from_torch(
+        buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded // grid_size.x, C // grid_size.y), ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt = ttnn.to_memory_config(tt, sharded_mem_config)
+
+    mask = ttnn.to_device(
+        ttnn.create_group_norm_input_mask(
+            C,
+            G,
+            grid_size.y,
+            ttnn.DataType.BFLOAT8_B,
+            rows_in_last_tile=(HW % 32) if prebuilt_mask else 0,
+        ),
+        device,
+    )
+    out = ttnn.group_norm(
+        tt,
+        num_groups=G,
+        input_mask=mask,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        inplace=False,
+    )
+    out = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float()[:, :, :HW, :]
+
+    max_abs_err = (out - ref).abs().max().item()
+    pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
+    logger.info(
+        f"block-sharded dirty padding grid={grid_x}x{grid_y} padding={padding_value} "
+        f"prebuilt_mask={prebuilt_mask}: max_abs_err={max_abs_err} pcc={pcc}"
+    )
+    assert max_abs_err < 0.08, (
+        f"max abs error {max_abs_err} with tile padding = {padding_value} on a {grid_x}x{grid_y} "
+        f"block-sharded grid; group_norm must be independent of its padding (see #52685)"
+    )
+    assert pcc > 0.999, f"pcc {pcc} with tile padding = {padding_value} (see #52685)"
