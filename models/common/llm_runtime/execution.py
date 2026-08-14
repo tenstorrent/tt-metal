@@ -492,6 +492,12 @@ class TracedExecutor:
                     schema_fingerprint=getattr(operation_plan, "schema_fingerprint", None),
                     prepare_workspace=getattr(operation_plan, "prepare_workspace", None),
                     workspace_fingerprint=getattr(operation_plan, "workspace_fingerprint", None),
+                    prime=(
+                        (lambda persistent, plan=operation_plan: plan.prime(persistent.values))
+                        if operation_plan.prime is not None
+                        else None
+                    ),
+                    release_prime_output=operation_plan.release_prime_output,
                 )
             )
         return programs

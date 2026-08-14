@@ -78,6 +78,8 @@ class PrefillCapturePlan:
     schema_fingerprint: tuple[Any, ...]
     workspace_fingerprint: tuple[Any, ...]
     refresh_fields: tuple[str, ...] = ("tokens", "page_table", "last_token", "sampling")
+    prime: Callable[[PrefillHiddenPersistentInputs], Any] | None = None
+    release_prime_output: Callable[[Any], list[BaseException]] | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,7 @@ class PrefillTraceHooks:
     run_hidden_body: Callable[..., Any]
     run_chunk_hidden_body: Callable[..., Any]
     release_transient: Callable[[Any], list[BaseException]]
+    trace_capture_prime_sequence_lengths: tuple[int, ...] = ()
 
 
 class PrefillTraceLifecycle:
@@ -122,6 +125,9 @@ class PrefillTraceLifecycle:
                 fill_rows=prepared.request.padded_batch_size,
             )
 
+        should_prime = (
+            prepared.trace_signature.padded_sequence_length in self.hooks.trace_capture_prime_sequence_lengths
+        )
         return PrefillCapturePlan(
             signature=prepared.trace_signature,
             prepare_inputs=prepare_inputs,
@@ -132,6 +138,8 @@ class PrefillTraceLifecycle:
                 prepared,
                 sampling_output_rows=self.hooks.postprocessor.sampling_output_rows(prepared),
             ),
+            prime=capture if should_prime else None,
+            release_prime_output=self.hooks.release_transient if should_prime else None,
         )
 
     def refresh(

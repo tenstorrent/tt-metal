@@ -96,6 +96,7 @@ class PrefillRuntime:
                 run_hidden_body=lambda *args, **kwargs: self._run_hidden_body(*args, **kwargs),
                 run_chunk_hidden_body=lambda *args, **kwargs: self._run_chunk_hidden_body(*args, **kwargs),
                 release_transient=lambda values: self._release_or_retain_transient(values),
+                trace_capture_prime_sequence_lengths=config.trace_capture_prime_sequence_lengths,
             )
         )
 

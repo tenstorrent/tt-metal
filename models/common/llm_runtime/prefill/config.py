@@ -32,6 +32,7 @@ class PrefillRuntimeConfig:
     cluster_shape: tuple[int, int]
     device_sampling_enabled: bool
     can_enable_trace: Callable[[int, int], bool]
+    trace_capture_prime_sequence_lengths: tuple[int, ...]
     allow_force_argmax: bool
     sampling_batch_size: int
     static_q128_topk_supported: bool
@@ -54,6 +55,7 @@ class PrefillRuntimeConfig:
         batched_prefill_batched_extract: bool = True,
         device_sampling_enabled: bool,
         can_enable_trace: Callable[[int, int], bool],
+        trace_capture_prime_sequence_lengths: tuple[int, ...] = (),
     ) -> "PrefillRuntimeConfig":
         """Validate construction inputs and derive every static capability."""
 
@@ -79,6 +81,9 @@ class PrefillRuntimeConfig:
             raise TypeError("device_sampling_enabled must be bool")
         if not callable(can_enable_trace):
             raise TypeError("can_enable_trace must be callable")
+        _validate_trace_capture_prime_sequence_lengths(trace_capture_prime_sequence_lengths)
+        if any(length > max_prefill_chunk_size for length in trace_capture_prime_sequence_lengths):
+            raise ValueError("trace capture prime sequence lengths cannot exceed max_prefill_chunk_size")
 
         if not isinstance(page_table_layout, PageTableLayout):
             raise TypeError("page_table_layout must be a PageTableLayout")
@@ -117,6 +122,7 @@ class PrefillRuntimeConfig:
             cluster_shape=resolved_cluster_shape,
             device_sampling_enabled=device_sampling_enabled,
             can_enable_trace=can_enable_trace,
+            trace_capture_prime_sequence_lengths=trace_capture_prime_sequence_lengths,
             allow_force_argmax=allow_force_argmax,
             sampling_batch_size=sampling_batch_size,
             static_q128_topk_supported=static_q128_topk_supported,
@@ -150,6 +156,7 @@ class PrefillRuntimeConfig:
             raise TypeError("allow_force_argmax must be bool")
         if not isinstance(self.static_q128_topk_supported, bool):
             raise TypeError("static_q128_topk_supported must be bool")
+        _validate_trace_capture_prime_sequence_lengths(self.trace_capture_prime_sequence_lengths)
         width_ceilings = (
             ("max_page_table_capacity_width", self.max_page_table_capacity_width),
             ("max_prefill_page_table_width", self.max_prefill_page_table_width),
@@ -230,3 +237,12 @@ def _require_optional_bool(name: str, value: Any) -> None:
 def _require_supported_prefill_batch_size(value: int) -> None:
     if value not in _SUPPORTED_PREFILL_BATCH_SIZES:
         raise ValueError(f"max_prefill_batch_size must be one of {_SUPPORTED_PREFILL_BATCH_SIZES}")
+
+
+def _validate_trace_capture_prime_sequence_lengths(values: Any) -> None:
+    if not isinstance(values, tuple):
+        raise TypeError("trace_capture_prime_sequence_lengths must be a tuple")
+    if len(set(values)) != len(values):
+        raise ValueError("trace_capture_prime_sequence_lengths must not contain duplicates")
+    for index, value in enumerate(values):
+        _require_positive_int(f"trace_capture_prime_sequence_lengths[{index}]", value)

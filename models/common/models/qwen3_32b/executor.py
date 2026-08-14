@@ -83,6 +83,7 @@ class Qwen3_32BExecutor:
         self.kv_cache_manager = PagedKVCacheManager(model, config.paged_kv_cache)
         self.page_table_layout = self._resolve_page_table_layout()
         self.output_reader = OutputReader(mesh_device)
+        trace_capture_prime_sequence_lengths = _resolve_trace_capture_prime_sequence_lengths(runtime_config)
         self.prefill_runtime = PrefillRuntime(
             PrefillRuntimeConfig.resolve(
                 model=model,
@@ -96,6 +97,7 @@ class Qwen3_32BExecutor:
                 disable_batched_prefill=bool(runtime_config.disable_batched_prefill),
                 max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
                 batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
+                trace_capture_prime_sequence_lengths=trace_capture_prime_sequence_lengths,
             )
         )
         self.decode_runtime = DecodeRuntime(
@@ -413,6 +415,7 @@ class Qwen3_32BExecutor:
             disable_batched_prefill=current_prefill.disable_batched_prefill,
             max_prefill_batch_size=current_prefill.max_prefill_batch_size,
             batched_prefill_batched_extract=current_prefill.batched_prefill_batched_extract,
+            trace_capture_prime_sequence_lengths=current_prefill.trace_capture_prime_sequence_lengths,
         )
         current_decode = self.decode_runtime.config
         decode_config = DecodeRuntimeConfig.resolve(
@@ -469,6 +472,13 @@ class Qwen3_32BExecutor:
 
 def build_qwen3_32b_executor(llm: Qwen3_32BForCausalLM, config: Qwen3_32BExecutorConfig) -> Qwen3_32BExecutor:
     return Qwen3_32BExecutor(llm.model, llm.runtime_config, config)
+
+
+def _resolve_trace_capture_prime_sequence_lengths(runtime_config: Any) -> tuple[int, ...]:
+    """Select the T3K Q1024 capture-body prime independently of batching policy."""
+
+    num_devices = int(runtime_config.cluster_shape[0]) * int(runtime_config.cluster_shape[1])
+    return (1024,) if num_devices == 8 and runtime_config.can_enable_trace(1024, 0) else ()
 
 
 def _compat_executor_config(model, *, trace_mode: str, device_sampling_enabled: bool) -> Qwen3_32BExecutorConfig:

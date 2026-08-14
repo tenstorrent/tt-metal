@@ -557,6 +557,31 @@ def test_qwen3_32b_binding_preserves_tp8_runtime_and_padded_vocab_defaults():
     assert config.device_sampling_enabled is False
 
 
+@pytest.mark.parametrize(
+    ("cluster_shape", "disable_batched_prefill", "can_trace_q1024", "expected"),
+    [
+        ([1, 8], False, True, (1024,)),
+        ([1, 8], True, True, (1024,)),
+        ([1, 4], False, True, ()),
+        ([1, 8], False, False, ()),
+    ],
+    ids=("t3k-batched", "t3k-sequential", "bh-batched", "t3k-low-ceiling"),
+)
+def test_qwen3_q1024_capture_prime_is_t3k_product_owned(
+    cluster_shape,
+    disable_batched_prefill,
+    can_trace_q1024,
+    expected,
+):
+    runtime = SimpleNamespace(
+        cluster_shape=cluster_shape,
+        disable_batched_prefill=disable_batched_prefill,
+        can_enable_trace=lambda length, cached: can_trace_q1024 and length == 1024 and cached == 0,
+    )
+
+    assert qwen3_32b_executor._resolve_trace_capture_prime_sequence_lengths(runtime) == expected
+
+
 def test_phi4_binding_preserves_cap8_trace_buckets_and_pinned_revision():
     runtime = _make_qwen2_runtime_config(max_prefill_batch_size=8)
     config = phi4_generator.Phi4GeneratorConfig(
@@ -608,6 +633,9 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
     assert executor.warmup.eager is executor.eager_executor
     assert executor.warmup.trace_compiler is executor.trace_compiler
     assert executor.eager_execution is executor.eager_executor
+    assert executor.prefill_runtime.config.trace_capture_prime_sequence_lengths == (
+        (1024,) if binding.executor_module is qwen3_32b_executor else ()
+    )
     if mode == "none":
         assert executor.warmup.execution is executor.eager_executor
         assert executor.trace_compiler is None
@@ -1026,6 +1054,9 @@ def test_late_capacity_reconfigures_existing_owners_before_allocation(binding, m
     assert executor.prefill_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.warmup.config.page_table_layout is executor.page_table_layout
+    assert executor.prefill_runtime.config.trace_capture_prime_sequence_lengths == (
+        (1024,) if binding.executor_module is qwen3_32b_executor else ()
+    )
 
     def fake_allocate():
         assert executor._runtime_configuration_sealed

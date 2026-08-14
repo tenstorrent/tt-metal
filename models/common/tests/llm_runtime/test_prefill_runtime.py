@@ -18,6 +18,8 @@ import models.common.llm_runtime.prefill.result_collector as result_collector_mo
 import models.common.llm_runtime.prefill.runtime as prefill_module
 import models.common.llm_runtime.prefill.sampling_helpers as sampling_helpers
 import models.common.llm_runtime.tensor_resources as tensor_resources_module
+import models.common.llm_runtime.trace_compiler as trace_compiler_module
+import ttnn
 from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
@@ -35,7 +37,7 @@ from models.common.llm_runtime.prefill.signatures import (
 )
 from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler, ProgramKey
-from models.common.llm_runtime.trace_compiler import TraceKey
+from models.common.llm_runtime.trace_compiler import TraceCapturePlan, TraceCompiler, TraceKey
 from models.common.sampling import SamplingParams
 
 
@@ -95,6 +97,7 @@ def _runtime(
     disable_batched_prefill=False,
     max_prefill_batch_size=8,
     batched_prefill_batched_extract=True,
+    trace_capture_prime_sequence_lengths=(),
 ):
     mesh_device = SimpleNamespace(shape=(1, 1))
     config = PrefillRuntimeConfig.resolve(
@@ -118,6 +121,7 @@ def _runtime(
         batched_prefill_batched_extract=batched_prefill_batched_extract,
         device_sampling_enabled=device_sampling_enabled,
         can_enable_trace=lambda length, cached: cached == 0 and length in trace_lengths,
+        trace_capture_prime_sequence_lengths=trace_capture_prime_sequence_lengths,
     )
     return PrefillRuntime(config)
 
@@ -2490,6 +2494,113 @@ def test_trace_capture_uses_hidden_body_without_eager_sequence(monkeypatch):
 
     assert runtime.capture_plan(prepared).capture(persistent) == "hidden"
     assert seen == [(prepared.request, "device-inputs", {"fill_rows": prepared.request.padded_batch_size})]
+
+
+@pytest.mark.parametrize("prompt_length", (80, 700), ids=("q128", "q1024"))
+def test_opt_in_trace_capture_prime_uses_padded_body_and_releases_output(monkeypatch, prompt_length):
+    padded_length = 128 if prompt_length <= 128 else 1024
+    runtime = _runtime(trace_capture_prime_sequence_lengths=(padded_length,))
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=prompt_length, rows=3)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        empty_slots=[0, 1, 2],
+        start_pos=start_pos,
+    )[0]
+    persistent = PrefillHiddenPersistentInputs(device_inputs="device-inputs")
+    seen = []
+    released = []
+    monkeypatch.setattr(
+        runtime,
+        "_run_hidden_body",
+        lambda request, device_inputs, **kwargs: seen.append((request, device_inputs, kwargs)) or "hidden",
+    )
+    monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
+
+    plan = runtime.capture_plan(prepared)
+    assert plan.prime is not None
+    assert plan.release_prime_output is not None
+    output = plan.prime(persistent)
+    assert output == "hidden"
+    assert plan.release_prime_output(output) == []
+
+    assert seen == [(prepared.request, "device-inputs", {"fill_rows": prepared.request.padded_batch_size})]
+    assert prepared.request.padded_batch_size == 4
+    assert released == ["hidden"]
+
+
+def test_q1024_partial_wave_primes_every_padded_child_program_before_capture(monkeypatch):
+    runtime = _runtime(trace_capture_prime_sequence_lengths=(1024,))
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=700, rows=3)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        empty_slots=[0, 1, 2],
+        start_pos=start_pos,
+    )[0]
+    operation_plan = runtime.capture_plan(prepared)
+    persistent = PrefillHiddenPersistentInputs(device_inputs="persistent-inputs")
+    child_programs = set()
+    events = []
+    capture_active = False
+
+    def run_hidden_body(request, device_inputs, *, fill_rows=None):
+        rows = len(request.source_rows) if fill_rows is None else fill_rows
+        required = {(request.padded_sequence_length, slot) for slot in range(rows)}
+        if capture_active and not required.issubset(child_programs):
+            raise RuntimeError("new child program during capture")
+        if not capture_active:
+            child_programs.update(required)
+        events.append(("body", rows, capture_active))
+        return "hidden-output"
+
+    monkeypatch.setattr(runtime, "_run_hidden_body", run_hidden_body)
+    runtime._run_hidden_body(prepared.request, "eager-inputs")
+
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append(("sync", mesh)))
+
+    def begin(mesh, cq_id):
+        nonlocal capture_active
+        capture_active = True
+        events.append(("begin",))
+        return 7
+
+    def end(mesh, trace_id, cq_id):
+        nonlocal capture_active
+        capture_active = False
+        events.append(("end",))
+
+    monkeypatch.setattr(ttnn, "begin_trace_capture", begin)
+    monkeypatch.setattr(ttnn, "end_trace_capture", end)
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, trace_id: None)
+    monkeypatch.setattr(trace_compiler_module, "_trim_host_allocator", lambda: None)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(
+        PrefillProgramSignature("regular-batched", 4, 1024, 32, None, "logits"),
+        lambda context: torch.zeros(1),
+    )
+    trace = TraceCompiler(compiler)
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            operation_plan.signature,
+            "prefill",
+            lambda: persistent,
+            lambda value: operation_plan.capture(value.values),
+            prime=lambda value: operation_plan.prime(value.values),
+            release_prime_output=operation_plan.release_prime_output,
+        )
+    )
+
+    trace.capture_all()
+
+    assert [event for event in events if event[0] == "body"] == [
+        ("body", 3, False),
+        ("body", 4, False),
+        ("body", 4, True),
+    ]
 
 
 def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatch):
