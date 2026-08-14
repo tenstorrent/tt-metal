@@ -629,6 +629,26 @@ class ModelArgs:
         # Load model params
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
             self.trust_remote_code_hf = True
+        # A one-model allowlist cannot express "this checkpoint ships custom code" -- but the
+        # checkpoint itself can: `auto_map` in config.json IS that declaration, and HF refuses to
+        # load such a model without trust_remote_code. Decide from the config rather than from the
+        # model's name, so any custom architecture works instead of exactly one.
+        # TT_TRUST_REMOTE_CODE=0 restores the old behaviour for an untrusted checkpoint.
+        if os.getenv("TT_TRUST_REMOTE_CODE", "").strip() == "0":
+            self.trust_remote_code_hf = False
+        elif not self.trust_remote_code_hf:
+            try:
+                _cfg_path = os.path.join(str(self.CKPT_DIR), "config.json")
+                if os.path.exists(_cfg_path):
+                    with open(_cfg_path) as _fh:
+                        if json.load(_fh).get("auto_map"):
+                            self.trust_remote_code_hf = True
+                            logger.info(
+                                "config.json declares auto_map -> enabling trust_remote_code "
+                                "(this checkpoint ships custom modelling code)"
+                            )
+            except Exception:  # noqa: BLE001 - a malformed config must not break model init
+                pass
 
         self._set_hf_params(self.CKPT_DIR)
 

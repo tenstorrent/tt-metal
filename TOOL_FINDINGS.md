@@ -2107,6 +2107,65 @@ it is not.
 
 ---
 
+## F21 — `trust_remote_code` is a ONE-MODEL allowlist, and the two halves of the pipeline disagree
+
+**Status: FIXED in this checkout** · severity: any custom-architecture checkpoint passes preflight
+and dies in the demo · reported: not yet
+
+```
+FAILED models/tt_transformers/demo/simple_text_demo.py::test_demo_text[...]
+  ValueError: The repository /localdev/.../voxtral-tts-full contains custom code which
+  must be executed to correctly load the model.
+```
+
+The bring-up half loads with custom code enabled — `bringup_loop.py:486`,
+`_cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, ...)`. The demo half, via
+`model_config.py`, enables it like this:
+
+```python
+if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+    self.trust_remote_code_hf = True
+```
+
+**Custom-architecture support is an allowlist containing exactly one model.** So a
+`trust_remote_code` checkpoint clears Step 0 (*"transformers can load ... [ok]"*), clears static
+analysis, and then fails at execution — and the message blames the repository rather than the
+loader's configuration.
+
+**Fix applied:** decide from the checkpoint, not the name. `auto_map` in `config.json` **is** the
+declaration that a model ships custom modelling code — HF refuses to load such a model without
+`trust_remote_code`, so its presence is decisive and needs no allowlist. `TT_TRUST_REMOTE_CODE=0`
+restores the old behaviour for a checkpoint that should not be trusted.
+
+### The theme these three share, and it is worth stating once in the proposal
+
+| finding | decided by | available instead |
+|---|---|---|
+| **F18** | is `model_type` a known **name**? | do the config's fields describe a decoder? |
+| **F19** | is there a template with a similar **name/family**? | does the template's `canonical_hf_id` equal the model being ported? |
+| **F21** | is the model's **name** on an allowlist? | does `config.json` declare `auto_map`? |
+
+**Three gates, three times deciding by identity when the answer was available from structure.** In
+each case the structural signal is present in data the tool has already loaded, and in each case
+the name-based answer fails on the first model that is not already known to it — which is the exact
+population a porting tool exists to serve.
+
+### F19 (addendum) — the generic demo has a SECOND entrance
+
+The routing gate patched under F19 fired correctly this run:
+
+```
+NOT routing to the generic LLM demo: family was INFERRED from config structure ...
+```
+
+and the model still reached `simple_text_demo`, via a different path — `scaffold` raising
+`ColdStartScaffoldError`, which the CLI handles as *"COLD-START PATH (no per-model `tt/` folder
+needed)"* at `cli.py:9189`. **Two independent routes reach the same generic backend, and closing
+one does not close the other.** Recorded rather than patched: one gate is a defect, two gates
+reaching the same place by different reasoning is a design note the author should see.
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
