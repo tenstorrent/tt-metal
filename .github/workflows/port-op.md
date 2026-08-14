@@ -850,8 +850,26 @@ needs changing, not that the measurement was unlucky. Read `failing`,
 **Do not go looking for a prior implementation of this op outside this branch.** No `git branch`
 spelunking, no diffing against other branches, no reading a port from another checkout. Anything you
 find that way is stale scratch work, not a reference, and using it invalidates this run. Build the
-port from the manifest, the generator source, the porting guide, the merged `repeat` port, the code
-already in your own worktree, and nothing else.
+port from the manifest, the generator source, the porting guide, the merged codegen ports already in
+your checkout, the code already in your own worktree, and nothing else.
+
+**The merged ports are a reference for shape, never for kernel arguments.** Search
+`ttnn/cpp/ttnn/operations/*/*/codegen/` and you will find ports that shipped — `repeat` and
+`untilize` at the time of writing. Read them for the things that are the same for every op: how the
+`DeviceOperation` registers and what its attributes struct holds, how `supported_by_codegen()` is
+structured, how the program factory assembles a descriptor, how the sources land in CMake.
+
+Do not read them for what a kernel expects to be handed. Each was transliterated from the generator
+as it stood at that op's `ported_codegen_commit`, and that is not the generator you have. Merged
+`untilize` came from `7f2930ff`, where `writer_untilize_interleaved.cpp` read three compile-time args
+and included no `rm_shard_split.h`; the same template on a later generator takes a shard-split
+contract of two further arguments and needs that header vendored. A port built by copying the merged
+argument list onto today's kernels compiles, routes, and writes uncorrelated data — which is what
+happened, on 76 of 112 cases, and it read as a kernel bug for a day.
+
+So the argument contract comes from one place: the builder under `.codegen/ops/<op>/spec.py` and the
+kernel templates this run vendored beside your port. When those disagree with a merged port, the
+merged port is the one that is out of date.
 
 The distinction matters because **the port already in your worktree, if there is one, is the starting
 point rather than something to be suspicious of.** A run may be continuing a branch a previous
