@@ -95,13 +95,12 @@ struct PhysicalMcast {
 
     uint32_t volume() const { return (end.y - start.y + 1) * (end.x - start.x + 1); }
 
-    // Destination count for a multicast issued BY `start`. Metal's multicast
-    // primitives exclude the sender unless NocOptions::MCAST_INCL_SRC is set, so
-    // a rectangle whose corner is the sender has volume() - 1 destinations.
-    uint32_t num_dests_excluding(PhysicalCoord sender) const {
-        return volume() -
-               (sender.y >= start.y && sender.y <= end.y && sender.x >= start.x && sender.x <= end.x ? 1 : 0);
-    }
+    // Destination count for a multicast issued BY `start`, which is the only
+    // core that ever issues one: every multicast path here elects its sender
+    // with `this_core() == start`, so the sender is always the rectangle's own
+    // corner. Metal's multicast primitives exclude the sender unless
+    // NocOptions::MCAST_INCL_SRC is set, hence one less than the rectangle.
+    uint32_t num_dests_excluding_sender() const { return volume() - 1; }
 };
 
 struct LogicalMcast {
