@@ -110,15 +110,10 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
-template <
-    uint32_t PAGE_COUNT,
-    uint32_t PAGE_SIZE,
-    uint32_t MAX_CHUNK_BYTES,
-    SourceL1Guard SOURCE_GUARD,
-    typename Buffer>
+template <uint32_t PAGE_COUNT, uint32_t PAGE_SIZE, uint32_t MAX_CHUNK_BYTES, SourceL1Guard SOURCE_GUARD>
 FORCE_INLINE void
 SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    send_from_cb(Buffer& src_cb, uint32_t dst_l1) {
+    send_from_cb(DataflowBuffer& src_cb, uint32_t dst_l1) {
     static_assert(PAGE_COUNT > 0, "send_from_cb requires a non-empty block");
     static_assert(PAGE_SIZE > 0, "send_from_cb requires a non-zero page size");
     static_assert(MAX_CHUNK_BYTES > 0, "send_from_cb requires a non-zero chunk size");

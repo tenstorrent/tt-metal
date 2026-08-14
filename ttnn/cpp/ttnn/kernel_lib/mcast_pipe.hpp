@@ -221,9 +221,8 @@ public:
         uint32_t PAGE_COUNT,
         uint32_t PAGE_SIZE,
         uint32_t MAX_CHUNK_BYTES = NOC_MAX_BURST_SIZE,
-        SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard,
-        typename Buffer = DataflowBuffer>
-    FORCE_INLINE void send_from_cb(Buffer& src_cb, uint32_t dst_l1);
+        SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
+    FORCE_INLINE void send_from_cb(DataflowBuffer& src_cb, uint32_t dst_l1);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
     // Broadcast a readiness signal (a doorbell, optionally carrying a small non-zero Flag value).
