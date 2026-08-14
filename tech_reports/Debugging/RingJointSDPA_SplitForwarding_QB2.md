@@ -112,6 +112,44 @@ if the split point moves, direction 0 and direction 1 cover different page sets 
 iter 0, and any region written on iter 0 but not re-covered on iter 1 retains stale data. Chunk 4
 and a max diff of 0.287 (a real value, not garbage) is consistent with stale-but-valid data.
 
+### Full nightly with both fixes: 5 failures, all on the kv_actual_isl / metadata path [VERIFIED]
+
+With both fixes the suite **runs to completion for the first time** (no device wedge, 16 min):
+
+```
+5 failed, 119 passed, 99 skipped in 972.29s (0:16:12)
+```
+
+Four of these five had never been observed before — every prior run wedged the device long before
+reaching them, which is also why §3 saw only two.
+
+| Test (all `ring_mla`) | Failure |
+|---|---|
+| `..._kv_actual_isl_indexed_reuse_max_..._determinism` | determinism, iter 1 chunk 4, 3957 diffs |
+| `..._chunked_nd_sharded_indexed_kv_cache_accuracy_and_determinism` | PCC 0.98699, RMSE 0.0631 |
+| `..._nd_sharded_indexed_kv_cache_accuracy` | RMSE 0.096537 > 0.05 |
+| `..._metadata_matches_scalar_rotation[kv320]` | max abs diff 2.25 |
+| `..._metadata_trace_replay_matches_scalar[chunks4]` | max abs diff 5.625 |
+
+**Control (feature absent): all 7 matching tests pass in 16 s.** So all five are caused by split
+forwarding; none are pre-existing.
+
+Every one sits on the `kv_actual_isl` / metadata clamp path. That is one common thread, not five
+independent bugs, and it is the same subsystem that produced the inverted-range underflow above.
+
+**Working theory for the whole cluster:** split forwarding is the only code that derives a *split
+point* (`first_half_pages`) from the clamped extent. `kv_actual_isl` makes that extent vary per
+chunk and per replay, so the split point moves with it. Anything that assumes a stable split — a
+region written under one split point and not re-covered under the next, or a reader/writer pair that
+clamp from `kv_actual_isl` reads taken at different moments while the host refreshes it in place —
+produces exactly this signature: real-valued (not garbage) diffs, deterministic, concentrated in the
+metadata/replay tests. The `[chunks4]` failure message says as much on its own: *"A replay matching
+chunk 1 instead points at a stale metadata read."*
+
+**Assessment: the feature is substantially broken on the metadata path, not one bug away from
+landing.** Three fixes so far have each revealed the next failure. Anyone continuing should treat
+the split-point-vs-clamp interaction as one design question to resolve, rather than patching each test.
+
 ### What this corrects in the rest of this document
 
 - **§7's ring-4 degenerate-case hypothesis is DISPROVED.** Ring 4 is not special. The `+1` relay
