@@ -566,20 +566,29 @@ def test_demo_text(
         generator.model[0]._active_page_tables_per_layer = per_layer_pts
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
-    # ── Warmup (prefill compile + optional trace) ──────────────────────────
     # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
-    # scale with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # scale with chunk×batch). Gate off *above* GEMMA4_PREFILL_TRACE_MAX_SEQ
     # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
     # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
-    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_trace and not prefill_enable_trace:
         logger.info(
-            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"Prefill trace disabled (max_seq_len={max_seq_len} > {prefill_trace_max}); "
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+    if prefill_enable_trace:
+        # 12B long-4k is single-chunk @ 4096; default lenses omit that bucket.
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=model_args_list,
         )
     # Sample on device by default, whenever the model exposes a sampling module
     # (TP>1 and a vocab shard <=64K); models without one fall back to host.
@@ -826,10 +835,20 @@ def _run_spec_decode(
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
     # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
     # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
-    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
+    args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
+    if prefill_enable_trace:
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=args_list,
+        )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -1022,10 +1041,20 @@ def _run_spec_decode_batched(
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
     # (≥4K); gate it off above a threshold (the batched decode trace stays on),
     # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
-    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
+    args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
+    if prefill_enable_trace:
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=args_list,
+        )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )

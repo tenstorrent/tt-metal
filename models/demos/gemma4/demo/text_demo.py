@@ -645,15 +645,24 @@ def _run_generation_via_generator(
             num_layers=num_layers,
         )
 
-    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_decode_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_decode_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_decode_trace and not prefill_enable_trace:
         logger.info(
-            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"Prefill trace disabled (max_seq_len={max_seq_len} > {prefill_trace_max}); "
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+    if prefill_enable_trace:
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=model_args_list,
         )
 
     # Device sample by default — see text_demo_v2 for the measurement that flipped
