@@ -27,8 +27,8 @@ import torch
 
 import ttnn
 
-from .....parallel.manager import CCLManager
 from .....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+from .....parallel.manager import CCLManager
 from ..common import weights_subdir
 
 # 1344x768 at 16x spatial compression. Latent frame counts follow the 17n -> 5n rule less
@@ -42,9 +42,16 @@ MESH_4X8 = [
     pytest.param(
         (4, 8),
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            # RING, not FABRIC_1D: `_decode_clip_device_stitched` hardcodes
+            # `all_gather(topology=ttnn.Topology.Ring)`, so the `yuv420` mode cannot run on a linear
+            # fabric at all. Ring is also the production tt_dit configuration, so measuring the other
+            # two modes here keeps all three comparable on one fabric.
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "require_exact_physical_num_devices": True,
             "l1_small_size": 65536,
+            # The traced mode captures one per-chunk graph (~1270 ops); 150 MB is what the denoise
+            # loop uses on the quad. Harmless for the untraced modes.
+            "trace_region_size": 150000000,
         },
         id="4x8",
     )
@@ -86,6 +93,9 @@ MODES = {
     "uint8": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "readback_uint8": True},
     # Stitch, clamp and colour-convert on device; read one planar canvas at 1.5 bytes/pixel.
     "yuv420": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "device_stitch": True},
+    # Same, with the per-chunk device graph captured once and replayed. Isolates host dispatch,
+    # measured at 3.025 s of the 6.934 s stage at 768P/15s.
+    "traced": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "device_stitch": True, "trace_device_stitch": True},
 }
 
 
@@ -101,9 +111,12 @@ def test_decode_stage(mesh_device, seconds, mode):
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
 
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
-    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
+    # Ring to match the fabric above. Unused on a single host -- `fast_device_to_host` and
+    # `fast_device_to_host_yuv` only consult it inside their `using_distributed_env()` branches --
+    # but Linear here would be wrong the moment this runs on the quad.
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     vae = MiniMaxH3Vae(config, mesh_device=mesh_device, ccl_manager=ccl_manager, **MODES[mode])
-    output_type = "yuv420" if mode == "yuv420" else "float"
+    output_type = "yuv420" if mode in ("yuv420", "traced") else "float"
 
     t0 = time.time()
     vae.load_decoder_state(_decoder_state(weights_dir))
@@ -133,7 +146,20 @@ def test_decode_stage(mesh_device, seconds, mode):
         f"DECODE_SPLIT mode={mode} seconds={seconds} "
         + " ".join(
             f"{k}={profile.get(k, 0.0):.3f}"
-            for k in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual")
+            for k in (
+                "device",
+                "readback",
+                "stitch",
+                "unpatchify",
+                "blend",
+                "concat",
+                "dispatch",
+                "compute",
+                "tiling",
+                "upload",
+                "host_prep",
+                "residual",
+            )
         )
         + f" waves={int(profile.get('waves', 0))} units={int(profile.get('units', 0))}"
         + f" readback_gb={profile.get('readback_mb', 0.0) / 1000:.2f}"
