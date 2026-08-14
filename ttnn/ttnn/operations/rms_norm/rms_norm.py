@@ -83,16 +83,17 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "rank": [2, 3, 4],
-    "dtype": [ttnn.bfloat16, ttnn.float32],
-    # Phase 0 is the maxed-out precision corner. fp32_dest_acc_en=False is a
-    # later refinement for bfloat16; for float32 it stays permanently refused
-    # (a silent reduced-width accumulation would be a lie to the caller).
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    # Both accumulation widths are supported.  The stat CBs stay float32
+    # regardless (see rms_norm_program_descriptor.py) — the axis only selects
+    # the DEST accumulation width, never the L1 statistic format.
+    # {float32, fp32_dest_acc_en=False} is refused below in EXCLUSIONS.
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "gamma_mode": ["gamma", "no_gamma"],
     # "none" is the absent-gamma sentinel and is ALWAYS legal.
-    "gamma_dtype": [ttnn.bfloat16, ttnn.float32, "none"],
+    "gamma_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
@@ -102,14 +103,15 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 #
-# Empty on purpose. The one cell the design calls out as a refusal —
-# {float32, fp32_dest_acc_en=False} — is already outside SUPPORTED (the whole
-# fp32_dest_acc_en=False column is), so an EXCLUSIONS entry for it would name a
-# cell that is not inside cartesian(SUPPORTED). When fp32_dest_acc_en=False is
-# admitted for bfloat16 by a later refinement, {float32, False} becomes a real
-# EXCLUSIONS entry at that moment.
+# `fp32_dest_acc_en=False` is now inside SUPPORTED, so the one cell the design
+# calls out as a PERMANENT refusal is finally expressible as an EXCLUSION:
+# a caller who hands us float32 activations is asking for float32 arithmetic,
+# and silently accumulating them at reduced DEST width would be a lie about the
+# precision they paid for.  This is not a refinement candidate.
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+]
 
 
 # ---------------------------------------------------------------------------

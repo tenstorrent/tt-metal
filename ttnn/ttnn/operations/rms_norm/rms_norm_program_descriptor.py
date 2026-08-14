@@ -86,6 +86,26 @@ def _f32_bits(value: float) -> int:
     return struct.unpack("I", struct.pack("f", float(value)))[0]
 
 
+# Block-float formats have no per-element byte size: 16 data elements share one
+# exponent, so `Tensor.element_size()` raises for them ("datum for bfp2, bfp4,
+# bfp8 is invalid", tt_backend_api_types.hpp).  The *_ELEM_BYTES compile-time
+# args are consumed ONLY by the ROW_MAJOR stick paths (stick pitch, per-element
+# byte offsets), and a block-float tensor is necessarily TILE-layout — there is
+# no row-major encoding of a shared-exponent block.  So the value below is a
+# never-dereferenced placeholder for that case, chosen as 1 so the reader's and
+# writer's `RM_STICK_PITCH % 16 == 0` static_assert (evaluated on every program,
+# not just ROW_MAJOR ones) still holds.
+_BLOCK_FLOAT_ELEM_BYTES = 1
+
+
+def _elem_bytes(tensor) -> int:
+    """`tensor.element_size()`, defined for block-float formats too."""
+    try:
+        return tensor.element_size()
+    except (ValueError, RuntimeError):
+        return _BLOCK_FLOAT_ELEM_BYTES
+
+
 def _l1_working_budget(device) -> int:
     query = getattr(device, "l1_size_per_core", None)
     total = query() if callable(query) else L1_SIZE_PER_CORE_FALLBACK
@@ -274,9 +294,9 @@ def create_program_descriptor(
 
     shape = list(input_tensor.shape)
     W = shape[-1]
-    in_elem = input_tensor.element_size()
-    out_elem = output_tensor.element_size()
-    gamma_elem = gamma.element_size() if has_gamma else in_elem
+    in_elem = _elem_bytes(input_tensor)
+    out_elem = _elem_bytes(output_tensor)
+    gamma_elem = _elem_bytes(gamma) if has_gamma else in_elem
     total_sticks = input_tensor.buffer_num_pages() if is_row_major else 0
 
     mask_valid_w = W % TILE_DIM
