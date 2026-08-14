@@ -67,6 +67,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -505,10 +506,47 @@ def adopt_workspace(results: Path, repo: Path) -> list[str]:
 # ---------------------------------------------------------------------------------------------
 
 
-def report_build(run: dict, api: Api) -> int:
+# `file:line:col: error: message`, which is every compiler diagnostic that matters here and nothing
+# else in a build log. Anchored on the extension so a stray `error:` in a CMake message or a test name
+# does not read as one.
+DIAGNOSTIC = re.compile(r"([\w./+-]+\.(?:cpp|cc|cxx|hpp|hxx|h)):(\d+):(\d+): error: (.+?)\s*$")
+
+
+def diagnostics(text: str) -> list[str]:
+    """The distinct compiler errors in a build log, keyed so two builds can be compared.
+
+    Keyed on the file's *base* name because the same error arrives twice under two different roots --
+    the wheel job compiles under `/project` and the release job under `/work` -- and those are one
+    error, not two. Dropping the directory would collide two same-named files in different
+    directories, which no port has, and the alternative is reporting every error twice.
+
+    Order is first-seen rather than sorted: a build log leads with the first thing that broke, and
+    that is usually the one worth reading first.
+    """
+    seen = {}
+    for line in text.splitlines():
+        found = DIAGNOSTIC.search(line)
+        if found:
+            path, line_no, column, message = found.groups()
+            # `error:` is kept in the key so each line still reads like the compiler line it came
+            # from, which is what gets pasted into a commit message and read back by the next attempt.
+            seen.setdefault(f"{Path(path).name}:{line_no}:{column}: error: {message}", None)
+    return list(seen)
+
+
+def report_build(run: dict, api: Api, work: Path) -> int:
     if run.get("conclusion") == "success":
+        record_diagnostics(work, [])
         print("BUILD PASSED -- the tree compiles and the wheel was produced.")
         return 0
+
+    text = failure_output(api, run["id"])
+    current = diagnostics(text)
+    # Read before the write below, so this is genuinely the previous build's set.
+    carried = _build_state(work).get("diagnostics") or []
+    record_diagnostics(work, current)
+    repeated = [d for d in current if d in carried]
+
     # Said this plainly because the agent has twice now read a delivered answer as a broken tool and
     # retried it unchanged. A compile is deterministic: the same tree gives the same errors.
     print(
@@ -518,7 +556,20 @@ def report_build(run: dict, api: Api) -> int:
         f"before it measures, so on this tree it would fail in the same place after queueing for a "
         f"card.\n\nRun: {run['html_url']}\n"
     )
-    print(failure_output(api, run["id"]))
+    if repeated:
+        # The tilize port's second build fixed one of the three errors its first build reported and
+        # left the other two at the same line and column, which cost a fourteen-minute round trip to
+        # be told again. A build is the most expensive thing this agent can do, so an error surviving
+        # one is worth saying loudly rather than leaving it to be noticed in a list.
+        print(
+            f"{len(repeated)} of these {len(current)} errors were in the previous build's output too, "
+            f"unchanged, at the same line and column. Whatever you edited did not address them. Fix "
+            f"every one of these before building again -- one build costs the same whether it clears "
+            f"one error or all of them:\n\n  "
+            + "\n  ".join(repeated)
+            + "\n"
+        )
+    print(text)
     return 1
 
 
@@ -550,10 +601,101 @@ def report_verify(run: dict, api: Api, results: Path | None) -> int:
     return 2 if verdict == "blocked" else 1
 
 
-def report_baseline(run: dict, api: Api, results: Path | None, repo: Path) -> int:
+BRIEF = "port-brief.md"
+
+
+def write_brief(repo: Path, results: Path | None, *, broken: list[str] | None = None) -> None:
+    """Everything the run learned before the agent existed, in a file the agent is told to read.
+
+    The baseline is a pre-step, so until this existed its output went to the job log and nowhere the
+    agent could reach -- while the prompt claimed the agent would find it "in your first tool output".
+    Nobody noticed because a fresh port does not need it. A *resumed* port does: the work list under
+    `incoming.json` is the measured set of cases the existing port fails, which is the entire point of
+    resuming rather than starting over, and no agent had ever seen one.
+
+    A file in the worktree rather than the prompt, because the prompt is rendered from `env` and this
+    is unbounded -- a work list can name a hundred cases. It is excluded in `.git/info/exclude`, so
+    `git add -A` leaves it out of the published commit: it informs the port without becoming part of
+    it, and it never reaches the write-path guard, which judges the commit.
+    """
+    parts = [
+        "# What this run already knows\n",
+        "Written before you were started, by the harness rather than by an agent. Everything here was "
+        "measured on the card or read off the branch you are continuing.\n",
+    ]
+
+    if broken:
+        parts.append(
+            "## The port on this branch does not compile, and that is the whole job\n\n"
+            "The baseline tried to build the code already here so it could measure what that code "
+            "fails, and the build itself failed. So there is no baseline and no case list this run -- "
+            "there is this, which is more specific than either. These errors are in the tree you have "
+            "in front of you right now.\n\n"
+            "Fix exactly these. Do not rewrite the port, do not re-transliterate a file because you "
+            "would have written it differently, and do not call `build` before you have addressed "
+            "every line below.\n\n"
+            "```\n" + "\n".join(broken) + "\n```\n"
+        )
+
+    inherited = os.environ.get("PORT_PRIOR_DIAGNOSTICS", "").strip()
+    if inherited and not broken:
+        parts.append(
+            "## The previous attempt left the tree not compiling\n\n"
+            "These are the compiler errors the last build on this branch reported. They were carried "
+            "here in that attempt's commit message, so they describe the code you have now. Fix them "
+            "before you spend a `build` rediscovering them -- that round trip is about fourteen "
+            "minutes and it is the single most common way an attempt wastes its budget.\n\n"
+            "```\n" + inherited + "\n```\n"
+        )
+
+    summary = (results / "baseline.json") if results else None
+    if summary and summary.is_file():
+        parts.append(f"## The native baseline\n\n```json\n{summary.read_text().strip()}\n```\n")
+
+    incoming = (results / "incoming.json") if results else None
+    if incoming and incoming.is_file():
+        parts.append(
+            "## This branch already carries a port, and here is what it fails\n\n"
+            "Measured on the card just now, against the code currently on the branch. This is your "
+            "work list. Cases under `prototype_gaps` are ones the generator itself cannot serve, so "
+            "they are excused and not yours to fix; do not spend the run on them.\n\n"
+            f"```json\n{incoming.read_text().strip()}\n```\n"
+        )
+
+    (repo / BRIEF).write_text("\n".join(parts))
+
+
+def report_baseline(run: dict, api: Api, results: Path | None, repo: Path, work: Path) -> int:
     if run.get("conclusion") != "success" or results is None:
+        text = failure_output(api, run["id"])
+        broken = diagnostics(text)
+
+        # A resumed branch whose port does not compile is the ordinary case, not an exceptional one,
+        # and until this returned 0 it was fatal. The baseline builds the code already on the branch in
+        # order to measure it, so `tilize` attempt 1 leaving two errors behind meant attempt 2 died in
+        # this step before its agent existed -- and every attempt after it would have died in the same
+        # place, on the same two errors, with no agent ever given the chance to fix them. A chain that
+        # cannot recover from a failed compile cannot resume a half-finished port at all, which is the
+        # one thing resuming is for.
+        #
+        # Only when the compiler is what objected. A baseline that failed with no diagnostics failed
+        # for some other reason -- no card, a bad checkout, a broken launcher -- and starting an agent
+        # against that would spend a budget on a problem no edit to the port can reach.
+        if broken and os.environ.get("PORT_RESUME") == "1":
+            record_diagnostics(work, broken)
+            write_brief(repo, results, broken=broken)
+            print(
+                f"the baseline could not build the port already on this branch, which means there is "
+                f"no measured case list this run -- the compile errors below are the work list "
+                f"instead, and they are in {BRIEF}. Starting the agent anyway: this is recoverable, "
+                f"and it is the state a half-finished port is most often left in.\n\n  "
+                + "\n  ".join(broken)
+                + f"\n\n{run['html_url']}\n"
+            )
+            return 0
+
         print(f"the baseline dispatch failed ({run.get('conclusion')}). {run['html_url']}\n")
-        print(failure_output(api, run["id"]))
+        print(text)
         return 1
     adopted = adopt_workspace(results, repo)
     print(f"baseline OK. {run['html_url']}")
@@ -563,9 +705,6 @@ def report_baseline(run: dict, api: Api, results: Path | None, repo: Path) -> in
     if summary.is_file():
         print(f"\n{summary.read_text()}")
 
-    # On a resumed branch, what the port already there currently fails. This is the work list, and it
-    # is printed into the baseline step's log rather than left in an artifact because the agent reads
-    # the log: a run that has to be told where to start should be told before it starts guessing.
     incoming = results / "incoming.json"
     if incoming.is_file():
         print(
@@ -574,6 +713,9 @@ def report_baseline(run: dict, api: Api, results: Path | None, repo: Path) -> in
             "`prototype_gaps` are ones the generator itself cannot serve, so they are excused and not "
             f"yours to fix:\n\n{incoming.read_text()}"
         )
+
+    write_brief(repo, results)
+    print(f"\nwrote {BRIEF}, which is what the agent reads before anything else")
     return 0
 
 
@@ -663,10 +805,28 @@ def _build_state(work: Path) -> dict:
         return {}
 
 
+def _update_build_state(work: Path, **fields) -> None:
+    """Merge rather than overwrite, because two things share this file for different spans.
+
+    `tree` and `outcome` describe one dispatch and are replaced by the next. `diagnostics` has to
+    outlive the dispatch that produced them: they are what the *following* build is compared against,
+    and what a resumed attempt inherits. Writing the file wholesale, which is what this used to do,
+    silently dropped them on the way to the next build.
+    """
+    state = _build_state(work)
+    state.update(fields)
+    (work / BUILD_STATE).write_text(json.dumps(state))
+
+
 def record_build_outcome(work: Path, tree: str, ok: bool) -> None:
     """Remember how the last build of this exact tree turned out, for the guard below."""
     if tree:
-        (work / BUILD_STATE).write_text(json.dumps({"tree": tree, "outcome": "passed" if ok else "failed"}))
+        _update_build_state(work, tree=tree, outcome="passed" if ok else "failed")
+
+
+def record_diagnostics(work: Path, found: list[str]) -> None:
+    """What the last build objected to, for the next build and the next attempt to be told."""
+    _update_build_state(work, diagnostics=found)
 
 
 def refuse_pointless_dispatch(work: Path, mode: str, tree: str) -> None:
@@ -688,7 +848,7 @@ def refuse_pointless_dispatch(work: Path, mode: str, tree: str) -> None:
     state = _build_state(work)
     if not tree or state.get("tree") != tree:
         if mode == "build":
-            (work / BUILD_STATE).write_text(json.dumps({"tree": tree, "outcome": "dispatched"}))
+            _update_build_state(work, tree=tree, outcome="dispatched")
         return
 
     if mode == "build":
@@ -716,6 +876,35 @@ def cleanup_ref(work: Path, repo: Path, remote: str, token_file: Path, branch: s
 
 
 TRAILER_PREFIX = "Port-"
+
+# Fenced rather than prose so the workflow can lift the block back out of a commit message with sed
+# and never mistake a sentence about diagnostics for the diagnostics.
+#
+# `===` and not `---`, which is what these were first: the sed range that matches them lives in
+# `port-op.md`'s YAML frontmatter, and `---` is how frontmatter ends. Writing it there truncated the
+# block every reader of that file parses, and the first symptom was an unrelated test losing the
+# `mcp-scripts` key. Anything embedded in a marker that appears inside frontmatter has to avoid it.
+DIAGNOSTICS_OPEN = "=== unresolved compiler diagnostics ==="
+DIAGNOSTICS_CLOSE = "=== end unresolved compiler diagnostics ==="
+
+# Enough to describe what is broken without turning a commit message into a build log. A tree with
+# more than this many distinct errors does not need a precise list to know where to start.
+DIAGNOSTICS_LIMIT = 40
+
+
+def carried_diagnostics(work: Path) -> list[str]:
+    """The errors the last build in this run reported, if it left the tree not compiling.
+
+    Gated on `failed` specifically, which excludes both of the other two outcomes for the same reason:
+    handing the next attempt a list of errors that are not in its code would send it hunting for
+    things already fixed. `passed` clears the list outright. `dispatched` means a build was started
+    and the job ended before anything collected it, so the tree has moved since the last diagnostics
+    were taken and how much of that list survives is unknown -- and a guess is worse than silence.
+    """
+    state = _build_state(work)
+    if state.get("outcome") != "failed":
+        return []
+    return (state.get("diagnostics") or [])[:DIAGNOSTICS_LIMIT]
 
 
 def read_verdict(work: Path) -> dict:
@@ -773,12 +962,19 @@ def publish(api: Api, repo: Path, work: Path, remote: str, token_file: Path, arg
         f"{TRAILER_PREFIX}failing: {failing if failing is not None else -1}",
         f"{TRAILER_PREFIX}generator: {args.codegen_ref}",
     ]
-    body = (
+    sections = [
         "Written by the port-op workflow, not by hand. The trailers below are the chain state a "
-        "resumed run reads off this branch; `Port-failing: -1` means no correctness band was graded.\n\n"
-        + "\n".join(trailers)
-    )
-    commit, base = commit_worktree(repo, work, f"{subject}\n\n{body}")
+        "resumed run reads off this branch; `Port-failing: -1` means no correctness band was graded."
+    ]
+    if unresolved := carried_diagnostics(work):
+        # Trailers have to be the final paragraph for git to parse them, so this goes above them.
+        # In the message rather than a file because a file would land in the port's own diff, and a
+        # reviewer opening this branch should see the code the port is made of and nothing else.
+        sections.append(
+            f"{DIAGNOSTICS_OPEN}\n" + "\n".join(unresolved) + f"\n{DIAGNOSTICS_CLOSE}"
+        )
+    sections.append("\n".join(trailers))
+    commit, base = commit_worktree(repo, work, subject + "\n\n" + "\n\n".join(sections))
 
     if commit == base or git("rev-parse", f"{commit}^{{tree}}", cwd=repo) == git(
         "rev-parse", f"{base}^{{tree}}", cwd=repo
@@ -864,12 +1060,12 @@ def should_chain(verdict: str, failing: int | None, args) -> tuple[bool, str]:
     return True, f"failing fell from {args.prev_failing if args.prev_failing >= 0 else 'unmeasured'} to {failing}"
 
 
-def report(mode: str, run: dict, api: Api, results: Path | None, repo: Path) -> int:
+def report(mode: str, run: dict, api: Api, results: Path | None, repo: Path, work: Path) -> int:
     if mode == "build":
-        return report_build(run, api)
+        return report_build(run, api, work)
     if mode == "verify":
         return report_verify(run, api, results)
-    return report_baseline(run, api, results, repo)
+    return report_baseline(run, api, results, repo, work)
 
 
 def delivered(code: int, as_tool: bool) -> int:
@@ -1060,7 +1256,7 @@ def main() -> int:
     finally:
         cleanup_ref(work, repo, remote, token_file, branch)
 
-    return delivered(report(args.mode, run, api, results, repo), args.as_tool)
+    return delivered(report(args.mode, run, api, results, repo, work), args.as_tool)
 
 
 def resume(api: Api, args, work: Path, repo: Path, remote: str, token_file: Path) -> int:
@@ -1098,7 +1294,7 @@ def resume(api: Api, args, work: Path, repo: Path, remote: str, token_file: Path
     if record["mode"] == "build":
         record_build_outcome(work, record.get("tree", ""), run.get("conclusion") == "success")
 
-    return delivered(report(record["mode"], run, api, results, repo), args.as_tool)
+    return delivered(report(record["mode"], run, api, results, repo, work), args.as_tool)
 
 
 if __name__ == "__main__":

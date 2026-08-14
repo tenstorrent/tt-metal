@@ -794,6 +794,221 @@ with tempfile.TemporaryDirectory() as tmp:
     dispatch.refuse_pointless_dispatch(work, "build", "def456")
     check("an edited tree builds again", True)
 
+# The diagnostics a build reported have to survive the next dispatch, because they are what the next
+# build is compared against and what a resumed attempt inherits. `record_build_outcome` used to write
+# the state file wholesale, which dropped them every time.
+BUILD_LOG = """
+2026-08-14T18:35:27Z /project/ttnn/cpp/ttnn/operations/x/tilize_codegen_supported.cpp:134:49: error: cannot initialize a parameter of type 'DataType'
+2026-08-14T18:33:50Z /work/ttnn/cpp/ttnn/operations/x/tilize_codegen_supported.cpp:134:49: error: cannot initialize a parameter of type 'DataType'
+2026-08-14T18:33:50Z /work/ttnn/cpp/ttnn/operations/x/tilize_codegen_program_factory.cpp:138:17: error: use of undeclared identifier 'device'
+2026-08-14T18:33:51Z -- Configuring incomplete, error: something cmake said
+"""
+_found = dispatch.diagnostics(BUILD_LOG)
+check(
+    "the same error under two build roots is one diagnostic",
+    _found
+    == [
+        "tilize_codegen_supported.cpp:134:49: error: cannot initialize a parameter of type 'DataType'",
+        "tilize_codegen_program_factory.cpp:138:17: error: use of undeclared identifier 'device'",
+    ],
+    f"{_found}: the wheel job compiles under /project and the release job under /work",
+)
+check(
+    "and a cmake line that merely contains 'error:' is not one",
+    not any("cmake" in d for d in _found),
+    f"{_found}",
+)
+
+with tempfile.TemporaryDirectory() as tmp:
+    work = Path(tmp)
+    dispatch.record_diagnostics(work, ["a.cpp:1:1: error: first", "b.cpp:2:2: error: second"])
+    dispatch.record_build_outcome(work, "tree1", ok=False)
+    check(
+        "recording a build outcome keeps the diagnostics it was about",
+        dispatch.carried_diagnostics(work) == ["a.cpp:1:1: error: first", "b.cpp:2:2: error: second"],
+        f"{dispatch.carried_diagnostics(work)}",
+    )
+    # A new dispatch on an edited tree must not clear them either: the whole point is to compare the
+    # next build's errors against these.
+    dispatch.refuse_pointless_dispatch(work, "build", "tree2")
+    check(
+        "and so does dispatching the next build",
+        len(dispatch._build_state(work).get("diagnostics") or []) == 2,
+        f"{dispatch._build_state(work)}",
+    )
+    check(
+        "but a tree whose build was never collected carries nothing forward",
+        dispatch.carried_diagnostics(work) == [],
+        "outcome is `dispatched`, so how many of those errors survive the edit is unknown",
+    )
+    dispatch.record_build_outcome(work, "tree2", ok=True)
+    dispatch.record_diagnostics(work, [])
+    check(
+        "and a build that passed carries nothing forward",
+        dispatch.carried_diagnostics(work) == [],
+        "errors from before a passing build describe code that no longer exists",
+    )
+
+# The commit message is the transport between attempts, so the fences the workflow greps for have to
+# be the ones publish writes, and they have to sit above the trailers -- git only parses trailers in
+# the last paragraph.
+_open, _close = dispatch.DIAGNOSTICS_OPEN, dispatch.DIAGNOSTICS_CLOSE
+_resolve = PORT_OP.read_text()
+# Everything in this suite that reads the workflow's frontmatter splits on `---`, so a bare `---` line
+# inside it truncates the YAML and the failure surfaces somewhere unrelated -- the first time, as a
+# missing `mcp-scripts` key three hundred lines away.
+check(
+    "no line inside the workflow's frontmatter can be mistaken for its end",
+    not any(line.strip() == "---" for line in _resolve.split("---", 2)[1].splitlines()),
+    "a step that greps for a `---` fence would break every frontmatter reader here",
+)
+check(
+    "the workflow lifts diagnostics back out using the fences publish writes",
+    f"/^{_open}$/,/^{_close}$/p" in _resolve,
+    "the sed range in the resolve step and the fences in dispatch.py have drifted apart",
+)
+check(
+    "and it reads them into the environment with a random delimiter",
+    "PORT_PRIOR_DIAGNOSTICS<<$delimiter" in _resolve and "openssl rand" in _resolve,
+    "a fixed heredoc delimiter lets a diagnostic containing it inject further variables",
+)
+check(
+    "and the brief the agent reads is kept out of the published commit",
+    'echo "port-brief.md" >> .git/info/exclude' in _resolve,
+    "otherwise it lands in the port's own diff and the write-path guard is asked about it",
+)
+check(
+    "and the prompt tells the agent to read that brief",
+    dispatch.BRIEF in _resolve.split("---", 2)[2],
+    "the brief exists but nothing in the prompt points at it, which is how the baseline "
+    "output went unread for a month",
+)
+
+# The brief is the only channel from the pre-agent half of the run to the agent, so what it does and
+# does not contain is worth asserting directly. The resume work list is the case that matters: it is
+# the entire reason to resume a branch rather than start over, and it reached no agent until this file.
+with tempfile.TemporaryDirectory() as tmp:
+    repo, results = Path(tmp) / "repo", Path(tmp) / "results"
+    repo.mkdir()
+    results.mkdir()
+    (results / "baseline.json").write_text('{"native_wall_us": 41.0}')
+    (results / "incoming.json").write_text('{"failures": ["codegen_tilize[7]"], "prototype_gaps": []}')
+    os.environ["PORT_PRIOR_DIAGNOSTICS"] = "a.cpp:1:1: error: left over from attempt 1"
+    dispatch.write_brief(repo, results)
+    _brief = (repo / dispatch.BRIEF).read_text()
+    for _label, _needle in [
+        ("the native baseline", "native_wall_us"),
+        ("the resumed port's measured work list", "codegen_tilize[7]"),
+        ("the previous attempt's unfixed errors", "left over from attempt 1"),
+    ]:
+        check(f"the brief carries {_label}", _needle in _brief, _brief)
+    check(
+        "and it says which of those cases are excused rather than leaving that to be inferred",
+        "prototype_gaps" in _brief and "not yours to fix" in _brief,
+        _brief,
+    )
+
+    del os.environ["PORT_PRIOR_DIAGNOSTICS"]
+    (results / "incoming.json").unlink()
+    dispatch.write_brief(repo, results)
+    _fresh = (repo / dispatch.BRIEF).read_text()
+    check(
+        "a fresh port's brief claims no prior work and no inherited errors",
+        "already carries a port" not in _fresh and "not compiling" not in _fresh,
+        _fresh,
+    )
+
+    # The deadlock case: no results at all, because the baseline could not build the port it was meant
+    # to measure. The brief has to stand on its own here -- it is the only thing the agent gets.
+    dispatch.write_brief(repo, None, broken=["a.cpp:1:1: error: undeclared 'device'"])
+    _stuck = (repo / dispatch.BRIEF).read_text()
+    check(
+        "a brief with no baseline at all still names the work",
+        "does not compile" in _stuck and "undeclared 'device'" in _stuck,
+        _stuck,
+    )
+
+
+# A resumed branch whose port does not compile must reach its agent. This killed `tilize` attempt 2 in
+# a pre-step, and would have killed 3, 4, 5 and 6 on the same two errors: the baseline builds the code
+# already on the branch, so a branch left not compiling can never be resumed. The distinction that
+# makes this safe is whether the compiler is what objected.
+class _FakeApi:
+    """Enough of `Api` for report_baseline's failure path, which only ever reads a log."""
+
+    def __init__(self, log: str):
+        self.repo, self._log = "t/t", log
+
+    def get_json(self, path):
+        return {"jobs": [{"id": 1, "name": "build", "conclusion": "failure"}]}
+
+    def download(self, path):
+        return self._log.encode()
+
+
+_FAILED_RUN = {"conclusion": "failure", "id": 7, "html_url": "https://example/run/7"}
+_COMPILE_LOG = "/work/x/tilize_codegen_supported.cpp:134:49: error: cannot initialize a parameter\n"
+
+for _resume, _log, _expected, _label in [
+    ("1", _COMPILE_LOG, 0, "a resumed branch that does not compile starts its agent anyway"),
+    ("0", _COMPILE_LOG, 1, "but a fresh port whose scaffold will not compile is a harness bug and stops"),
+    ("1", "the runner had no card\n", 1, "and a baseline that failed for any other reason still stops"),
+]:
+    with tempfile.TemporaryDirectory() as tmp:
+        repo, work = Path(tmp) / "repo", Path(tmp) / "work"
+        repo.mkdir()
+        work.mkdir()
+        os.environ["PORT_RESUME"] = _resume
+        _code = dispatch.report_baseline(_FAILED_RUN, _FakeApi(_log), None, repo, work)
+        check(_label, _code == _expected, f"returned {_code}, wanted {_expected}")
+        if _expected == 0:
+            check(
+                "and hands it the compile errors as the work list",
+                "does not compile" in (repo / dispatch.BRIEF).read_text(),
+                (repo / dispatch.BRIEF).read_text(),
+            )
+            check(
+                "and remembers them, so the next build can say which survived",
+                dispatch._build_state(work).get("diagnostics") != [],
+                f"{dispatch._build_state(work)}",
+            )
+os.environ.pop("PORT_RESUME", None)
+
+# Trailers are only trailers to git if they are the message's last paragraph, so inserting the
+# diagnostics block has to leave them there. Checked against real git rather than by inspection,
+# because the workflow reads them with `%(trailers)` and a message git parses differently than this
+# suite assumes would break the entire chain silently.
+with tempfile.TemporaryDirectory() as tmp:
+    repo = Path(tmp)
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "t@t.co")
+    _git(repo, "config", "user.name", "t")
+    _message = (
+        "tilize: port to codegen, attempt 1 (none)\n\nprose about the run.\n\n"
+        + f"{_open}\na.cpp:1:1: error: first\nb.cpp:2:2: error: second\n{_close}"
+        + "\n\nPort-verdict: none\nPort-attempt: 1\nPort-failing: -1\nPort-generator: "
+        + "d" * 40
+    )
+    _git(repo, "commit", "-q", "--allow-empty", "-m", _message)
+    _read = _git(repo, "log", "-1", "--format=%(trailers:only=true,unfold=true)")
+    check(
+        "git still finds the trailers with a diagnostics block above them",
+        "Port-attempt: 1" in _read and "Port-generator: " + "d" * 40 in _read,
+        f"git parsed: {_read!r}",
+    )
+    check(
+        "and does not read a diagnostic as one of them",
+        "a.cpp" not in _read,
+        f"git parsed: {_read!r}",
+    )
+    # The other half of the round trip: what the workflow's sed range lifts back out of what git stored.
+    _lifted = _git(repo, "log", "-1", "--format=%B").split(_open)[1].split(_close)[0].strip().splitlines()
+    check(
+        "and the fenced block comes back out exactly as it went in",
+        _lifted == ["a.cpp:1:1: error: first", "b.cpp:2:2: error: second"],
+        f"{_lifted}",
+    )
+
 # Nothing the measure job fetches may land in the checkout. An untracked file under /work is one
 # `check_write_paths` attributes to the agent, and the agent cannot clear it: the download happens
 # on the far side, after its snapshot was taken. On 2026-08-12 this returned `blocked` from every
@@ -1123,6 +1338,20 @@ check(
     "but an ungraded second attempt does not",
     dispatch.should_chain("back-to-translate", None, _ChainArgs(attempt=2, prev_failing=4))[0] is False,
     "two runs in a row without a graded band is a loop, not progress",
+)
+# The case the check above does not cover, and the one `tilize` actually hit. `prev_failing` is -1 for
+# as long as nothing has ever graded, so `prev_failing < 0` keeps saying yes and an op that cannot
+# compile chains to the cap without ever producing the count the no-progress stop reads. Asserted as
+# the behaviour it is rather than fixed: the answer is to make a compile failure cheap, and a tighter
+# cap here would stop the runs that are making real progress toward a first build.
+check(
+    "a branch that has never graded keeps chaining to the cap",
+    dispatch.should_chain("back-to-translate", None, _ChainArgs(attempt=2, prev_failing=-1))[0] is True,
+    "documented so the six-attempt cap is understood to be the only bound in this case",
+)
+check(
+    "and the cap is what finally stops it",
+    dispatch.should_chain("back-to-translate", None, _ChainArgs(attempt=6, prev_failing=-1))[0] is False,
 )
 
 # The reason is reported, not just the decision: a chain that stopped silently is indistinguishable

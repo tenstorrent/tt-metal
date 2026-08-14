@@ -326,9 +326,84 @@ The old fixture could not have caught it, because it carried no codegen globs fo
 prefix of; the replacement mirrors `main` as it actually stands.
 
 Worth noting what worked while that failed. The publish post-step committed the partial scaffold to the
-branch anyway, chained attempt 2, and attempt 2 would have been the last -- `should_chain` allows one
-ungraded attempt and no more. So the bounded chain behaved exactly as designed on its first real
-outing, including on a failure it had never been shown.
+branch anyway and chained attempt 2, so the bounded chain behaved as designed on its first real outing,
+including on a failure it had never been shown.
+
+What is *not* true, and was written here first: that an ungraded attempt is allowed once and no more.
+`should_chain` returns `args.prev_failing < 0` when the current attempt produced no count, and a branch
+that has never graded carries `-1` forever, so that test keeps passing and ungraded attempts chain all
+the way to the six-attempt cap. The no-progress stop only starts biting once some attempt has produced a
+real failing count for the next one to fail to beat. An op that cannot compile therefore burns the full
+cap -- roughly six agent-hours on a card -- without ever producing the signal the stop was built to read.
+That is the argument for making a compile failure cheap rather than for tightening the cap.
+
+## The first real `tilize` run, and the deadlock it exposed
+
+Run [31823944470](https://github.com/tenstorrent/tt-metal/actions/runs/31823944470) is the best output
+this harness has produced and it is also how the resume path was found to be broken. Worth reading in
+order, because each step looked fine at the time.
+
+Attempt 1 wrote a whole port -- 2,457 lines over 20 files on `ebanerjee/port-tilize` at `b580709de46`:
+six codegen components, eight vendored kernels, CMake registration, the generated routing test, and the
+`implementation` kwarg wired through `tilize.cpp`, `.hpp` and `_nanobind.cpp`. It got two builds in
+seventy minutes. The first reported three errors; the second fixed one of them and left the other two
+at the same line and column, which bought nothing and spent fourteen minutes. Then the job ended,
+publish committed the work and chained attempt 2 unprompted, which is exactly the design.
+
+Attempt 2 [31829482825](https://github.com/tenstorrent/tt-metal/actions/runs/31829482825) then died in
+a pre-step, before its agent existed, and this is the part that matters:
+
+**A resumed branch whose port does not compile could not be resumed at all.** The baseline builds the
+code already on the branch in order to measure what that code fails. Attempt 1 left two compile errors,
+so the baseline build failed, so `report_baseline` returned 1, so the step failed and the job ended --
+and attempts 3 through 6 would each have died in the same step on the same two errors, with no agent
+ever handed the chance to fix them. The one state a half-finished port is most likely to be in was the
+one state the resume path could not accept.
+
+It now starts the agent anyway when the compiler is what objected, handing it the diagnostics as its
+work list. Gated on the compiler specifically: a baseline that failed with no diagnostics failed for
+some other reason -- no card, a bad checkout, a broken launcher -- and starting an agent against that
+spends a budget on something no edit to the port can reach. A fresh port whose *scaffold* will not
+compile is a harness bug and still stops the run.
+
+### The agent could not see anything the run learned before it started
+
+Found while fixing the above, and older than it. The baseline is a pre-step, so its output went to the
+job log and nowhere an agent can read -- while the prompt claimed the agent would find it "in your
+first tool output". Nobody noticed because a fresh port does not need it. A resumed port does: the
+measured list of cases the existing port fails is the entire reason to resume rather than start over,
+and no agent had ever seen one.
+
+There is now a `port-brief.md` in the worktree, written before the agent starts and the first thing the
+prompt tells it to read: the baseline, the resume work list, inherited compile errors, or the fact that
+the tree does not compile. It is in `.git/info/exclude`, so `git add -A` leaves it out of the published
+commit -- it informs the port without becoming part of it, and the write-path guard is never asked
+about it.
+
+Two smaller things in the same area. Diagnostics now survive into the next attempt, carried between two
+fences in the commit message, so a resumed run does not spend its first build rediscovering what the
+last one already knew. And when a build reports an error the previous build also reported, unchanged,
+the tool says so in as many words rather than leaving it in a list to be noticed.
+
+A note on those fences: they were `--- ... ---` first. The sed range matching them lives in
+`port-op.md`'s YAML frontmatter, `---` is how frontmatter ends, and writing it there truncated the
+frontmatter for every reader of that file. The first symptom was `selftest.py` losing the `mcp-scripts`
+key three hundred lines from anything related. They are `=== ... ===` now, and a check asserts no line
+inside that frontmatter can be mistaken for its end.
+
+### What is still expensive, and the number to beat
+
+The binding constraint is that a compile error costs a round trip to CIv2: fourteen minutes measured,
+of which the build is about eight and the rest is queueing. The agent is using a card-backed CI job as
+a syntax checker, and it holds an N150 doing no device work while it waits.
+
+The cheap version of the fix is real and specific: configure once with
+`CMAKE_EXPORT_COMPILE_COMMANDS` -- the `clang-tidy` preset already sets it -- then check the port's own
+six translation units with `-fsyntax-only` and the exact flags cmake recorded. Seconds per file, no
+card, and it catches every error both of attempt 1's builds were spent on. Whether the bare N150 host
+can do it is unknown, because tt-metal's CI builds inside a container, so there is now a
+`continue-on-error` step that records what the host has -- cmake, ninja, clang++, ccache, docker,
+cores, disk. Read it off the next run before designing against it.
 
 ## Two things the ledger and the generator were quietly getting wrong
 

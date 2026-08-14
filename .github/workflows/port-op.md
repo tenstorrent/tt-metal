@@ -320,6 +320,12 @@ steps:
       # would refuse to measure anything.
       echo ".codegen/" >> .git/info/exclude
 
+      # The run brief, for the same reason and one more. It is written into the worktree because that
+      # is the only place the agent can read -- but it describes the port rather than being part of it,
+      # so a reviewer opening the branch should never see it and the write-path guard should never be
+      # asked about it.
+      echo "port-brief.md" >> .git/info/exclude
+
       # The base the write-path guard diffs against. On a resumed branch this is the branch's own
       # HEAD, which is what makes the guard judge only the work this run adds rather than everything
       # the previous run committed.
@@ -422,6 +428,28 @@ steps:
       echo "PORT_PREV_FAILING=${prev_failing:--1}" >> $GITHUB_ENV
       echo "attempt $(( ${prev_attempt:-0} + 1 )), previous failing count ${prev_failing:-none}"
 
+      # What the previous attempt's last build objected to, carried in its commit message between two
+      # fences. The `tilize` port is why: attempt 1 ended with two compiler errors outstanding, and
+      # attempt 2 inherited the broken code with no record of what was wrong with it, so its first act
+      # had to be a fourteen-minute build to be told what the previous run already knew.
+      #
+      # Fenced and lifted with sed rather than parsed, because a trailer cannot hold a multi-line value
+      # and these are one line per error. Multi-line into $GITHUB_ENV needs a random delimiter -- a
+      # fixed one would let a diagnostic containing that word close the block early and inject the
+      # rest as further variables.
+      prior=$(git log -1 --format=%B 2>/dev/null | \
+        sed -n '/^=== unresolved compiler diagnostics ===$/,/^=== end unresolved compiler diagnostics ===$/p' | \
+        sed '1d;$d')
+      if [ -n "$prior" ]; then
+        delimiter="PORT_EOF_$(openssl rand -hex 16)"
+        {
+          echo "PORT_PRIOR_DIAGNOSTICS<<$delimiter"
+          printf '%s\n' "$prior"
+          echo "$delimiter"
+        } >> $GITHUB_ENV
+        echo "carrying $(printf '%s\n' "$prior" | grep -c .) unresolved diagnostics from the last attempt"
+      fi
+
   # `scaffold.py` imports `yaml` and `ttnn_names`, whose own `import ttnn` sits inside a function
   # that the scaffold pass never calls. So the whole pass runs here with PyYAML and nothing else --
   # no container, no build, no card. Only `--emit-test-only` needs a real ttnn, and that is why it
@@ -472,6 +500,27 @@ steps:
   # launcher's own ceiling is what bounds this.
   - name: Measure the native baseline on CIv2
     run: python3 "$HOME/.port-harness/dispatch.py" --mode baseline
+
+  # Reconnaissance, not a dependency: nothing in this run reads the output, and the step cannot fail.
+  #
+  # The dominant cost in this pipeline is that a compile error costs a round trip to CIv2 -- fourteen
+  # minutes measured, of which the build itself is roughly eight and the rest is queueing -- so the
+  # agent is using a card-backed CI job as a syntax checker. The fix is to compile locally, and the
+  # cheap version of it is real: configure once with `CMAKE_EXPORT_COMPILE_COMMANDS`, then check the
+  # port's own six translation units with `-fsyntax-only` and the exact flags cmake recorded. That is
+  # seconds per file, needs no card, and catches everything `tilize` attempt 1 spent both its builds on.
+  #
+  # Whether it is possible here is unknown, because tt-metal's CI builds inside a container and this
+  # is the bare host. So this records what the host actually has before anyone designs against it.
+  - name: What this runner could compile with
+    continue-on-error: true
+    run: |
+      for tool in cmake ninja clang++ g++ ccache docker; do
+        printf '%s: %s\n' "$tool" "$(command -v "$tool" 2>/dev/null || echo 'absent')"
+      done
+      cmake --version 2>/dev/null | head -1 || true
+      clang++ --version 2>/dev/null | head -1 || true
+      echo "cores: $(nproc 2>/dev/null || echo '?'), free disk: $(df -h . | awk 'NR==2{print $4}')"
 
 post-steps:
   # Push what the agent wrote back onto the branch it was given, whatever the verdict, and decide
@@ -647,6 +696,18 @@ The tree is already scaffolded. The kernels are copied, the three `codegen/` sou
 empty stubs, they are registered in CMake, the routing test has been generated, and a native
 baseline has been measured on real hardware. Your job is to fill in those stubs and wire the routing.
 
+**Read `port-brief.md` in the repository root before you do anything else.** It is written by the
+harness before you start and it is the only place some of this run's facts appear: the native
+baseline, whether you are continuing a port someone else left and the measured list of cases it
+currently fails, and any compiler errors the previous attempt ended with. None of that is guessable
+from the tree, and every item in it is something you would otherwise spend a build or a verify
+learning. It is excluded from git on purpose -- do not commit it, and do not edit it.
+
+The brief also overrides the paragraph above when the two disagree. If it tells you the port already
+here does not compile, then no baseline was measured and no case list exists this run, because
+measuring needs a binary; the compiler errors it lists are the whole of your work list, and the
+shortest path through this run is to fix precisely those and build.
+
 ## Your tools run somewhere else, and they are slow
 
 There is no compiler and no Tenstorrent card on this machine. `build` and `verify` push your working
@@ -667,6 +728,12 @@ What that changes about how you work:
   error in three files cost exactly the same. Read all the sources, write the whole port, re-read
   what you wrote looking for the obvious mistakes, and only then build. Calling `build` on a file
   you already know is unfinished wastes a fifth of your budget.
+- **When a build fails, fix every error it reported before building again.** Not the first one, not
+  the ones you understand -- all of them, because the next build costs the same either way. The
+  `tilize` port's second build fixed one of the three errors the first had named and left the other
+  two untouched at the same line and column, which bought nothing and spent a round trip. If an
+  error still appears after you thought you fixed it, the tool will say so explicitly; treat that as
+  a sign you edited the wrong thing rather than a reason to build a third time.
 - **`verify` is scarce.** Get correctness passing, then measure performance once. Iterating on
   performance is what exhausted the budget in an earlier run of this workflow.
 - Never call either tool twice on an unchanged tree. The answer will be the same and you will have
@@ -873,12 +940,11 @@ merged port is the one that is out of date.
 
 The distinction matters because **the port already in your worktree, if there is one, is the starting
 point rather than something to be suspicious of.** A run may be continuing a branch a previous
-attempt or a person left half-finished. You can tell which: the baseline printed in your first tool
-output says so, and if it did, it also handed you a measured list of the cases that port currently
-fails. That list is the job. Read the existing code, fix what the list names, and leave the rest
-alone -- a rewrite throws away work that was already verified on hardware and costs a whole run to
-get back to where you started. Do not delete and re-transliterate a file because you would have
-written it differently.
+attempt or a person left half-finished. `port-brief.md` says which, and when it is a continuation it
+carries a measured list of the cases that port currently fails. That list is the job. Read the
+existing code, fix what the list names, and leave the rest alone -- a rewrite throws away work that
+was already verified on hardware and costs a whole run to get back to where you started. Do not
+delete and re-transliterate a file because you would have written it differently.
 
 **Do not write tests, and do not edit the generated one.** No new `test_*.py`, no ad-hoc device
 scripts, no edits to any existing test, harness, or gate script. Correctness and performance are
