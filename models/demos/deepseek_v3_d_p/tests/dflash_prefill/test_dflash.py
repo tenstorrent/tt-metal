@@ -101,9 +101,9 @@ def test_dflash_pcc(
             mesh_mapper=mapper,
         )
         drafter.tap(h_tt, tid)
-    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into write_kv_cache.
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into finalize_context_kv.
     k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, cfg, ctx_len, sp_axis=sp_axis, tp_axis=tp_axis)
-    drafter.write_kv_cache(k_cache, v_cache)
+    drafter.finalize_context_kv(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1) → full

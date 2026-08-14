@@ -178,11 +178,14 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
-# Build the DFlash drafter context-KV cache during this prefill. There is no dedicated on/off env: dflash
-# runs when the selected model declares the capability (ADAPTER.supports_dflash) AND a drafter checkpoint is
-# provided (DFLASH_HF_MODEL, resolved by the runtime). This keeps a non-dflash model from ever building a
-# Kimi drafter, and makes the checkpoint's presence the switch (DFLASH_HF_MODEL= empty forces it off).
-DFLASH_ENABLED = ADAPTER.supports_dflash and bool(os.environ.get("DFLASH_HF_MODEL"))
+# Build the DFlash drafter context-KV cache during this prefill. Three gates, ALL required: the selected
+# model declares the capability (ADAPTER.supports_dflash — only Kimi K2.6/K2.7), the run explicitly opts in
+# (PREFILL_DFLASH=1), and a drafter checkpoint is provided (DFLASH_HF_MODEL, resolved by the runtime). The
+# capability gate keeps a non-dflash model from ever building a Kimi drafter; the explicit PREFILL_DFLASH
+# switch keeps it off unless asked for, even when a checkpoint happens to be on disk.
+DFLASH_ENABLED = (
+    ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
+)
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -195,6 +198,13 @@ _L1_SMALL_SIZE = ADAPTER.l1_small_size
 # swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
+# DFlash is not trace-compatible: the drafter tap / pack-unpack / KV finalize run outside the runtime's
+# captured per-chunk segment, so a replayed trace would silently skip them. Fail loudly rather than
+# produce meaningless drafter KV. (Per offline discussion — keep DFlash on the eager per-op path.)
+assert not (DFLASH_ENABLED and USE_TRACE), (
+    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
+    "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 

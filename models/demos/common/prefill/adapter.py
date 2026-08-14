@@ -66,7 +66,6 @@ class PrefillRunParams:
     num_links: int
     gate_mode_name: str  # GateComputeMode enum name
     kv_only_last_layer: bool
-    dflash_enabled: bool  # build the DFlash drafter context-KV cache
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
@@ -79,6 +78,10 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
+    # Build the DFlash drafter context-KV cache during prefill. Opt-in / default False so adding this
+    # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
+    # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
+    dflash_enabled: bool = False
 
     @property
     def sp_factor(self) -> int:

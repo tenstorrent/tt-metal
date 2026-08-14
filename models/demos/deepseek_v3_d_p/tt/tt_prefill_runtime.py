@@ -254,6 +254,11 @@ class TtPrefillRuntime:
             f"checkpoint={path}"
         )
         state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
+        # SINGLE-TURN SCOPE (issue #50725): the drafter context-KV cache is sized to ONE chunk and every
+        # finalize_context_kv() writes it at context offset 0 for a single request slot — it does NOT yet key
+        # on slot_id/num_users or a non-zero start position. So with num_users > 1 or more than one chunk, a
+        # later write overwrites the earlier one; only slot 0 / a single chunk is correct today. The deep
+        # per-user cache + block-cyclic offset writes are the multi-turn follow-up, not this PR.
         dflash_seq = self.config.chunk_size
         self.drafter = TtDFlashDrafter(
             self.mesh_device,
@@ -628,7 +633,7 @@ class TtPrefillRuntime:
         if self.config.dflash_enabled:
             if self.config.is_last_rank:
                 # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC / migration).
-                self.drafter.write_kv_cache(self._dflash_k_cache, self._dflash_v_cache)
+                self.drafter.finalize_context_kv(self._dflash_k_cache, self._dflash_v_cache)
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())

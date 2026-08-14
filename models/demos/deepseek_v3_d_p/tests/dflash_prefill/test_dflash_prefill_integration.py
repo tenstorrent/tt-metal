@@ -276,6 +276,10 @@ def test_dflash_prefill_integration(
         return host.reshape(1, isl_total, H).float()
 
     target_hiddens = [_to_host(tapped_hiddens[tid]) for tid in dcfg.target_layer_ids]
+    # Free the captured device residuals now that they're on host: the sliced drafter retains no ownership
+    # of the taps, and at 5K x 7168 holding all six is substantial DRAM during this 61-layer test.
+    for _tapped in tapped_hiddens.values():
+        ttnn.deallocate(_tapped)
     ctx = torch.cat(target_hiddens, dim=-1)  # [1, seq, n*H] — the fc input (concat over target layers)
     assert ctx.shape[-1] == dcfg.target_feature_size, f"ctx feature {ctx.shape[-1]} != {dcfg.target_feature_size}"
 
@@ -283,9 +287,9 @@ def test_dflash_prefill_integration(
     real = hf_context_kv(ctx)
 
     # Device drafter: finalize the accumulated sliced FC (reduce_scatter → hidden_norm → per-layer k/v/norm/rope).
-    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into write_kv_cache.
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into finalize_context_kv.
     k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, dcfg, isl_total, sp_axis=sp_axis, tp_axis=tp_axis)
-    drafter.write_kv_cache(k_cache, v_cache)
+    drafter.finalize_context_kv(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1); the host[:num_layers]

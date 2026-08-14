@@ -113,7 +113,7 @@ class TtDFlashDrafter:
         if self.build_kv_tail:
             self._ensure_rope(self.cache_seq)
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
-        # write_kv_cache — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
+        # finalize_context_kv — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
         # Partial forwarded from upstream pipeline ranks (import_partial), already reduce_scattered to
         # [1,1,seq,H/tp]; summed into this rank's finalized partial. None on rank 0 / single-rank.
@@ -183,7 +183,7 @@ class TtDFlashDrafter:
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
         # like the model's attn_norm/ffn_norm. A plain ttnn.rms_norm over the replicated 7168 forces
         # one core to hold 7168-wide (224-tile) CBs and overflows L1. cluster_axis=tp_axis matches the
-        # H/tp shard it consumes (see write_kv_cache: reduce_scatter -> norm -> all_gather).
+        # H/tp shard it consumes (see finalize_context_kv: reduce_scatter -> norm -> all_gather).
         self.hidden_norm = TtDistributedRmsNorm(
             mesh_device=self.mesh_device,
             emb_dim=cfg.hidden_size,
@@ -207,7 +207,7 @@ class TtDFlashDrafter:
 
     def _ensure_rope(self, end: int) -> None:
         """Build (memoized) drafter deepseek_yarn cos/sin covering positions [0, end). Called ONCE from
-        __init__ with end=cache_seq so it stays OUT of the write_kv_cache hot path; memoized, so it does
+        __init__ with end=cache_seq so it stays OUT of the finalize_context_kv hot path; memoized, so it does
         NOT rebuild per call (would only rebuild if a longer range were later requested). yarn inv_freq
         is position-independent, so growing the table never changes the
         values at existing positions. HALF-SPLIT (interleave=False) to match Qwen3 rotate_half +
@@ -336,7 +336,7 @@ class TtDFlashDrafter:
         )
         return heads
 
-    def write_kv_cache(self, k_cache: ttnn.Tensor, v_cache: ttnn.Tensor, positions_start: int = 0) -> None:
+    def finalize_context_kv(self, k_cache: ttnn.Tensor, v_cache: ttnn.Tensor, positions_start: int = 0) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
         ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
         hidden_norm, then per draft layer project/norm/rope K and project V, writing each into its cache
@@ -345,7 +345,7 @@ class TtDFlashDrafter:
         offsets rope for the last-4k window (Phase 3); Phase 1 uses 0. Caller must have supplied
         seq-contiguous taps."""
         assert self.build_kv_tail, (
-            "write_kv_cache on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
+            "finalize_context_kv on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
             "via export_partial instead"
         )
         cfg = self.config
