@@ -4197,6 +4197,15 @@ profiler moving, right now, next to the zones that explain it" is a picture rath
 Capture: `tracy_captures/drisc_nocfp_plots_sd15.tracy`, SD delay 15, 120 cores, `--iters 500`, zones +
 footprint on, 18.78 MB, 126 contexts, 25 plots.
 
+> **CORRECTION (§N+46).** "Land on the device timebase" is right about the *conversion* and was measured on a
+> part where it was also right about the *result* -- but only because **bh-26 happens to give the DRAM-core and
+> Tensix-worker wall clocks a common origin**. The anchor these plots were converted against
+> (`chip_anchors_[chip]`) is measured on a **Tensix worker**, while the samples are produced by a **DRAM core**.
+> On bh-05 (p100a) those two counters are zeroed by different events, so every number in the table below -- and
+> every DRISC zone -- sat **10-42 minutes** right of the workload. The containment percentages here are real for
+> bh-26 and were **not** a general property of the code. §N+46 measures the offset, explains it, and fixes it
+> with a per-core anchor; re-read that section before quoting any alignment figure from this one.
+
 ### The alignment proof, which is the deliverable
 
 A plot stamped at DECODE time would sit milliseconds right of its zones — the mover's ring tail alone trails
@@ -4719,3 +4728,191 @@ being a rounding error and becomes half the traffic.
 /localdev/mmemarian/e2e_ovh/run_ovh.sh <resnet|distilbert|mistral|llama> <base|drisc|driscz> 4
 /localdev/mmemarian/e2e_ovh/gen_findings.py     # regenerates every table above from the rep logs
 ```
+
+## §N+46 — The DRAM-core clock has its own ORIGIN, and it is board-dependent (bh-05 / **p100a**, 2026-08-14)
+
+Every DRISC drainer zone and every NoC-footprint plot sample on bh-05 sat **tens of minutes to the right of the
+workload it describes**, while its *durations* were correct. §N+43 declared this timebase solved; it was solved
+on a part where the bug is invisible. This section measures the offset, names the mechanism, and fixes it.
+
+### The measurement that identifies it: spans right, origin wrong
+
+Three captures, same code, same box, differing only in how long the card had been up since its last reset:
+
+| condition | DRISC − worker zone offset |
+|---|---|
+| card up ~31 min, ~30 device opens | 1,111,245,448,933 ns = **18.52 min** |
+| 41 min later, **no reset** | 2,544,449,032,352 ns = **42.41 min** |
+| 12 s after `tt-smi -r` | 9,367,303,880 ns = **9.367 s** |
+
+Zone **spans** agreed with worker spans to **0.15–0.17%** in all three. So the frequency was never wrong — only
+the origin — and the offset tracks *time since chip reset*, not time since anything else.
+
+### The mechanism — measured, and NOT the obvious one
+
+**RETRACTED before it was ever written down: "the worker clock is re-zeroed at every device open".** That was the
+working hypothesis for most of this investigation and it is **false**. It predicts that two consecutive processes
+read back the same small value; they do not. Three back-to-back `--clkprobe` processes, starts 32 s apart, on an
+un-reset card:
+
+| | probe 1 | probe 2 | probe 3 | advance per 32 s of WALL |
+|---|---|---|---|---|
+| worker v(1,2) | 97,519,878,564 | 99,979,838,639 | 102,560,804,955 | **+1.82 s, +1.91 s** |
+| DRAM bank 0 v(18,12) | 2,261,193,437,386 | 2,287,850,854,682 | 2,314,637,641,541 | **+19.75 s, +19.84 s** |
+
+Read off that table:
+
+- **Neither counter re-zeroes at device open.** Both are **strictly monotonic across separate processes**. There
+  is one zero point for both — the **chip reset** — and nothing in a device open touches either.
+- **Neither is a wall clock.** Over 32 s of wall time the worker advanced 1.8 s and the DRAM core 19.8 s.
+- **In-process both tick at exactly 1350.0 MHz** (the 500 ms bracket inside each probe measures 1350.0 on every
+  core, every time). So the frequency is right and only the accumulated total differs.
+
+So the divergence is **clock GATING, not re-zeroing**: the two counters sit in different clock domains with
+duty cycles that differ by ~11x. The Tensix counter advances only while Tensix is out of reset (~1.8 s per short
+process, i.e. it is stopped nearly all the time), while the DRAM-tile counter keeps running whenever the card is
+powered but at a reduced clock when idle (19.8/32 ≈ 62% of the 1.35 GHz active rate, i.e. ~0.84 GHz idle). Both
+started at 0 at the last chip reset; by the time the card has been up a while the DRAM counter has banked
+**~22x** the worker's total (2,315 s vs 103 s here).
+
+That is why the offset **grows monotonically with card activity and is not predictable from anything the host
+knows**. It also explains the three-point table above without any extra assumption: right after a reset both
+totals are near 0 and the offset is seconds; leave the card up and the DRAM side runs away.
+
+**Do not cite the "worker window minimum is 5.6-6.0 s in every capture" observation as evidence about this.**
+A worker window is in Tracy DISPLAY ns, already rebased onto host TSC by the anchor — it says nothing about the
+raw device counter, and using it that way is what made the re-zeroing story look confirmed.
+
+The defect itself is unchanged by the corrected mechanism:
+
+- `sync_device_clock()` was called with `w = ctx.core_virt[0]` — a **Tensix worker core** — and the single result
+  registered per chip via `AddDevice(chip_id, ...)`. The DRAM-core contexts, pre-created in `PreCreateContexts`,
+  **inherited that worker-derived anchor**.
+- Every zone pushes a **raw** device timestamp once `ctx.synced` (`pkt.timestamp = r.ts - base`, `base = 0`), so
+  the DRAM-core rows were displaced by exactly the reset→open gap. The NoC-footprint plots inherited the same
+  anchor through `chip_anchors_` and were displaced identically.
+
+**Reset discipline cannot fix this, and that was tried.** Device open takes ~9–12 s and a ResNet workload window
+is ~753 ms, so the gap is **structurally larger than the window it would have to fit inside**. There is no
+reset-then-run cadence that makes a worker anchor correct for a DRAM core. (With the gating mechanism in hand the
+reason is sharper still: the DRAM counter banks ~20 s for every 32 s the card merely *exists*, so the offset is
+already tens of seconds before the first workload runs.)
+
+### It is BOARD-DEPENDENT — validate on bh-05, never on bh-26
+
+On **bh-26** the same offset is **+0.003 ms after 5 hours of uptime**: that part evidently re-zeroes both
+counters at device open, so the bug does not exist there and a broken build looks perfect. Every §N+43 alignment
+number was taken on bh-26. **A fix that looks correct on bh-26 proves nothing.**
+
+### PREREQUISITE, proven before any profiler edit: a DRAM tile answers the wall-clock register
+
+`RISCV_DEBUG_REG_WALL_CLOCK_L/H` (`0xFFB121F0` / `0xFFB121F8`) is documented as a **Tensix-tile** debug
+register. Nothing had confirmed a **DRAM tile** answers at all, and the whole per-core-anchor approach dies if it
+does not. Tested in isolation first — `test_perf_debug_zones --clkprobe 1`, which reads the register on a worker
+and on **all 7 DRAM views** and does not boot a drainer, so a fault would indict the read and nothing else:
+
+| | result |
+|---|---|
+| readable on a DRAM tile | **yes, all 7 views**, no fault, no hang, no reset needed |
+| non-zero | yes (5.2e11 cycles) |
+| advances | yes |
+| rate over a 500 ms host interval | **1350.0 MHz on all 8 cores** = aiclk exactly |
+| spread across the 7 DRAM views | ~28k cycles ≈ 21 us — the sequential read latency, not clock skew |
+
+Two probes 40 s apart also show the divergence happening: the DRAM value advanced +53.7e9 cycles while the worker
+advanced only +2.49e9, and the offset grew 377,758 ms → 415,699 ms. **This is also the command that killed the
+re-zeroing hypothesis** — see the mechanism table above; run it 3x back-to-back and both counters increase
+monotonically, which "re-zeroed at open" cannot produce.
+
+### The fix: a per-core anchor, host-side only
+
+`sync_device_clock()` now runs **once per DRISC on its own DRAM core**, and the result is registered with a new
+`PerfDebugTracyHandler::AddCore(chip, noc0_x, noc0_y, ...)` into a `core_anchors_` map keyed by `ContextKey`.
+Anchor resolution became `LookupAnchor`: **per-core entry first, chip entry as fallback**. Both consumers use
+it — `GetOrCreateContext` (zones) and the `SPSC_DATA_ID_NOCFP` branch of `HandleWorkerEvent` (plots), which had
+its own `chip_anchors_` lookup and would otherwise have kept every plot point at the old offset.
+
+Five properties worth stating, because each one is a way to get this wrong:
+
+- **Registered before `PreCreateContexts`.** A Tracy context bakes its anchor in at creation, so an anchor that
+  arrives after the context is silently ignored.
+- **Keyed on NOC0**, resolved through `ctx.virt_to_noc0`. `drisc_virtual` is the VIRTUAL space; registering the
+  virtual pair would look up nothing and degrade in silence — the same trap `SetDriscRole` documents.
+- **Unconditional, not gated on "the offset looks big".** On a part whose counters share an origin the per-core
+  anchor is the same number measured on the core that actually produced the timestamps, which is strictly better
+  than borrowing a worker's.
+- **Each DRISC gets its own frequency fit**, not the worker's, so `device_at_anchor` and `frequency` come from
+  one self-consistent least-squares fit. Measured: 1.349902–1.350039 GHz across the six, worker 1.350038.
+- **Degrades loudly.** A failed DRAM-core fit falls back to the worker anchor with a `log_warning` naming the
+  core, because that silently reinstates the entire bug.
+
+Cost: 6 × 100 register reads at device open, ~2 ms of a 9–12 s open. Nothing on the drain path. **No firmware
+change** — the device-side rebase was not needed. And the claim near `perf_debug_profiler.cpp:671` that the
+drainer FW co-samples these registers in a `calibrate()` is **FALSE**: `calibrate` appears nowhere in
+`drisc_profiler_drain.cpp`, in `tt_metal/hw`, or anywhere else device-side. Corrected in place — there was never
+a device-side co-sample to lean on, which is exactly why a host per-core anchor was needed.
+
+The run log now states the offset per DRISC, which is the board-dependence tell — microseconds means the part
+shares an origin and this changed nothing; minutes means it just fixed the capture:
+
+```
+Device 0 DRISC 0 NOC0 (9,9) clock sync: frequency=1.349902 GHz,
+  device_time_at_anchor=897228525747 cycles, offset vs worker anchor +649728.554 ms
+```
+
+### VERIFIED TWICE, 25.5 min apart on an UN-RESET card — which is the whole point
+
+One aligned capture right after a reset proves nothing: it has to hold **as the two counters diverge**. Both
+captures are ResNet-50 `test_perf_trace_2cqs[16-0.0018-30-device_params0]`, zones + footprint on, under
+`tracy-capture`, no reset between them. The offset **grew 2.35x** across the pair and alignment did not move:
+
+| | capture 1 (17:26) | capture 2 (17:51) |
+|---|---|---|
+| worker anchor | 20,158,353,764 cyc (14.93 s) | 90,649,806,954 cyc (67.15 s) |
+| DRISC 0 anchor | 897,228,525,747 cyc (664.6 s) | 2,149,036,633,766 cyc (1592.2 s) |
+| **anchor offset the fix removes** | **+649,728.554 ms (10.83 min)** | **+1,524,808.622 ms (25.41 min)** |
+| worker window | 773.640 ms | 770.017 ms |
+| DRISC window | 775.034 ms | 771.497 ms |
+| **DRISC window OPEN vs worker open** | **−0.007 ms** | **−0.145 ms** |
+| per-DRISC opens (6 cores) | −0.007 … +0.131 ms | −0.145 … +0.048 ms |
+| DRISC window CLOSE past worker close | +1.386 ms (0.18%) | +1.335 ms (0.17%) |
+| filler plot containment | **99.3–99.4%** | **97.9–99.4%** |
+| mover plot containment | **99.0%** | **99.0–99.1%** |
+| CONTROL: Tracy's own CPU `Frame` plot | 11.0% | 9.6% |
+
+Reading the residuals, because none of them is misalignment:
+
+- **The close offset (+1.3–1.4 ms) is the §N+44 drain tail**, measured there as +1.294 ms on an 839.6 ms
+  workload. Movers keep emptying the DRAM ring after the last worker zone; they are *supposed* to end late.
+- **A DRISC window that opens a few tens of us BEFORE the first worker zone is correct.** The drainers are
+  resident and sweeping before the workload starts, so `starts-inside=NO` on one context at −7 us / −145 us is
+  physics, not skew. It is also the reason containment is 97.9–99.4% rather than 100%.
+- **The control row is weaker here than in §N+43** (9.6–11.0% vs 0.0%) and that is an artifact of window ratios,
+  not of the fix: `Frame` spans the whole 7,300 ms process at ~101 ms per sample, so ~10% of its samples land
+  inside a 770 ms window by chance. §N+43's window was 1.9 ms of a 2,994 ms plot, where chance gives 0.
+
+### No regression (4 reps each, NO `tracy-capture` attached — it starves the decoder and would change the timing)
+
+| | base | + profiler + instrument |
+|---|---|---|
+| inference s, reps 2–4 mean | 0.0015536 | 0.0016415 |
+| overhead | — | **+5.66%** |
+| §N+45's own figure for this box | 0.0015495 | 0.0016338 → +5.44% |
+| agreement with §N+45 | +0.27% | +0.47% |
+| producer stalls | — | **0** of 110, all 4 reps |
+| records dropped | — | **0**, all 4 reps (1.817–1.823 M taken) |
+| ts regressions publish / consume | — | **0 / 0**, all 4 reps |
+| `overflows region` / `FAILED TO LOAD` | none | **none** |
+
+The per-core anchor costs 6 × 100 register reads inside device open (~2 ms of a 9–12 s open) and touches nothing
+on the drain path, which is why the timing is indistinguishable from §N+45's pre-fix numbers.
+
+**Losslessness re-checked on the synthetic harness too**, `--gx 12 --gy 10 --iters 500`, `ROLE_SPLIT` on, zones
+off: **5,501,100 markers drained, 5,501,100 consumed, 0 dropped, 0 stalls, 0 regressions.**
+
+**On the 6,001,200 target — it is unreachable on bh-05 for a PART-GEOMETRY reason, not a harness one.** 600 lanes
+needs a 12-column compute grid. **p100a's `compute_with_storage_grid_size()` is 11x10**, so `--gx 12` clamps to
+11 (the harness prints `dispatching 11x10`) and the ceiling is 550 lanes → 550 x 500 x 10 x 2 + 2 x 550 =
+**5,501,100**, which is exactly what drained. An earlier attempt reached the same "unreachable" conclusion from
+the harness's `gx=2, gy=2` DEFAULTS (`400 x iters + 40`), i.e. the right answer for the wrong reason — the grid
+was explicitly passed here and the part is still the binding constraint. **6,001,200 is a p150/bh-26 number.**

@@ -85,6 +85,43 @@ void PerfDebugTracyHandler::AddDevice(
 #endif
 }
 
+void PerfDebugTracyHandler::AddCore(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] uint32_t noc0_x,
+    [[maybe_unused]] uint32_t noc0_y,
+    [[maybe_unused]] int64_t host_start,
+    [[maybe_unused]] double first_timestamp,
+    [[maybe_unused]] double frequency) {
+#if defined(TRACY_ENABLE)
+    std::lock_guard<std::mutex> lock(mutex_);
+    core_anchors_[ContextKey(chip_id, noc0_x, noc0_y)] = ChipAnchor{host_start, first_timestamp, frequency};
+#endif
+}
+
+bool PerfDebugTracyHandler::LookupAnchorLocked(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] uint32_t core_x,
+    [[maybe_unused]] uint32_t core_y,
+    [[maybe_unused]] ChipAnchor& out) {
+#if defined(TRACY_ENABLE)
+    // Per-core FIRST: a DRAM core's entry exists precisely because its clock origin differs from the chip's.
+    if (auto cit = core_anchors_.find(ContextKey(chip_id, core_x, core_y)); cit != core_anchors_.end()) {
+        out = cit->second;
+        return true;
+    }
+    if (auto ait = chip_anchors_.find(chip_id); ait != chip_anchors_.end()) {
+        out = ait->second;
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool PerfDebugTracyHandler::LookupAnchor(uint32_t chip_id, uint32_t core_x, uint32_t core_y, ChipAnchor& out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return LookupAnchorLocked(chip_id, core_x, core_y, out);
+}
+
 TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     [[maybe_unused]] uint32_t chip_id,
     [[maybe_unused]] uint32_t core_x,
@@ -96,11 +133,10 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     if (auto it = tracy_contexts_.find(key); it != tracy_contexts_.end()) {
         return it->second;
     }
-    auto ait = chip_anchors_.find(chip_id);
-    if (ait == chip_anchors_.end()) {
+    ChipAnchor a{};
+    if (!LookupAnchorLocked(chip_id, core_x, core_y, a)) {
         return nullptr;  // device was never AddDevice'd
     }
-    const ChipAnchor& a = ait->second;
     ZoneScopedNC("ctx-create", 0xD35400);  // orange: creating a Tracy GPU context (GpuNewContext+Populate+name)
                                            // -- one per core, all lazily on the first batch -> startup spike
     TracyTTCtx ctx = TracyTTContext();
@@ -281,14 +317,12 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
     //
     // and the server-private baseTime cancels, which is what makes this computable client-side at all.
     if (event.id == kernel_profiler::SPSC_DATA_ID_NOCFP && event.num_values >= 2) {
+        // PER-CORE anchor, same as the zone path. These samples come off a DRAM core, whose wall clock has its
+        // own origin, so resolving the CHIP anchor here would land every plot point the same reset->open gap to
+        // the right of the workload -- off the visible timeline entirely, not merely misplaced.
         ChipAnchor a{};
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto ait = chip_anchors_.find(event.chip_id);
-            if (ait == chip_anchors_.end() || ait->second.frequency == 0.0) {
-                return;  // no anchor yet: a sample with no mapping is worse than no sample
-            }
-            a = ait->second;
+        if (!LookupAnchor(event.chip_id, event.core_noc0_x, event.core_noc0_y, a) || a.frequency == 0.0) {
+            return;  // no anchor yet: a sample with no mapping is worse than no sample
         }
         const double timer_mul = tracy::Profiler::GetTimerMul();
         if (timer_mul == 0.0) {

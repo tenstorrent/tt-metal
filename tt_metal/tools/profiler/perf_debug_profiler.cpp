@@ -668,7 +668,18 @@ struct PerfDebugSync {
 
 PerfDebugSync sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
     // RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L atomically LATCHES H, so read L then H (H's own latency is
-    // irrelevant). Same registers the drainer firmware co-samples in calibrate().
+    // irrelevant).
+    //
+    // CORRECTED: an earlier version of this comment said "the same registers the drainer firmware co-samples in
+    // calibrate()". THERE IS NO SUCH FUNCTION -- `calibrate` appears nowhere in drisc_profiler_drain.cpp, in
+    // tt_metal/hw, or anywhere else on the device side. The drainer does NOT co-sample two clocks; the whole
+    // reason §N+46 needed a per-core HOST anchor is that no device-side rebase exists to lean on.
+    //
+    // Valid on a DRAM tile as well as a Tensix one, which is what makes the per-core anchor possible. That is
+    // not documented anywhere -- these are Tensix-tile debug registers by spec -- so it was measured first, in
+    // isolation, before this function was ever pointed at a DRAM core: see `test_perf_debug_zones --clkprobe 1`,
+    // which reads all 7 DRAM views plus a worker and reports the rate and the pairwise offset. Result: readable,
+    // non-zero, advancing at aiclk to 0.1 MHz on every view.
     constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
     constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
     constexpr uint32_t kSamples = 100;
@@ -827,6 +838,87 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 "(device zones will lag the host zones by the drain latency)",
                 ctx.chip_id);
             tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
+        }
+        // ---- PER-DRAM-CORE ANCHOR: the drainers do NOT share the worker's clock origin -------------------
+        //
+        // The sync above is measured on a TENSIX WORKER (core_virt[0]) and registered per CHIP, so every DRISC
+        // row inherited it. But a DRAM tile's wall clock has banked a WILDLY different total than a worker's,
+        // and since every zone pushes a RAW device timestamp once ctx.synced, the DRISC rows came out shifted
+        // right by that whole difference: measured on bh-05 (p100a) as 18.52 min on a card up ~31 min, 42.41 min
+        // 41 minutes later with no reset, and 9.37 s twelve seconds after a tt-smi -r. Zone SPANS agreed with
+        // worker spans to 0.15-0.17% throughout -- the frequency was always right, only the origin was wrong,
+        // which is why this read as an unexplained constant skew for so long.
+        //
+        // WHY the totals differ is CLOCK GATING, not a difference in zero point. Both counters are zeroed by the
+        // same event (a chip reset) and NEITHER is re-zeroed at device open -- three back-to-back processes read
+        // both counters strictly INCREASING, which is what killed the obvious "the worker re-zeroes every open"
+        // story after it had been believed for most of this investigation (FINDINGS N+46). What differs is duty
+        // cycle: over 32 s of wall time the worker advanced 1.8 s (the Tensix domain is clocked only while out of
+        // reset) and the DRAM core 19.8 s (~62% of 1.35 GHz -- it keeps running at a reduced clock while idle),
+        // even though BOTH tick at exactly 1350.0 MHz in-process. ~11x duty ratio, so the gap grows with card
+        // activity and the host cannot predict it -- it can only MEASURE it, per core, which is what this does.
+        //
+        // Reset discipline cannot fix it and was tried: device open takes ~9-12 s while the workload window is
+        // ~753 ms, so the gap is structurally LARGER than the window it has to fit inside.
+        //
+        // BOARD-DEPENDENT, so do not judge this code on a part where it is a no-op: on bh-26 the same
+        // measurement gives +0.003 ms after 5 hours of uptime, i.e. that part evidently re-zeroes both counters
+        // at device open. Registering a per-core anchor unconditionally is therefore right on both: where the
+        // origins agree it is the same number measured on the core that actually produced the timestamps.
+        //
+        // Prerequisite, verified in isolation before this existed (test_perf_debug_zones --clkprobe): a DRAM
+        // tile DOES answer RISCV_DEBUG_REG_WALL_CLOCK -- documented as a Tensix debug register, never before
+        // confirmed off-Tensix -- non-zero, advancing, and at aiclk to 0.1 MHz on all 7 DRAM views.
+        if (sync.valid && tracy_ != nullptr) {
+            for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+                // Keyed on NOC0, like every other context lookup; drisc_virtual is the VIRTUAL space, and the
+                // register read needs the virtual pair. Absent mapping means self-profiling is off, so this
+                // core has no Tracy row to anchor -- see the identical guard in the role loop below.
+                const auto nit = ctx.virt_to_noc0.find(
+                    (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
+                    static_cast<uint64_t>(ctx.drisc_virtual[d].y));
+                if (nit == ctx.virt_to_noc0.end()) {
+                    continue;
+                }
+                const PerfDebugSync ds = sync_device_clock(cluster, ctx.chip_id, ctx.drisc_virtual[d]);
+                if (!ds.valid) {
+                    // Degrade to the worker anchor rather than dropping the rows: a misplaced row is still
+                    // readable, an absent one is not. Loud, because it silently reinstates the whole bug.
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] Device {} DRISC {} at NOC0 ({},{}): DRAM-core clock sync FAILED; "
+                        "its zones and plots fall back to the WORKER anchor and will be shifted by the "
+                        "reset->open gap",
+                        ctx.chip_id,
+                        d,
+                        nit->second.first,
+                        nit->second.second);
+                    continue;
+                }
+                tracy_->AddCore(
+                    ctx.chip_id,
+                    nit->second.first,
+                    nit->second.second,
+                    ds.host_anchor,
+                    static_cast<double>(ds.device_at_anchor),
+                    ds.frequency);
+                // Log the OFFSET, not just the anchor: it is the board-dependence tell. Microseconds means the
+                // part shares an origin and this changed nothing; minutes means it just fixed the capture.
+                const double off_ms =
+                    (static_cast<double>(ds.device_at_anchor) - static_cast<double>(sync.device_at_anchor)) /
+                    (ds.frequency > 0.0 ? ds.frequency : 1.0) / 1e6;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] Device {} DRISC {} NOC0 ({},{}) clock sync: frequency={:.6f} GHz, "
+                    "device_time_at_anchor={} cycles, offset vs worker anchor {:+.3f} ms",
+                    ctx.chip_id,
+                    d,
+                    nit->second.first,
+                    nit->second.second,
+                    ds.frequency,
+                    ds.device_at_anchor,
+                    off_ms);
+            }
         }
         // NOTE: per-core Tracy contexts are created LAZILY on each core's first zone (HandleWorkerZone ->
         // GetOrCreateContext). We deliberately do NOT pre-create the full worker grid here: only ~16 of
