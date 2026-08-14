@@ -383,14 +383,25 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1.
-    add_cb(pcb::u, cv, 1);  // v_beta
-    add_cb(pcb::w, ck, 1);  // kd
-    add_cb(pcb::qdecay, ck, 1);
-    add_cb(pcb::intra, cc, 1);
-    add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, 1, 1);
-    add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
+    // Per-chunk inputs (streamed from DRAM), DOUBLE buffered. u-slot holds v_beta, w-slot holds kd.
+    //
+    // These were nbuf=1, which put a full DRAM round trip on the critical path of every step of a
+    // strictly sequential recurrence: reader_chunk_gdn_scan.cpp reserves each CB for chunk c+1, so
+    // with one slot it cannot start those reads until compute has popped chunk c, and the scan has
+    // no other work to hide the latency behind. nbuf=2 lets the reader run one chunk ahead.
+    //
+    // Cost at Qwen3.6 TP=4 (Ct=1, Kt=4, Vtl=1): the whole per-chunk input set is 16 fp32 tiles =
+    // 64 KB, so this adds 64 KB against a 1536 KB worker L1, on a program whose total CB footprint
+    // is ~192 KB. cb_out was already nbuf=2 for exactly this reason, which is what makes the 1s
+    // here look like an oversight rather than a deliberate L1 trade.
+    constexpr uint32_t kInputBuf = 2;
+    add_cb(pcb::u, cv, kInputBuf);  // v_beta
+    add_cb(pcb::w, ck, kInputBuf);  // kd
+    add_cb(pcb::qdecay, ck, kInputBuf);
+    add_cb(pcb::intra, cc, kInputBuf);
+    add_cb(pcb::kdec_t, kc, kInputBuf);
+    add_cb(pcb::dl, 1, kInputBuf);
+    add_cb(pcb::Tinv, cc, kInputBuf);  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);
