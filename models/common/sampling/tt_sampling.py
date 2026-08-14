@@ -18,6 +18,15 @@ from models.common.sampling.vocab_padding import (
     get_vocab_shard_dims,
 )
 
+# The multi-core ttnn.topk factory's admission rules, mirrored from
+# ttnn/cpp/ttnn/operations/reduction/topk/device/topk_device_operation.cpp
+# (select_program_factory) and topk_constants.hpp. A reduced width that fails any of
+# them falls to a single-core kernel whose cost scales with the width, which on a large
+# vocab shard can cost more than an entire transformer decode step. See
+# TTSampling._topk_multicore_split.
+_TOPK_MULTICORE_MAX_WIDTH = 65535  # multi-core indices are UInt16
+_TOPK_MULTICORE_MIN_WIDTH = 8192  # ttnn::prim::constants::multi_core_min_width
+
 # Greedy tie-break boost (see TTSampling._adjust_values_for_tiebreak).
 # bfloat16 keeps an 8-bit mantissa, so the gap to the next representable value at magnitude |x| is
 # between |x| * 2^-8 and |x| * 2^-7. Scaling the tied maximum by 2^-6 is therefore at least 2 ULP at
@@ -132,6 +141,14 @@ class TTSampling(LightweightModule):
         self._line_all_gather_supports_buffer_key = False
         self._line_all_gather_supports_dtype = False
         self.pad_to_power_of_2 = getattr(args, "pad_logits_to_power_of_2", False)
+        # Opt-in, and off by default so no existing model changes behaviour: pad the
+        # local vocab shard to a power of two and then *split* it, so each ttnn.topk
+        # call reaches the multi-core factory instead of a single-core kernel whose
+        # cost scales with vocab width. See _topk_multicore_split for the measurements
+        # and for why padding alone is not enough. Implies pad_to_power_of_2.
+        self.topk_split_to_power_of_2 = getattr(args, "topk_split_to_power_of_2", False)
+        if self.topk_split_to_power_of_2:
+            self.pad_to_power_of_2 = True
         if callable(self._line_all_gather):
             try:
                 line_all_gather_sig = inspect.signature(self._line_all_gather)
@@ -319,16 +336,22 @@ class TTSampling(LightweightModule):
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
         num_devices_in_mesh = self._get_num_sampling_shards()
-        indices_device_offsets = torch.ones(
-            1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
-        )
         # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
         padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        # How many candidates each device contributes to the gather. Normally max_top_k;
+        # the multi-core topk split contributes max_top_k *per piece* (see
+        # _topk_multicore_split for why they cannot be reduced back on device), so the
+        # offset stride has to follow it or the gathered indices get the wrong device's
+        # offset added.
+        self.topk_pieces = self._topk_piece_count(padded_per_device)
+        self.candidates_per_device = self.max_top_k * self.topk_pieces
+        indices_device_offsets = torch.ones(
+            1, 1, self.max_batch_size, self.candidates_per_device * num_devices_in_mesh, dtype=torch.int64
+        )
 
         for device_id in range(num_devices_in_mesh):
-            indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
-                device_id * padded_per_device
-            )
+            lo = device_id * self.candidates_per_device
+            indices_device_offsets[:, :, :, lo : lo + self.candidates_per_device] = device_id * padded_per_device
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
             device=self.mesh_device,
@@ -425,6 +448,116 @@ class TTSampling(LightweightModule):
             ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def _topk_piece_count(self, padded_per_device: int) -> int:
+        """How many pieces the local shard is split into for ``ttnn.topk``.
+
+        1 means no split. Mirrors the width the split actually operates on: the padded
+        shard when ``pad_to_power_of_2`` applies, otherwise the shard itself.
+        """
+        if not self.topk_split_to_power_of_2:
+            return 1
+        width = padded_per_device
+        if not is_power_of_2(width):
+            width = upper_power_of_2(width)
+        pieces = 1
+        while width // pieces >= _TOPK_MULTICORE_MAX_WIDTH:
+            pieces *= 2
+        per_piece = width // pieces
+        if pieces == 1 or not is_power_of_2(per_piece) or per_piece < _TOPK_MULTICORE_MIN_WIDTH:
+            return 1
+        return pieces
+
+    def _topk_multicore_split(self, x_bf16):
+        """Local top-k, split so each ``ttnn.topk`` call reaches the multi-core factory.
+
+        ``TopKDeviceOperation::select_program_factory`` takes the multi-core factory
+        only when the reduced width is **a power of two**, **below the uint16 index
+        bound** (65535) and **at least** ``multi_core_min_width`` (8192), with
+        ``k <= 64``.  A vocab shard that is none of the first three falls to a
+        single-core kernel whose cost scales with width, and on a large vocab that
+        kernel can dominate an entire decode step.
+
+        Measured on 4 x Blackhole at the real decode payload ``[1, 1, 32, W]``, k=32
+        (``doc/full_model/bench/topk_geometry_probe.py`` in the Muse-Glimmer-30B
+        autoport, ``topk_geometry_probe.json``):
+
+        The measured widths, and which reach the multi-core factory, are in the
+        Muse-Glimmer-30B autoport's ``doc/full_model/topk_geometry_probe.json``; they are
+        not repeated here, because a table of timings in a docstring goes stale silently.
+
+        So padding a 50688-wide shard to the next power of two is *not* enough --
+        65536 is over the uint16 bound and stays single-core.  Padding and then
+        splitting into halves of 32768 satisfies every condition, for a 33x
+        reduction on the op.
+
+        This returns ``pieces * max_top_k`` candidates per device rather than
+        ``max_top_k``, which is why :attr:`candidates_per_device` exists and why the
+        device-offset tensor is built from it.  Reducing the pieces back to
+        ``max_top_k`` on device with a second ``ttnn.topk`` was tried first and is
+        **wrong**: a 64-wide reduction is below ``multi_core_min_width``, and the
+        single-core factory *ignores* ``indices_tensor`` and returns positions into its
+        input.  The unsplit path only survives that because its indices tensor is the
+        identity map, where position and index coincide; a second stage over
+        already-permuted indices does not have that property, and it silently returned
+        candidate positions 0..63 as if they were vocab ids
+        (``doc/full_model/bench/topk_split_correctness.py``,
+        ``topk_split_correctness.json``: values correct, indices ``[0, 32, 2, 1, ...]``).
+        Widening the candidate set keeps every ``ttnn.topk`` call in the multi-core
+        regime and keeps the index mapping exact.
+        """
+        width = int(x_bf16.shape[-1])
+        pieces = self.topk_pieces
+        if pieces <= 1:
+            # The shard cannot be split into the multi-core regime, so take the op as it
+            # is. ``candidates_per_device`` is ``max_top_k * 1`` in this case, so the
+            # device-offset stride already matches this branch's output.
+            return ttnn.topk(
+                x_bf16,
+                k=self.max_top_k,
+                dim=-1,
+                sub_core_grids=self.sub_core_grid_topk,
+                indices_tensor=self.tt_indices_tensor,
+                stable=self._topk_stable,
+            )
+        per_piece = width // pieces
+        if width % pieces or not is_power_of_2(per_piece):
+            # ``topk_pieces`` was derived at build time from the padded shard width, and
+            # ``candidates_per_device`` -- which sizes the device-offset tensor -- was
+            # derived from it. If the runtime width disagrees, silently falling back to a
+            # single call would return max_top_k candidates where the offsets expect
+            # pieces * max_top_k, and the offset add would either fail on shape or, worse,
+            # apply the wrong device's offset. Say so instead.
+            raise ValueError(
+                f"topk split expected a width divisible into {pieces} power-of-two pieces, "
+                f"got {width} (per piece {per_piece}); candidates_per_device="
+                f"{self.candidates_per_device} was built for the split"
+            )
+
+        x_list = ttnn.split(x_bf16, per_piece, dim=3)
+        indices_list = ttnn.split(self.tt_indices_tensor, per_piece, dim=3)
+        values_parts = []
+        indices_parts = []
+        for x_piece, indices_piece in zip(x_list, indices_list):
+            values, indices = ttnn.topk(
+                x_piece,
+                k=self.max_top_k,
+                dim=-1,
+                sub_core_grids=self.sub_core_grid_topk,
+                indices_tensor=indices_piece,
+                stable=self._topk_stable,
+            )
+            values_parts.append(values)
+            indices_parts.append(indices)
+            ttnn.deallocate(x_piece)
+            ttnn.deallocate(indices_piece)
+
+        topk_values = ttnn.concat(values_parts, dim=3)
+        topk_indices = ttnn.concat(indices_parts, dim=3)
+        for values, indices in zip(values_parts, indices_parts):
+            ttnn.deallocate(values)
+            ttnn.deallocate(indices)
+        return topk_values, topk_indices
 
     def _mask_invalid_vocab_logits(self, logits):
         if self.tt_invalid_vocab_tail_mask is not None:
@@ -657,7 +790,19 @@ class TTSampling(LightweightModule):
         LLK top-k test skips every stable case, and this tree still carries the double-SFPSWAP
         scheme rather than the index-aware comparator from tt-llk#1340), which is why this exists.
 
-        KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. If a single
+        NOTE, and it matters if #33492 ever closes and someone deletes this pass: the
+        "ordered the same way BY CONSTRUCTION" argument above assumes each device block is one
+        top-k over one contiguous shard. With `topk_split_to_power_of_2` a block is
+        `[piece0 top-k | piece1 top-k]`, so position order does NOT track global-id order
+        within a block even with a perfectly stable top-k -- piece1's ids are all larger than
+        piece0's, but the two runs interleave by value. This pass stays correct either way,
+        because it takes an explicit `min` over the *global* indices rather than relying on
+        layout; the redundancy argument is what stops being true.
+
+        KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. Note the
+        unit this is measured in changes under `topk_split_to_power_of_2`: the gathered set is then
+        `pieces * max_top_k` per device, and the "more maxima than we keep" condition applies per
+        *piece* (32768 columns here) rather than per whole shard. If a single
         device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k drops
         all but 32 of them by the same unreliable network, so the true lowest-id token may never
         reach the gathered set and this pass cannot recover it. Fixing #33492 is the real fix; this
@@ -844,20 +989,23 @@ class TTSampling(LightweightModule):
                     sub_core_grids=self.sub_core_grids,
                 )
             # Perform local top-k on each device
-            topk_values, topk_indices = ttnn.topk(
-                x_bf16,
-                k=self.max_top_k,
-                dim=-1,
-                sub_core_grids=self.sub_core_grid_topk,
-                indices_tensor=self.tt_indices_tensor,
-                # Break exact-value ties by lowest index instead of array position, so which
-                # of a set of tied candidates enters the top-k does not depend on placement.
-                # Best effort only, and only where the LLK has the network at all (see
-                # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                # guarantees the greedy pick.
-                stable=self._topk_stable,
-            )
+            if self.topk_split_to_power_of_2:
+                topk_values, topk_indices = self._topk_multicore_split(x_bf16)
+            else:
+                topk_values, topk_indices = ttnn.topk(
+                    x_bf16,
+                    k=self.max_top_k,
+                    dim=-1,
+                    sub_core_grids=self.sub_core_grid_topk,
+                    indices_tensor=self.tt_indices_tensor,
+                    # Break exact-value ties by lowest index instead of array position, so which
+                    # of a set of tied candidates enters the top-k does not depend on placement.
+                    # Best effort only, and only where the LLK has the network at all (see
+                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
+                    # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
+                    # guarantees the greedy pick.
+                    stable=self._topk_stable,
+                )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
             sampling_cluster_axis = self._get_sampling_cluster_axis()
