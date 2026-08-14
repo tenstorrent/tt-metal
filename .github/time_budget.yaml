@@ -326,13 +326,13 @@ models:
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 230
-    wh_galaxy_perf: 75
+    wh_llmbox_perf: 180
+    wh_galaxy_perf: 55
     wh_n150: 65
     wh_n300: 60
     bh_p150: 7
     bh_p300: 8
-    bh_quietbox_2: 42
+    bh_quietbox_2: 92
   unit:
     wh_llmbox: 80
     wh_galaxy_perf: 10
@@ -354,14 +354,14 @@ models:
     bh_p150: 20
     bh_quietbox_2: 50
   unit_tier3:
-    wh_llmbox: 100
-    wh_galaxy: 90
+    wh_llmbox: 90
+    wh_galaxy: 80
     wh_llmbox_perf: 58
     wh_n150: 41
     wh_n300: 33
     bh_p150: 20
     bh_p300: 30
-    bh_quietbox_2: 21
+    bh_quietbox_2: 25
   integration:
     wh_llmbox: 40
   perf:

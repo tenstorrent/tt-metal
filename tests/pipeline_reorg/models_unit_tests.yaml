@@ -1159,8 +1159,8 @@
 # ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
 # The Qwen2.5-VL text encoder pair is the only Qwen-Image unit leg that was in CI:
 # it backed both the retired t3k integration leg (-k 2x4) and the retired Galaxy
-# integration leg (-k 4x8). require_exact_physical_num_devices now selects the
-# mesh per machine, so one entry covers both SKUs.
+# integration leg (-k 4x8). require_exact_physical_num_devices now selects the mesh
+# per machine, so the new 2x2 case is the one that runs on this 4-chip SKU.
 - name: TT-DiT Qwen-Image unit tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -1169,10 +1169,7 @@
   model: qwenimage
   model_family: Qwen
   skus:
-    wh_llmbox:
-      timeout: 10
-      tier: 3
-    wh_galaxy:
+    bh_quietbox_2:
       timeout: 10
       tier: 3
   owner_id: U08TED0JM9D # Samuel Adesoye

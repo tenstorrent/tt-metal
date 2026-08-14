@@ -26,6 +26,8 @@ from ....utils.test import line_params_req_exact_devices
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
+        # 2x2 config for 4-chip boxes (BH QuietBox 2): the 2x4 config with tp halved to fit axis 1.
+        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
         pytest.param(
             (2, 4),
             (2, 0),
@@ -39,6 +41,7 @@ from ....utils.test import line_params_req_exact_devices
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
+        "2x2cfg2sp1tp2",
         "2x4cfg2sp1tp4",
         "4x8cfg2sp4tp4",
     ],
@@ -225,7 +228,17 @@ def test_qwenimage_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-    if tuple(mesh_device.shape) == (2, 4):
+    if tuple(mesh_device.shape) == (2, 2):
+        # TODO: provisional BH QuietBox 2 targets. These are deliberately loose so the bring-up run
+        # reports real numbers instead of failing the assert below on a guessed threshold. Tighten
+        # them from the first green run before this leg is treated as a perf gate.
+        expected_metrics = {
+            "total_encoding_time": 1.0,
+            "denoising_steps_time": 240.0,
+            "vae_decoding_time": 10.0,
+            "total_time": 260,
+        }
+    elif tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
             "total_encoding_time": 0.35,
             "denoising_steps_time": 80.0,
@@ -264,6 +277,7 @@ def test_qwenimage_pipeline_performance(
                     target=target,
                 )
         device_name_map = {
+            (2, 2): "BH_QB",
             (2, 4): "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }

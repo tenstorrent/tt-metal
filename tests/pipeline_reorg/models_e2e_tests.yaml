@@ -1022,9 +1022,10 @@
 
 # ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
 # Merges the retired t3k demo (test_pipeline_qwenimage.py) and t3k perf
-# (test_performance_qwenimage.py) legs. Both files parametrize a 2x4 and a 4x8
-# mesh; require_exact_physical_num_devices in device_params picks the one that
-# matches the machine, so no -k topology filter is needed.
+# (test_performance_qwenimage.py) legs onto BH QuietBox 2. Both files parametrize
+# a 2x2, a 2x4 and a 4x8 mesh; require_exact_physical_num_devices in device_params
+# picks the one matching the machine, so no -k topology filter is needed — on this
+# 4-chip SKU the 2x4 and 4x8 cases skip and the new 2x2 case runs.
 - name: TT-DiT Qwen-Image e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -1034,30 +1035,8 @@
   model: qwenimage
   model_family: Qwen
   skus:
-    wh_llmbox_perf:
+    bh_quietbox_2:
       timeout: 50
-      tier: 3
-      release_ready: false
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-
-# Galaxy carries the pipeline leg only. The 4x8 case of
-# test_performance_qwenimage.py hangs the device mid-pipeline in an
-# uninterruptible driver call and leaks TLB windows that `tt-smi reset` does not
-# reclaim, bricking the runner for every subsequent job (#47355). That is why the
-# legacy `Galaxy DiT Qwen-Image model perf tests` entry was commented out rather
-# than run; this entry preserves that state. Fold the perf line in here once
-# #47355 is fixed.
-- name: TT-DiT Qwen-Image e2e tests (Galaxy)
-  cmd: |
-    unset HF_HUB_OFFLINE
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
-  model: qwenimage
-  model_family: Qwen
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
       tier: 3
       release_ready: false
   owner_id: U08TED0JM9D # Samuel Adesoye
