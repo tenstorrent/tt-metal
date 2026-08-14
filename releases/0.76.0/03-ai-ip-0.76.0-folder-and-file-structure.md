@@ -143,7 +143,7 @@ The repository holds one Quasar op tree. There are no separate program directori
 
 ## Level 3 - Sub-architecture / program (the customer delivery)
 
-The repository holds**one**Quasar architecture folder. There are no separate Horizon / Trinity / Saturn directories — each program delivers the**same tt_llk_quasar/ tree**, distinguished by the release milestone and the feature list below.
+The repository holds **one** Quasar architecture folder. There are no separate Horizon / Trinity / Saturn directories — each program delivers the **same tt_llk_quasar/ tree**, distinguished by the release milestone and the feature list below.
 
 | **Level** | **Program** | **Delivered from** | **Feature this release** |
 | --- | --- | --- | --- |
