@@ -99,11 +99,17 @@ FORCE_INLINE void fill_l1_with_val(uint32_t start_addr, uint32_t n_bytes, uint32
 // bigger runs is still the right shape (strictly fewer instructions, and it is
 // what lets the reader's now-redundant fill be skipped), but do not expect the
 // run length itself to buy anything.
+//
+// TINY TILES (Refinement 5): a sub-32-row tile does not have 16-row faces — its
+// face height IS the tile height (tile.cpp TILE_FACE_HW_CHOICES: 16x32 -> 16x16,
+// 8x32 -> 8x16, ... 1x32 -> 1x16), so the face geometry is derived from tile_h
+// rather than fixed at 16. At tile_h >= 16 this is byte-identical to the previous
+// form; below it the tile is a single face-row of tile_w/16 faces.
 template <uint32_t tile_h, uint32_t tile_w, uint32_t elem_bytes>
 FORCE_INLINE void fill_tile_pad(uint32_t tile_addr, uint32_t valid_rows, uint32_t valid_cols, uint32_t word) {
-    constexpr uint32_t FACE_H = 16;
+    constexpr uint32_t FACE_H = tile_h < 16 ? tile_h : 16;
     constexpr uint32_t FACE_W = 16;
-    static_assert(tile_h % FACE_H == 0 && tile_w % FACE_W == 0, "fill_tile_pad needs whole 16x16 faces");
+    static_assert(tile_h % FACE_H == 0 && tile_w % FACE_W == 0, "fill_tile_pad needs whole faces");
     constexpr uint32_t FACES_PER_ROW = tile_w / FACE_W;
     constexpr uint32_t FACE_ROWS = tile_h / FACE_H;
     constexpr uint32_t FACE_ELEMS = FACE_H * FACE_W;

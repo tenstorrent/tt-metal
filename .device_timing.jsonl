@@ -216,3 +216,16 @@
 {"event": "phase", "phase": "refinement_5", "state": "start", "at_ms": 1786723492677}
 {"source":"tt-probe","pid":355482,"started_at_ms":1786723703441,"wait_ms":177,"run_ms":15946,"test_path":"tilize","exit_code":0}
 {"source":"tt-probe","pid":355816,"started_at_ms":1786723751534,"wait_ms":197,"run_ms":21034,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":357732,"started_at_ms":1786723859762,"wait_ms":256,"run_ms":54958,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":361512,"started_at_ms":1786723939220,"wait_ms":250,"run_ms":27316,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":362710,"started_at_ms":1786723987467,"wait_ms":221,"run_ms":16103,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":363920,"started_at_ms":1786724135498,"wait_ms":233,"run_ms":17757,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":364636,"started_at_ms":1786724228598,"wait_ms":161,"run_ms":19471,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":365672,"started_at_ms":1786724348611,"wait_ms":251,"run_ms":18697,"test_path":"tilize","exit_code":0}
+{"source":"run_safe_pytest","pid":366676,"started_at_ms":1786724465080,"wait_ms":2,"run_ms":7450,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":3}
+{"source":"run_safe_pytest","pid":366979,"started_at_ms":1786724484608,"wait_ms":1,"run_ms":12618,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":367349,"started_at_ms":1786724507009,"wait_ms":2,"run_ms":28426,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":1}
+{"source":"run_safe_pytest","pid":368678,"started_at_ms":1786724538838,"wait_ms":3,"run_ms":14630,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":1}
+{"source":"run_safe_pytest","pid":369574,"started_at_ms":1786724644140,"wait_ms":2,"run_ms":16581,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":1}
+{"source":"run_safe_pytest","pid":370394,"started_at_ms":1786724679014,"wait_ms":1,"run_ms":9663,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":0}
+{"source":"run_safe_pytest","pid":371396,"started_at_ms":1786724711911,"wait_ms":2,"run_ms":9790,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":0}

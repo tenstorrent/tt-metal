@@ -220,6 +220,25 @@ EXCLUSIONS = [
     #     `tilize_writer.cpp` and `_pack_pad_word`.
 ]
 
+# --- Refinement 5 (tile geometry) -------------------------------------------
+# A 16x32 BLOCK-FLOAT tile is mis-packed by the hardware on Wormhole, and it is a
+# PLATFORM gap, not a tilize one: metal flags every sub-32-row tile as
+# `partial_face` (tile.cpp `partial_face = tile_shape[0] < TILE_HEIGHT`), but a
+# 16x32 tile's two faces are FULL 16-row faces. That flag routes the packer to the
+# partial-face BFP MOP (`llk_pack.h` `_llk_pack_mop_config_`: PACKCNT=1, PACR
+# ADDR_MOD_0 + INCADCXY + PACR ADDR_MOD_1), whose DEST walk advances by
+# `face_r_dim` rows and then by another 16 — correct for a genuinely partial face
+# (8/4/2/1 rows), one face-row too far at face_r_dim == 16. Measured signature:
+# every datum comes back as `src[i + 32] / 4` (the mantissas shifted one face and
+# the shared exponent two binades low).
+#
+# Pinned as OUT of this op's hands by `test_tilize_tile_geometry.py::
+# test_bfp8_16x32_is_a_platform_pack_gap`: a plain `ttnn.mul` on a 16x32
+# bfloat8_b tile — no tilize anywhere — reproduces the same bytes. Every OTHER
+# tiny height packs block-float correctly through this op (8/4/2/1 are exact),
+# and so does 16 for every non-block-float dtype.
+EXCLUSIONS.append({"tile_height": 16, "output_dtype": ttnn.bfloat8_b})
+
 # --- Refinement 1 (sharded placement) ---------------------------------------
 # A sharded tensor is inherently MULTI-CORE: the shards pin both the core set and
 # the per-core work, so there is no single-core realization of a sharded call.

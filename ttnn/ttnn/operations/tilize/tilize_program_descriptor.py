@@ -49,8 +49,12 @@ EIGHT_BIT_DTYPES = (ttnn.uint8,)
 # output-format pad stamp below never applies to them).
 BLOCK_FLOAT_DTYPES = tuple(d for d in (getattr(ttnn, "bfloat8_b", None), getattr(ttnn, "bfloat4_b", None)) if d)
 
-# Faces are 16x16 on every supported arch; the output-format pad stamp addresses a
-# tiled tile through that geometry, so it needs whole face-rows.
+# Faces are 16 wide on every supported arch and 16 tall on a full 32-row tile; a
+# TINY tile's face height is the tile height itself (tile.cpp TILE_FACE_HW_CHOICES:
+# 8x32 -> 8x16, ... 1x32 -> 1x16). The output-format pad stamp addresses a tiled
+# tile through that geometry, so `fill_tile_pad` derives the same rule from tile_h
+# — this constant is only the FULL-tile face height, and the assert below is what
+# pins that every supported tile height has whole faces.
 FACE_HEIGHT = 16
 
 # --- blocking-model constants (single source; every knob derives from these)-
@@ -766,7 +770,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # actually losing the value, so every other cell is byte-identical to before.
     out_fill = int(
         plan.has_pad_region
-        and tile_h % FACE_HEIGHT == 0  # the stamp addresses whole 16x16 face rows
+        # The stamp addresses whole faces: 16 rows on a full tile, tile_h rows on a
+        # tiny one (Refinement 5). Every legal tile height satisfies one or the other.
+        and (tile_h % FACE_HEIGHT == 0 or FACE_HEIGHT % tile_h == 0)
         and bool(LEVERS["out_fill"])
         and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
     )

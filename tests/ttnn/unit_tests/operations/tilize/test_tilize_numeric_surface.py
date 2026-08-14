@@ -198,7 +198,16 @@ def test_exclusions_is_empty():
     rows remain, and they are placement, not numeric-surface."""
     from ttnn.operations.tilize import EXCLUSIONS
 
-    numeric = [e for e in EXCLUSIONS if {"dtype", "output_dtype", "pad_mode", "pad_value"} & set(e)]
+    # A dtype/pad EXCLUSION keyed ONLY on the numeric surface is what Refinement 4
+    # removed. Refinement 5 added one keyed on the TILE GEOMETRY as well
+    # (tile_height=16 x a block-float output — a platform pack gap, see the op
+    # file), which is a tile-geometry refusal that happens to name a dtype, not a
+    # numeric-surface one: at the default 32-row tile every dtype is supported.
+    numeric = [
+        e
+        for e in EXCLUSIONS
+        if ({"dtype", "output_dtype", "pad_mode", "pad_value"} & set(e)) and "tile_height" not in e
+    ]
     assert numeric == [], f"a numeric-surface EXCLUSION came back: {numeric}"
 
 
