@@ -46,6 +46,7 @@ from helpers.sfpu_dispatch_constants import (
     SOFTSHRINK_LAMBDA,
     THRESHOLD_T,
     THRESHOLD_V,
+    UNARY_BITWISE_SCALAR,
     UNARY_COMP_THRESHOLD,
     UNARY_MAX_MIN_VALUE,
 )
@@ -2273,6 +2274,13 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32: self._unary_min_int32,
             MathOperation.UnaryMaxUint32: self._unary_max_int32,
             MathOperation.UnaryMinUint32: self._unary_min_int32,
+            # Unary bitwise against a fixed scalar, and bitwise complement. Both are
+            # exact int32 lane ops (calculate_sfpu_unary_bitwise / calculate_bitwise_not),
+            # so they join the integer path below rather than the float pipeline.
+            MathOperation.BitwiseAnd: self._bitwise_and_scalar,
+            MathOperation.BitwiseOr: self._bitwise_or_scalar,
+            MathOperation.BitwiseXor: self._bitwise_xor_scalar,
+            MathOperation.BitwiseNot: self._bitwise_not,
         }
         # Elementwise integer unary ops that use the dedicated exact-int path in
         # __call__. Only these ops are routed there; other integer-capable ops
@@ -2284,11 +2292,16 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            MathOperation.BitwiseAnd,
+            MathOperation.BitwiseOr,
+            MathOperation.BitwiseXor,
+            MathOperation.BitwiseNot,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
         self._int_shift_amount = 3
         self._int_maxmin_scalar = INT_MAXMIN_SCALAR
+        self._unary_bitwise_scalar = UNARY_BITWISE_SCALAR
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2819,6 +2832,29 @@ class UnarySFPUGolden:
     def _right_shift(self, x):
         # Arithmetic right shift by 3; Python >> on ints is arithmetic (sign-propagating).
         return int(x) >> self._int_shift_amount
+
+    def _to_int32(self, x):
+        """Wrap a Python int into the signed 32-bit range the SFPU lane holds.
+
+        Python ints are unbounded, so ~x and x | scalar would otherwise produce values no
+        int32 Dest lane can represent and the comparison against hardware would fail on
+        the golden's side rather than the kernel's.
+        """
+        return ((int(x) + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+
+    def _bitwise_and_scalar(self, x):
+        # calculate_sfpu_unary_bitwise<UnaryBitwiseOp::AND>: v & scalar, per lane.
+        return self._to_int32(int(x) & self._unary_bitwise_scalar)
+
+    def _bitwise_or_scalar(self, x):
+        return self._to_int32(int(x) | self._unary_bitwise_scalar)
+
+    def _bitwise_xor_scalar(self, x):
+        return self._to_int32(int(x) ^ self._unary_bitwise_scalar)
+
+    def _bitwise_not(self, x):
+        # calculate_bitwise_not: ~v on the I32 layout.
+        return self._to_int32(~int(x))
 
     def _unary_max_int32(self, x):
         return max(int(x), self._int_maxmin_scalar)
@@ -4768,6 +4804,123 @@ class WhereGolden:
         cond = operand1.flatten().to(torch.float32)
         mask = cond != 0.0
         return torch.where(mask, true_value.flatten(), false_value.flatten())
+
+
+@register_golden
+class StructuralSFPUGolden:
+    """Golden for the tile-structural SFPU kernels: tiled_prod, int_sum, rotate90.
+
+    These are the only parity kernels that are not element-wise. They address Dest by
+    *slot* -- ``dst_reg[k]`` is one 32-lane SFPU vector -- and combine slots with each
+    other, so a per-element reference cannot express them. The model below is therefore
+    written in slot space and is the one place the Dest layout is spelled out:
+
+        * A 32x32 tile is 4 faces of 16x16, face-major, each face row-major.
+        * One slot is 32 consecutive datums, so a 16x16 face is 8 slots and a tile is 32.
+        * Slot ``k`` of face ``f`` is absolute slot ``8*f + k``.
+        * ``VectorMode::RC`` invokes the functor once per face; a kernel whose loop reaches
+          past slot 7 therefore reads or writes into the *next* face.
+
+    Provenance: derived from the Blackhole kernel sources, not from a passing test --
+    none of these three has a Blackhole tt-llk test, which is why they needed a golden
+    written from scratch. Until a Quasar kernel exists to run against, treat a mismatch
+    here as evidence about the golden as much as about the kernel.
+    """
+
+    #: Datums in one SFPU vector, and so in one Dest slot.
+    SLOT = 32
+    #: Slots in one 16x16 face.
+    SLOTS_PER_FACE = 8
+
+    def __call__(
+        self,
+        operation: MathOperation,
+        operand,
+        data_format: DataFormat,
+        num_faces: int = 4,
+    ):
+        slots = self._to_slots(operand, num_faces)
+
+        if operation == MathOperation.TiledProd:
+            out = self._tiled_prod(slots)
+        elif operation == MathOperation.IntSumRow:
+            out = self._sum_int_row(slots)
+        elif operation == MathOperation.IntSumCol:
+            out = self._sum_int_col(slots)
+        elif operation == MathOperation.AltComplexRotate90:
+            out = self._alt_complex_rotate90(slots)
+        else:
+            raise ValueError(f"Unsupported structural SFPU operation: {operation}")
+
+        return out.reshape(-1).to(format_dict[data_format])
+
+    def _to_slots(self, operand, num_faces: int):
+        """Reshape a flat tile into (num_faces, SLOTS_PER_FACE, SLOT)."""
+        flat = operand.flatten()
+        expected = num_faces * self.SLOTS_PER_FACE * self.SLOT
+        if flat.numel() != expected:
+            raise ValueError(
+                f"structural golden expects one {num_faces}-face tile "
+                f"({expected} elements), got {flat.numel()}"
+            )
+        return flat.reshape(num_faces, self.SLOTS_PER_FACE, self.SLOT)
+
+    def _tiled_prod(self, slots):
+        """Running product across the face: out[d] = prod(in[0..d]), per lane.
+
+        calculate_tiled_prod runs ITERATIONS=8 slots and then does one more unrolled
+        step at dst_reg[8] -- which is slot 0 of the *following* face. For faces 0..2
+        that write is immediately overwritten when the next face runs its own d=0 step,
+        and for the last face it lands outside the tile. Either way it is not observable
+        in the packed tile, so the reference models the in-face cumulative product only.
+        A kernel change that made the ninth write visible would show up here as a
+        mismatch on face 0's first slot, which is the behaviour worth catching.
+        """
+        return torch.cumprod(slots.to(torch.float32), dim=1)
+
+    def _sum_int_row(self, slots):
+        """calculate_sum_int_row: for i in {0,2,4,6}, dst[i] += dst[i+1] + dst[i+8] + dst[i+9].
+
+        The +8 / +9 terms reach slots in face 1, so this kernel spans two faces and must
+        be dispatched once per tile rather than once per face. Only the four even slots
+        of face 0 are written; everything else keeps its input value.
+        """
+        out = slots.clone().to(torch.int64)
+        flat = out.reshape(-1, self.SLOT)
+        for i in (0, 2, 4, 6):
+            flat[i] = flat[i] + flat[i + 1] + flat[i + 8] + flat[i + 9]
+        return flat.reshape(slots.shape)
+
+    def _sum_int_col(self, slots):
+        """calculate_sum_int_col: for i in {0,1}, sum slots i+{0,2,4,6} and i+{16,18,20,22}.
+
+        Reaches slots 16..23, i.e. face 2, so this also spans the whole tile. Only slots
+        0 and 1 are written.
+        """
+        out = slots.clone().to(torch.int64)
+        flat = out.reshape(-1, self.SLOT)
+        for i in (0, 1):
+            acc = flat[i].clone()
+            for j in (2, 4, 6):
+                acc = acc + flat[i + j]
+            for j in (16, 18, 20, 22):
+                acc = acc + flat[i + j]
+            flat[i] = acc
+        return flat.reshape(slots.shape)
+
+    def _alt_complex_rotate90(self, slots):
+        """Rotate interleaved (re, im) slot pairs: (a, b) -> (-b, a).
+
+        ITERATIONS=4 covers the four slot pairs of one face, so unlike the two above this
+        one stays inside its face.
+        """
+        out = slots.clone().to(torch.float32)
+        for k in range(0, self.SLOTS_PER_FACE, 2):
+            re = out[:, k].clone()
+            im = out[:, k + 1].clone()
+            out[:, k] = -im
+            out[:, k + 1] = re
+        return out
 
 
 @register_golden

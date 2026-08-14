@@ -31,6 +31,7 @@ from helpers.param_config import (
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
+from helpers.sfpu_port_quasar import Arity, entries, is_ported
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -958,3 +959,211 @@ def test_eltwise_binary_sfpu_quant_quasar(binary_op, sign_magnitude, tile_indice
     (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
     (SMAG32) datapaths."""
     _run_quant(binary_op, tile_indices, sign_magnitude)
+
+
+# ===========================================================================
+# Family 5 — the SFPU parity set (binary half)
+#
+# The Blackhole binary kernels written in pure sfpi:: that Quasar has not received yet.
+# The op list is generated from helpers/sfpu_port_quasar.py and every op is filtered
+# through is_ported(), so until a kernel header lands the family contributes no variants
+# and the suite stays green. Nothing here needs editing when a port arrives.
+#
+# Stimuli live in the local table below rather than in sfpu_domains: this file already
+# owns its per-family stimuli (_prepare_int_stimuli, _prepare_float_inputs), and the
+# shared registry's OperandSpecs carries only spec_A/spec_B for the *unary* sweep --
+# registering binary ops there would also enrol them in the Blackhole unary sweep, which
+# this work is not meant to change.
+# ===========================================================================
+
+# Per-op operand domains, as (low_A, high_A, low_B, high_B). Chosen so the *result* is
+# representable and the kernel's own preconditions hold, not to explore a curve:
+#   binary_pow  -- base > 0, because the implementation is exp(b * log(a));
+#   fmod / remainder / div -- divisor bounded away from zero;
+#   isclose     -- both operands over the same narrow band, so the tolerance compare
+#                  produces a mix of 0 and 1 rather than a constant;
+#   mask        -- operand B spans zero, since it is the mask and only its zero-ness matters.
+_PARITY_BINARY_FLOAT_DOMAINS = {
+    MathOperation.SfpuAtan2: (-8.0, 8.0, -8.0, 8.0),
+    MathOperation.SfpuElwpow: (0.25, 8.0, -3.0, 3.0),
+    MathOperation.SfpuBinaryFmod: (-64.0, 64.0, 0.5, 8.0),
+    MathOperation.SfpuBinaryRemainder: (-64.0, 64.0, 0.5, 8.0),
+    MathOperation.SfpuIsclose: (-2.0, 2.0, -2.0, 2.0),
+    MathOperation.SfpuLogsigmoid: (-8.0, 8.0, -8.0, 8.0),
+    MathOperation.SfpuMask: (-8.0, 8.0, -1.0, 1.0),
+}
+
+# Integer parity ops. Bounds keep products and quotients inside int32 and keep divisors
+# away from zero; the div/rem families would otherwise trap on a zero divisor.
+_PARITY_BINARY_INT_DOMAINS = {
+    MathOperation.SfpuBitwiseAnd: (-(2**30), 2**30, -(2**30), 2**30),
+    MathOperation.SfpuBitwiseOr: (-(2**30), 2**30, -(2**30), 2**30),
+    MathOperation.SfpuBitwiseXor: (-(2**30), 2**30, -(2**30), 2**30),
+    MathOperation.SfpuFmodInt32: (-(2**20), 2**20, 1, 2**10),
+    MathOperation.SfpuRemainderInt32: (-(2**20), 2**20, 1, 2**10),
+    MathOperation.SfpuRemainderUint32: (0, 2**20, 1, 2**10),
+    MathOperation.SfpuDivInt32: (-(2**20), 2**20, 1, 2**10),
+    MathOperation.SfpuDivInt32Floor: (-(2**20), 2**20, 1, 2**10),
+    MathOperation.SfpuRsubInt32: (-(2**20), 2**20, -(2**20), 2**20),
+}
+
+
+def _parity_binary_domain(mathop):
+    """The (low_A, high_A, low_B, high_B) band for a parity op, and whether it is integer."""
+    if mathop in _PARITY_BINARY_INT_DOMAINS:
+        return _PARITY_BINARY_INT_DOMAINS[mathop], True
+    return _PARITY_BINARY_FLOAT_DOMAINS[mathop], False
+
+
+def _prepare_parity_binary_stimuli(
+    formats, input_dimensions, src0_idx, src1_idx, mathop
+):
+    """Stage both operands of a parity op into src_A at their tile indices.
+
+    Mirrors _prepare_int_stimuli / _prepare_float_stimuli: the shared driver expects both
+    operands inside src_A, one per tile index, because the Quasar binary path unpacks
+    straight to Dest.
+    """
+    (lo_a, hi_a, lo_b, hi_b), _is_int = _parity_binary_domain(mathop)
+
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec.uniform(low=0.0, high=1.0),
+        spec_B=StimuliSpec.uniform(low=0.0, high=1.0),
+    )
+
+    torch_format = format_dict[formats.input_format]
+    unit = src_A.to(torch.float32)
+    flat = unit.flatten().clone()
+
+    a_start = src0_idx * MAX_TILE_ELEMENTS
+    b_start = src1_idx * MAX_TILE_ELEMENTS
+    flat[a_start : a_start + MAX_TILE_ELEMENTS] = lo_a + flat[
+        a_start : a_start + MAX_TILE_ELEMENTS
+    ] * (hi_a - lo_a)
+    flat[b_start : b_start + MAX_TILE_ELEMENTS] = lo_b + flat[
+        b_start : b_start + MAX_TILE_ELEMENTS
+    ] * (hi_b - lo_b)
+
+    if _is_int:
+        flat = flat.round()
+        # A zero divisor is undefined for the div / fmod / remainder families, and the
+        # rounding above can land on one even though the band starts at 1.
+        if mathop in (
+            MathOperation.SfpuFmodInt32,
+            MathOperation.SfpuRemainderInt32,
+            MathOperation.SfpuRemainderUint32,
+            MathOperation.SfpuDivInt32,
+            MathOperation.SfpuDivInt32Floor,
+        ):
+            divisor = flat[b_start : b_start + MAX_TILE_ELEMENTS]
+            flat[b_start : b_start + MAX_TILE_ELEMENTS] = torch.where(
+                divisor == 0, torch.ones_like(divisor), divisor
+            )
+    elif mathop == MathOperation.SfpuLogsigmoid:
+        # logsigmoid(x) = -softplus(-x) with x at src0 and exp(-x) expected at src1, so
+        # operand B is not free: it is derived from A. Passing an independent random tile
+        # would test an identity the kernel never computes.
+        x = flat[a_start : a_start + MAX_TILE_ELEMENTS]
+        flat[b_start : b_start + MAX_TILE_ELEMENTS] = torch.exp(-x)
+    elif mathop == MathOperation.SfpuElwpow:
+        # binary_pow reaches _float_to_int32_positive_ from ckernel_sfpu_conversions.h,
+        # which has no kernel of its own and is covered through its callers (see
+        # CONVERSIONS_COVERAGE in helpers/sfpu_port_quasar.py). Seed integer-valued and
+        # near-half exponents so the float-to-int rounding boundary is crossed in both
+        # directions rather than being reached only by chance.
+        exps = flat[b_start : b_start + MAX_TILE_ELEMENTS]
+        seeds = [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            -1.0,
+            -2.0,
+            0.5,
+            1.5,
+            2.5,
+            -0.5,
+            1.4999999,
+            1.5000001,
+        ]
+        for lane, value in enumerate(seeds):
+            if lane < exps.numel():
+                exps[lane] = value
+
+    src_A = flat.reshape(unit.shape).to(torch_format)
+    return src_A, tile_cnt_A, src_B
+
+
+def _parity_binary_formats_dest_acc(is_int: bool):
+    """Format x dest_acc matrix for a parity op, filtered for Quasar."""
+    if is_int:
+        # The integer kernels declare the I32 Dest layout only, which forces a 32-bit dest.
+        return [
+            (fmt, DestAccumulation.Yes)
+            for fmt in input_output_formats([DataFormat.Int32], same=True)
+        ]
+    return _get_valid_float_formats_dest_acc()
+
+
+def _parity_binary_cases():
+    """(binary_op, mathop, formats, dest_acc) for every ported binary parity op.
+
+    Empty while the parity kernels are unported, which is the normal state today.
+    """
+    cases = []
+    for entry in entries(Arity.BINARY):
+        for mathop in entry.ops:
+            if not is_ported(mathop):
+                continue
+            _domain, is_int = _parity_binary_domain(mathop)
+            for fmt, dest_acc in _parity_binary_formats_dest_acc(is_int):
+                cases.append((mathop.cpp_enum_value, mathop, fmt, dest_acc))
+    return cases
+
+
+_PARITY_BINARY_CASES = _parity_binary_cases()
+
+
+@pytest.mark.quasar
+@pytest.mark.skipif(
+    not _PARITY_BINARY_CASES,
+    reason="no binary SFPU parity kernel is ported to Quasar yet",
+)
+@parametrize(
+    parity_case=_PARITY_BINARY_CASES,
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_parity_quasar(
+    parity_case,
+    implied_math_format,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Binary half of the SFPU parity set, validated against BinarySFPUGolden.
+
+    One compile-time-selected BinaryOp per variant. Each op activates only once its
+    Quasar kernel header exists; see helpers/sfpu_port_quasar.py.
+    """
+    binary_op, mathop, formats, dest_acc = parity_case
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        implied_math_format,
+        tile_indices,
+        mathop,
+        binary_op,
+        prepare_stimuli=_prepare_parity_binary_stimuli,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )

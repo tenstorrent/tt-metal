@@ -53,3 +53,25 @@ LRELU_NEGATIVE_SLOPE = 0.1
 
 # UnaryMax/MinInt32 and UnaryMax/MinUint32 compare against this scalar.
 INT_MAXMIN_SCALAR = 1000
+
+# Unary bitwise (calculate_sfpu_unary_bitwise) masks against this scalar. Chosen with bits
+# set in both halves of the word and neither all-ones nor a single bit, so AND, OR and XOR
+# each produce a value distinguishable from the input and from each other.
+UNARY_BITWISE_SCALAR = 0x0F0F0F0F
+
+# Unary left_shift / right_shift shift by this many bits.
+UNARY_SHIFT_AMOUNT = 3
+
+# Unary fmod / remainder divide by this fixed divisor.
+UNARY_MOD_DIVISOR = 2.0
+
+# heaviside(x) returns this when x == 0.
+HEAVISIDE_VALUE = 0.5
+
+# celu / elu negative-branch alpha.
+ELU_ALPHA = 1.0
+CELU_ALPHA = 1.0
+
+# selu's fixed scale and alpha (0x3f867d5f / 0x3fd62d7d as fp32 bit patterns).
+SELU_SCALE = 1.0507009873554805
+SELU_ALPHA = 1.6732632423543772

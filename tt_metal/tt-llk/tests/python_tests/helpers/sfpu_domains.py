@@ -497,6 +497,58 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.UnaryLe: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
     ),
+    # UnaryNe / UnaryEq compare against the same 0.5 threshold as the four above. On
+    # Blackhole they are driven by a crafted-stimuli test rather than the registry sweep,
+    # so they had no domain; the Quasar sweep drives every parity op through the registry,
+    # which needs one. Equality against a threshold only produces a mix of 0/1 outputs if
+    # some stimuli land exactly on it, so _OP_EDGE_POINTS' probe at UNARY_COMP_THRESHOLD
+    # carries the interesting case and the domain just spans it.
+    MathOperation.UnaryNe: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryEq: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # logical_not(x) = (x == 0) ? 1 : 0. Same reasoning as UnaryEq: the answer is only
+    # interesting at exactly zero, which the edge probe supplies; the domain spans it so
+    # the surrounding "not zero -> 0" case is covered densely.
+    MathOperation.LogicalNotUnary: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # Integer-domain parity ops. These run on the integer path (exact int32 lanes), so the
+    # bounds are chosen to keep the *result* representable rather than to explore a curve:
+    #   left_shift by 3 must not overflow int32, so cap the magnitude at 2^27;
+    #   right_shift and the bitwise ops are total on int32, so they span a wide band.
+    MathOperation.LeftShift: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-(2**27), high=2**27
+        )
+    ),
+    MathOperation.RightShift: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-(2**30), high=2**30
+        )
+    ),
+    MathOperation.BitwiseAnd: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-(2**30), high=2**30
+        )
+    ),
+    MathOperation.BitwiseOr: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-(2**30), high=2**30
+        )
+    ),
+    MathOperation.BitwiseXor: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-(2**30), high=2**30
+        )
+    ),
+    MathOperation.BitwiseNot: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-(2**30), high=2**30
+        )
+    ),
     # unary max/min against value 0.0; span both signs
     MathOperation.UnaryMax: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -981,6 +1033,23 @@ _UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
     MathOperation.TopKLocalSort: "perf-only; whole-op topk is covered by test_topk.py",
     MathOperation.TopKMerge: "perf-only; whole-op topk is covered by test_topk.py",
     MathOperation.TopKRebuild: "perf-only; whole-op topk is covered by test_topk.py",
+    # ── Registered for the Quasar SFPU parity sweep, exempt from the Blackhole one ──
+    #
+    # These ops needed a registry entry so helpers.sfpu_port_quasar's parity sweep can
+    # resolve a domain through for_op_pipeline, but Blackhole already covers them by
+    # other means and enrolling them in the standard profile would change what the
+    # Blackhole suite runs. Registration and sweeping are separate decisions here:
+    # sfpu_unary_ops() subtracts this table, so the domain is available to any caller
+    # that asks for it by name while the Blackhole sweep stays exactly as it was.
+    MathOperation.UnaryNe: "Blackhole covers it with crafted threshold-tie stimuli in test_sfpu_unary.py",
+    MathOperation.UnaryEq: "Blackhole covers it with crafted threshold-tie stimuli in test_sfpu_unary.py",
+    MathOperation.LogicalNotUnary: "Blackhole covers it with crafted exact-zero stimuli in test_sfpu_unary.py",
+    MathOperation.LeftShift: "integer op; Blackhole covers it through test_eltwise_unary_sfpu_int",
+    MathOperation.RightShift: "integer op; Blackhole covers it through test_eltwise_unary_sfpu_int",
+    MathOperation.BitwiseAnd: "integer op with no Blackhole test; float sweep cannot drive it",
+    MathOperation.BitwiseOr: "integer op with no Blackhole test; float sweep cannot drive it",
+    MathOperation.BitwiseXor: "integer op with no Blackhole test; float sweep cannot drive it",
+    MathOperation.BitwiseNot: "integer op with no Blackhole test; float sweep cannot drive it",
 }
 
 

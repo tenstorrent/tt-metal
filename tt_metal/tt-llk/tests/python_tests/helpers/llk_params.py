@@ -225,6 +225,18 @@ class MathOperation(Enum):
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
+    # Unary bitwise against a compile-time scalar (ckernel_sfpu_bitwise.h). Distinct from
+    # the SfpuBitwise* BinaryOp entries below, which take two operand tiles.
+    BitwiseAnd = OpSpec("bitwise_and", MathOpType.SFPU_UNARY)
+    BitwiseOr = OpSpec("bitwise_or", MathOpType.SFPU_UNARY)
+    BitwiseXor = OpSpec("bitwise_xor", MathOpType.SFPU_UNARY)
+    # Tile-structural ops: these read or write across the whole tile rather than
+    # element-wise, so they run through the dedicated structural harness
+    # (test_sfpu_structural_quasar) and carry their own goldens.
+    TiledProd = OpSpec("tiled_prod", MathOpType.SFPU_UNARY)
+    AltComplexRotate90 = OpSpec("alt_complex_rotate90", MathOpType.SFPU_UNARY)
+    IntSumRow = OpSpec("sum_int_row", MathOpType.SFPU_UNARY)
+    IntSumCol = OpSpec("sum_int_col", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
