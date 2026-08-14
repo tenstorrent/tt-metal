@@ -337,6 +337,21 @@ class MuseGlimmerGenerator(Generator):
         #: stage's evidence; see :meth:`_invalidate_traces_if_cache_moved`.
         self._prefill_trace_releases = 0
         self._decode_trace_releases = 0
+        #: Traces whose ``ttnn.release_trace`` *raised*.  Round 8 of the stage review found
+        #: that round 7's retain-in-place policy fixed the leak by reintroducing round 4's
+        #: bug: the handle stayed in ``_trace_id`` / ``_prefill_traces``, so the very next
+        #: ``decode_forward`` (or ``_prefill_traced``) found it and replayed it -- against the
+        #: cache the caller had just rebound away from.  Silently wrong tokens, which is worse
+        #: than the leak.
+        #:
+        #: So a failed release *fails closed*: the handle and every tensor the trace may still
+        #: read move here, out of the lookup paths, and the id/logits slots are cleared so the
+        #: next call recaptures.  Nothing is deallocated -- a possibly-live trace still holds
+        #: those addresses -- and ``note_trace_released()`` is **not** called, so
+        #: ``live_traces_over_kv_cache`` stays raised and ``deallocate()`` keeps warning.
+        #: :meth:`_retry_orphaned_traces` retries them at every release and at teardown.
+        #: Entries are ``{"what": str, "id": int, "tensors": [ttnn.Tensor, ...]}``.
+        self._orphaned_traces: list[dict] = []
         self._device_inputs: dict[str, ttnn.Tensor] = {}
         self._prev_page_table: torch.Tensor | None = None
         self._needs_reseed = True
@@ -684,6 +699,8 @@ class MuseGlimmerGenerator(Generator):
             self._release_prefill_traces()
         if stale_decode:
             self._release_decode_trace()
+        # A rebind is the natural retry point for anything an earlier rebind could not free.
+        self._retry_orphaned_traces()
 
     def _release_decode_trace(self) -> None:
         """Drop the decode trace, and with it the sampling trace captured over its logits.
@@ -718,17 +735,30 @@ class MuseGlimmerGenerator(Generator):
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the decode trace: {exc}")
             if not released:
-                # Round 7: making only the *decrement* conditional was half a fix. Clearing
-                # the id discarded the only handle, so the trace could never be retried and
-                # the counter had no reachable decrement left -- which turned the
-                # ``deallocate()`` warning into a permanent false positive. And freeing the
-                # logits a possibly-live trace still reads is the very use-after-free the
-                # counter exists to warn about. So a failed release changes *nothing*: the
-                # id, the logits and the count all stay, and the next ``teardown()`` retries.
-                logger.warning(
-                    "MuseGlimmerGenerator: retaining the decode trace and its logits after a failed "
-                    "release; the live-trace count stays raised and teardown() will retry."
+                # Round 7 kept the id in place so a retry was possible.  Round 8 showed what
+                # that cost: ``decode_forward`` tests ``self._trace_id is None`` to decide
+                # whether to recapture, so a retained id is a *replayed* id, and on the rebind
+                # path the buffers it was captured over are no longer the ones bound.  Fail
+                # closed instead -- the handle and the logits move to ``_orphaned_traces``,
+                # which no lookup path consults, and the slots are cleared so the next call
+                # recaptures against the live cache.  Nothing is deallocated and the live-trace
+                # count stays raised; :meth:`_retry_orphaned_traces` retries.
+                self._orphaned_traces.append(
+                    {
+                        "what": "decode",
+                        "id": self._trace_id,
+                        "tensors": [t for t in (self._trace_logits,) if t is not None],
+                    }
                 )
+                logger.warning(
+                    "MuseGlimmerGenerator: the decode trace failed to release; it is retained "
+                    "unusable (never replayed again) with its logits, the live-trace count stays "
+                    "raised, and the release is retried at the next release and at teardown()."
+                )
+                self._trace_id = None
+                self._trace_logits = None
+                self._decode_trace_cache_sig = ()
+                ttnn.synchronize_device(self.mesh_device)
                 return
             self._trace_id = None
             self.model.note_trace_released()
@@ -766,7 +796,7 @@ class MuseGlimmerGenerator(Generator):
         if self._prefill_traces:
             ttnn.synchronize_device(self.mesh_device)
             self.counters["synchronizations"] += 1
-        retained = {}
+        orphaned = 0
         for padded_len, entry in list(self._prefill_traces.items()):
             released = False
             try:
@@ -775,10 +805,21 @@ class MuseGlimmerGenerator(Generator):
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the prefill trace for {padded_len}: {exc}")
             if not released:
-                # Same as _release_decode_trace: keep the entry and its buffers so a retry is
-                # possible and the count stays honest, rather than freeing tensors a live
-                # trace holds and losing the handle.
-                retained[padded_len] = entry
+                # Fails closed exactly as the decode trace does, and for a sharper reason: the
+                # bucket dict *is* the lookup, so a retained entry is one ``_prefill_traced``
+                # will find and replay.  Worse, with ``prefill_trace_max_entries > 1`` -- which
+                # the stage README recommends for serving -- a partial failure used to return
+                # before clearing ``_prefill_trace_cache_sig``, so the next capture on another
+                # bucket re-stamped the signature to the *new* cache and the stale entry could
+                # never be invalidated again.  Moving it out of the dict removes both.
+                self._orphaned_traces.append(
+                    {
+                        "what": f"prefill[{padded_len}]",
+                        "id": entry["id"],
+                        "tensors": [entry[key] for key in ("tokens", "page_table", "logits")],
+                    }
+                )
+                orphaned += 1
                 continue
             ttnn.synchronize_device(self.mesh_device)
             for key in ("tokens", "page_table", "logits"):
@@ -787,14 +828,48 @@ class MuseGlimmerGenerator(Generator):
                 except Exception:  # noqa: BLE001
                     pass
             self.model.note_trace_released()
-        self._prefill_traces = retained
-        if retained:
-            logger.warning(
-                f"MuseGlimmerGenerator: retained {len(retained)} prefill trace(s) after a failed "
-                "release; teardown() will retry."
-            )
-            return
+        # Unconditional on both counts: every entry was either released or orphaned, so no
+        # bucket is left replayable, and the signature must be cleared even when something
+        # was orphaned or a later capture would stamp the new cache over the old comparison.
+        self._prefill_traces = {}
         self._prefill_trace_cache_sig = ()
+        if orphaned:
+            logger.warning(
+                f"MuseGlimmerGenerator: {orphaned} prefill trace(s) failed to release; they are "
+                "retained unusable (never replayed again) with their buffers, the live-trace count "
+                "stays raised, and the release is retried at the next release and at teardown()."
+            )
+
+    def _retry_orphaned_traces(self) -> int:
+        """Retry every trace whose release raised, and free its tensors once it lands.
+
+        Called after a rebind-driven release and from :meth:`teardown`, so a transient
+        failure is retried at the next natural boundary, not only at process exit.  A trace that
+        still refuses to release stays orphaned: it is never replayed, its buffers are never
+        freed, and it keeps ``live_traces_over_kv_cache`` raised so
+        :meth:`MuseGlimmerModel.deallocate` still warns.  Returns how many are still held.
+        """
+        if not self._orphaned_traces:
+            return 0
+        ttnn.synchronize_device(self.mesh_device)
+        still_held = []
+        for orphan in self._orphaned_traces:
+            try:
+                ttnn.release_trace(self.mesh_device, orphan["id"])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"retrying the release of the {orphan['what']} trace failed again: {exc}")
+                still_held.append(orphan)
+                continue
+            ttnn.synchronize_device(self.mesh_device)
+            for tensor in orphan["tensors"]:
+                try:
+                    ttnn.deallocate(tensor)
+                except Exception:  # noqa: BLE001
+                    pass
+            self.model.note_trace_released()
+            logger.info(f"MuseGlimmerGenerator: the retained {orphan['what']} trace released on retry.")
+        self._orphaned_traces = still_held
+        return len(still_held)
 
     def prefill_forward(
         self,
@@ -1228,6 +1303,14 @@ class MuseGlimmerGenerator(Generator):
         self.counters["synchronizations"] += 1
         self._release_prefill_traces()
         self._release_decode_trace()
+        # Last chance for anything a previous release could not free.  Both release calls
+        # above may themselves have orphaned something, so this runs after them.
+        still_held = self._retry_orphaned_traces()
+        if still_held:
+            logger.warning(
+                f"MuseGlimmerGenerator: teardown() leaves {still_held} trace(s) unreleased after a "
+                "retry; their KV-cache buffers must not be freed while this device stays open."
+            )
 
     # ------------------------------------------------------------- reporting
 
@@ -1249,13 +1332,25 @@ class MuseGlimmerGenerator(Generator):
             "force_argmax": bool(self.sampling.tt_sampling.force_argmax_sampling),
             "sampling_implementation": "models.common.sampling.SamplingGenerator",
             # This stage's own three decode-path flags plus the opt-in prefill trace, read off
-            # the *modules* rather than from prose.  Round 7 pointed out that without them the
-            # ``capacity`` blocks of the baseline and shipped evidence arms are byte-identical
-            # on exactly the settings that separate them, so the only thing distinguishing the
-            # arms was ``performance.baseline_arm``.  Same reasoning as the carried-forward
-            # decoder contract above: a build that silently flipped one of these would be a
-            # different model and should say so in its own evidence.
-            "lm_head_softcap_in_l1": bool(model_mod.LM_HEAD_SOFTCAP_IN_L1),
+            # the *built model* rather than from prose.  Round 7 pointed out that without them
+            # the ``capacity`` blocks of the baseline and shipped evidence arms are
+            # byte-identical on exactly the settings that separate them, so the only thing
+            # distinguishing the arms was ``performance.baseline_arm``.  Same reasoning as the
+            # carried-forward decoder contract above: a build that silently flipped one of these
+            # would be a different model and should say so in its own evidence.
+            #
+            # Round 8: the softcap flag is the one of the three that is *snapshotted* --
+            # ``_LMHead.__init__`` copies the module constant into ``self.softcap_in_l1`` and
+            # ``forward`` consults the instance (``tt/model.py``), and both the L1 probe and the
+            # acceptance test drive the instance -- so reading the module global here described
+            # the import, not the build, and a model constructed with ``softcap_in_l1=False``
+            # reported ``true``.  The other two are read per-forward off the module, so there
+            # the global *is* the built state.
+            # (The reported *value* is unchanged for all three shipped evidence arms -- the
+            # harness mutates the global before the build and never restores -- so no
+            # committed artifact goes stale on this fix; what changes is that a build which
+            # overrode the constructor argument can no longer misreport itself.)
+            "lm_head_softcap_in_l1": bool(self.model.lm_head.softcap_in_l1),
             "embed_decode_gather_sharded": bool(model_mod.EMBED_DECODE_GATHER_SHARDED),
             "decode_swiglu_mul_cores": dec_mod.DECODE_SWIGLU_MUL_CORES,
             "prefill_trace": bool(self.gen_config.prefill_trace),

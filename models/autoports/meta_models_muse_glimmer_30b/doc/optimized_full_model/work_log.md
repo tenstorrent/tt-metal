@@ -166,8 +166,8 @@ Every part of the estimate was wrong in the safe direction except the payback, w
 guessed at ~7 and measured at 6.6. It works, it is exact, it fits alongside the decode
 traces, and it costs almost no DRAM at this row count — so it **ships**, as
 `GeneratorConfig.prefill_trace` with `prefill_trace_max_entries` bounding the bucket
-cache. Through the same evidence harness: **TTFT 63.66 → 50.19 ms, −21.2 %**, decode
-unchanged to 0.06 % (`evidence_perf_prefill_trace.json`).
+cache. Through the same evidence harness: **TTFT 63.68 → 49.76 ms, −21.9 %**, decode
+unchanged to 0.14 % (`evidence_perf_prefill_trace.json`).
 
 Off by default, because one trace serves one 32-row padded-length bucket and capture
 costs 98 ms against a ~15 ms per-replay saving: a win for a caller that repeats or
@@ -253,7 +253,7 @@ expected: resharding a tensor is not arithmetic.
 `decode_ab.py --arms full_model_stage,terminal_only,base` (`decode_ab_shipped.json`),
 traced logits-only on 2 layers: 1.5535 → 1.5376 → **1.5246** ms. Extrapolating the
 per-step terms once and the per-layer term 26x predicts 22.81 ms on the 52-layer model;
-the measured all-layer step is **22.657 ms**, 0.7 % better than predicted.
+the measured all-layer step is **22.656 ms**, 0.7 % better than predicted.
 
 ## 4. Candidates considered and not taken
 
@@ -300,15 +300,15 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | decode A/B, SwiGLU grid | `decode_ab_swiglu.json` | 80 cores wins by 0.83 % |
 | decode A/B, cumulative | `decode_ab_shipped.json` | −1.86 % on 2 layers |
 | per-layer floor | `logs/layer_ab_after.log` | 0.4473 / 0.4164 |
-| perf, baseline arm | `evidence_perf_before.json` | 23.815 / 23.164 ms, TTFT 65.94 |
-| perf + shapes + 130073 | `evidence_perf.json` | **23.315 / 22.657 ms**, TTFT 63.66 |
-| perf, `--prefill-trace` | `evidence_perf_prefill_trace.json` | **TTFT 50.19 ms**, decode unchanged |
+| perf, baseline arm | `evidence_perf_before.json` | 23.844 / 23.164 ms, TTFT 65.41 |
+| perf + shapes + 130073 | `evidence_perf.json` | **23.298 / 22.656 ms**, TTFT 63.68 |
+| perf, `--prefill-trace` | `evidence_perf_prefill_trace.json` | **TTFT 49.76 ms**, decode unchanged |
 | autoregressive, chat + raw | `evidence_autoregress.json` | coherent, non-degenerate |
 | accuracy + sampling + fallback | `evidence_accuracy.json` | top-5 1.000, top-100 1.000 |
 | fp32 control + misses | `evidence_fp32_gate.json`, `evidence_misses.json` | all four gates pass |
 | greedy sampler benchmark | `sampler_ab.json` | split still wins, 15x |
-| 55-case suite, forward | `test_results.xml` | 55 passed |
-| 55-case suite, reverse | `logs/full_test_run_reverse.log` | 55 passed |
+| 56-case suite, forward | `test_results.xml` | 56 passed |
+| 56-case suite, reverse | `logs/full_test_run_reverse.log` | 56 passed |
 | qualitative, TT + compare | `qualitative/` | byte-identical to stage 6 |
 | degeneracy gate | `logs/check_degenerate_output.log` | no degenerate output |
 | watcher, shipped-default 10 cases | `watcher/`, `logs/run_watcher.log` | `WATCHER_CLEAN`, 0 tripped asserts |
@@ -366,23 +366,26 @@ directly readable, which is what `perf_summary.json`'s device-time term is built
 
 `perf_summary.json`. Roofline **8.829 ms/token** (4,520,382,464 B/device ÷ 512 GB/s,
 where the bandwidth is back-derived from `tt-perf-report`'s own DRAM% columns rather than
-a data sheet), device time **22.838 ms/token**, end-to-end token-out **23.315 ms/token**,
-end-to-end logits-only **22.657 ms/token**.
+a data sheet), device time **22.838 ms/token**, end-to-end token-out **23.298 ms/token**,
+end-to-end logits-only **22.656 ms/token**.
 
 Two gaps, both named:
 
-* **roofline to device (37.9 %)** — 176 µs of a 431 µs sliding layer is non-matmul work
-  that moves no weight bytes: 4 norms, `SdpaDecode`, two collectives, two cache updates,
-  rotary, head create/concat, layout conversions. The projections themselves run at
-  52–72 % of peak. This is the "modules built from many small ops sit lower" case, and
+* **roofline to device (37.9 %)** — 179.07 µs of a 431.48 µs sliding layer is non-matmul
+  work that moves no weight bytes: 4 norms, `SdpaDecode`, two collectives, two cache
+  updates, rotary, head create/concat, layout conversions. The projections themselves run
+  at 52.27–77.12 % of peak. This is the "modules built from many small ops sit lower" case, and
   the explanation is the requirement;
 * **device to end-to-end (−0.8 %)** — device time comes out *above* the traced replay,
   because `tt-perf-report` merges a 4-device capture by taking the max per op. The sign
   is the useful part: there is no room for host work between them, which the zero
   per-token refresh counters say independently.
 
-`22.657 + 0.632 = 23.289` against a measured token-out of `23.315`: the two traces
-account for the step to within 27 µs, and that 27 µs is the caller's token readback.
+`22.656 + 0.632 = 23.288` against a measured token-out of `23.298`: the two traces
+account for the step to within 9.9 µs, and that 9.9 µs is the caller's token readback.
+(Round 8 found this paragraph still carrying the pre-regeneration arithmetic and its
+larger residual; the figures are this run's, and the README's accounting section states
+the same three numbers.)
 
 ## 9. The figure gate
 
@@ -423,7 +426,7 @@ real defect:
 
 | finding | what was wrong | what was done |
 | --- | --- | --- |
-| **P1** the host-dispatch gap was declined on an *unmeasured* cost model, and TTFT did not improve | the stage named a prefill trace as the only mechanism and never captured one; the two inputs to the "does not pay back" argument were estimates | captured it (`bench/prefill_trace_probe.py`): **59.80 → 44.96 ms, bit-identical, 98.16 ms capture, 3.3 MB retained, coexists with the decode traces**, then **shipped it** as `GeneratorConfig.prefill_trace` with a bounded bucket cache and a contract test. TTFT **63.66 → 50.19 ms, −21.2 %** (§2.5) |
+| **P1** the host-dispatch gap was declined on an *unmeasured* cost model, and TTFT did not improve | the stage named a prefill trace as the only mechanism and never captured one; the two inputs to the "does not pay back" argument were estimates | captured it (`bench/prefill_trace_probe.py`): **59.80 → 44.96 ms, bit-identical, 98.16 ms capture, 3.3 MB retained, coexists with the decode traces**, then **shipped it** as `GeneratorConfig.prefill_trace` with a bounded bucket cache and a contract test. TTFT **63.68 → 49.76 ms, −21.9 %** (§2.5) |
 | **P2** the host attribution had a 2x hole and a contradiction | the collective probe used a **BF16** payload in a hot loop and reproduced 60 µs against the model's 125–140; `perf_summary.json` said 12.1 ms where the README said 19.1 | re-measured at the model's **BFP8** payload, with a loaded queue, and with the device drained before each in-model collective: **117.05 µs loaded against 114.6 in-model drained** — the gap is the instruction stream, nothing is unattributed. `perf_summary.json` and the README now both say 20.93 ms, and the retracted "nothing moves it" is replaced by the measured **−14/−17 % from persistent buffers**, blocked on the decoder stage's correctness race (§2.4) |
 | **P2** the teacher-forcing "after" range dropped this stage's own lowest measurement | the README quoted 37.51–38.50 while `evidence_accuracy.json` said 37.19 | all three runs reported, the ranges noted as overlapping, and **the +1.3 % claim withdrawn** |
 | **P2** "none of the three changes allocates anything" was false for L1 | `ttnn.tanh`/`ttnn.multiply` have no in-place form, so change 1 moves two 3.24 MB transients into width-sharded L1 | measured (`bench/l1_highwater_probe.py`): **+126,976 B/bank of peak L1**, 1.24 MB/bank still free there; the sentence corrected, the pool/moment confusion with the 7,296 B semaphore figure explained, and it is now limitation 8 |
@@ -652,7 +655,7 @@ agree on every arm tally and on the primary contrast.
 | **P1** limitation 6 was the retracted round-4 statement; the gate required it | rewritten; superseded phrases asserted *absent*; cross-section agreement asserted |
 | **P2** the reversal was over-claimed: the one significant contrast was confounded in both dimensions, the isolating ones were not significant, the multiplicity note had been deleted, and the "length control" matched case *count* but not *work* | **two new arms run.** A **work-matched** twelve-case arm whose extra case builds its own `reuse=False` generator, clones and frees all 104 cache tensors and captures *and releases* a trace — a **decode** trace, not a prefill one: **0 of 3**. And the **opt-in pair alone**, repeated to **0 of 4**. With those, the conclusion is an interaction rather than a main effect, and it is stated with the multiplicity and independence caveats restored |
 | **P2** "the fix moved neither arm … **excludes** the in-model mechanisms" rested on two 3-vs-3 tables whose minimum attainable p is 0.100 | replaced with what the data bounds: four in-model candidates changed and the rate did not move, so the mechanism is not among them — which is weaker than "excludes" and is what the runs support |
-| **P2** the closure statement called the ctx-256 floor "not conservative" | it is a *comparator*, not a bound, and the document now proves it with its own numbers: 22.421 + 0.691 = 23.112 ms for bare layers plus the terminal term, against a 22.657 ms measured step that also contains the terminal path — the real step beats the sum of its separately-measured parts by **0.456 ms**, so the per-layer harness overprices by ~2 %. The contract's floor-plus-terminal comparison is stated alongside, and `perf_summary.json` now carries the ctx-256 comparator |
+| **P2** the closure statement called the ctx-256 floor "not conservative" | it is a *comparator*, not a bound, and the document now proves it with its own numbers: 22.421 + 0.691 = 23.112 ms for bare layers plus the terminal term, against a 22.656 ms measured step that also contains the terminal path — the real step beats the sum of its separately-measured parts by **0.456 ms**, so the per-layer harness overprices by ~2 %. The contract's floor-plus-terminal comparison is stated alongside, and `perf_summary.json` now carries the ctx-256 comparator |
 | **P2** the round-5 contract substitution broke two things it touched: it rewrote the `qualitative.py --arm hf` command this stage deliberately did **not** run, and an `evidence_misses_*.json` glob that matches nothing here | the blanket substitution is replaced by explicit per-command handling; the HF arm is attributed to the stage that ran it with the reason; the miss note is derived from the file that exists. The gate now **resolves** contract-referenced paths instead of pattern-matching the string, and the "no `doc/full_model/`" rule carries a named exception rather than being dropped |
 | **P2** the trace-counter guard over-decremented on a failed release and had no behavioural coverage | decrement only on a successful release — otherwise the counter reads zero while a trace is alive, silencing the guard in exactly the case it exists for. New test `test_the_live_trace_count_round_trips_over_both_trace_kinds` drives both kinds through capture and release and pins the round-trip and the clamp |
 | three stale suite sizes | corrected against `test_results.xml`; the suite ended round 6 at **55** cases with nine new, and round 7 found a fourth stale `54` the round-6 sweep missed |
@@ -672,10 +675,19 @@ Five arms, 24 processes (25 with the single `--arm rebuild` run, which is not on
 | twelve: ten + `decode_follows_the_cache…` + a sampling case (**work-matched**) | 3 | 0 |
 | **twelve: ten + both opt-in `prefill_trace` cases** | 6 | **6** |
 
-Neither half reproduces alone. The pair by itself is 0 of 4; a twelve-case process that
-builds an extra generator, clones and frees the whole cache and captures and releases a
-*decode* trace is 0 of 3. Together: 6 of 6, against 2 of 18 for everything else pooled
-(p = 0.00021, six post-hoc contrasts, no multiplicity correction).
+> **Superseded by round 7, below** — and by README limitation 6, which is the current
+> statement. The round-7 review found that the count-matched control arm (twelve cases, no
+> prefill trace) trips **2 of 6**, so a preceding workload *alone* is sometimes sufficient
+> and the interaction claim in the paragraph below is not what the arms support. It is left
+> here as the record of what round 6 concluded, not as a live claim. The current reading is
+> **the opt-in pair takes the rate from a 0–33 % background to 100 %**, directional, with the
+> mechanism unavailable from this design.
+
+Neither half reproduces alone (round 6's reading; see the note above). The pair by itself
+is 0 of 4; a twelve-case process that builds an extra generator, clones and frees the whole
+cache and captures and releases a *decode* trace is 0 of 3. Together: 6 of 6, against 2 of
+18 for everything else pooled (p = 0.00021, six post-hoc contrasts, no multiplicity
+correction).
 
 So the sixth statement is close to the third, which round 4 retracted. That is not a
 vindication of the third — it was underpowered and its pooling was circular — but it is worth
@@ -715,6 +727,54 @@ And `capability_report()` now reports this stage's own four flags, so the baseli
 evidence arms are no longer byte-identical in their `capacity` blocks on exactly the settings
 that separate them.
 
+### Round 8 — `more-work-needed`
+
+Two P1s, and the first one is the same defect for the third time: a figure block labelled
+with an artifact it does not come from. The **whole** `performance` block of
+`doc/context_contract.json` was the round-6 run while its `source` field named this one —
+and the stage's own `refresh_context_contract.py --check` said so, exiting 1, while this
+gate passed 651/651 because it asserted the provenance *string* and never the figures.
+Regenerating changed exactly the six fields the review predicted.
+
+The second P1 is round 7's own fix reintroducing round 4's bug. Round 7 made a failed
+`ttnn.release_trace` retain everything in place — which is the handle `decode_forward`
+tests (`if self._trace_id is None: capture`) and the bucket `_prefill_traced` looks up. So
+on the rebind path a failed release meant *replaying* a trace against the cache the caller
+had just rebound away from: silently wrong tokens, from the branch round 4's test does not
+take. It now fails **closed**: the handle and every tensor the trace may still read move to
+`_orphaned_traces`, which no lookup path consults; the id/bucket slots are cleared so the
+next call recaptures against the live cache; nothing is deallocated and
+`live_traces_over_kv_cache` stays raised; and `_retry_orphaned_traces()` retries at the next
+rebind and at `teardown()`. `_prefill_trace_cache_sig` is now cleared **unconditionally**,
+which closes the `prefill_trace_max_entries > 1` case round 8 found: a partial failure used
+to return before clearing it, so the next capture on another bucket re-stamped the signature
+to the new cache and the stale entry could never be invalidated again.
+
+| finding | what was done |
+| --- | --- |
+| **P1** the contract's performance block was the previous run under this run's name | regenerated; the gate now binds **every** field of the block to `evidence_perf.json`, asserts the block holds no unbound figure, and runs `refresh_context_contract.py --check` as a subprocess — the one check in the tree that would have caught it |
+| **P1** a failed release fell open into a stale-cache replay, for both trace kinds | fail-closed orphan list, unconditional signature clear, a retry at every rebind and at teardown, and a new test (`test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried`) that monkeypatches `ttnn.release_trace` to raise and pins all four properties: nothing replayable, nothing deallocated, the count still raised, the next decode answering from the rebound cache, and the retry bringing the count back down |
+| **P2** three derived figures in `perf_summary.json` were the superseded run's, and the gate read none of them | re-pointed, and the file is now **exhausted** by the gate: every numeric field is bound at a named path (an unlisted path fails, so a new field cannot go unbound) and every decimal number in its prose must resolve to an artifact value or a documented constant |
+| **P2** the work log recorded the pre-regeneration run in five places, one two regenerations stale | all re-pointed; its headline figures are bound to the same artifacts the README's are, with the superseded literals blacklisted by name |
+| **P2** the cross-section gate was defeatable eight more ways, all demonstrated | a fabricated sixth arm row now fails (rows the gate cannot attribute are a failure, not a skip); the headline table is bound **cell by cell** with the columns asserted not interchanged; the audit table's `ids` and `µs` columns are parsed from the README and checked against the CSV instead of from a hardcoded copy; every `N of M` in the two arm sections must be a tally derived from the logs; the eligibility conditions are bound to `tt/generator.py`; and the duplicated figures (device time, roofline, `SdpaDecode`, the accuracy rates, force-argmax, the context, the suite size, the fallback counters) are bound to the section that claims them |
+| **P2** `capability_report()` read the softcap flag off the module, not the build | reports `self.model.lm_head.softcap_in_l1`, which is what `forward` consults. The value is unchanged in all three arms, so no artifact went stale on it |
+| the matched contrast was the one contrast the multiplicity paragraph did not correct | corrected: **p = 0.36**. The gate computes all three corrections from its own Fisher values and requires the text's rounding to be a rounding of *that*, not of an already-rounded p — which is where the previous `0.0013` came from |
+| the prefill-trace arm's evidence predated the four `capability_report()` flags | regenerated (`TTFT 49.76 ms`); all three perf arms are now asserted to carry the block and to disagree exactly where the arms disagree |
+| the round-6 conclusion sat in this log with no supersession marker | marked, with a pointer to the round-7 restatement and to limitation 6 |
+| §8 disagreed with the README on two figures from the same partition | corrected to the README's (**179.07 µs** of a 431.48 µs layer; the projections at **52.27–77.12 %**) |
+
+The suite is **56** cases (46 inherited + 10 new), forward and reverse.
+
+And the thing four rounds of this have implied: the mutation testing is **committed**
+(`bench/mutate_figure_gate.py`, `logs/mutate_figure_gate.log`). Thirty mutations, each one a
+defeat a review demonstrated, each applied alone to a scratch copy of the model directory,
+each required to make the gate fail. Four of them survived the first attempt at this round's
+fixes — the work log's token-out row, its two-trace residual, the accounting section's device
+figure and the accuracy table's top-5 — all for the same reason the review named: those
+figures appear more than once in their document, so "the literal is present" was satisfied by
+the other copy. They are bound to their table cell now, and the gate asserts the harness's log
+alongside its own verdict.
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -728,7 +788,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `c28f91010d0` | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
 | `40e3fd71014` | round-5 review fixes: one trace-release path with a drain, the fixture finalizer, the model's live-trace guard and semaphore-cache cleanup, the re-measured limitation-6 arms, all three Fisher contrasts, and the contract's `tested` provenance |
 | `24cdea2f559` | round-6 review fixes: limitation 6 rewritten from current data with cross-section gate checks, the work-matched and pair-alone arms, the comparator-not-a-bound correction, the contract-substitution repair, and the trace-counter test |
-| *(this commit)* | round-7 review fixes: the derived process count, the conclusion restated to what the arms support, a parse-and-bind cross-section gate, the recoverable trace-release failure path, and the documented prefill-trace eligibility |
+| `c675d8dc2d3` | round-7 review fixes: the derived process count, the conclusion restated to what the arms support, a parse-and-bind cross-section gate, the recoverable trace-release failure path, and the documented prefill-trace eligibility |
+| *(this commit)* | round-8 review fixes: the regenerated context contract and prefill-trace evidence arm, the fail-closed trace-release path and its injected-failure test, the exhausted `perf_summary.json` and re-pointed work log, cell-level and section-scoped gate binding, and the corrected multiplicity paragraph |
 
 Nothing unrelated is in any of them: `git status` is clean at each, and the
 only files touched outside `doc/optimized_full_model/` are the four implementation/test

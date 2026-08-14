@@ -1,0 +1,34 @@
+baseline: FIGURES_OK
+
+CAUGHT  contract token-out figure
+CAUGHT  contract TTFT figure
+CAUGHT  perf_summary stored roofline fraction
+CAUGHT  perf_summary logits-only field
+CAUGHT  perf_summary prose TTFT figure
+CAUGHT  perf_summary prose replay figure
+CAUGHT  work log token-out figure
+CAUGHT  work log two-trace residual
+CAUGHT  work log baseline row (two regenerations stale)
+CAUGHT  fabricated sixth arm row
+CAUGHT  prose-only contradictory tally
+CAUGHT  control-arm bullet reversed
+CAUGHT  headline table columns swapped (TTFT row)
+CAUGHT  headline table columns swapped (token-out row)
+CAUGHT  Bonferroni values falsified
+CAUGHT  audit SdpaDecode µs
+CAUGHT  audit id moved out of its group
+CAUGHT  device time in the accounting section
+CAUGHT  fallback synchronizations counter
+CAUGHT  accuracy top-5
+CAUGHT  force-argmax flipped
+CAUGHT  context reduced
+CAUGHT  suite size
+CAUGHT  eligibility bound
+CAUGHT  eligibility user_id condition dropped
+CAUGHT  arm row tally
+CAUGHT  work log accounting device figure
+CAUGHT  work log per-layer floor row
+CAUGHT  accuracy fp32 row top-100
+CAUGHT  roofline row in the reconciliation table
+
+ALL 30 MUTATIONS CAUGHT

@@ -8,7 +8,7 @@
   },
   "ttft_ms": 63.68,
   "decode_ms_per_token_e2e": 23.298,
-  "decode_ms_per_token_e2e_logits_only": 22.657,
+  "decode_ms_per_token_e2e_logits_only": 22.656,
   "decode_ms_per_token_device": 22.838,
   "sampling_trace_ms_per_token": 0.632,
   "roofline_ms_per_token_estimate": 8.829,
@@ -21,19 +21,19 @@
     "assumed_per_device_dram_bandwidth_bytes_per_s": 512000000000,
     "bandwidth_source": "back-derived from tt-perf-report's own DRAM% on this stage's decode_sliding capture: the LM-head row id 3139 (279.38 GB/s = 54.5666%) and the wqkv row id 3039 (394.85 GB/s = 77.1192%). Both return 512.0 GB/s, which is the tool's assumed peak, not an independent measurement."
   },
-  "roofline_fraction_of_e2e": 0.3787,
+  "roofline_fraction_of_e2e": 0.379,
   "layer_stack_lower_bound_ms_per_token": 22.858,
   "device_time_source": "doc/optimized_full_model/tracy/decode_{sliding,full}_perf_report.csv, one real layer of each kind plus the real terminal path; 39*431.48 + 13*409.16 + 691.07 us, where the common embedding/terminal term (691.07 us) is subtracted from both windows",
   "named_limitations": [
-    "Prefill (TTFT) is host-issue bound, not device bound: 4122 ttnn dispatches over a 62.75 ms window, measured at 54.91 ms of issue against 55.08 ms to drain (prefill_host_probe.json, prefill_opcount.json). The 209 collective dispatches are 20.93 ms of it -- 33 % of the wall time on 5 % of the calls. The opt-in prefill trace removes 21.2 % of TTFT (63.66 -> 50.19 ms, bit-identical logits; evidence_perf_prefill_trace.json and prefill_trace_probe.json) and is off by default because one trace serves one 32-row padded-length bucket at a 98.16 ms capture cost.",
+    "Prefill (TTFT) is host-issue bound, not device bound: 4122 ttnn dispatches over a 62.75 ms window, measured at 54.91 ms of issue against 55.08 ms to drain (prefill_host_probe.json, prefill_opcount.json). The 209 collective dispatches are 20.93 ms of it -- 33 % of the wall time on 5 % of the calls. The opt-in prefill trace removes 21.9 % of TTFT (63.68 -> 49.76 ms, bit-identical logits; evidence_perf_prefill_trace.json and prefill_trace_probe.json) and is off by default because one trace serves one 32-row padded-length bucket at a 98.16 ms capture cost.",
     "Persistent CCL staging buffers are worth 14-17 % of the prefill reduce-scatter's host cost at the model's BFP8 payload and 4-worker setting (ccl_host_probe_bfp8*.json), i.e. ~2 ms of TTFT, and are unavailable: the decoder stage rejected them on an intermittent first-use correctness race. An earlier version of this file said the collectives were 12.1 ms and that nothing moved them; both came from a BF16 hot-loop arm and are withdrawn.",
-    "tt-perf-report merges a 4-device capture by taking the max per op, so the summed device time is ~0.8 % above the warmed traced replay it explains (22.838 ms device against a 22.657 ms logits-only replay). The same capture shows a 310.959 us op-to-op gap on the graph's first op (id 3145), which is the inter-replay boundary of a one-replay signposted window under profiler instrumentation, not host work in the loop: the device-vs-e2e arithmetic leaves no room for it and the steady-state token/position/sync refresh counters are all zero per token.",
+    "tt-perf-report merges a 4-device capture by taking the max per op, so the summed device time is ~0.8 % above the warmed traced replay it explains (22.838 ms device against a 22.656 ms logits-only replay). The same capture shows a 310.959 us op-to-op gap on the graph's first op (id 3145), which is the inter-replay boundary of a one-replay signposted window under profiler instrumentation, not host work in the loop: the device-vs-e2e arithmetic leaves no room for it and the steady-state token/position/sync refresh counters are all zero per token.",
     "The MLP gate/up output shard grid cannot be widened past 16 cores: the DRAM-sharded matmul requires K_tiles % cores == 0 on both 6656/32=208 and 5120/32=160, and 16 is the largest count in both divisor sets. The SwiGLU multiply is widened by reshard instead, which raises the decode step's peak L1 by 126,976 B/bank for change 1 and adds three transient reshards for change 3.",
     "The decode step's 104 collectives (2 per layer) are the preserved replicated-residual contract from the decoder stage; a fractured residual would halve the dispatch count but is out of this stage's scope.",
     "Two prefill norms run on 1 and 4 cores for ~134 us each (0.27 ms of a 65 ms TTFT), left because the fix changes prefill numerics on the accuracy gates' critical path."
   ],
-  "ttft_ms_with_prefill_trace": 50.19,
+  "ttft_ms_with_prefill_trace": 49.76,
   "l1_peak_delta_per_bank_bytes": 126976,
   "layer_stack_comparator_ms_per_token_at_decode_context_256": 22.421,
-  "layer_stack_comparator_note": "39 x 0.4390 + 13 x 0.4077 from doc/optimized_full_model/logs/layer_ab_after_ctx256.log, measured at the benchmark's own decode context. It is a same-context *comparator*, not a strict lower bound: 52 bare layers measured one at a time plus the 0.691 ms terminal device term is 23.112 ms, which the whole 52-layer traced step (22.657 ms) beats by 0.456 ms, so the per-layer harness overprices the stack by about 2%. The 22.858 figure above is the same measurement at decode context 2048, which is what the decoder stage's floor uses."
+  "layer_stack_comparator_note": "39 x 0.4390 + 13 x 0.4077 from doc/optimized_full_model/logs/layer_ab_after_ctx256.log, measured at the benchmark's own decode context. It is a same-context *comparator*, not a strict lower bound: 52 bare layers measured one at a time plus the 0.691 ms terminal device term is 23.112 ms, which the whole 52-layer traced step (22.656 ms) beats by 0.456 ms, so the per-layer harness overprices the stack by about 2%. The 22.858 figure above is the same measurement at decode context 2048, which is what the decoder stage's floor uses."
 }

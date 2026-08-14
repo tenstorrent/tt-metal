@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import csv
 import gzip
+import importlib.util
 import json
 import pathlib
 import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 D = ROOT / "doc/optimized_full_model"
@@ -43,11 +47,11 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 651
+ADVERTISED_CHECKS = 839
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
-ADVERTISED_BINDINGS = 34
+ADVERTISED_BINDINGS = 35
 
 
 #: Every artifact this run actually opened, recorded by the three readers below.  Round 4
@@ -477,6 +481,35 @@ def main() -> int:
     )
     perf("prefill-trace TTFT ms", pt["ttft_ms"]["min"], 2)
     perf("prefill-trace token-out ms", pt["token_out_decode_ms_per_token"]["min"], 3)
+    # Round 7 added this stage's four flags to ``capability_report()`` so an arm's own evidence
+    # states the settings that define it; round 8 found the prefill-trace arm had not been
+    # re-run since, leaving the one arm whose name *is* a flag unable to show it.  It is
+    # regenerated, and all three perf arms are asserted to carry the block -- and to disagree
+    # where the arms disagree, which is the property the block exists for.
+    FLAGS = ("lm_head_softcap_in_l1", "embed_decode_gather_sharded", "decode_swiglu_mul_cores", "prefill_trace")
+    arms = {
+        "shipped": load(D / "evidence_perf.json")["capacity"],
+        "baseline": load(D / "evidence_perf_before.json")["capacity"],
+        "prefill-trace": load(D / "evidence_perf_prefill_trace.json")["capacity"],
+    }
+    for arm, capacity in arms.items():
+        same(f"the {arm} arm's capacity block carries this stage's flags", [f in capacity for f in FLAGS], [True] * 4)
+    same(
+        "the baseline arm's flags are the reverted ones",
+        [arms["baseline"][f] for f in FLAGS],
+        [False, False, None, False],
+    )
+    same("the shipped arm's are the shipped ones", [arms["shipped"][f] for f in FLAGS], [True, True, 80, False])
+    same(
+        "...and the prefill-trace arm differs from it in exactly the flag it is named for",
+        [k for k in FLAGS if arms["prefill-trace"][k] != arms["shipped"][k]],
+        ["prefill_trace"],
+    )
+    same(
+        "the softcap flag is read off the built model, not the module global",
+        "bool(self.model.lm_head.softcap_in_l1)" in text(ROOT / "tt/generator.py"),
+        True,
+    )
     l1 = load(D / "l1_highwater_probe.json")
     same("L1 peak delta per bank", l1["l1_peak_delta_per_bank_bytes"], 126976)
     same("L1 free per bank at the peak", l1["l1_free_per_bank_at_peak_with_change"], 1238144)
@@ -572,8 +605,42 @@ def main() -> int:
         "logs/check_watcher_prefill_trace_pair.log",
     ):
         same(f"{verdict_log} re-derives a clean verdict", text(D / verdict_log).count("WATCHER_CLEAN"), 1)
-    same("55 cases passed forward", "55 passed" in text(D / "logs/full_test_run.log"), True, readme="55 passed")
-    same("55 cases passed in reverse", "55 passed" in text(D / "logs/full_test_run_reverse.log"), True)
+    # The suite size is derived from the junit artifact rather than typed, so a case added
+    # without updating the README fails here.  Round 6 found three stale sizes and round 7 a
+    # fourth; a hardcoded literal is how all four survived.
+    suite_cases = len(list(ET.parse(_record(D / "test_results.xml")).iter("testcase")))
+    same(
+        f"{suite_cases} cases passed forward",
+        f"{suite_cases} passed" in text(D / "logs/full_test_run.log"),
+        True,
+        readme=f"{suite_cases} passed",
+    )
+    same(
+        f"{suite_cases} cases passed in reverse",
+        f"{suite_cases} passed" in text(D / "logs/full_test_run_reverse.log"),
+        True,
+    )
+    bind("the README states the suite size", str(suite_cases))
+    new_cases = [
+        name
+        for name in (
+            "test_lm_head_softcap_runs_in_l1_and_matches_the_dram_form",
+            "test_decode_embedding_gathers_straight_into_the_boundary_layout",
+            "test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one",
+            "test_prefill_trace_is_opt_in_and_matches_the_eager_path",
+            "test_prefill_trace_survives_rebinding_the_same_external_cache",
+            "test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured",
+            "test_the_live_trace_count_round_trips_over_both_trace_kinds",
+            "test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried",
+        )
+        if f"`{name}" in readme
+    ]
+    same("the README's new-case table lists every new test", len(new_cases), 8)
+    same(
+        "...and the inherited/new split adds up to the suite",
+        f"(46 inherited + {suite_cases - 46} new)" in readme,
+        True,
+    )
     same("tracy integrity check passed", "TRACY_INTEGRITY_OK" in text(D / "logs/run_tracy.log"), True)
     same("the overflowed two-layer capture is preserved", (D / "logs/run_tracy_two_layer_overflow.log").is_file(), True)
 
@@ -600,6 +667,53 @@ def main() -> int:
         "contract notes are attributed to this stage",
         "optimized-full-model stage takes no capability reduction" in contract["notes"],
         True,
+    )
+    # Round 8's P1: the contract's whole ``performance`` block was the *previous* run's while
+    # its ``source`` field named this one -- the third recurrence of the false-provenance
+    # defect rounds 2, 3 and 4 each found elsewhere.  This gate asserted only the provenance
+    # *string*, so 651/651 passed over a contract that contradicted the artifact it cited, and
+    # mutating any figure in it passed too.  Every field is bound to the artifact now.
+    contract_perf = contract["performance"]
+    # (The provenance *string* is asserted in round 4's block further down; what follows is
+    # the figures it points at.)
+    for field, artifact_value in (
+        ("ttft_ms", after["ttft_ms"]["min"]),
+        ("token_out_decode_ms_per_token", after["token_out_decode_ms_per_token"]["min"]),
+        ("token_out_decode_tok_s_u", after["token_out_decode_tok_s_u"]),
+        ("traced_decode_logits_only_ms_per_token", after["traced_decode_logits_only_ms_per_token"]["min"]),
+        ("traced_decode_logits_only_tok_s_u", after["traced_decode_logits_only_tok_s_u"]),
+        ("sampling_trace_ms_per_token", after["sampling_trace_ms_per_token"]["min"]),
+        ("layer_stack_lower_bound_ms_per_token", after["layer_stack_lower_bound_ms_per_token"]["total_ms"]),
+    ):
+        same(f"the contract's {field} is this run's, not a predecessor's", contract_perf[field], artifact_value)
+    # Every *other* numeric field of the block too, so a field added later cannot go
+    # unbound -- the block is exhausted rather than sampled.
+    same(
+        "the contract's performance block holds no unbound figure",
+        sorted(k for k, v in contract_perf.items() if isinstance(v, (int, float)) and not isinstance(v, bool)),
+        [
+            "layer_stack_lower_bound_ms_per_token",
+            "sampling_trace_ms_per_token",
+            "token_out_decode_ms_per_token",
+            "token_out_decode_tok_s_u",
+            "traced_decode_logits_only_ms_per_token",
+            "traced_decode_logits_only_tok_s_u",
+            "ttft_ms",
+        ],
+    )
+    # And the whole file against a fresh regeneration.  ``--check`` is the one check in the
+    # tree that would have caught the staleness above on its own; round 8 found this gate was
+    # not invoking it, so a contract left un-regenerated after a perf re-run passed here.
+    refresh = subprocess.run(
+        [sys.executable, str(D / "bench/refresh_context_contract.py"), "--check"],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT.parents[2]),
+    )
+    same(
+        f"the contract is what a fresh regeneration produces ({refresh.stdout.strip()[-90:] or 'no output'})",
+        refresh.returncode,
+        0,
     )
 
     # --------------------------------------- round-3 coverage: the rows the gate missed
@@ -853,7 +967,46 @@ def main() -> int:
     same("...and deallocate() checks it", "if self.live_traces_over_kv_cache:" in model_src, True)
     same("...and no longer claims to free weights", 'weights included."""' in model_src, False)
     same("the generator notes both captures", generator_src.count("note_trace_captured()"), 2)
-    same("...and both releases", generator_src.count("note_trace_released()"), 2)
+    # Three release sites, not two: the decode path, the prefill path, and the retry that
+    # drains ``_orphaned_traces``.  A failed release does **not** decrement (round 6), so the
+    # retry is the only place a retained trace can ever be accounted for.
+    same("...and every release", generator_src.count("self.model.note_trace_released()"), 3)
+    # Round 8's P1: a failed ``ttnn.release_trace`` must fail *closed*.  Round 7 retained the
+    # handle in place, which is the handle ``decode_forward`` tests and the bucket
+    # ``_prefill_traced`` looks up, so a failed release on the rebind path replayed a trace
+    # against the cache the caller had just rebound away from -- round 4's silent-wrong-token
+    # bug from a branch round 4's test does not take.  Assert the policy at each of the four
+    # places it lives, on the source, and the behaviour in the test.
+    same(
+        "a failed release moves the trace out of every lookup path",
+        "self._orphaned_traces.append(" in generator_src and generator_src.count("_orphaned_traces") >= 6,
+        True,
+    )
+    same(
+        "...and the decode slot is cleared so the next call recaptures",
+        "def _retry_orphaned_traces" in generator_src,
+        True,
+    )
+    same(
+        "...the prefill bucket dict is emptied unconditionally",
+        "self._prefill_traces = {}" in generator_src,
+        True,
+    )
+    same(
+        "...and the signature is cleared even when something was orphaned",
+        "self._prefill_traces = {}\n        self._prefill_trace_cache_sig = ()" in generator_src,
+        True,
+    )
+    same(
+        "the retained-in-place policy round 8 rejected is gone",
+        "retaining the decode trace and its logits after a failed" in generator_src,
+        False,
+    )
+    same(
+        "teardown retries what an earlier release could not free",
+        "still_held = self._retry_orphaned_traces()" in generator_src,
+        True,
+    )
     same(
         "close_multichip_mesh drops the model's semaphore cache too",
         "_MODEL_CCL_SEMAPHORES.pop(id(mesh), None)" in text(ROOT / "tt/multichip_decoder.py"),
@@ -868,6 +1021,29 @@ def main() -> int:
     same(
         "the decode-rebind test compares the traced decode against the eager one",
         "the traced decode must answer from the cache it is bound to now" in tests_src,
+        True,
+    )
+    # Round 8: both retention branches were dead code from the suite's point of view -- no
+    # test made ``release_trace`` raise, so the policy was asserted only on the source.  The
+    # injected-failure case is now the behavioural half of the four source checks above.
+    same(
+        "a test injects a raising release_trace",
+        "injected: release_trace refused" in tests_src,
+        True,
+    )
+    same(
+        "...and asserts the failed release is not answered from the kept trace",
+        "must not answer from the released-and-kept trace" in tests_src,
+        True,
+    )
+    same(
+        "...that nothing was deallocated",
+        'all(t.is_allocated() for o in generator._orphaned_traces for t in o["tensors"])' in tests_src,
+        True,
+    )
+    same(
+        "...and that the retry accounts for both orphans",
+        "the two orphans are accounted for on retry" in tests_src,
         True,
     )
     # Round 4's P2: the contract's provenance must name this stage, not the previous one.
@@ -1227,6 +1403,127 @@ def main() -> int:
         round(load(D / "perf_summary.json")["layer_stack_comparator_ms_per_token_at_decode_context_256"], 3),
         22.421,
     )
+    # ------------------------------------------- perf_summary.json, every number of it
+    #
+    # Round 8 found three derived figures here still pointing at the superseded run, and this
+    # gate reading none of them: it checked four fields and recomputed the roofline fraction
+    # from two of *those* rather than from the stored one, so mutating the stored fraction, the
+    # logits-only field, or any figure inside ``named_limitations`` passed 651/651.  This is
+    # the `$optimize`-mandated accounting artifact and it is what a downstream stage reads
+    # instead of the prose, so two rules now exhaust it.
+    #
+    # (1) Every numeric *field*, at a named path, against an artifact-derived value.  An
+    # unlisted path is a failure, so a field added later cannot go unbound.
+    lm_row = next(r for r in sliding if r["ID"] == "3139")
+    qkv_row = next(r for r in sliding if r["ID"] == "3039")
+    bw = float(lm_row["DRAM"]) / (float(lm_row["DRAM %"]) / 100)
+    # The full-attention window, which no check read before round 8 even though the device
+    # figure's own formula is stated in terms of it.
+    full_rows = csv_rows("decode_full_perf_report.csv")
+    full_layer = round(sum(float(r["Device Time"]) for r in full_rows) - terminal, 2)
+    close("the full-attention layer, window minus terminal", full_layer, 409.16, tol=1e-4)
+    ri = ps["roofline_inputs"]
+    ps_expected = {
+        "workload/prompt_len": 128,
+        "workload/gen_len": 128,
+        "workload/batch": 1,
+        "ttft_ms": round(after["ttft_ms"]["min"], 2),
+        "decode_ms_per_token_e2e": round(after["token_out_decode_ms_per_token"]["min"], 3),
+        "decode_ms_per_token_e2e_logits_only": round(after["traced_decode_logits_only_ms_per_token"]["min"], 3),
+        # The device figure is the two Tracy windows summed by the formula in
+        # ``device_time_source``; both terms are checked against the CSVs above.
+        "decode_ms_per_token_device": round((39 * layer + 13 * full_layer + terminal) / 1e3, 3),
+        "sampling_trace_ms_per_token": round(after["sampling_trace_ms_per_token"]["min"], 3),
+        "roofline_ms_per_token_estimate": round(ri["per_device_bytes_per_token"] / bw * 1e3 / 1e9, 3),
+        "roofline_inputs/per_device_bytes_per_token": (
+            ri["layer_weight_bytes"]
+            + ri["lm_head_bfp4_bytes"]
+            + ri["embedding_rows_read_bytes"]
+            + ri["kv_cache_read_bytes_at_context_192"]
+        ),
+        "roofline_inputs/layer_weight_bytes": cap["per_device_layer_weight_bytes"],
+        # BFP4 packs 16 values per 8-byte block plus one exponent byte: the padded local vocab
+        # 50688 x 6656 at 4.5 bits.
+        "roofline_inputs/lm_head_bfp4_bytes": 50688 * 6656 * 9 // 16,
+        # 32 decode rows x 6656 hidden x 2 B, plus the two RoPE tables' rows.
+        "roofline_inputs/embedding_rows_read_bytes": 106496,
+        "roofline_inputs/kv_cache_read_bytes_at_context_192": 2715648,
+        "roofline_inputs/assumed_per_device_dram_bandwidth_bytes_per_s": int(bw * 1e9),
+        "roofline_fraction_of_e2e": round(ps["roofline_ms_per_token_estimate"] / ps["decode_ms_per_token_e2e"], 4),
+        "layer_stack_lower_bound_ms_per_token": round(floor["total_ms"], 3),
+        "ttft_ms_with_prefill_trace": round(pt["ttft_ms"]["min"], 2),
+        "l1_peak_delta_per_bank_bytes": l1["l1_peak_delta_per_bank_bytes"],
+        "layer_stack_comparator_ms_per_token_at_decode_context_256": round(floor256, 3),
+    }
+
+    def _numeric_paths(value, prefix=""):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                yield from _numeric_paths(item, f"{prefix}{key}/")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                yield from _numeric_paths(item, f"{prefix}[{index}]/")
+        elif isinstance(value, bool):
+            return
+        elif isinstance(value, (int, float)):
+            yield prefix.rstrip("/"), value
+
+    ps_paths = dict(_numeric_paths(ps))
+    same("every numeric field of perf_summary.json is bound", sorted(ps_paths), sorted(ps_expected))
+    for path, want in ps_expected.items():
+        if path in ps_paths:
+            close(f"perf_summary {path}", ps_paths[path], want, tol=1e-3, readme="")
+
+    # (2) Every decimal number in its *prose* -- ``named_limitations`` and the three provenance
+    # notes -- must be one of those same artifact-derived values or one of the constants below,
+    # each of which is checked elsewhere in this file against its own artifact.  This is the
+    # half that catches "removes 21.2 % of TTFT (63.66 -> 50.19 ms)" going stale inside a
+    # sentence, which is exactly what round 8 found in three places.
+    ps_prose_ok = {
+        # from the artifacts, via the fields above
+        ps_expected["ttft_ms"],
+        ps_expected["decode_ms_per_token_e2e_logits_only"],
+        ps_expected["decode_ms_per_token_device"],
+        ps_expected["ttft_ms_with_prefill_trace"],
+        ps_expected["layer_stack_comparator_ms_per_token_at_decode_context_256"],
+        ps_expected["layer_stack_lower_bound_ms_per_token"],
+        round(bw, 1),  # 512.0 GB/s, the tool's assumed peak
+        round(float(lm_row["DRAM"]), 2),  # 279.38 GB/s
+        round(float(lm_row["DRAM %"]), 4),  # 54.5666 %
+        round(float(qkv_row["DRAM"]), 2),  # 394.85 GB/s
+        round(float(qkv_row["DRAM %"]), 4),  # 77.1192 %
+        round(float(next(r for r in sliding if r["ID"] == "3145")["Op-to-Op Gap"]), 3),  # 310.959 us
+        round(oc["wall_issue_ms"], 2),  # 62.75 ms prefill window
+        round(trace["capture_ms"], 2),  # 98.16 ms capture
+        round(layer, 2),  # 431.48 us sliding layer
+        round(full_layer, 2),  # 409.16 us full layer
+        terminal_ms,  # 0.691 ms terminal term
+        round(floor256 + terminal_ms, 3),  # 23.112
+        round(floor256 + terminal_ms - after["traced_decode_logits_only_ms_per_token"]["min"], 3),  # 0.456
+        # constants checked elsewhere in this file against their own artifacts
+        54.91,  # prefill_host_probe issue ms
+        55.08,  # ...and drain ms
+        20.93,  # the collective dispatches' share, ms
+        round(abs(improvement), 1),  # the prefill trace's TTFT improvement %, from the two arms
+        0.8,  # device-vs-replay %
+        12.1,  # the withdrawn BF16 collective figure, named as withdrawn
+        0.27,  # the two prefill norms, ms
+        0.4390,  # per-layer sliding at ctx 256
+        0.4077,  # ...and full
+        691.07,  # the terminal window, us
+        431.48,  # the sliding layer, us
+        409.16,  # the full layer, us
+    }
+    ps_prose = " ".join(
+        [ps["device_time_source"], ps["layer_stack_comparator_note"], ri["bandwidth_source"], *ps["named_limitations"]]
+    )
+    for literal in sorted(set(re.findall(r"(?<![\d.])\d+\.\d+", ps_prose))):
+        same(
+            f"perf_summary prose figure {literal} resolves to an artifact",
+            any(abs(float(literal) - allowed) <= max(5e-4, abs(allowed) * 1e-4) for allowed in ps_prose_ok),
+            True,
+        )
+
     same("the ten-case repeat control is clean", "WATCHER_CLEAN" in text(D / "logs/check_watcher_default10.log"), True)
     # The tripped run's own artifact is unusable, and that is the point: the abort lands
     # inside the watcher's dump, so the log has no detach lines and check_watcher rejects it.
@@ -1257,6 +1554,90 @@ def main() -> int:
     work_log = text(D / "work_log.md").replace("\u2212", "-").replace("\u2013", "-")
     for literal in ("77.12", "69.35", "18.03", "36.85", "1.88"):
         same(f"work log states {literal} and it resolves", literal in work_log, True)
+    # Round 8: the work log recorded the *pre-regeneration* run in five places, one of them two
+    # regenerations stale, and this half of the gate was five literals and two negative checks
+    # -- so mutating its perf figures passed.  Its headline figures are bound to the same
+    # artifacts the README's are, derived rather than typed, so a re-run moves both documents
+    # or fails both.
+    # Cell-level, not file-level: every one of these figures appears in the work log more than
+    # once, so "the literal is somewhere in the document" is satisfied by the other copy --
+    # which is how the round-8 mutations of this table survived the first attempt at this
+    # check.  The evidence table's rows are parsed and the value cell is what must contain it.
+    work_log_rows = {}
+    for line in work_log.splitlines():
+        if not line.startswith("| ") or set(line) <= set("| -:\n"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 3:
+            work_log_rows[cells[0]] = cells[2]
+    for row, literals in (
+        (
+            "perf, baseline arm",
+            [
+                f"{before['token_out_decode_ms_per_token']['min']:.3f}",
+                f"{before['traced_decode_logits_only_ms_per_token']['min']:.3f}",
+                f"{before['ttft_ms']['min']:.2f}",
+            ],
+        ),
+        (
+            "perf + shapes + 130073",
+            [
+                f"{after['token_out_decode_ms_per_token']['min']:.3f}",
+                f"{after['traced_decode_logits_only_ms_per_token']['min']:.3f}",
+                f"{after['ttft_ms']['min']:.2f}",
+            ],
+        ),
+        ("perf, `--prefill-trace`", [f"{pt['ttft_ms']['min']:.2f}"]),
+        ("per-layer floor", [f"{floor['sliding_ms_per_layer']:.4f}", f"{floor['full_ms_per_layer']:.4f}"]),
+        ("56-case suite, forward", [f"{suite_cases} passed"]),
+        ("56-case suite, reverse", [f"{suite_cases} passed"]),
+    ):
+        cell = work_log_rows.get(row.replace("56", str(suite_cases)))
+        same(f"the work log's {row!r} row is in the table", cell is not None, True)
+        for literal in literals:
+            same(f"...and its cell states {literal} from this run", literal in (cell or ""), True)
+    residual_us_now = (
+        after["token_out_decode_ms_per_token"]["min"]
+        - after["traced_decode_logits_only_ms_per_token"]["min"]
+        - after["sampling_trace_ms_per_token"]["min"]
+    ) * 1000
+    for label, sentence in (
+        (
+            "the two-trace sum",
+            f"`{after['traced_decode_logits_only_ms_per_token']['min']:.3f} + "
+            f"{after['sampling_trace_ms_per_token']['min']:.3f} = "
+            f"{round(after['traced_decode_logits_only_ms_per_token']['min'], 3) + round(after['sampling_trace_ms_per_token']['min'], 3):.3f}`",
+        ),
+        (
+            "the measured step it is against",
+            f"a measured token-out of `{after['token_out_decode_ms_per_token']['min']:.3f}`",
+        ),
+        ("the residual", f"account for the step to within {residual_us_now:.1f} µs"),
+        ("...and what it attributes it to", f"that {residual_us_now:.1f} µs is the caller's token readback"),
+        ("the device figure", f"device time **{ps['decode_ms_per_token_device']:.3f} ms/token**"),
+    ):
+        same(f"the work log's accounting states {label} from this run", sentence in work_log, True)
+    # The superseded values, named.  Each was in the work log at round 8 and each belongs to a
+    # run that is no longer committed, so their absence is checkable and their presence is a
+    # figure resolving to nothing.
+    for stale in ("23.315", "22.657", "63.66 ", "65.94", "23.815", "23.825", "64.64", "50.19"):
+        same(f"the work log no longer states the superseded {stale.strip()!r}", stale in work_log, False)
+    same(
+        "the work log's two-trace residual is this run's",
+        f"{(after['token_out_decode_ms_per_token']['min'] - after['traced_decode_logits_only_ms_per_token']['min'] - after['sampling_trace_ms_per_token']['min']) * 1000:.1f} \u00b5s"
+        in work_log,
+        True,
+    )
+    same(
+        "the work log's superseded round-6 conclusion is marked as superseded",
+        "> **Superseded by round 7, below**" in work_log,
+        True,
+    )
+    same(
+        "...next to the paragraph it supersedes",
+        work_log.index("> **Superseded by round 7, below**") < work_log.index("Neither half reproduces alone"),
+        True,
+    )
     same(
         "the work log no longer quotes teacher-forcing rates no artifact has",
         any(bad in work_log for bad in ("37.13", "37.16", "38.16")),
@@ -1396,6 +1777,7 @@ def main() -> int:
         "both opt-in": c_optin,
     }
     parsed = {}
+    unaccounted = []
     for line in watcher_section.splitlines():
         if not line.startswith("| ") or "---" in line or "| runs |" in line:
             continue
@@ -1411,6 +1793,13 @@ def main() -> int:
             if key in cells[0]:
                 parsed[key] = (trips, runs)
                 break
+        else:
+            # Round 8 defeated the previous version by *adding* a sixth, fabricated arm row:
+            # its label matched no known key, so it was silently dropped and the run-column
+            # sum still returned 25 while the table displayed 34 runs.  A row this gate cannot
+            # attribute to an arm it derived from the logs is now a failure, not a skip.
+            unaccounted.append(cells[0][:60])
+    same("no row in the Watcher arm table is unaccounted for", unaccounted, [])
     same("every arm row in the Watcher table parsed", sorted(parsed), sorted(derived))
     for key, value in derived.items():
         same(f"the Watcher table's {key!r} row matches the logs", parsed.get(key), value)
@@ -1439,6 +1828,50 @@ def main() -> int:
         "neither alone is sufficient" in limitation6,
         False,
     )
+    # Round 8: the *positive* half of that was unbound, so replacing the control-arm bullet
+    # with its opposite ("the pair is required") passed.  Require the statement the arms
+    # support to be present, not merely the retracted one to be absent.
+    same(
+        "the Watcher section states that a preceding workload alone is sometimes sufficient",
+        "a preceding workload alone *is* sometimes sufficient" in watcher_section,
+        True,
+    )
+    # The restated conclusion's own numbers, derived from the arms rather than read as prose:
+    # the background is the range of the non-opt-in arms' trip rates and the opt-in arm is 100 %.
+    background = [100.0 * trips / runs for key, (trips, runs) in parsed.items() if key != "both opt-in"]
+    background_phrase = f"{min(background):.0f}–{max(background):.0f} %"
+    same(
+        f"the restated conclusion states the background the arms measured ({background_phrase})",
+        background_phrase in limitation6 or background_phrase in watcher_section,
+        True,
+    )
+    same(
+        "...and the opt-in arm's rate with it",
+        100.0 * parsed["both opt-in"][0] / parsed["both opt-in"][1] == 100.0,
+        True,
+    )
+    # Multiplicity: round 8 pointed out the correction was applied to the two contrasts either
+    # side of the one this section names as the one to weigh, and not to that one.  All three
+    # are computed here and required in the text.
+    multiplicity = watcher_section[
+        watcher_section.index("These are six post-hoc contrasts") : watcher_section.index(
+            "**What the five arms support"
+        )
+    ]
+    stated_p = re.findall(r"p = ([0-9.]+)", multiplicity)
+    for label, raw in (
+        ("pooled", fisher(c_optin[0], 0, rest_trips, rest_runs - rest_trips)),
+        ("work-matched", fisher(c_optin[0], 0, 0, 3)),
+        ("matched", fisher(c_optin[0], c_optin[1] - c_optin[0], c_ctrl[0], c_ctrl[1] - c_ctrl[0])),
+    ):
+        # Precision-aware: the paragraph may print any number of decimals, but what it prints
+        # must be its own rounding of p x 6 -- not of a value already rounded once, which is
+        # how "0.0013" got there for a corrected p of 0.00125.
+        same(
+            f"the multiplicity paragraph corrects the {label} contrast (x6 = {raw * 6:.5f})",
+            any(round(raw * 6, len(s.split(".")[1])) == float(s) for s in stated_p if "." in s),
+            True,
+        )
     same(
         "limitation 6 and the Watcher section agree on the pooled contrast",
         "p = 0.00021" in limitation6 and "p = 0.00021" in watcher_section,
@@ -1460,6 +1893,230 @@ def main() -> int:
         ("the withdrawn gate rationale", "largestsizemeasuredwithzerotrips"),
     ):
         same(f"the superseded phrase {stale} is gone from the README", needle in squashed, False)
+
+    # ------------------------------------------------- cell-level binding
+    #
+    # The cross-check above is a *document-wide* digit-bounded search, and round 8 showed what
+    # that cannot see: swapping the before and after columns of the headline table leaves both
+    # literals present, so the inverted claim is invisible; and any figure that occurs twice in
+    # the README can be changed in one of its two places and still be found in the other.  Both
+    # are fixed the same way -- bind the value to the cell it is claimed in, not to the file.
+
+    def table_rows(section: str) -> list[list[str]]:
+        rows = []
+        for line in section.splitlines():
+            if not line.startswith("| ") or set(line) <= set("| -:\n"):
+                continue
+            rows.append([c.strip() for c in line.strip().strip("|").split("|")])
+        return rows
+
+    result_table = readme[readme.index("| | before | **after** | delta |") : readme.index("† The teacher-forcing row")]
+    result_rows = {row[0]: row for row in table_rows(result_table) if len(row) >= 3}
+    same("the Result table has the rows the checks below name", len(result_rows) >= 9, True)
+    for label, before_value, after_value, digits in (
+        (
+            "**token-out decode**",
+            before["token_out_decode_ms_per_token"]["min"],
+            after["token_out_decode_ms_per_token"]["min"],
+            3,
+        ),
+        (
+            "**traced logits-only decode**",
+            before["traced_decode_logits_only_ms_per_token"]["min"],
+            after["traced_decode_logits_only_ms_per_token"]["min"],
+            3,
+        ),
+        (
+            "**TTFT**, prompt 128, shipped default",
+            before["ttft_ms"]["min"],
+            after["ttft_ms"]["min"],
+            2,
+        ),
+        (
+            "layer-stack lower bound",
+            before["layer_stack_lower_bound_ms_per_token"]["total_ms"],
+            after["layer_stack_lower_bound_ms_per_token"]["total_ms"],
+            3,
+        ),
+    ):
+        row = result_rows[label]
+        before_literal, after_literal = f"{before_value:.{digits}f}", f"{after_value:.{digits}f}"
+        same(f"the Result table's {label!r} before cell is the baseline arm's", before_literal in row[1], True)
+        same(f"...and its after cell is the shipped arm's", after_literal in row[2], True)
+        # The columns cannot be swapped: each literal must be absent from the other cell.
+        same(f"...and the two are not interchanged", after_literal not in row[1] and before_literal not in row[2], True)
+
+    # The audit table's own ``ids`` column, which the document calls a verified partition and
+    # which this gate previously re-derived from its *own* hardcoded copy of the ids -- so
+    # moving an id between groups in the README changed nothing here.  Parsed from the README
+    # now and checked against the CSV.
+    audit_table = readme[
+        readme.index("| op group | ids | device µs | candidate | action |") : readme.index(
+            "† `tt-perf-report`'s `Cores` column"
+        )
+    ]
+    audit_ids: list[str] = []
+    audit_rows = 0
+    for row in table_rows(audit_table):
+        if len(row) < 3 or row[1] == "ids":
+            continue
+        ids = [i.strip() for i in row[1].split(",") if i.strip().isdigit()]
+        stated = row[2].replace("*", "").strip()
+        if not ids:
+            # the ``window total`` row: "all 55" against the whole CSV
+            same("the audit table's total row counts every CSV row", f"all {len(sliding)}" in row[1], True)
+            close(
+                "...and states the window total", float(stated), round(sum(float(r["Device Time"]) for r in sliding), 3)
+            )
+            continue
+        audit_rows += 1
+        audit_ids += ids
+        close(
+            f"the README's own ids for the audit row {row[0][:34]!r} sum to its own µs",
+            round(sum(device_time(sliding, i) for i in ids), 3),
+            float(stated),
+            tol=1e-6,
+        )
+    same("the README's audit table has the 14 groups it claims", audit_rows, 14)
+    same("...whose ids are unique", len(audit_ids), len(set(audit_ids)))
+    same(
+        "...and are every row of the CSV, as the partition claim says",
+        sorted(audit_ids),
+        sorted(r["ID"] for r in sliding),
+    )
+    same("...and match the groups this gate checks", sorted(audit_ids), sorted(used))
+
+    # Section-scoped literals.  Each of these occurs more than once in the README, so the
+    # document-wide search cannot tell which copy it found; round 8 changed one copy of each
+    # and the gate passed.  Bound to the section that makes the claim.
+    def section(start: str, end: str) -> str:
+        return readme[readme.index(start) : readme.index(end)]
+
+    accounting = section("## Performance accounting", "## Where TTFT actually goes")
+    fallback_section = section("## Runtime fallback audit", "## Capability and batch")
+    item_table = section("| item | value |", "## What ships")
+    # The reconciliation table, cell by cell: each of these figures appears more than once in
+    # the accounting section, so only the row that *claims* it will do.
+    accounting_rows = {row[0]: row[1] for row in table_rows(accounting) if len(row) == 3}
+    for row_label, value in (
+        ("roofline", f"**{ps['roofline_ms_per_token_estimate']:.3f} ms/token**"),
+        ("device-time decode", f"**{ps['decode_ms_per_token_device']:.3f} ms/token**"),
+        ("end-to-end token-out", f"**{after['token_out_decode_ms_per_token']['min']:.3f} ms/token**"),
+        ("end-to-end logits-only", f"**{after['traced_decode_logits_only_ms_per_token']['min']:.3f} ms/token**"),
+    ):
+        same(f"the reconciliation table's {row_label!r} row states {value}", accounting_rows.get(row_label), value)
+    for name, needle, where, where_name in (
+        (
+            "the roofline fraction",
+            f"{ps['roofline_fraction_of_e2e'] * 100:.1f} %",
+            accounting,
+            "the accounting section",
+        ),
+        ("the context", "**131072**, unreduced", item_table, "the item table"),
+        ("the suite size", f"**{suite_cases}** cases", item_table, "the item table"),
+        (
+            "the zero synchronizations counter",
+            "| synchronizations | **0** | **0.0** |",
+            fallback_section,
+            "the fallback table",
+        ),
+        (
+            "the zero device-position-advance counter",
+            "| `device_position_advances` | **0** |",
+            fallback_section,
+            "the fallback table",
+        ),
+    ):
+        same(f"{where_name} states {name} ({needle})", needle in where, True)
+    accuracy_section = section("## Accuracy", "## Qualitative")
+    contract_table = section("## Carried-forward decoder contract, unchanged", "## Performance accounting")
+    acc = load(D / "evidence_accuracy.json")
+    # Every cell of the accuracy table, per row: the four rows print the same three rates, so a
+    # single changed cell is invisible to any check that asks whether the value is present.
+    accuracy_rows = [row for row in table_rows(accuracy_section) if len(row) == 5 and row[2] != "top-1"]
+    same("the accuracy table has its four gate rows", len(accuracy_rows), 4)
+    fp32_gate = load(D / "evidence_fp32_gate.json")
+    for row in accuracy_rows:
+        gate_key = "prefill_check" if "run_prefill_check" in row[0] else "teacher_forcing"
+        # The bf16 rows come from the accuracy run, the fp32-control rows from the gate run;
+        # each is keyed on the reference file it was scored against.
+        fp32 = "fp32" in row[1]
+        source = fp32_gate if fp32 else acc
+        reference = "readiness_aime24_chat_fp32.refpt" if fp32 else "readiness_aime24_chat.refpt"
+        entry = source[f"{gate_key}_by_reference"][reference]["per_entry"][0]
+        same(
+            f"the accuracy row {row[0][:24]!r}/{reference} states this run's rates",
+            [row[2], row[3], row[4]],
+            [f"{entry['top1']:.3f}", f"**{entry['top5']:.3f}**", f"**{entry['top100']:.3f}**"],
+        )
+    same(
+        "the contract table states force-argmax off, in the row that claims it",
+        "force-argmax **off**" in contract_table,
+        True,
+    )
+    same(
+        "...and that is what the built sampler reports",
+        load(D / "evidence_perf.json")["capacity"]["force_argmax"],
+        False,
+    )
+    # A tally for these arms stated *in prose* rather than in the table was round 8's
+    # "5 of 6" mutation: containment cannot see an added sentence, so every "N of M" in the
+    # two sections that discuss the arms must be one this gate derived from the logs.
+    derived_tallies = {f"{trips} of {runs}" for trips, runs in parsed.values()} | {
+        f"{rest_trips} of {rest_runs}",
+        "0 of 1",  # the --arm rebuild run
+    }
+    for tally in sorted(set(re.findall(r"\d+ of \d+", watcher_section + limitations))):
+        same(f"the arm tally {tally!r} is one the logs support", tally in derived_tallies, True)
+    same(
+        "the audit table states SdpaDecode's µs in its own row, not merely somewhere",
+        any(
+            row[0] == "`SdpaDecode`" and row[2] == f"{device_time(sliding, '3168'):.3f}"
+            for row in table_rows(audit_table)
+        ),
+        True,
+    )
+
+    # The opt-in prefill trace's three eligibility conditions, bound to the code that
+    # implements them.  Round 7 added the documentation; round 8 pointed out it was bound to
+    # nothing, so changing 8192 to 4096 or dropping "user_id == 0" passed.
+    eligibility = generator_src[
+        generator_src.index("def _prefill_user") : generator_src.index("def _capture_prefill_trace")
+    ]
+    for condition, prose in (
+        ("prompt_len <= config.prefill_chunk_size", "`prompt_len <=\nconfig.prefill_chunk_size`"),
+        ("user_id == 0", "`user_id == 0`"),
+        ("not return_all_logits", "`return_all_logits` is false"),
+    ):
+        same(f"the generator gates the prefill trace on {condition}", condition in eligibility, True)
+        same(f"...and the README documents it", prose.replace("\n", " ") in " ".join(readme.split()), True)
+    same(
+        "the documented chunk size is the built model's",
+        f"(**{load(D / 'evidence_perf.json')['capacity']['prefill_chunk_size']}**)" in readme,
+        True,
+    )
+
+    # The gate's own adversarial evidence.  Four review rounds found this file passing over a
+    # wrong figure, and each time the *reviewer* had to construct the mutation by hand; the
+    # harness is committed now, so "the gate passes" is accompanied by "and here is what makes
+    # it fail".  Its log is checked rather than its existence.
+    mutations = text(D / "logs/mutate_figure_gate.log")
+    same("the mutation harness ran from a clean baseline", "baseline: FIGURES_OK" in mutations, True)
+    same("...and every mutation was caught", "MUTATION_SURVIVORS" in mutations, False)
+    mutation_count = len(re.findall(r"^CAUGHT ", mutations, re.M))
+    same(
+        f"...all {mutation_count} of them",
+        f"ALL {mutation_count} MUTATIONS CAUGHT" in mutations,
+        True,
+    )
+    # Counted off the harness's own table rather than off its formatting, which the repo's
+    # black hook rewrites.
+    harness_spec = importlib.util.spec_from_file_location(
+        "muse_glimmer_figure_gate_mutations", _record(D / "bench/mutate_figure_gate.py")
+    )
+    harness = importlib.util.module_from_spec(harness_spec)
+    harness_spec.loader.exec_module(harness)
+    same("the harness covers every defeat the log records", len(harness.MUTATIONS), mutation_count)
 
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)

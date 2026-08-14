@@ -8,7 +8,7 @@
   "cache_slots": 1,
   "layers": "all",
   "build_kwargs": {},
-  "build_seconds": 158.8,
+  "build_seconds": 154.5,
   "capacity": {
     "hf_model": "meta-models/Muse-Glimmer-30B",
     "supported_context": 131072,
@@ -77,6 +77,11 @@
     ],
     "force_argmax": false,
     "sampling_implementation": "models.common.sampling.SamplingGenerator",
+    "lm_head_softcap_in_l1": true,
+    "embed_decode_gather_sharded": true,
+    "decode_swiglu_mul_cores": 80,
+    "prefill_trace": true,
+    "prefill_trace_max_entries": 1,
     "lm_head_dtype": "DataType.BFLOAT4_B",
     "lm_head_matmul": "dram_sharded",
     "lm_head_cores": 52,
@@ -145,38 +150,38 @@
       "batch": 1
     },
     "ttft_ms": {
-      "min": 50.193069997476414,
-      "mean": 50.33931933576241,
+      "min": 49.762389971874654,
+      "mean": 50.2663179843997,
       "rounds": [
-        50.62294102390297,
-        50.193069997476414,
-        50.20194698590785
+        50.52639701170847,
+        50.510166969615966,
+        49.762389971874654
       ]
     },
     "token_out_decode_ms_per_token": {
-      "min": 23.32819842524445,
-      "mean": 23.33315550400069,
+      "min": 23.3298309920099,
+      "mean": 23.333857740089787,
       "rounds": [
-        23.334343110323026,
-        23.32819842524445,
-        23.336924976434588
+        23.33298259035237,
+        23.33875963790709,
+        23.3298309920099
       ]
     },
-    "token_out_decode_tok_s_u": 42.86657639699501,
+    "token_out_decode_tok_s_u": 42.86357669468263,
     "traced_decode_logits_only_ms_per_token": {
-      "min": 22.65698431256169,
-      "mean": 22.657753572881727,
+      "min": 22.656090624877834,
+      "mean": 22.657204114390577,
       "replays_per_round": 32,
       "rounds": [
-        22.65698431256169,
-        22.6580766875486,
-        22.65819971853489
+        22.656090624877834,
+        22.65824190544663,
+        22.657279812847264
       ]
     },
-    "traced_decode_logits_only_tok_s_u": 44.13650052472212,
+    "traced_decode_logits_only_tok_s_u": 44.13824152441976,
     "sampling_trace_ms_per_token": {
-      "min": 0.632269593552337,
-      "mean": 0.6324833332958709
+      "min": 0.6318427185760811,
+      "mean": 0.6323091250427145
     },
     "layer_stack_lower_bound_ms_per_token": {
       "sliding_layers": 39,
@@ -185,7 +190,7 @@
       "full_ms_per_layer": 0.4164,
       "total_ms": 22.857899999999997,
       "tok_s_u": 43.74855082925379,
-      "source": "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b --decode-context 2048, on this stage's shipped default (doc/optimized_full_model/logs/layer_ab_after.log)"
+      "source": "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b --decode-context 2048, on this stage's shipped default (doc/optimized_full_model/logs/layer_ab_after.log), hardcoded here as SLIDING/FULL_MS_PER_LAYER rather than re-measured by this run"
     },
     "baseline_arm": false,
     "prefill_trace_arm": true,

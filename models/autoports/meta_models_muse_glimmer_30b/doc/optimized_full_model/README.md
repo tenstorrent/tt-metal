@@ -4,7 +4,7 @@ An optimization pass over the [full model](../full_model/README.md), in place, o
 same four Blackhole dies. Same public contract, same 131072-token capability, the same
 canonical split-sampling token-out path, the same carried-forward decoder precision /
 KV-cache / CCL / residual policy — and **2.1 % faster token-out decode** from three
-layout changes that move no arithmetic at all, plus **21 % faster TTFT** from an
+layout changes that move no arithmetic at all, plus **22 % faster TTFT** from an
 opt-in traced prefill that is bit-identical to the eager path.
 
 ## Result
@@ -22,7 +22,7 @@ exactly the three changes ([`logs/evidence_perf_before.log`](logs/evidence_perf_
 | traced teacher-forcing decode | 36.88–37.99 t/s/u † | **37.07–38.15 t/s/u** † | overlapping ranges; no claim † |
 | sampling trace | 0.632 ms | 0.632 ms | unchanged |
 | **TTFT**, prompt 128, shipped default | 65.41 ms (min of 3) | 63.68 ms (min of 3) | inside the process spread; it is not device-bound, see below |
-| **TTFT**, prompt 128, `prefill_trace=True` | — | **50.19 ms (min of 3)** | **-21.2 %** against the default arm |
+| **TTFT**, prompt 128, `prefill_trace=True` | — | **49.76 ms (min of 3)** | **-21.9 %** against the default arm |
 | layer-stack lower bound | 23.239 ms/token | **22.858 ms/token** | −1.64 % |
 | decode accuracy (teacher forcing) | top-1 0.990 · top-5 **1.000** · top-100 **1.000** | same | — |
 | prefill accuracy | top-1 0.990 · top-5 **1.000** · top-100 **1.000** | same | — |
@@ -61,7 +61,7 @@ the attribution and why the trace is opt-in are in
 | decoder | `tt/optimized_decoder.py` (`_OptimizedMLP.decode_forward`) |
 | device | 4 x Blackhole, `ClusterType::P300_X2`, `ttnn.MeshShape(1, 4)`, `FABRIC_1D_RING`, `ttnn.Topology.Ring`, 2 links |
 | context | **131072**, unreduced — [`../context_contract.json`](../context_contract.json) |
-| tests | `tests/test_full_model.py`, **55** cases (46 inherited + 9 new), forward and reverse order |
+| tests | `tests/test_full_model.py`, **56** cases (46 inherited + 10 new), forward and reverse order |
 | watcher | `WATCHER_CLEAN` on the shipped default (10 device cases) and on each opt-in prefill-trace case separately; 0 fatal messages, 0 tripped asserts — [`logs/check_watcher.log`](logs/check_watcher.log) |
 
 ## What ships
@@ -79,7 +79,7 @@ the reason it is opt-in is the whole point of it.
 | 1 | the tanh softcap runs on the LM head matmul's own width-sharded L1 output instead of on DRAM-interleaved logits | `_LMHead.forward`, `LM_HEAD_SOFTCAP_IN_L1` | **−13.1 µs/step** of device time (36.85 → 23.79 µs for the pair) |
 | 2 | the decode embedding all-gather writes the decoder's boundary layout directly | `_embed` / `embed_decode`, `EMBED_DECODE_GATHER_SHARDED` | **−2.0 µs/step**: one `interleaved_to_sharded` removed |
 | 3 | the SwiGLU multiply's SFPU SiLU runs on 80 cores instead of 16, with three reshards to get there and back | `_OptimizedMLP.decode_forward`, `DECODE_SWIGLU_MUL_CORES` | **−7.4 µs/layer** = −383 µs/step over 52 layers (18.03 → 4.75 µs of multiply for 5.91 µs of reshard) |
-| 4 | the prefill runs from a trace, keyed by padded prompt length. **Off by default** | `tt/generator.py`, `GeneratorConfig.prefill_trace` / `prefill_trace_max_entries` | **-21.2 % of TTFT** when a caller turns it on, with bit-identical logits; nothing on decode |
+| 4 | the prefill runs from a trace, keyed by padded prompt length. **Off by default** | `tt/generator.py`, `GeneratorConfig.prefill_trace` / `prefill_trace_max_entries` | **-21.9 % of TTFT** when a caller turns it on, with bit-identical logits; nothing on decode |
 
 Cumulative, on the reduced two-layer build, traced logits-only decode, min of 3 rounds
 x 64 replays, **one invocation** so the arms are like-for-like
@@ -539,12 +539,12 @@ padded-length buckets may hold one, and through the same evidence harness it giv
 
 | | shipped default | **`--prefill-trace`** |
 | --- | --- | --- |
-| **TTFT**, prompt 128 | 63.68 ms (min of 3; 67.74 / 63.68 / 67.43) | **50.19 ms (min of 3; 50.62 / 50.19 / 50.20)** |
-| token-out decode | 23.298 ms/token | 23.328 ms/token |
+| **TTFT**, prompt 128 | 63.68 ms (min of 3; 67.74 / 63.68 / 67.43) | **49.76 ms (min of 3; 50.53 / 50.51 / 49.76)** |
+| token-out decode | 23.298 ms/token | 23.330 ms/token |
 | traced logits-only decode | 22.656 ms/token | 22.657 ms/token |
 | prefill trace buckets captured | — | `[128]` |
 
-**-21.2 % of TTFT**, with decode untouched to 0.13 %
+**-21.9 % of TTFT**, with decode untouched to 0.14 %
 ([`evidence_perf_prefill_trace.json`](evidence_perf_prefill_trace.json),
 [`logs/evidence_perf_prefill_trace.log`](logs/evidence_perf_prefill_trace.log)).
 
@@ -588,7 +588,7 @@ process. The decode figures do not do this: 23.334 / 23.340 / 23.298 here,
 and the two arms do not overlap.
 Read the default TTFT as ~61–70 ms in both arms and the decode numbers as exact. Nothing
 this stage changed touches prefill except the terminal softcap, which is ~30 µs of a
-65 ms window. The `--prefill-trace` arm's 50.19 ms is well outside that spread in the
+65 ms window. The `--prefill-trace` arm's 49.76 ms is well outside that spread in the
 other direction.
 
 ### One remaining prefill inefficiency, priced and left
@@ -674,6 +674,23 @@ cache in place, so the buffer addresses are unchanged and every trace over them 
 correct — which is the property `test_reset_zeroes_the_cache_without_dropping_traces` pins.
 `teardown()` and the rebind path now go through the same `_release_decode_trace()`, because
 two copies of a trace lifecycle drifting apart is what produced the round-4 finding.
+
+**A release that fails, fails closed.** `ttnn.release_trace` can raise, and what happens then
+took three review rounds to get right: round 6 freed the buffers a possibly-live trace still
+held and dropped its only handle; round 7 fixed that by retaining everything *in place*,
+which put the trace back on the lookup paths — `decode_forward` recaptures only when
+`_trace_id is None`, and `_prefill_traced` replays whatever is in the bucket dict — so a
+failed release on the rebind path silently replayed a trace against the cache the caller had
+just rebound away from, which is round 4's bug again. The policy now: the handle and every
+tensor the trace may still read move to `_orphaned_traces`, which no lookup path consults;
+the id and the bucket are cleared so the next call recaptures against the live cache;
+`_prefill_trace_cache_sig` is cleared **unconditionally**, so a partial failure with
+`prefill_trace_max_entries > 1` cannot leave a stale entry that later re-stamping makes
+uninvalidatable; nothing is deallocated and `live_traces_over_kv_cache` stays raised, so
+`deallocate()` still refuses to be silent; and `_retry_orphaned_traces()` retries at the next
+rebind and at `teardown()`, freeing the tensors and lowering the count only once the release
+actually lands. `test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried` pins all
+of it with `ttnn.release_trace` monkeypatched to raise.
 
 ## Split sampling, preserved
 
@@ -914,8 +931,14 @@ p = 0.061**; the pooled figure is reported because it is what "against everythin
 tried" means, not because it is the stronger inference.
 
 These are six post-hoc contrasts on one run set and carry **no multiplicity correction**;
-Bonferroni at ×6 leaves the primary contrast at p = 0.0013 and the work-matched one at
-p = 0.071. Fisher also assumes independence, and these are sequential runs on one physical
+Bonferroni at ×6 leaves the pooled contrast at p = 0.0012 and the work-matched one at
+p = 0.071 — and the matched contrast this section names as the one to weigh at
+**p = 0.36**, i.e. not significant at any conventional threshold once the six contrasts are
+paid for. (Each is the uncorrected p times six: 0.000208, 0.011905 and 0.060606. The
+0.0013 this paragraph printed before round 8 was a rounding of a rounding.) Round 8 of the stage review pointed out that correcting the two contrasts either
+side of it and not that one put the correction everywhere except where it changes the
+reading. It does change the reading: what survives correction is the *ordering* of the
+arms, not a significant matched contrast. Fisher also assumes independence, and these are sequential runs on one physical
 mesh of a device-state phenomenon — the resets between runs are the only thing standing in
 for that assumption. Treat the ordering as solid and the exact p-values as indicative.
 
@@ -994,7 +1017,7 @@ What follows for the shipped code:
   is watched **together in its own process** (0 of 1), so the trace-lifecycle code this stage
   ships is still under watcher, which is what `$optimize` asks for with async CCLs in play;
 * the shipped default never captures a prefill trace, so **none of this is on its path** —
-  which is why the gated ten and the 55-case suite are unaffected either way;
+  which is why the gated ten and the 56-case suite are unaffected either way;
 * the operational note for a serving stage is now specific rather than the withdrawn
   "reset between builds": **with `prefill_trace=True`, expect a watcher-enabled process that
   also runs a substantial other workload to abort at teardown.** Reset afterwards, never read
@@ -1080,7 +1103,7 @@ quotes in the force-argmax section is a different pool and a different moment �
 what a `TT_CCL`'s 36 extra *global semaphores* would have to fit into, at the decoder's
 tightest in-layer point, not what the terminal path has after 52 layers have freed their
 intermediates. The two are not in conflict, and the empirical co-residency evidence is
-that the traced step runs clean: 55 tests, the batch-32 mixed-length case, and a
+that the traced step runs clean: 56 tests, the batch-32 mixed-length case, and a
 watcher-clean run over all three changes.
 
 Batch: batch 1 at 131072 is the primary target and is tested; batch 4 and batch 32 at
@@ -1103,8 +1126,8 @@ in the public path.
 
 | run | result |
 | --- | --- |
-| `pytest tests/test_full_model.py` | **55 passed** — [`logs/full_test_run.log`](logs/full_test_run.log), [`test_results.xml`](test_results.xml) |
-| the same 55 in reverse order, one process | **55 passed** — [`logs/full_test_run_reverse.log`](logs/full_test_run_reverse.log) |
+| `pytest tests/test_full_model.py` | **56 passed** — [`logs/full_test_run.log`](logs/full_test_run.log), [`test_results.xml`](test_results.xml) |
+| the same 56 in reverse order, one process | **56 passed** — [`logs/full_test_run_reverse.log`](logs/full_test_run_reverse.log) |
 | watcher, gated subset (10 shipped-default cases) | **10 passed**, `WATCHER_CLEAN` — [`logs/watcher_pytest.log`](logs/watcher_pytest.log), [`watcher/`](watcher), [`logs/check_watcher.log`](logs/check_watcher.log) |
 | watcher, each opt-in prefill-trace case alone | **1 passed** each, `WATCHER_CLEAN` |
 | watcher, both opt-in cases together in one process | **2 passed**, `WATCHER_CLEAN` — [`logs/watcher_pytest_prefill_trace_pair.log`](logs/watcher_pytest_prefill_trace_pair.log) |
@@ -1116,7 +1139,7 @@ in the public path.
 | `test_the_live_trace_count_round_trips_over_both_trace_kinds` | the model's live-trace count balances across capture and release of both trace kinds, and clamps rather than going negative |
 | the layer-stack floor at the benchmark's own context | sliding 0.4390, full 0.4077 ms/layer → **22.421 ms** — [`logs/layer_ab_after_ctx256.log`](logs/layer_ab_after_ctx256.log) |
 
-Nine cases are new (three of them parametrizations of one test) and each pins one shipped change:
+Ten cases are new (three of them parametrizations of one test) and each pins one shipped change:
 
 | test | pins |
 | --- | --- |
@@ -1127,13 +1150,14 @@ Nine cases are new (three of them parametrizations of one test) and each pins on
 | `test_prefill_trace_survives_rebinding_the_same_external_cache` | the serving path: the **same** external cache every request keeps its trace; a cache bound to **different** buffers releases it, recaptures against the new ones and still answers correctly |
 | `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` | the **decode** trace bakes the same cache addresses, so a rebind to different buffers must release and recapture it. Against the pre-fix code it fails, and that failure is committed as a negative control ([`logs/decode_rebind_prefix_negative_control.log`](logs/decode_rebind_prefix_negative_control.log): `AssertionError: a moved cache must release the decode trace`, with the shipped source restored afterwards. It is a **partial** revert — the signature is still recorded, only the comparison and the release are removed — because a full revert to `5e6022db622` fails on a missing attribute instead of on the behaviour). Two of its assertions do different jobs: that one catches the missing release, and the last one — the **traced** decode off the rebound cache must agree with the **eager** decode off the same cache — catches a release that recaptured against the wrong buffers. The committed control trips the first, because that is the one the pre-fix code violates |
 | `test_the_live_trace_count_round_trips_over_both_trace_kinds` | the model's live-trace count balances across capture and release of both kinds, and the clamp is exercised directly rather than asserted about |
+| `test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried` | a raising `ttnn.release_trace` fails **closed**, for both trace kinds: the handle leaves the lookup paths so nothing can replay it against a rebound cache, nothing is deallocated and the live-trace count stays raised, the next decode answers from the cache it is bound to now, and the retry releases both and brings the count back down. The failure is injected (`ttnn.release_trace` monkeypatched to raise) because no input makes it raise on healthy hardware; what is under test is the generator's control flow around it |
 
 ## Limitations and known issues
 
 1. **Batch-1 TTFT is host-dispatch bound; the fix ships but is opt-in.** ~17 ms of the
    ~64 ms default TTFT is host issue over 4122 ttnn dispatches, and the 209 collective
-   dispatches are 33 % of it. `prefill_trace=True` removes 21 % of TTFT (63.68 →
-   50.19 ms) with bit-identical logits, and is **off by default** because one trace
+   dispatches are 33 % of it. `prefill_trace=True` removes 22 % of TTFT (63.68 →
+   49.76 ms) with bit-identical logits, and is **off by default** because one trace
    serves one 32-row padded-length bucket and capture costs 98 ms against a ~15 ms
    per-replay saving — a win for a caller that repeats or buckets prompt lengths, a
    one-time cost for one that does not, and the generator cannot tell which it is. DRAM
@@ -1259,7 +1283,7 @@ Nine cases are new (three of them parametrizations of one test) and each pins on
 | watcher clean, separate from profiler | yes | `WATCHER_CLEAN` on the ten-case gated set and on both opt-in prefill-trace cases run together; Tracy ran after a reset, in its own process. The one configuration that trips is limitation 6, it trips after every test has passed, and it is recorded with its positive control rather than excluded |
 | context contract preserved | yes | 131072, unreduced, rebuilt from this stage's evidence |
 | `$qualitative-check` after the selected optimization, with a control | yes | byte-identical to the previous-stage control on all six prompts |
-| every reported figure resolves to a committed artifact | yes | `bench/check_reported_figures.py`, which also compares every literal it resolves back to the README text (digit-bounded, so `1.0` no longer matches `21.05`) and asserts its check count, the assertion/binding split within it, and the set of artifacts it actually **opened** — recorded by its readers, not tested with `is_file()`, which round 4 pointed out is an existence check wearing a coverage label (it caught two: `work_log.md` was read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened). Round 3 was right that a frozen count is not coverage: the gate passed 328/328 with six wrong figures in sections it never read, and the sections it missed — the prefill-128 capture, the audit table's µs column, the teacher-forcing rates and `work_log.md` — are all bound now |
+| every reported figure resolves to a committed artifact | yes | `bench/check_reported_figures.py`, which also compares every literal it resolves back to the README text (digit-bounded, so `1.0` no longer matches `21.05`) and asserts its check count, the assertion/binding split within it, and the set of artifacts it actually **opened** — recorded by its readers, not tested with `is_file()`, which round 4 pointed out is an existence check wearing a coverage label (it caught two: `work_log.md` was read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened). Round 3 was right that a frozen count is not coverage: the gate passed 328/328 with six wrong figures in sections it never read, and the sections it missed — the prefill-128 capture, the audit table's µs column, the teacher-forcing rates and `work_log.md` — are all bound now. Round 8 was right that a *document-wide* search is not binding either: a figure that appears twice can be changed in one place and found in the other, and swapping a table's before/after columns leaves both literals present. The headline table is bound cell by cell with the columns asserted not interchanged, the audit table's `ids` and `µs` columns are parsed from the README and checked against the CSV, and the duplicated figures are bound to the section that claims them. `perf_summary.json` and `doc/context_contract.json` — where round 8 found the staleness, because the gate read four fields of one and one string of the other — are now exhausted field by field, with `refresh_context_contract.py --check` run as part of this gate |
 
 ## How to reproduce
 
@@ -1316,8 +1340,9 @@ python $B/l1_highwater_probe.py
 # the greedy sampler benchmark, on this build
 python $M/doc/full_model/bench/sampler_ab.py --rounds 3 --replays 32
 
-# acceptance tests, forward and reverse
-pytest $M/tests/test_full_model.py
+# acceptance tests, forward and reverse.  The junit file is what the figure gate reads the
+# suite size from, so it is written rather than derived from the console.
+pytest $M/tests/test_full_model.py --junitxml=$M/doc/optimized_full_model/test_results.xml
 # reverse order, from the junit ids the forward run just wrote.  (`--collect-only -q` is
 # not usable for this here: the repo's conftest prints prose containing `::`, and there is
 # no pytest-reverse plugin in this environment.)
@@ -1443,6 +1468,10 @@ python .agents/scripts/check_context_contract.py --model-dir $M \
 
 # the gated perimeter of this file's figures, resolved against committed runs
 python $B/check_reported_figures.py
+
+# ...and what makes that gate fail: every defeat a stage review demonstrated, applied one
+# at a time to a scratch copy.  A SURVIVED line is a hole in the gate.
+python $B/mutate_figure_gate.py
 ```
 
 ## Artifacts
@@ -1474,12 +1503,13 @@ Evidence:
 | `prefill_trace_release_probe.py` arms | `logs/watcher_probe_*.log`: capture / release / recapture / clone-cache, each watcher-clean |
 | `decode_ab.json` | the `mlpN` arms; their `error` field keeps only the last traceback line, so the exact `TT_FATAL` is in `logs/decode_ab.log` |
 | `perf_summary.json` | roofline / device / end-to-end reconciliation |
-| `test_results.xml` | the 55-case suite |
+| `test_results.xml` | the 56-case suite |
 | `tracy/` | reduced-variant profiles: prefill 128, decode sliding, decode full, sampling |
 | `qualitative/` | the shared suite, the HF control, the comparison, and the diff against the full-model stage |
 | `watcher/`, `watcher_prefill_trace_{optin,rebind}/` | the three watcher logs the verdicts are re-derived from (each run's `generated/inspector` and kernel-name dumps are 6 MB of build metadata and are not kept) |
 | `logs/` | every console log named above |
 | `bench/check_reported_figures.py` | resolves the figures in this document against the artifacts above, and asserts its advertised check count, its assertion/binding split and the artifacts it opened; `FIGURES_OK` |
+| `bench/mutate_figure_gate.py` | mutation-tests that gate: 30 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
 
 ## Stage review
 

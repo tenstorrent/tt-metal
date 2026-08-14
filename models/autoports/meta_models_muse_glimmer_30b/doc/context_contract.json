@@ -111,12 +111,12 @@
       "gen_len": 128,
       "batch": 1
     },
-    "ttft_ms": 63.66124202031642,
-    "token_out_decode_ms_per_token": 23.315411543209603,
-    "token_out_decode_tok_s_u": 42.89008573349591,
-    "traced_decode_logits_only_ms_per_token": 22.656718843791168,
-    "traced_decode_logits_only_tok_s_u": 44.13701767209065,
-    "sampling_trace_ms_per_token": 0.631904718829901,
+    "ttft_ms": 63.679240993224084,
+    "token_out_decode_ms_per_token": 23.298420512033115,
+    "token_out_decode_tok_s_u": 42.92136453986322,
+    "traced_decode_logits_only_ms_per_token": 22.656403937617142,
+    "traced_decode_logits_only_tok_s_u": 44.137631141880746,
+    "sampling_trace_ms_per_token": 0.632158875305322,
     "layer_stack_lower_bound_ms_per_token": 22.857899999999997,
     "source": "doc/optimized_full_model/evidence_perf.json"
   },

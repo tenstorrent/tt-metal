@@ -1076,6 +1076,123 @@ def test_the_live_trace_count_round_trips_over_both_trace_kinds(mesh):
         clear_generator_cache()
 
 
+def test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried(mesh):
+    """A raising ``ttnn.release_trace`` must fail *closed* -- for both trace kinds.
+
+    Round 6 found the original failure path freeing a live trace's tensors and dropping its
+    handle.  Round 7 fixed that by retaining everything in place, and round 8 found what
+    that reintroduced: the retained handle is the one ``decode_forward`` tests
+    (``if self._trace_id is None: capture``) and the retained bucket is the one
+    ``_prefill_traced`` looks up, so on the rebind path -- the only path that releases while
+    the generator stays alive -- a failed release meant replaying a trace against the cache
+    the caller had just rebound away from.  That is round 4's silent-wrong-token bug, from a
+    branch round 4's test does not take.
+
+    The four properties this pins, in the order the assertions make them:
+
+    1. the handle leaves the lookup paths, so nothing can replay it;
+    2. the live-trace count stays raised and no tensor is deallocated, so
+       ``deallocate()`` still warns and a possibly-live trace keeps its buffers;
+    3. the next call answers from the cache it is bound to *now*, not the captured one;
+    4. the release is retried, and on success the count comes back down.
+
+    The failure is injected rather than provoked because no input makes ``release_trace``
+    raise on healthy hardware; what is under test is this module's control flow around it.
+    Both prompts are 64 tokens on purpose, so both prefills land in the *same* bucket key --
+    a retained entry would be found and replayed, which is precisely the defect.
+    """
+    clear_generator_cache()
+    generator = build_generator(
+        MODEL_DIR,
+        mesh,
+        max_seq_len=REDUCED_MAX_SEQ,
+        layer_indices=REDUCED_LAYERS,
+        reuse=False,
+        prefill_trace=True,
+    )
+    model = generator.model
+    prompt_a = _prompt(64, seed=23)
+    prompt_b = _prompt(64, seed=71)
+    assert prompt_a != prompt_b
+    own = model.kv_cache
+    moved = None
+    real_release = ttnn.release_trace
+    try:
+        generator.prefill_forward(torch.tensor([prompt_a]), kv_cache=own, prompt_lens=[len(prompt_a)])
+        generator.decode_forward(
+            tokens=torch.tensor([[prompt_a[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_a)], dtype=torch.int32),
+            kv_cache=own,
+        )
+        assert list(generator._prefill_traces) == [64]
+        assert generator._trace_id is not None
+        assert model.live_traces_over_kv_cache == 2, "one prefill trace and one decode trace"
+        doomed = {generator._trace_id, generator._prefill_traces[64]["id"]}
+
+        moved = [
+            [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())]
+            for k, v in own
+        ]
+        generator.reset()
+        generator.model.set_kv_cache(moved)
+        generator.model.reset_kv_cache()
+        generator.model.set_kv_cache(own)
+
+        def refuse(*_a, **_k):
+            raise RuntimeError("injected: release_trace refused")
+
+        ttnn.release_trace = refuse
+        generator.prefill_forward(torch.tensor([prompt_b]), kv_cache=moved, prompt_lens=[len(prompt_b)])
+
+        # (1) Neither handle is reachable from a lookup path any more.
+        assert generator._trace_id is None, "the failed decode release must still clear the replayed slot"
+        assert generator._decode_trace_cache_sig == ()
+        assert list(generator._prefill_traces) == [64], "the rebind recaptures this bucket"
+        assert generator._prefill_traces[64]["id"] not in doomed, "and not by finding the retained one"
+        assert generator._prefill_trace_cache_sig != (), "the *new* bucket re-stamps the signature"
+        assert {o["id"] for o in generator._orphaned_traces} == doomed
+        # (2) Nothing was freed and the count never dropped: 2 orphans + the prefill trace
+        # this rebind captured.
+        assert model.live_traces_over_kv_cache == 3
+        assert all(t.is_allocated() for o in generator._orphaned_traces for t in o["tensors"])
+
+        # (3) The rebound cache is the one that answers.
+        eager = generator.decode_forward(
+            tokens=torch.tensor([[prompt_b[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_b)], dtype=torch.int32),
+            kv_cache=moved,
+            enable_trace=False,
+        )
+        traced = generator.decode_forward(
+            tokens=torch.tensor([[prompt_b[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_b)], dtype=torch.int32),
+            kv_cache=moved,
+        )
+        assert generator._trace_id is not None and generator._trace_id not in doomed
+        assert torch.equal(
+            traced.argmax(dim=-1), eager.argmax(dim=-1)
+        ), "a decode after a failed release must not answer from the released-and-kept trace"
+
+        # (4) The retry lands once the device cooperates again.
+        ttnn.release_trace = real_release
+        assert generator._retry_orphaned_traces() == 0
+        assert generator._orphaned_traces == []
+        assert model.live_traces_over_kv_cache == 2, "the two orphans are accounted for on retry"
+    finally:
+        ttnn.release_trace = real_release
+        generator._release_prefill_traces()
+        generator._release_decode_trace()
+        generator._retry_orphaned_traces()
+        generator.model.set_kv_cache(own)
+        if moved is not None:
+            for pair in moved:
+                for tensor in pair:
+                    ttnn.deallocate(tensor)
+        generator.teardown()
+        generator.model.deallocate()
+        clear_generator_cache()
+
+
 def test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured(mesh):
     """A rebind to *different* buffers after decode-trace capture must not be silent.
 
