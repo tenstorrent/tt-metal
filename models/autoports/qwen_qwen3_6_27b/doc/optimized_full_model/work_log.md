@@ -162,5 +162,10 @@ bound, terminal work is 4.011288 ms or 7.61%. No further split was required.
   `TT_METAL_WATCHER_DISABLE_ETH=1` workaround; this is instrumentation-only.
 - No vLLM integration and no datatype Pareto search performed.
 
-Stage-review findings and local-only commit SHA(s) are appended after the
-independent review/remediation cycle. Nothing is pushed.
+## Review and local commits
+
+Independent stage review and rereview completed with `clean-pass`; required
+work is none (`STAGE_REVIEW.md`). Stage implementation, tests, profiler CSVs,
+logs, and evidence were committed locally as `37b19aa9cc4`. This documentation
+handoff is a following local-only commit so that the implementation SHA can be
+recorded exactly. Nothing was pushed.
