@@ -105,14 +105,10 @@ public:
     MeshBuffer(MeshBuffer&& other) noexcept;
     MeshBuffer& operator=(MeshBuffer&& other) noexcept;
 
-    // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
-    // destructor or the `deallocate` method deallocate the MeshBuffer.
+    // Returns true if the MeshBuffer holds a live allocation. A MeshBuffer is created in the allocated state and
+    // stays allocated for its entire lifetime; this returns false only for a moved-from MeshBuffer, or once the
+    // owning MeshDevice has been destroyed. To release the memory, destroy the MeshBuffer.
     bool is_allocated() const;
-
-    // Deallocates the MeshBuffer.
-    // TODO: Re-consider a need for explicit deallocation methods, as opposed to relying on RAII to clean up the
-    // resources.
-    void deallocate();
 
     // Throws an exception if the corresponding MeshDevice is already deallocated
     MeshDevice* device() const;
@@ -176,6 +172,12 @@ private:
         state_(ExternallyOwnedState{}) {}
 
     void initialize_device_buffers();
+
+    // Releases the device memory and moves the MeshBuffer into `DeallocatedState`. Called only by the destructor and
+    // by move-assignment (to release whatever this object held before taking over `other`'s allocation). MeshBuffer is
+    // an RAII type: memory release is not part of its public API.
+    void deallocate();
+
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
     std::weak_ptr<MeshDevice> mesh_device_;
