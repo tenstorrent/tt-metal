@@ -71,6 +71,20 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
 }
 
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
+    # 4-chip boxes (BH QuietBox 2). Mirrors the 2x4 preset with tp halved to fit axis 1.
+    # Both dynamic loads are on: with half the chips of the 2x4 case, freeing the encoder and
+    # VAE weights between stages is the memory-safer default. Provisional until a green run.
+    (2, 2): {
+        "cfg": (2, 0),
+        "sp": (1, 0),
+        "tp": (2, 1),
+        "encoder_tp": (2, 1),
+        "vae_tp": (2, 1),
+        "num_links": 1,
+        "is_fsdp": False,
+        "dynamic_load_encoder": True,
+        "dynamic_load_vae": True,
+    },
     (2, 4): {
         "cfg": (2, 0),
         "sp": (1, 0),
