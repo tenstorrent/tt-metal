@@ -72,6 +72,10 @@ def _runtime_config():
         model_cache_path="cache",
         max_prefill_chunk_size=2048,
         trace_prefill_supported_seq_lens=(128, 1024),
+        supports_batched_prefill=True,
+        disable_batched_prefill=False,
+        max_prefill_batch_size=32,
+        batched_prefill_batched_extract=True,
         can_enable_trace=lambda sequence_length, num_cached_tokens=0: (
             num_cached_tokens == 0 and sequence_length in (128, 1024)
         ),
@@ -90,6 +94,61 @@ def _config(mode="none", *, num_blocks=None):
         ),
         device_sampling_enabled=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("runtime_disabled", "device_sampling_enabled", "diagnostic_override", "expected_disabled"),
+    [
+        (False, False, False, False),
+        (True, False, False, True),
+        (False, True, False, True),
+        (True, True, False, True),
+        (False, True, True, False),
+        (True, True, True, False),
+    ],
+)
+def test_executor_resolves_batched_prefill_policy(
+    monkeypatch, runtime_disabled, device_sampling_enabled, diagnostic_override, expected_disabled
+):
+    runtime_config = _runtime_config()
+    runtime_config.disable_batched_prefill = runtime_disabled
+    base_config = _config()
+    config = llama_executor.Llama3ExecutorConfig(
+        trace=base_config.trace,
+        warmup=base_config.warmup,
+        paged_kv_cache=base_config.paged_kv_cache,
+        device_sampling_enabled=device_sampling_enabled,
+        allow_batched_prefill_with_device_sampling_for_diagnostics=diagnostic_override,
+    )
+    model = _model()
+    if device_sampling_enabled:
+        class _Sampling:
+            pass
+
+        monkeypatch.setattr(llama_executor, "Sampling1D", _Sampling)
+        sampler = _Sampling()
+        sampler.config = SimpleNamespace(is_resolved=lambda: True, allow_force_argmax=True, max_batch_size=32)
+        model.sampling = sampler
+
+    executor = llama_executor.Llama3Executor(model, runtime_config, config)
+
+    assert executor.prefill_runtime.config.supports_batched_prefill is True
+    assert executor.prefill_runtime.config.disable_batched_prefill is expected_disabled
+    assert executor.prefill_runtime.config.max_prefill_batch_size == 32
+    assert executor.prefill_runtime.config.batched_prefill_batched_extract is True
+
+
+def test_executor_rejects_batched_prefill_diagnostic_override_without_device_sampling():
+    base_config = _config()
+
+    with pytest.raises(ValueError, match="requires device_sampling_enabled"):
+        llama_executor.Llama3ExecutorConfig(
+            trace=base_config.trace,
+            warmup=base_config.warmup,
+            paged_kv_cache=base_config.paged_kv_cache,
+            device_sampling_enabled=False,
+            allow_batched_prefill_with_device_sampling_for_diagnostics=True,
+        )
 
 
 @pytest.mark.parametrize("mode", ["none", "decode_only", "all"])

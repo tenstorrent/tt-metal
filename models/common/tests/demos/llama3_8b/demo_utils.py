@@ -116,3 +116,50 @@ def preprocess_llama3_8b_chat_prompts(
         reserve_decode_tokens=reserve_decode_tokens,
         pad_id=pad_id,
     )
+
+
+def assert_seeded_cross_cardinality_consistency(
+    outputs_by_cardinality: dict[int, dict[str, list[int]]],
+    sequential_controls: dict[str, list[int]],
+    *,
+    request_ids: tuple[str, ...],
+    expected_cardinalities: tuple[int, ...] = (1, 2, 4, 32),
+) -> None:
+    """Fail closed unless every batched request exactly matches its batch-1 control."""
+
+    if tuple(outputs_by_cardinality) != expected_cardinalities:
+        raise AssertionError(
+            f"seeded cross-cardinality experiment expected {expected_cardinalities}, "
+            f"got {tuple(outputs_by_cardinality)}"
+        )
+    if tuple(sequential_controls) != request_ids:
+        raise AssertionError(
+            "sequential controls must contain every fixed request in order: "
+            f"expected {request_ids}, got {tuple(sequential_controls)}"
+        )
+
+    for cardinality, outputs in outputs_by_cardinality.items():
+        expected_request_ids = request_ids[:cardinality]
+        if tuple(outputs) != expected_request_ids:
+            raise AssertionError(
+                f"cardinality {cardinality} must contain the fixed request prefix "
+                f"{expected_request_ids}, got {tuple(outputs)}"
+            )
+        for request_id, token_ids in outputs.items():
+            control_token_ids = sequential_controls[request_id]
+            if not token_ids:
+                raise AssertionError(f"request {request_id!r} returned no generated tokens")
+            if token_ids != control_token_ids:
+                mismatch_index = next(
+                    (
+                        index
+                        for index, (actual, control) in enumerate(zip(token_ids, control_token_ids, strict=False))
+                        if actual != control
+                    ),
+                    min(len(token_ids), len(control_token_ids)),
+                )
+                raise AssertionError(
+                    f"request {request_id!r} differs from its seeded batch-1 control at cardinality "
+                    f"{cardinality}, token index {mismatch_index}: batched={token_ids[:64]!r}, "
+                    f"control={control_token_ids[:64]!r}"
+                )

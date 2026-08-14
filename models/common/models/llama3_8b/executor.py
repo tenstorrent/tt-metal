@@ -33,6 +33,9 @@ class Llama3ExecutorConfig:
     warmup: WarmupConfig
     paged_kv_cache: PagedKVCacheConfig
     device_sampling_enabled: bool
+    # Qualification-only escape hatch for the BH seeded cross-cardinality
+    # experiment. Serving and ordinary demos must retain the safe default.
+    allow_batched_prefill_with_device_sampling_for_diagnostics: bool = False
 
     def __post_init__(self) -> None:
         nested_configs = (
@@ -45,6 +48,12 @@ class Llama3ExecutorConfig:
                 raise TypeError(f"{name} must be exactly {expected_type.__name__}")
         if not isinstance(self.device_sampling_enabled, bool):
             raise TypeError("device_sampling_enabled must be bool")
+        if not isinstance(self.allow_batched_prefill_with_device_sampling_for_diagnostics, bool):
+            raise TypeError("allow_batched_prefill_with_device_sampling_for_diagnostics must be bool")
+        if self.allow_batched_prefill_with_device_sampling_for_diagnostics and not self.device_sampling_enabled:
+            raise ValueError(
+                "allow_batched_prefill_with_device_sampling_for_diagnostics requires device_sampling_enabled"
+            )
 
 
 class Llama3Executor:
@@ -109,6 +118,14 @@ class Llama3Executor:
                 max_prefill_chunk_size=int(runtime_config.max_prefill_chunk_size),
                 device_sampling_enabled=config.device_sampling_enabled,
                 can_enable_trace=runtime_config.can_enable_trace,
+                supports_batched_prefill=bool(runtime_config.supports_batched_prefill),
+                disable_batched_prefill=(
+                    False
+                    if config.allow_batched_prefill_with_device_sampling_for_diagnostics
+                    else bool(runtime_config.disable_batched_prefill) or config.device_sampling_enabled
+                ),
+                max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
+                batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
             )
         )
         self.decode_runtime = DecodeRuntime(
@@ -479,6 +496,10 @@ class Llama3Executor:
             max_prefill_chunk_size=current_prefill.max_prefill_chunk_size,
             device_sampling_enabled=current_prefill.device_sampling_enabled,
             can_enable_trace=current_prefill.can_enable_trace,
+            supports_batched_prefill=current_prefill.supports_batched_prefill,
+            disable_batched_prefill=current_prefill.disable_batched_prefill,
+            max_prefill_batch_size=current_prefill.max_prefill_batch_size,
+            batched_prefill_batched_extract=current_prefill.batched_prefill_batched_extract,
         )
         current_decode = self.decode_runtime.config
         decode_config = DecodeRuntimeConfig.resolve(

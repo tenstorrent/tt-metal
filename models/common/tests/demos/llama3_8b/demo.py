@@ -44,7 +44,11 @@ from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
-from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, preprocess_llama3_8b_chat_prompts
+from models.common.tests.demos.llama3_8b.demo_utils import (
+    assert_seeded_cross_cardinality_consistency,
+    load_input_prompts,
+    preprocess_llama3_8b_chat_prompts,
+)
 from models.common.tests.demos.run_helpers import (
     PerfBenchmarkResult,
     assert_no_special_tokens,
@@ -338,6 +342,7 @@ mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
 mesh_device_shape = {
     "P150": (1, 1),
     "P300": (1, 2),
+    "P150X4": (1, 4),
     "N150": (1, 1),
     "N300": (1, 2),
     "T3K": (1, 8),
@@ -345,7 +350,7 @@ mesh_device_shape = {
 }.get(mesh_device_name)
 if mesh_device_shape is None:
     pytest.skip(
-        f"Unsupported MESH_DEVICE={mesh_device_name!r}; use P150, P300, N150, N300, T3K, or TG.",
+        f"Unsupported MESH_DEVICE={mesh_device_name!r}; use P150, P300, P150x4, N150, N300, T3K, or TG.",
         allow_module_level=True,
     )
 ttnn_mesh_device_params = {
@@ -353,7 +358,7 @@ ttnn_mesh_device_params = {
     "trace_region_size": resolve_trace_region_size("llama3.1-8b", mesh_device_name),
     "num_command_queues": 1,
 }
-if mesh_device_name == "P300":
+if mesh_device_name in {"P300", "P150X4"}:
     ttnn_mesh_device_params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
 pytestmark = pytest.mark.parametrize(
     "ttnn_mesh_device",
@@ -455,6 +460,204 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
         cleanup_model_case(llm.model if llm is not None else None, mesh_device)
 
 
+_BH_CROSS_CARDINALITY_REQUEST_IDS = tuple(f"llama3-8b-request-{index:02d}" for index in range(32))
+_BH_CROSS_CARDINALITY_SEEDS = tuple(2_026_081_401 + 104_729 * index for index in range(32))
+_BH_CROSS_CARDINALITIES = (1, 2, 4, 32)
+
+
+def _seeded_cross_cardinality_sampling_params(request_indexes) -> SamplingParams:
+    """Build slot-independent stochastic sampling params for fixed requests."""
+
+    seeds = [_BH_CROSS_CARDINALITY_SEEDS[index] for index in request_indexes]
+    return SamplingParams(
+        temperature=[0.8] * len(seeds),
+        top_k=[32] * len(seeds),
+        top_p=[0.95] * len(seeds),
+        seed=seeds,
+    )
+
+
+def _install_cross_cardinality_device_seeds(llm, request_indexes) -> None:
+    """Map fixed per-request seeds onto the active Sampling1D slots."""
+
+    sampling = llm.model.sampling
+    seeds_buffer = sampling.config.seeds
+    update = getattr(seeds_buffer, "update", None)
+    if not callable(update):
+        raise TypeError("seeded cross-cardinality qualification requires a mutable Sampling1D seed buffer")
+    active_seeds = [_BH_CROSS_CARDINALITY_SEEDS[index] for index in request_indexes]
+    padded_seeds = active_seeds + [0] * (sampling.config.max_batch_size - len(active_seeds))
+    update(torch.tensor(padded_seeds, dtype=torch.int32))
+
+
+def _run_seeded_cross_cardinality_batch(
+    llm,
+    prompts: list[str],
+    request_indexes,
+    *,
+    allow_batched_prefill: bool,
+    num_decode_tokens: int,
+) -> list[list[int]]:
+    """Run one controlled eager shape with fixed request seeds and a fresh KV cache."""
+
+    if allow_batched_prefill:
+        conflicting_env = [
+            name for name in ("DISABLE_BATCHED_PREFILL", "DISABLE_BATCHED_EXTRACT") if os.environ.get(name)
+        ]
+        if conflicting_env:
+            raise RuntimeError(
+                "BH seeded cross-cardinality qualification cannot run with " + ", ".join(conflicting_env)
+            )
+
+    executor = _build_demo_executor(
+        llm,
+        trace_mode="none",
+        device_sampling_enabled=True,
+        allow_batched_prefill_with_device_sampling_for_diagnostics=allow_batched_prefill,
+    )
+    try:
+        # This override exists solely to measure BH batch variance. Production
+        # and normal demo paths continue to force sequential prefill whenever
+        # device sampling is enabled.
+        assert executor.prefill_runtime.config.disable_batched_prefill is not allow_batched_prefill
+        kv_cache = executor.allocate_kv_cache()
+        page_table = _contiguous_page_table(llm.model.config.max_batch_size, llm.model.config.max_seq_len)
+        return _execute_seeded_cross_cardinality_shape(
+            llm,
+            executor,
+            kv_cache,
+            page_table,
+            prompts,
+            request_indexes,
+            num_decode_tokens=num_decode_tokens,
+        )
+    finally:
+        executor.cleanup()
+
+
+def _execute_seeded_cross_cardinality_shape(
+    llm,
+    executor,
+    kv_cache,
+    page_table,
+    prompts: list[str],
+    request_indexes,
+    *,
+    num_decode_tokens: int,
+) -> list[list[int]]:
+    """Execute one exact eager shape after its program is compiled."""
+
+    active_prompts = [prompts[index] for index in request_indexes]
+    _install_cross_cardinality_device_seeds(llm, request_indexes)
+    input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
+        active_prompts,
+        llm,
+        reserve_decode_tokens=num_decode_tokens,
+    )
+    sampling_params = _seeded_cross_cardinality_sampling_params(request_indexes)
+    # run_perf_benchmark compiles this exact eager prefill shape before it
+    # executes it; no trace is activated by this diagnostic.
+    result = run_perf_benchmark(
+        executor,
+        tokens=input_tokens,
+        kv_cache=kv_cache,
+        page_table=page_table,
+        num_decode_tokens=num_decode_tokens,
+        max_batch_size=llm.model.config.max_batch_size,
+        prompt_lens=prompt_lens,
+        sampling_params=sampling_params,
+        prefill_sampling_params=sampling_params,
+        pipeline_readback=False,
+    )
+    assert len(result.generated_token_ids) == len(request_indexes)
+    return [list(token_ids) for token_ids in result.generated_token_ids]
+
+
+def _run_seeded_batch1_controls(llm, prompts: list[str], *, num_decode_tokens: int) -> dict[str, list[int]]:
+    """Run every fixed request end-to-end at active batch cardinality one."""
+
+    executor = _build_demo_executor(llm, trace_mode="none", device_sampling_enabled=True)
+    try:
+        assert executor.prefill_runtime.config.disable_batched_prefill is True
+        kv_cache = executor.allocate_kv_cache()
+        page_table = _contiguous_page_table(llm.model.config.max_batch_size, llm.model.config.max_seq_len)
+        controls = {}
+        for request_index, request_id in enumerate(_BH_CROSS_CARDINALITY_REQUEST_IDS):
+            outputs = _execute_seeded_cross_cardinality_shape(
+                llm,
+                executor,
+                kv_cache,
+                page_table,
+                prompts,
+                (request_index,),
+                num_decode_tokens=num_decode_tokens,
+            )
+            controls[request_id] = outputs[0]
+        return controls
+    finally:
+        executor.cleanup()
+
+
+@pytest.mark.parametrize("optimizations", ["performance", "accuracy"])
+@pytest.mark.usefixtures("silicon_arch_name")
+def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
+    """BH qualification: batched 1/2/4/32 outputs must match seeded batch-1 controls.
+
+    ``allow_batched_prefill_with_device_sampling_for_diagnostics`` is an
+    intentionally narrow measurement override, not a serving policy.
+    """
+
+    mesh_device = ttnn_mesh_device
+    device_name = get_device_name(mesh_device)
+    if device_name not in {"P150", "P150x4"}:
+        pytest.skip("BH seeded cross-cardinality qualification requires P150 or P150x4")
+
+    num_decode_tokens = int(os.environ.get("LLAMA3_8B_CROSS_CARDINALITY_DECODE_TOKENS", "32"))
+    assert num_decode_tokens > 0, "cross-cardinality qualification requires at least one decode token"
+    llm = None
+    try:
+        _validate_tp_topology(mesh_device)
+        llm = create_llama3_for_causal_lm(
+            mesh_device,
+            optimizations,
+            max_batch_size=32,
+            max_seq_len=1024,
+        )
+        prompts = _eval_repeat_prompts(len(_BH_CROSS_CARDINALITY_REQUEST_IDS))
+        assert len(prompts) == len(_BH_CROSS_CARDINALITY_REQUEST_IDS)
+
+        sequential_controls = _run_seeded_batch1_controls(
+            llm,
+            prompts,
+            num_decode_tokens=num_decode_tokens,
+        )
+
+        outputs_by_cardinality = {}
+        for cardinality in _BH_CROSS_CARDINALITIES:
+            request_indexes = tuple(range(cardinality))
+            outputs = _run_seeded_cross_cardinality_batch(
+                llm,
+                prompts,
+                request_indexes,
+                allow_batched_prefill=True,
+                num_decode_tokens=num_decode_tokens,
+            )
+            outputs_by_cardinality[cardinality] = {
+                request_id: token_ids
+                for request_id, token_ids in zip(
+                    _BH_CROSS_CARDINALITY_REQUEST_IDS[:cardinality], outputs, strict=True
+                )
+            }
+
+        assert_seeded_cross_cardinality_consistency(
+            outputs_by_cardinality,
+            sequential_controls,
+            request_ids=_BH_CROSS_CARDINALITY_REQUEST_IDS,
+        )
+    finally:
+        cleanup_model_case(llm.model if llm is not None else None, mesh_device)
+
+
 # =============================================================================
 # Token accuracy
 # =============================================================================
@@ -464,7 +667,14 @@ def _attention_config(model):
     return model.config.block_configs[0].attention_config
 
 
-def _build_demo_executor(llm, *, trace_mode, device_sampling_enabled, include_decode_top_k=False):
+def _build_demo_executor(
+    llm,
+    *,
+    trace_mode,
+    device_sampling_enabled,
+    include_decode_top_k=False,
+    allow_batched_prefill_with_device_sampling_for_diagnostics=False,
+):
     attention_config = _attention_config(llm.model)
     paged_attention_config = attention_config.paged_attention_config
     config = Llama3ExecutorConfig(
@@ -481,6 +691,9 @@ def _build_demo_executor(llm, *, trace_mode, device_sampling_enabled, include_de
             dtype=attention_config.kv_cache_dtype,
         ),
         device_sampling_enabled=device_sampling_enabled,
+        allow_batched_prefill_with_device_sampling_for_diagnostics=(
+            allow_batched_prefill_with_device_sampling_for_diagnostics
+        ),
     )
     return build_llama3_executor(llm, config)
 
