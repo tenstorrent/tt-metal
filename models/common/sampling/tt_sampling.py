@@ -133,6 +133,20 @@ class TTSampling(LightweightModule):
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.vocab_size = args.vocab_size
+
+        # Single-device top-k runs the vocab in same-device chunks (multi-step reduction).
+        # ttnn.topk handles at most 64K elements per call, so use the fewest power-of-two
+        # chunks whose width fits: two chunks preserve the historical behavior for every
+        # vocab up to 128K, and larger vocabs (e.g. Qwen3's 151936) get four (#53064).
+        self._num_vocab_splits = 2
+        if self.multi_step_reduction:
+            while self.padded_vocab_size // self._num_vocab_splits > 64 * 1024:
+                self._num_vocab_splits *= 2
+            chunk_width = self.padded_vocab_size // self._num_vocab_splits
+            assert self.padded_vocab_size % self._num_vocab_splits == 0 and chunk_width % 32 == 0, (
+                f"padded_vocab_size={self.padded_vocab_size} cannot be cut into "
+                f"{self._num_vocab_splits} tile-aligned single-device top-k chunks"
+            )
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
@@ -291,7 +305,7 @@ class TTSampling(LightweightModule):
 
     def _get_num_sampling_shards(self):
         if self.multi_step_reduction:
-            return 2
+            return self._num_vocab_splits
         if 1 in self.cluster_shape:
             return max(self.cluster_shape[0], self.cluster_shape[1])
 
@@ -755,11 +769,23 @@ class TTSampling(LightweightModule):
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         if self.multi_step_reduction:
-            x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
+            x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // self._num_vocab_splits, dim=3)
             topk_values_list = []
             topk_indices_list = []
 
             for i in range(len(x_bf16_list)):
+                # Pad a non-power-of-2 chunk so ttnn.topk hits the multi-core factory.
+                # Padded slots hold -inf and can never be selected; the post-concat
+                # per-chunk offsets use the unpadded chunk width, so real indices are
+                # unaffected.
+                if self.pad_to_power_of_2 and not is_power_of_2(x_bf16_list[i].shape[-1]):
+                    padded_value = upper_power_of_2(x_bf16_list[i].shape[-1])
+                    x_bf16_list[i] = ttnn.pad(
+                        x_bf16_list[i],
+                        [(0, 0), (0, 0), (0, 0), (0, padded_value - x_bf16_list[i].shape[-1])],
+                        value=-sys.float_info.max,
+                        sub_core_grids=self.sub_core_grids,
+                    )
                 topk_values, topk_indices = ttnn.topk(
                     x_bf16_list[i],
                     k=self.max_top_k,

@@ -813,6 +813,9 @@ def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batc
         pytest.param(32768, id="v32768_multicore_halves"),
         # Half the vocab is not a power of two, so each half falls back to the single-core factory.
         pytest.param(32000, id="v32000_single_core_halves"),
+        # Half the vocab exceeds ttnn.topk's 64K width limit, so TTSampling must cut the vocab
+        # into four same-device chunks. Qwen3 has exactly this vocab size (#53064).
+        pytest.param(151936, id="v151936_four_way_split"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
