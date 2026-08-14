@@ -52,7 +52,7 @@ def rms_norm(
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability expansion (unlocks the perf target's config)
+### [x] Refinement 1 — Numerical configurability expansion (unlocks the perf target's config)
 
 **Goal**: grow the precision surface to the whole TARGET rectangle:
 
@@ -67,6 +67,20 @@ def rms_norm(
 **Verifier notes**: this is the **largest single unlock in the queue and it gates the perf phases**, so it goes first. `fp32_dest_acc_en=False` alone accounts for 3609 of the 6174 xfail cells, and *every* hand-authored loose case — the whole `perf`, `resilience` and `pad_poison` corpus — pins `fp32_dest_acc_en=False`, so none of them runs today. In particular the mandatory perf target (Refinement 3) is specified at bf16 / **HiFi2** / **`fp32_dest_acc_en=False`** / TILE / INTERLEAVED; a perf pass may not stand a `fp32_dest_acc_en=True` proxy in for it, so this refinement must land that exact config as a supported cell. Two op-specific hazards to carry into the work: (1) `DEST_AUTO_LIMIT` doubles from 4 to 8 tiles when `fp32_dest_acc_en=False` — the helpers clamp themselves, but do not hardcode either number; (2) `cb_input_tiles` is rewritten **in place** twice, so a `bfloat8_b` input means the intermediate `x·r` is re-quantized to block-float before the gamma multiply — measure that cell against the golden bf8b tolerance (0.99 PCC / 0.10 rel-RMS) and, if it misses, exclude the cell rather than un-fusing the in-place path. `bfloat8_b` on a non-tile-aligned shape and `bfloat8_b + ROW_MAJOR` are already `INVALID` in `feature_spec.py`, so they will not appear.
 
 **Done when**: `verify_supported` shows `supported_fail = 0`, `xpass_drift = 0`, `xfail_wrong_mode = 0` with the three axis values above inside SUPPORTED, and the `perf` / `resilience` / `pad_poison` loose-case groups run as supported cells instead of xfail (the `pad_poison` group is the padding-in-the-denominator guard and must pass).
+
+**Result**: landed with **zero kernel changes** — the compute kernel was already fully
+helper-based and the stat CBs were already pinned `float32` independently of the input dtype, so
+both new axis values were descriptor-level only. The single host-side fix was a block-float guard:
+`Tensor.element_size()` *raises* for `bfloat8_b` ("datum for bfp2, bfp4, bfp8 is invalid"), so the
+`*_ELEM_BYTES` compile-time args now route through `_elem_bytes()`. Measured on device: the exact
+perf-target config (bf16 / HiFi2 / `fp32_dest_acc_en=False`, `(1,1,32,7168)`) gives **PCC 0.99998**
+against the 0.9995 soft gate — Refinement 3 can be specified at its real config. The verifier's
+`bfloat8_b` in-place re-quantization hazard did **not** materialize: the doubly-rewritten
+`cb_input_tiles` still lands at PCC ≥ 0.9998 / rel-RMS ≤ 0.020 against a 0.99 / 0.10 gate, so the
+fused in-place path is kept and no cell was excluded for it. Golden slices run: `pad_poison` 6/6
+interleaved, `perf` 8/8 interleaved, `resilience` 86/86 interleaved, all-`bfloat8_b` cartesian
+450/450, 5-shape full cartesian 288/288 — zero failures. The only remaining xfails in those groups
+are `*_SHARDED`, which is Refinement 2's scope.
 
 ---
 
