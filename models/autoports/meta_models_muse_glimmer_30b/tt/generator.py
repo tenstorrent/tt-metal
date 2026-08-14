@@ -709,12 +709,18 @@ class MuseGlimmerGenerator(Generator):
             logger.warning(f"failed to release the sampling trace: {exc}")
         self._sampling_captured = False
         if self._trace_id is not None:
+            released = False
             try:
                 ttnn.release_trace(self.mesh_device, self._trace_id)
+                released = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the decode trace: {exc}")
             self._trace_id = None
-            self.model.note_trace_released()
+            # Only on success.  Round 6: decrementing unconditionally made the counter read
+            # zero while a trace was still alive, so ``deallocate()``'s warning would fail
+            # to fire in exactly the case it exists for -- a release that did not happen.
+            if released:
+                self.model.note_trace_released()
         ttnn.synchronize_device(self.mesh_device)
         if self._trace_logits is not None:
             try:
@@ -750,8 +756,10 @@ class MuseGlimmerGenerator(Generator):
             ttnn.synchronize_device(self.mesh_device)
             self.counters["synchronizations"] += 1
         for padded_len, entry in list(self._prefill_traces.items()):
+            released = False
             try:
                 ttnn.release_trace(self.mesh_device, entry["id"])
+                released = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the prefill trace for {padded_len}: {exc}")
             ttnn.synchronize_device(self.mesh_device)
@@ -760,7 +768,8 @@ class MuseGlimmerGenerator(Generator):
                     ttnn.deallocate(entry[key])
                 except Exception:  # noqa: BLE001
                     pass
-            self.model.note_trace_released()
+            if released:  # see _release_decode_trace on why this is conditional
+                self.model.note_trace_released()
         self._prefill_traces.clear()
         self._prefill_trace_cache_sig = ()
 

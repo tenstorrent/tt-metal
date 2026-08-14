@@ -1009,6 +1009,61 @@ def test_prefill_trace_is_opt_in_and_matches_the_eager_path(mesh):
         clear_generator_cache()
 
 
+def test_the_live_trace_count_round_trips_over_both_trace_kinds(mesh):
+    """The model's live-trace count balances across capture and release of both kinds.
+
+    The model owns the KV cache and the generator owns the traces, so neither can enforce
+    release-before-free alone; ``live_traces_over_kv_cache`` is the shared bit that lets
+    ``MuseGlimmerModel.deallocate()`` refuse to be silent about a use-after-free.  Round 6
+    of the stage review pointed out it had no behavioural coverage -- only source greps,
+    which cannot see an imbalance -- so this drives both trace kinds through the public
+    path and pins that the count returns to zero.  A stuck-high count warns forever and a
+    stuck-low one never warns, and both are silent failures of the guard.
+    """
+    clear_generator_cache()
+    generator = build_generator(
+        MODEL_DIR,
+        mesh,
+        max_seq_len=REDUCED_MAX_SEQ,
+        layer_indices=REDUCED_LAYERS,
+        reuse=False,
+        prefill_trace=True,
+    )
+    model = generator.model
+    prompt = _prompt(96, seed=17)
+    try:
+        assert model.live_traces_over_kv_cache == 0, "a fresh build holds no traces"
+
+        generator.prefill_forward(torch.tensor([prompt]), kv_cache=model.kv_cache, prompt_lens=[len(prompt)])
+        assert list(generator._prefill_traces) == [96]
+        assert model.live_traces_over_kv_cache == 1, "the prefill trace is counted"
+
+        generator.decode_forward(
+            tokens=torch.tensor([[prompt[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt)], dtype=torch.int32),
+            kv_cache=model.kv_cache,
+        )
+        assert generator._trace_id is not None
+        assert model.live_traces_over_kv_cache == 2, "and so is the decode trace"
+
+        generator._release_prefill_traces()
+        assert model.live_traces_over_kv_cache == 1
+        generator._release_decode_trace()
+        assert model.live_traces_over_kv_cache == 0, "the count round-trips"
+
+        # Idempotent: releasing either kind again must not drive it negative, because a
+        # negative count reads as "no live traces" and silences the guard permanently.
+        generator._release_prefill_traces()
+        generator._release_decode_trace()
+        assert model.live_traces_over_kv_cache == 0
+        generator.teardown()
+        assert model.live_traces_over_kv_cache == 0, "and teardown leaves it at zero"
+    finally:
+        generator.teardown()
+        generator.model.deallocate()
+        clear_generator_cache()
+
+
 def test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured(mesh):
     """A rebind to *different* buffers after decode-trace capture must not be silent.
 

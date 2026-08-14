@@ -307,8 +307,8 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | accuracy + sampling + fallback | `evidence_accuracy.json` | top-5 1.000, top-100 1.000 |
 | fp32 control + misses | `evidence_fp32_gate.json`, `evidence_misses.json` | all four gates pass |
 | greedy sampler benchmark | `sampler_ab.json` | split still wins, 15x |
-| 54-case suite, forward | `test_results.xml` | 54 passed |
-| 54-case suite, reverse | `logs/full_test_run_reverse.log` | 54 passed |
+| 55-case suite, forward | `test_results.xml` | 55 passed |
+| 55-case suite, reverse | `logs/full_test_run_reverse.log` | 55 passed |
 | qualitative, TT + compare | `qualitative/` | byte-identical to stage 6 |
 | degeneracy gate | `logs/check_degenerate_output.log` | no degenerate output |
 | watcher, shipped-default 10 cases | `watcher/`, `logs/run_watcher.log` | `WATCHER_CLEAN`, 0 tripped asserts |
@@ -636,6 +636,54 @@ limitation is close to the second. That is the lesson of the whole sequence and 
 recorded as such in the README: each version fell to the first control left out of it, and
 two of the five fell to nothing more than insufficient n.
 
+### Round 6 — `more-work-needed`
+
+The P1 was the worst kind of record defect: **limitation 6 still contained the round-4 text
+that round 5 had retracted**, so the shipped document stated a conclusion and its withdrawal
+as current fact in two different sections. Worse, the figure gate *required* the stale
+paragraph — the pre-fix Fisher checks bound `p = 0.400`, which appeared nowhere else — so the
+mechanism meant to prevent exactly this was holding it in place. Both are fixed: limitation 6
+is rewritten from the current data, the pre-fix contrasts are gone from the gate, and the gate
+now slices the README into sections and asserts that limitation 6 and the Watcher section
+agree on every arm tally and on the primary contrast.
+
+| finding | what was done |
+| --- | --- |
+| **P1** limitation 6 was the retracted round-4 statement; the gate required it | rewritten; superseded phrases asserted *absent*; cross-section agreement asserted |
+| **P2** the reversal was over-claimed: the one significant contrast was confounded in both dimensions, the isolating ones were not significant, the multiplicity note had been deleted, and the "length control" matched case *count* but not *work* | **two new arms run.** A **work-matched** twelve-case arm whose extra case builds its own `reuse=False` generator, clones and frees all 104 cache tensors and captures *and releases* a trace — a **decode** trace, not a prefill one: **0 of 3**. And the **opt-in pair alone**, repeated to **0 of 4**. With those, the conclusion is an interaction rather than a main effect, and it is stated with the multiplicity and independence caveats restored |
+| **P2** "the fix moved neither arm … **excludes** the in-model mechanisms" rested on two 3-vs-3 tables whose minimum attainable p is 0.100 | replaced with what the data bounds: four in-model candidates changed and the rate did not move, so the mechanism is not among them — which is weaker than "excludes" and is what the runs support |
+| **P2** the closure statement called the ctx-256 floor "not conservative" | it is a *comparator*, not a bound, and the document now proves it with its own numbers: 22.421 + 0.691 = 23.112 ms for bare layers plus the terminal term, against a 22.657 ms measured step that also contains the terminal path — the real step beats the sum of its separately-measured parts by **0.456 ms**, so the per-layer harness overprices by ~2 %. The contract's floor-plus-terminal comparison is stated alongside, and `perf_summary.json` now carries the ctx-256 comparator |
+| **P2** the round-5 contract substitution broke two things it touched: it rewrote the `qualitative.py --arm hf` command this stage deliberately did **not** run, and an `evidence_misses_*.json` glob that matches nothing here | the blanket substitution is replaced by explicit per-command handling; the HF arm is attributed to the stage that ran it with the reason; the miss note is derived from the file that exists. The gate now **resolves** contract-referenced paths instead of pattern-matching the string, and the "no `doc/full_model/`" rule carries a named exception rather than being dropped |
+| **P2** the trace-counter guard over-decremented on a failed release and had no behavioural coverage | decrement only on a successful release — otherwise the counter reads zero while a trace is alive, silencing the guard in exactly the case it exists for. New test `test_the_live_trace_count_round_trips_over_both_trace_kinds` drives both kinds through capture and release and pins the round-trip and the clamp |
+| three stale suite sizes (53 / "five new tests" / "53-case suite") | 54 / six / 54, checked against `test_results.xml` |
+| `DECODE_SWIGLU_MUL_CORES` had no divisibility guard | asserted where it is relied on: 80 divides *this* checkpoint's 160-tile width, which is a property of (intermediate_size, tp), not a constant |
+| `trace_counter_smoke.log` was referenced nowhere | removed; the new test supersedes it |
+| the "partial revert" label and the historical `ttft_breakdown_before.json` name | both stated where a reader meets them |
+
+### Round 6's own finding: the sixth statement is the third one, with the controls it lacked
+
+Five arms, 28 processes:
+
+| configuration | runs | tripped |
+| --- | --- | --- |
+| ten gated cases | 5 | 0 |
+| the opt-in pair **alone** | 4 | 0 |
+| twelve: ten + two sampling cases (count-matched) | 6 | 2 |
+| twelve: ten + `decode_follows_the_cache…` + a sampling case (**work-matched**) | 3 | 0 |
+| **twelve: ten + both opt-in `prefill_trace` cases** | 6 | **6** |
+
+Neither half reproduces alone. The pair by itself is 0 of 4; a twelve-case process that
+builds an extra generator, clones and frees the whole cache and captures and releases a
+*decode* trace is 0 of 3. Together: 6 of 6, against 2 of 18 for everything else pooled
+(p = 0.00021, six post-hoc contrasts, no multiplicity correction).
+
+So the sixth statement is close to the third, which round 4 retracted. That is not a
+vindication of the third — it was underpowered and its pooling was circular — but it is worth
+naming what actually happened across six rounds: **every statement fell to one control that
+had been left out, and two of the six fell to nothing more than n = 3.** The arms that finally
+separated it (hold work constant; run the suspect pair alone) each cost about twelve minutes
+and could have been run at round 3.
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -647,7 +695,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `3d03b5ca595` | `doc/optimized_full_model/` in full, the regenerated `doc/context_contract.json`, and the regenerated `readiness_autoregressive_{chat,raw}/` outputs |
 | `5e6022db622` | round-3 review fixes: the audit-table partition, the corrected prefill-128 and host-dispatch figures, the retracted retirement flag, the `--arm rebuild` probe and the gate's coverage extension |
 | `c28f91010d0` | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
-| *(this commit)* | round-5 review fixes: one trace-release path with a drain, the fixture finalizer, the model's live-trace guard and semaphore-cache cleanup, the re-measured limitation-6 arms, all three Fisher contrasts, and the contract's `tested` provenance |
+| `40e3fd71014` | round-5 review fixes: one trace-release path with a drain, the fixture finalizer, the model's live-trace guard and semaphore-cache cleanup, the re-measured limitation-6 arms, all three Fisher contrasts, and the contract's `tested` provenance |
+| *(this commit)* | round-6 review fixes: limitation 6 rewritten from current data with cross-section gate checks, the work-matched and pair-alone arms, the comparator-not-a-bound correction, the contract-substitution repair, and the trace-counter test |
 
 Nothing unrelated is in any of them: `git status` is clean at each, and the
 only files touched outside `doc/optimized_full_model/` are the four implementation/test

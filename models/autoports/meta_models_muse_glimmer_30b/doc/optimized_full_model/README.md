@@ -61,7 +61,7 @@ the attribution and why the trace is opt-in are in
 | decoder | `tt/optimized_decoder.py` (`_OptimizedMLP.decode_forward`) |
 | device | 4 x Blackhole, `ClusterType::P300_X2`, `ttnn.MeshShape(1, 4)`, `FABRIC_1D_RING`, `ttnn.Topology.Ring`, 2 links |
 | context | **131072**, unreduced — [`../context_contract.json`](../context_contract.json) |
-| tests | `tests/test_full_model.py`, **54** cases (46 inherited + 8 new), forward and reverse order |
+| tests | `tests/test_full_model.py`, **55** cases (46 inherited + 9 new), forward and reverse order |
 | watcher | `WATCHER_CLEAN` on the shipped default (10 device cases) and on each opt-in prefill-trace case separately; 0 fatal messages, 0 tripped asserts — [`logs/check_watcher.log`](logs/check_watcher.log) |
 
 ## What ships
@@ -365,15 +365,34 @@ the benchmark's own context ([`logs/layer_ab_after_ctx256.log`](logs/layer_ab_af
 | full x13 | 0.4164 | **0.4077** | −2.1 % |
 | **layer-stack floor** | 22.858 | **22.421** | −1.9 % |
 
-Against that tighter floor the comparison becomes informative rather than vacuous:
+Against that tighter comparator:
 
-* the model decode trace is **22.657 ms**, i.e. **+1.05 %** over a 22.421 ms same-context
-  floor — the 52 layers plus the whole terminal path cost 1 % more than the 52 layers alone
-  cost when measured one at a time;
-* token-out is **23.315 ms**, **+3.99 %** on that floor, of which the sampling trace is
-  632 µs (2.8 %);
-* both are far inside the 10–15 % bar, and now for a reason a reader can check: the bar is
-  cleared by 1 % against a floor that is *not* conservative, not by 3.6 % against one that is.
+* the model decode trace is **22.657 ms**, i.e. **+1.05 %** over 22.421 ms — the 52 layers
+  plus the whole terminal path cost 1 % more than the 52 layers alone cost when measured one
+  at a time;
+* token-out is **23.315 ms**, **+3.99 %** on it, of which the sampling trace is 632 µs
+  (2.8 %);
+* the goal's comparison is against floor **plus terminal work**: 22.421 + 0.691 device
+  terminal + 0.632 sampling = **23.744 ms**, and token-out is **1.8 % below** that.
+
+**It is a comparator, not a lower bound, and round 6 was right that calling it "not
+conservative" overstated it.** The proof is in the document's own numbers: 22.421 + 0.691 =
+**23.112 ms** for 52 bare layers plus the terminal device term, against a **22.657 ms**
+measured 52-layer traced replay that also contains the embedding, the gather, the terminal
+norm, the LM head, the softcap and two `plus_one`s. The real step beats the sum of its
+separately-measured parts by **0.456 ms**, so the per-layer harness overprices the stack by
+about **2 %** — it isolates one layer with its own warm-up, dispatch and drain rather than
+measuring it inside a 52-layer pipeline. Measuring at context 256 rather than the window's
+~192 mean adds a further +0.07 %, which is negligible but is conservatism in the same
+direction.
+
+So what the re-measurement bought is a **tighter and same-context** comparator, not a
+falsifiable bound: 22.421 instead of 22.858 removes 1.9 % of unrelated slack, and the
+`+1.05 %` figure is a real reading rather than the `−0.9 %` that made the old comparison
+uninterpretable. Both remain far inside the 10–15 % bar, and the honest statement of *why*
+there is no gap to close is the one that does not depend on the floor at all: the fallback
+audit is zero per-token host work, the two traces account for the step to 26.8 µs, and the
+terminal path is priced directly in the profile.
 
 `tp4b`, the same-config repeat control, reproduces `tp4` to 1e-4 at this context too
 (0.4390 / 0.4390 sliding, 0.4077 / 0.4078 full), and PCC is unchanged from the 2048 run —
@@ -383,7 +402,7 @@ cheaper floor, not a different model.
 ## Where TTFT actually goes
 
 TTFT at prompt 128 on the shipped default is **63.66 ms**, of which the 52-layer stack
-is **60.3 ms** ([`ttft_breakdown_before.json`](ttft_breakdown_before.json)). The phase
+is **60.3 ms** ([`ttft_breakdown_before.json`](ttft_breakdown_before.json) — the name is historical: `bench/ttft_breakdown.py` has no `--baseline` flag and this file is the **shipped default's** phase table, not a before-arm). The phase
 table below is the **min of each phase across three rounds** of that probe, which is not
 one run — the phases are timed with a device synchronisation around each, and the sum
 (64.45 ms) is quoted against a 63.66 ms TTFT measured in a different process. It is a
@@ -843,65 +862,82 @@ twelve cases and every clean one had ten, so the attribution to the prefill-trac
 confounded with plain process length. That was also right. The missing control is twelve
 device cases *without* those two, and it has now been run three times.
 
-**Twenty-two watcher processes**, each with a device reset before it. The two twelve-case
-arms were run three times, then *re-run three times each* against the fixed teardown of
-round 5 — because the first eleven had been measured with a `teardown()` that left
-`_trace_logits` to Python GC and reached `release_trace` with no drain, and with a test
-fixture that closed the mesh over live traces. Both are candidate causes of exactly this
-assert, so the pre-fix numbers could not be read as evidence about the shipped code.
+**Twenty-eight watcher processes across five configurations**, each with a device reset
+before it. Rounds 3, 4 and 5 each attributed this to something the next round's missing
+control refuted, so round 6's design adds the two arms that were still absent: a **work-matched**
+twelve-case arm, and the **opt-in pair alone** repeated.
 
-| configuration | pre-fix | post-fix | combined |
-| --- | --- | --- | --- |
-| the two opt-in `prefill_trace` cases alone in one process | 0 / 1 | — | **0 / 1** |
-| `--arm rebuild`: release a prefill trace, then build and run a second generator | 0 / 1 | — | **0 / 1** |
-| the ten gated cases | 0 / 5 | — | **0 / 5** |
-| twelve cases: the ten + two other sampling cases (**length control**) | 1 / 3 | 1 / 3 | **2 / 6** |
-| twelve cases: the ten + both opt-in `prefill_trace` cases | 3 / 3 | 3 / 3 | **6 / 6** |
+| configuration | 12 cases | builds an extra generator | clones/frees the 104 cache tensors | captures a **prefill** trace | runs | tripped |
+| --- | --- | --- | --- | --- | --- | --- |
+| the ten gated cases | | | | | 5 | **0** |
+| the two opt-in `prefill_trace` cases **alone** | | ✓ | ✓ | ✓ | 4 | **0** |
+| `--arm rebuild` (release a prefill trace, then build and run a second generator) | | ✓ | | ✓ | 1 | **0** |
+| twelve: the ten + two other **sampling** cases (count-matched) | ✓ | | | | 6 | **2** |
+| twelve: the ten + `decode_follows_the_cache…` + a sampling case (**work-matched**) | ✓ | ✓ | ✓ | | 3 | **0** |
+| **twelve: the ten + both opt-in `prefill_trace` cases** | ✓ | ✓ | ✓ | ✓ | 6 | **6** |
 
-**The teardown fix moved neither arm** — 3/3 to 3/3 and 1/3 to 1/3, Fisher p = 1.000 on
-both. That is what licenses pooling pre- and post-fix per arm, and it excludes the two
-in-model mechanisms round 5 identified: they were real defects and are fixed, but they are
-not this. With six runs per arm instead of three, the contrasts separate:
+The work-matched arm is the one round 6 asked for. Its extra case
+(`test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured`) does
+everything the opt-in cases do — builds its own `reuse=False` generator, clones and frees all
+104 KV-cache tensors, captures **and releases** a trace — except that the trace is the
+*decode* trace, not a prefill one. It is **0 of 3**.
 
 | contrast | rates | two-sided Fisher |
 | --- | --- | --- |
-| **opt-in twelve vs ten** | 6/6 vs 0/5 | **p = 0.0022** |
-| length-control twelve vs ten | 2/6 vs 0/5 | p = 0.455 |
-| opt-in vs length control | 6/6 vs 2/6 | p = 0.061 |
-| twelve pooled vs ten | 8/12 vs 0/5 | p = 0.029 |
+| opt-in twelve vs **everything else pooled** | 6/6 vs 2/18 | **p = 0.00021** |
+| opt-in twelve vs ten | 6/6 vs 0/5 | p = 0.0022 |
+| opt-in twelve vs the **work-matched** twelve | 6/6 vs 0/3 | **p = 0.0119** |
+| opt-in twelve vs the pair **alone** | 6/6 vs 0/4 | p = 0.0048 |
+| opt-in twelve vs the count-matched twelve | 6/6 vs 2/6 | p = 0.061 |
+| work-matched twelve vs count-matched twelve | 0/3 vs 2/6 | p = 0.500 |
 
-**So the discriminating factor is the opt-in prefill-trace pair, not process length.** The
-length-matched control is statistically indistinguishable from the ten-case set (p = 0.455)
-while the opt-in arm is far from it (p = 0.0022). That reinstates something close to the
-round-3 statement, which round 4 had retracted on three runs per arm — and it is the *fifth*
-statement of this limitation. The sequence is worth keeping visible, because the lesson is
-not any one of the claims:
+These are six post-hoc contrasts on one run set and carry **no multiplicity correction**;
+Bonferroni at ×6 leaves the primary contrast at p = 0.0013 and the work-matched one at
+p = 0.071. Fisher also assumes independence, and these are sequential runs on one physical
+mesh of a device-state phenomenon — the resets between runs are the only thing standing in
+for that assumption. Treat the ordering as solid and the exact p-values as indicative.
 
-1. "release then build another model" — disproved by two clean configurations;
-2. "the opt-in cases plus the larger workload" — retracted as confounded with length;
-3. "length, and the opt-in effect is not separable" — the pooling was circular and the
-   3-vs-3 table could not have separated anything (minimum attainable p = 0.100);
-4. round 5: the whole statistic was measured in a configuration with two live in-model
-   candidates in it;
-5. **this one**: with the candidates fixed and six runs per arm, composition separates and
-   length does not.
+**What the five arms support: the trip needs *both* the prefill-trace cases and a preceding
+workload, and neither alone is sufficient.**
 
-Each earlier version fell to the first control that had been left out of it. What the current
-one still cannot do is explain *why* the pair matters when releasing a prefill trace in
-isolation, rebuilding a model after one, and running both cases together in their own process
-are all clean — so it remains **not root-caused**, and the honest scope is "these two cases
-in a longer process", not a mechanism.
+* the pair **alone** is 0 of 4 — so it is not the prefill trace by itself;
+* a **work-matched** twelve-case process is 0 of 3 — so it is not process length, not
+  building an extra generator, not cache churn, and not trace capture/release in general;
+* the two together are **6 of 6**.
 
-**What "below the model" now rests on.** Round 5 was right that the phrase had been used
-without testing the in-model candidates: the fixture that closed the mesh over live traces,
-and a `teardown()` that deferred a 3.24 MB/device free to Python GC and drained nothing on
-the shipped default. Both are fixed — one release path with an unconditional drain, a fixture
-finalizer, `close_multichip_mesh` also dropping the model's semaphore cache, and
-`MuseGlimmerModel.deallocate()` warning rather than silently freeing a cache under a live
-trace — and the arms were re-measured. **Neither arm moved.** So the phrase is now a tested
-conclusion rather than an assumption: the model-side lifecycle is deterministic and the trip
-survives it. What is below the model is still not identified, and this stage does not claim
-to have identified it.
+That is, with the controls it always lacked, close to the round-3 statement that round 4
+retracted. The honest reading of the sequence is not that any one round was careless but
+that four of the five earlier claims were **underpowered or uncontrolled in a way the next
+round's single missing arm exposed**:
+
+1. "release then build another model" — refuted by `--arm rebuild` and the pair alone;
+2. "the opt-in cases plus a larger workload" — retracted as confounded with length;
+3. "length, and composition is not separable" — the pooling was circular and the 3-vs-3
+   table's minimum attainable p is 0.100, so it could not have separated anything;
+4. round 5's "composition, not length" — the significant contrast was still confounded in
+   both dimensions, and no arm held work constant;
+5. **this one** — with a work-matched arm and a pair-alone arm, the interaction is what
+   survives, and the two unexplained trips in the count-matched arm are the residual
+   (0/3 work-matched against 2/6 count-matched is itself p = 0.500, i.e. those two trips are
+   not attributable to anything this design isolates).
+
+What none of it explains is *why* the combination matters when each half is clean, so it
+remains **not root-caused**, and the scope is exactly "both opt-in cases in a process that
+has already done substantial other device work".
+
+**What "below the model" rests on.** Round 5 was right that the phrase had been used
+without testing the in-model candidates: a test fixture that closed the mesh over live
+traces, and a `teardown()` that deferred a 3.24 MB/device free to Python GC and drained
+nothing on the shipped default. Both are fixed — one release path with an unconditional
+drain, a fixture finalizer, `close_multichip_mesh` also dropping the model's semaphore
+cache, and `MuseGlimmerModel.deallocate()` warning rather than silently freeing a cache
+under a live trace — and both twelve-case arms were re-measured against the fix. **Neither
+moved** (3/3 → 3/3 and 1/3 → 1/3). Those are two 3-vs-3 tables and they cannot *exclude*
+anything on their own — round 6 was right about that too, and the earlier wording here
+claimed they did. What they do show is that the model-side lifecycle is now deterministic
+and the trip survives it, which is the most this stage can say: the remaining mechanism is
+not in the release ordering, the drain, the fixture, or the semaphore cache, because all
+four changed and the rate did not. What it *is* remains unidentified.
 
 Two properties bound it. **All twelve tests pass first** — the assert fires 1–4 s after the
 last `PASSED`, in the watcher's teardown poll, so nothing produces a wrong number and no
@@ -1006,7 +1042,7 @@ quotes in the force-argmax section is a different pool and a different moment �
 what a `TT_CCL`'s 36 extra *global semaphores* would have to fit into, at the decoder's
 tightest in-layer point, not what the terminal path has after 52 layers have freed their
 intermediates. The two are not in conflict, and the empirical co-residency evidence is
-that the traced step runs clean: 53 tests, the batch-32 mixed-length case, and a
+that the traced step runs clean: 55 tests, the batch-32 mixed-length case, and a
 watcher-clean run over all three changes.
 
 Batch: batch 1 at 131072 is the primary target and is tested; batch 4 and batch 32 at
@@ -1029,17 +1065,20 @@ in the public path.
 
 | run | result |
 | --- | --- |
-| `pytest tests/test_full_model.py` | **54 passed** — [`logs/full_test_run.log`](logs/full_test_run.log), [`test_results.xml`](test_results.xml) |
-| the same 54 in reverse order, one process | **54 passed** — [`logs/full_test_run_reverse.log`](logs/full_test_run_reverse.log) |
+| `pytest tests/test_full_model.py` | **55 passed** — [`logs/full_test_run.log`](logs/full_test_run.log), [`test_results.xml`](test_results.xml) |
+| the same 55 in reverse order, one process | **55 passed** — [`logs/full_test_run_reverse.log`](logs/full_test_run_reverse.log) |
 | watcher, gated subset (10 shipped-default cases) | **10 passed**, `WATCHER_CLEAN` — [`logs/watcher_pytest.log`](logs/watcher_pytest.log), [`watcher/`](watcher), [`logs/check_watcher.log`](logs/check_watcher.log) |
 | watcher, each opt-in prefill-trace case alone | **1 passed** each, `WATCHER_CLEAN` |
 | watcher, both opt-in cases together in one process | **2 passed**, `WATCHER_CLEAN` — [`logs/watcher_pytest_prefill_trace_pair.log`](logs/watcher_pytest_prefill_trace_pair.log) |
 | watcher, ten cases repeated (limitation 6's 0-of-5 arm) | **10 passed**, `WATCHER_CLEAN`, x4 more — [`watcher_default10/`](watcher_default10), `logs/check_watcher_console_10case_rep{a,b,c}.log` |
 | watcher, twelve in one process — ten + both opt-in cases | **12 passed** every time, then a tripped assert at teardown, **6 of 6** across pre- and post-teardown-fix — `logs/watcher_pytest_12case_tripped{,_run2,_run3}.log`, `logs/watcher_pytest_postfix_optin{1,2,3}.log` |
 | watcher, twelve in one process — ten + two *other* sampling cases (the length control) | **12 passed** every time, tripped **2 of 6** — `logs/watcher_pytest_12case_control{,2,3}.log`, `logs/watcher_pytest_postfix_ctrl{1,2,3}.log` |
+| watcher, twelve in one process — ten + `decode_follows_the_cache…` + a sampling case (**work-matched**: extra generator, cache churn, a decode trace captured and released) | **12 passed** every time, tripped **0 of 3** — `logs/watcher_pytest_workmatched{1,2,3}.log` |
+| watcher, the opt-in pair **alone** in one process | **2 passed** every time, tripped **0 of 4** — [`logs/watcher_pytest_prefill_trace_pair.log`](logs/watcher_pytest_prefill_trace_pair.log), `logs/watcher_pytest_pairalone{1,2,3}.log` |
+| `test_the_live_trace_count_round_trips_over_both_trace_kinds` | the model's live-trace count balances across capture and release of both trace kinds, and clamps rather than going negative |
 | the layer-stack floor at the benchmark's own context | sliding 0.4390, full 0.4077 ms/layer → **22.421 ms** — [`logs/layer_ab_after_ctx256.log`](logs/layer_ab_after_ctx256.log) |
 
-Eight cases are new (three of them parametrizations of one test) and each pins one shipped change:
+Nine cases are new (three of them parametrizations of one test) and each pins one shipped change:
 
 | test | pins |
 | --- | --- |
@@ -1048,7 +1087,7 @@ Eight cases are new (three of them parametrizations of one test) and each pins o
 | `test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one` | change 3 leaves the MLP's boundary output layout unchanged |
 | `test_prefill_trace_is_opt_in_and_matches_the_eager_path` | the opt-in prefill trace: same tokens, one bucket, non-aligned lengths inside it, eager fallback past the bound, released on teardown |
 | `test_prefill_trace_survives_rebinding_the_same_external_cache` | the serving path: the **same** external cache every request keeps its trace; a cache bound to **different** buffers releases it, recaptures against the new ones and still answers correctly |
-| `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` | the **decode** trace bakes the same cache addresses, so a rebind to different buffers must release and recapture it. Against the pre-fix code it fails, and that failure is committed as a negative control ([`logs/decode_rebind_prefix_negative_control.log`](logs/decode_rebind_prefix_negative_control.log): `AssertionError: a moved cache must release the decode trace`, with the shipped source restored afterwards). Two of its assertions do different jobs: that one catches the missing release, and the last one — the **traced** decode off the rebound cache must agree with the **eager** decode off the same cache — catches a release that recaptured against the wrong buffers. The committed control trips the first, because that is the one the pre-fix code violates |
+| `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` | the **decode** trace bakes the same cache addresses, so a rebind to different buffers must release and recapture it. Against the pre-fix code it fails, and that failure is committed as a negative control ([`logs/decode_rebind_prefix_negative_control.log`](logs/decode_rebind_prefix_negative_control.log): `AssertionError: a moved cache must release the decode trace`, with the shipped source restored afterwards. It is a **partial** revert — the signature is still recorded, only the comparison and the release are removed — because a full revert to `5e6022db622` fails on a missing attribute instead of on the behaviour). Two of its assertions do different jobs: that one catches the missing release, and the last one — the **traced** decode off the rebound cache must agree with the **eager** decode off the same cache — catches a release that recaptured against the wrong buffers. The committed control trips the first, because that is the one the pre-fix code violates |
 
 ## Limitations and known issues
 
@@ -1089,26 +1128,29 @@ Eight cases are new (three of them parametrizations of one test) and each pins o
    One real layer of each kind in its own capture is the same coverage with half the
    markers, and the integrity check in [`bench/run_tracy.sh`](bench/run_tracy.sh) fails
    the run rather than printing.
-6. **A watcher process trips a fabric ERISC assert at teardown more often the more device
-   cases it contains.** `subordinate_erisc detected invalid NOC command buffer state …
-   fabric_erisc_router.cpp`, **after every test in the process has passed**, in the
-   watcher's teardown poll. Measured over fifteen processes: **0 trips in 5** runs of the
-   ten gated cases, **4 trips in 6** runs of twelve cases (3 of 3 with the two opt-in
-   `prefill_trace` cases, 1 of 3 with two other sampling cases instead). Fisher's exact:
-   twelve-vs-ten **p = 0.061**; opt-in-vs-length-control **p = 0.400**, i.e. the length
-   effect is suggestive and the prefill-trace effect is not separable at this sample size.
-   *Restated twice.* It was first claimed as "releasing a prefill trace then building
-   another model on the same mesh", which two clean configurations disprove
-   (`prefill_trace_release_probe.py --arm rebuild`; both opt-in cases in one process); then
-   as "the opt-in cases plus a larger workload", which the length control disproves
-   ([`logs/watcher_pytest_12case_control2.log`](logs/watcher_pytest_12case_control2.log)).
-   Very likely the same fault as limitation 7 — same teardown, same acteth cores 29-25 and
-   25-25, both watcher-only. Consequences are bounded: no test fails and no number is
-   wrong; what breaks is the watcher *artifact*, since the abort truncates the log
-   mid-dump. Not root-caused: it is below the model, in fabric router state at teardown.
-   The gated set is ten because ten is the largest size measured with zero trips, and a
-   longer watcher run of this module should be expected to abort at teardown sometimes —
-   reset and re-run, and never read a truncated watcher log as a clean one.
+6. **Both opt-in `prefill_trace` cases in a watcher process that has already done
+   substantial other device work trip a fabric ERISC assert at teardown.**
+   `subordinate_erisc detected invalid NOC command buffer state … fabric_erisc_router.cpp`,
+   **after every test in the process has passed**, in the watcher's teardown poll.
+   **6 of 6** for that configuration, against **2 of 18** across every other configuration
+   tested (Fisher **p = 0.00021**, no multiplicity correction; see
+   [Watcher](#watcher) for all five arms and six contrasts). Neither half reproduces it
+   alone: the pair **by itself** is 0 of 4, and a **work-matched** twelve-case process —
+   same case count, its own extra generator, all 104 cache tensors cloned and freed, a trace
+   captured *and released*, but a **decode** trace rather than a prefill one — is 0 of 3.
+   *This is the sixth statement of this limitation and it is close to the third; the four in
+   between were each refuted by one control the next round found missing, which is recorded
+   in the Watcher section rather than smoothed over.* Consequences are bounded: **no test
+   fails, no number is wrong**, and the shipped default never captures a prefill trace so
+   never releases one. What breaks is the watcher *artifact* — the abort lands inside the
+   watcher's own dump, truncating the log, which `check_watcher.py` correctly rejects as
+   `WATCHER_LOG_NOT_A_REAL_RUN`. Probably the same fault as limitation 7 (same teardown,
+   same acteth cores 29-25 and 25-25, watcher-only). **Not root-caused**: four in-model
+   candidates were fixed without changing the rate, so it is below the model, but the
+   mechanism is unidentified. The gated set is the ten cases and the opt-in pair is watched
+   in its own process; a serving stage enabling `prefill_trace` under watcher alongside other
+   work should expect the teardown abort, reset afterwards, and never read a truncated
+   watcher log as a clean one.
 
 7. **A watcher-enabled run still aborts at device close.** Inherited unchanged from the
    full-model stage (its limitation 11); watcher-only, recoverable with a reset, not
@@ -1314,6 +1356,20 @@ done
 python $M/doc/optimized_multichip_decoder/bench/layer_ab.py \
     --candidates tp4,tp4b --prefill-seq 128 --decode-context 256
 
+# round 6's two arms: work-matched twelve (extra generator + cache churn + a decode trace,
+# but no prefill trace) and the opt-in pair alone.  These are what separate "the prefill
+# trace" from "a long process that builds generators".
+for i in 1 2 3; do
+  python $M/doc/full_model/bench/tt_reset.py
+  env WATCHER_TAG=_workmatched$i bash $B/run_watcher.sh "${TEN[@]}" \
+      test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured \
+      test_top_k_top_p_runs_through_the_same_path_and_greedy_survives_it
+  python $M/doc/full_model/bench/tt_reset.py
+  env WATCHER_TAG=_pairalone$i bash $B/run_watcher.sh \
+      test_prefill_trace_is_opt_in_and_matches_the_eager_path \
+      test_prefill_trace_survives_rebinding_the_same_external_cache
+done
+
 # and the ten gated cases repeated, which is the 0-of-5 arm
 for tag in _default10 _10case_repa _10case_repb _10case_repc; do
   env WATCHER_TAG=$tag bash $B/run_watcher.sh
@@ -1352,7 +1408,7 @@ Implementation:
 | --- | --- |
 | [`../../tt/model.py`](../../tt/model.py) | `LM_HEAD_SOFTCAP_IN_L1`, `EMBED_DECODE_GATHER_SHARDED`, `_LMHead.forward`, `_all_gather_async(memory_config=)`, `_embed(memory_config=)`, `embed_decode` |
 | [`../../tt/optimized_decoder.py`](../../tt/optimized_decoder.py) | `DECODE_SWIGLU_MUL_CORES`, `_OptimizedMLP.decode_forward` |
-| [`../../tests/test_full_model.py`](../../tests/test_full_model.py) | five new contract tests (seven cases with parametrization) |
+| [`../../tests/test_full_model.py`](../../tests/test_full_model.py) | seven new contract tests (nine cases with parametrization) |
 
 Evidence:
 
@@ -1373,7 +1429,7 @@ Evidence:
 | `prefill_trace_release_probe.py` arms | `logs/watcher_probe_*.log`: capture / release / recapture / clone-cache, each watcher-clean |
 | `decode_ab.json` | the `mlpN` arms; their `error` field keeps only the last traceback line, so the exact `TT_FATAL` is in `logs/decode_ab.log` |
 | `perf_summary.json` | roofline / device / end-to-end reconciliation |
-| `test_results.xml` | the 53-case suite |
+| `test_results.xml` | the 55-case suite |
 | `tracy/` | reduced-variant profiles: prefill 128, decode sliding, decode full, sampling |
 | `qualitative/` | the shared suite, the HF control, the comparison, and the diff against the full-model stage |
 | `watcher/`, `watcher_prefill_trace_{optin,rebind}/` | the three watcher logs the verdicts are re-derived from (each run's `generated/inspector` and kernel-name dumps are 6 MB of build metadata and are not kept) |

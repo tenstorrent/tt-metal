@@ -53,15 +53,38 @@ def main() -> int:
         budget = contract.get("byte_budget_at_full_context")
         if isinstance(budget, dict) and "measured_from" in budget:
             budget["measured_from"] = f"{stage_dir}/evidence_accuracy.json (capability_report over the built model)"
-        # Round 5 found the same defect in the sibling fields: ``tested.commands`` still
-        # named the previous stage's harness for all five commands, and
-        # ``tested.prefill_misses.note`` its miss file, while every value under ``tested``
-        # is this stage's.  A reader following those commands runs the wrong script.  Fixed
-        # by substitution on the whole subtree so a future field cannot be missed the way
-        # these two were, and the gate now asserts no ``doc/full_model/`` survives here.
+        # Round 5 found the same defect in the sibling fields: ``tested.commands`` named the
+        # previous stage's harness, and ``tested.prefill_misses.note`` its miss file, while
+        # every *value* under ``tested`` is this stage's.  Round 6 then found that fixing it
+        # with a blanket substitution over the subtree was too blunt and broke two things:
+        # it rewrote the ``qualitative.py --arm hf`` command, which this stage deliberately
+        # did **not** run (it reuses the previous stage's HF control via
+        # ``--reuse-hf-control``), and it rewrote a ``evidence_misses_*.json`` glob that
+        # matches the previous stage's ``_bfp4`` suffix but nothing here.  So the commands
+        # are now stated explicitly as the ones this stage actually ran, and the miss note
+        # names the file that exists.
         tested = contract.get("tested")
-        if tested is not None:
-            contract["tested"] = json.loads(json.dumps(tested).replace("doc/full_model/", f"{stage_dir}/"))
+        if isinstance(tested, dict):
+            commands = tested.get("commands")
+            if isinstance(commands, list):
+                tested["commands"] = [
+                    (
+                        # The HF arm is the previous stage's control, reused rather than re-run.
+                        "python doc/full_model/bench/qualitative.py --arm hf "
+                        "(the previous stage's control, reused here via --reuse-hf-control)"
+                        if "--arm hf" in command
+                        else command.replace("doc/full_model/", f"{stage_dir}/")
+                    )
+                    for command in commands
+                ]
+                if not any("--arm compare" in command for command in tested["commands"]):
+                    tested["commands"].append(f"python {stage_dir}/bench/qualitative.py --arm compare")
+            misses = tested.get("prefill_misses")
+            if isinstance(misses, dict) and "note" in misses:
+                miss_files = sorted(path.name for path in evidence.glob("evidence_misses*.json"))
+                misses["note"] = f"per-position detail in {stage_dir}/" + (
+                    miss_files[0] if miss_files else "evidence_misses.json"
+                )
         # The two persistent/peak allocations this stage adds, from their own measured
         # artifacts rather than from prose.  ``$optimize`` requires the contract to move
         # when trace buffers or activation memory move, and both of these do.

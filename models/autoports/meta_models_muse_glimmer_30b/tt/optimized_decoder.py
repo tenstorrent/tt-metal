@@ -895,6 +895,19 @@ class _OptimizedMLP(LightweightModule):
             # See :data:`DECODE_SWIGLU_MUL_CORES`: three reshards to spread the SFPU
             # SiLU over more cores.  ``mlp_down``'s ``in0_block_w`` is derived from
             # the *gate/up* grid, so the product has to come back to it.
+            #
+            # 80 divides this checkpoint's 160-tile local intermediate width, and that is
+            # a property of (intermediate_size, tp), not a constant.  Round 6 pointed out
+            # that a config change would otherwise produce an uneven shard silently rather
+            # than failing, so the divisibility that makes the reshard legal is asserted
+            # where it is relied on.
+            width_tiles = int(gate.shape[-1]) // ttnn.TILE_SIZE
+            if width_tiles % wide:
+                raise ValueError(
+                    f"DECODE_SWIGLU_MUL_CORES={wide} must divide the local intermediate width in "
+                    f"tiles ({width_tiles} for shape {tuple(gate.shape)}); an uneven width shard "
+                    "is silently wrong rather than an error. Pick a divisor or set it to None."
+                )
             wide_memcfg = dec._sharded_memcfg(rows, int(gate.shape[-1]), wide)
             gate_w = ttnn.to_memory_config(gate, wide_memcfg)
             ttnn.deallocate(gate)

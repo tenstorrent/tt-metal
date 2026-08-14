@@ -33,5 +33,7 @@
     "Two prefill norms run on 1 and 4 cores for ~134 us each (0.27 ms of a 65 ms TTFT), left because the fix changes prefill numerics on the accuracy gates' critical path."
   ],
   "ttft_ms_with_prefill_trace": 50.19,
-  "l1_peak_delta_per_bank_bytes": 126976
+  "l1_peak_delta_per_bank_bytes": 126976,
+  "layer_stack_comparator_ms_per_token_at_decode_context_256": 22.421,
+  "layer_stack_comparator_note": "39 x 0.4390 + 13 x 0.4077 from doc/optimized_full_model/logs/layer_ab_after_ctx256.log, measured at the benchmark's own decode context. It is a same-context *comparator*, not a strict lower bound: 52 bare layers measured one at a time plus the 0.691 ms terminal device term is 23.112 ms, which the whole 52-layer traced step (22.657 ms) beats by 0.456 ms, so the per-layer harness overprices the stack by about 2%. The 22.858 figure above is the same measurement at decode context 2048, which is what the decoder stage's floor uses."
 }
