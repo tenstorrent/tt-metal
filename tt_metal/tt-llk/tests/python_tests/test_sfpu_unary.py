@@ -31,14 +31,13 @@ from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
     SPECIALS_READY_OPS,
-    UNSPECIFIED_NAN_SIGN_SKIP_REASON,
     edge_spec,
     exclude_undefined,
     for_op_pipeline,
-    nan_sign_is_unspecified,
     negative_zero_delivered,
     op_edge_points,
     sfpu_unary_ops,
+    specials_after_nan_sign_gate,
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -215,11 +214,15 @@ def _skip_coverage_unsupported(mathop):
     # the actual reason the broad profile is excluded from the instrumented run is not
     # recorded anywhere, and is presumably its cost under instrumentation.
     #
-    # What matters for a reader here is that the skip is now a routing decision rather than a
-    # coverage hole. The broad profile runs in the non-coverage companion groups of llk-e2e
-    # (split_group 6-10 in tests/pipeline_reorg/llk_e2e_tests.yaml). Before those existed it
-    # ran in no automated job on any architecture, because every other LLK python job
-    # excludes the `nightly` marker.
+    # An earlier revision of this comment claimed the broad profile "ran in no automated job
+    # on any architecture" before the llk-e2e companion groups were added. That was wrong:
+    # no group in llk_e2e_tests.yaml passes `--coverage`, WITH_COVERAGE is set only by that
+    # option, so this branch never fires in that workflow and the broad profile was already
+    # running nightly on both arches. The companion groups, and whether this skip is needed
+    # at all, are under discussion on the PR -- see the header comment in
+    # tests/pipeline_reorg/llk_e2e_tests.yaml.
+    #
+    # What is still true here: when coverage *is* on, this skips the broad profile.
     if mathop in BROAD_SWEEP_OPS:
         pytest.skip(
             reason="Broad-profile ops are not run under coverage; they run in llk-e2e's "
@@ -341,25 +344,21 @@ def _skip_bh_unsupported_float_combo(formats, dest_acc):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
 
-def _skip_unspecified_nan_sign(mathop, formats, dest_acc, specials):
-    """Drop the variants whose only disagreement is a NaN sign Wormhole does not promise.
-
-    Scoped by *specials* because a NaN only enters this sweep through the cat-B probe: with
-    specials off the stimulus is finite and none of these ops produces a NaN from it, so the
-    gate must not reach the cat-A/D variants of the same op.
+def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
+    """*specials*, minus the cells where the golden would assert an unspecified NaN sign.
 
     Blackhole is untouched -- its SFPMAD guarantees the canonical 0x7fc00000, so the golden's
-    canonicalisation is sound there and these variants keep asserting. Reason and rationale
-    live next to the predicate, in sfpu_domains.
+    canonicalisation is sound there. The rule itself lives in sfpu_domains, shared with
+    test_sfpu_binop_scalar's copy of this sweep.
     """
-    if (
-        specials
-        and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and nan_sign_is_unspecified(
-            mathop, formats.input_format, formats.output_format, dest_acc
-        )
-    ):
-        pytest.skip(reason=UNSPECIFIED_NAN_SIGN_SKIP_REASON.format(op=mathop.name))
+    return specials_after_nan_sign_gate(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        specials,
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
 
 
 def _skip_bh_unless_fp32(formats, dest_acc):
@@ -657,6 +656,12 @@ _EDGE_KNOWN_DIVERGENCES.update(
     }
 )
 
+# The three whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
+# specials surviving the NaN-sign gate; see where the marker is applied.
+_CAT_B_DERIVED_DIVERGENCES = frozenset(
+    {MathOperation.Reciprocal, MathOperation.Sqrt, MathOperation.Rsqrt}
+)
+
 _EDGE_DIVERGENCE_REASON = {
     MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
     "documented contract: SFPSETCC is specified only for inputs that are not negative "
@@ -774,13 +779,6 @@ def test_eltwise_unary_sfpu_edges(
 
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    if (formats.input_format, formats.output_format, dest_acc) in (
-        _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
-    ):
-        request.node.add_marker(
-            pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
-        )
-
     if mathop == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
 
@@ -791,7 +789,23 @@ def test_eltwise_unary_sfpu_edges(
         formats.input_format, formats.output_format, dest_acc
     )
 
-    _skip_unspecified_nan_sign(mathop, formats, dest_acc, specials)
+    specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
+
+    # Marked after the gate, not before, because three of these divergences are cat-B's and
+    # the gate can take cat B away. _cat_b_divergences derives Reciprocal's, Sqrt's and
+    # Rsqrt's sets from the combinations that *deliver* the probe, so on a cell where the
+    # gate has since switched specials off the probe is not sent, the divergence cannot
+    # occur, and the entry would be a non-strict xfail that can never fire -- XPASS every
+    # run, recording nothing, which is exactly what Signbit's deleted entries were.
+    # Sign, Heaviside, RsqrtCompat and Erfinv are unaffected: their divergences are cat-A
+    # poles and signed zeros that edge_values() emits with or without specials.
+    diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
+        _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
+    )
+    if diverges_here and (specials or mathop not in _CAT_B_DERIVED_DIVERGENCES):
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
+        )
 
     spec_A = edge_spec(
         mathop,
@@ -936,7 +950,14 @@ _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 # straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch
 # a lost low bit, and zero. Magnitudes only -- these are all non-negative, and the docstring
 # below says why no negative counterpart is drivable.
-_SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536]
+#
+# 2**30 is here for the *right* shift specifically. Without it the largest magnitude is 2**16,
+# so every stimulus is already 0 by an amount of 17 and each of 17..30 asserts nothing but
+# 0 >> n == 0 -- which cannot tell calculate_right_shift's `eff = 31` clamp apart from a clamp
+# anywhere in that range. 2**30 >> 30 == 1 restores the distinction at the top in-range amount.
+# It needs no left-shift exclusion: the limit filter below drops it from every LeftShift
+# variant that would overflow int32, keeping it only at an amount of 0.
+_SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
 
 _INT32_MAX = 2**31 - 1
 
@@ -987,7 +1008,11 @@ def test_eltwise_unary_sfpu_int_shift(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    """Sweep the unary shift ops over the full shift-amount axis, in range and out."""
+    """Sweep the unary shift ops over the amounts worth driving, in range and out.
+
+    Not the full axis: _UNARY_SHIFT_AMOUNTS carries 8 of the 32 in-range amounts, chosen the
+    way SHIFT_EDGE_AMOUNTS is, plus the out-of-range ones collapsed to one representative.
+    """
     values = _shift_stimulus_values(mathop, shift_amount)
     if not any(v for v in values):
         # Only 0 survives the representable-result filter, so the variant would assert

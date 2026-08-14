@@ -77,24 +77,32 @@
 # ---------------------------------------------------------------------------------------
 # Non-coverage companion groups (split_group 6-10).
 #
-# The groups above all pass --coverage, and `_skip_coverage_unsupported` in
-# test_sfpu_unary.py skips every BROAD_SWEEP_OPS variant wholesale when coverage is on.
-# Since the only other LLK python jobs (llk-smoke, llk-bit-exact) exclude the `nightly`
-# marker, the broad unary profile -- the large majority of the sweep's parametrizations --
-# was running in no automated job on any architecture. Coverage that nothing runs cannot
-# catch a regression, and the arch-gates in this suite are exactly the kind of thing that
-# regresses quietly.
+# !! THE JUSTIFICATION BELOW WAS WRONG, AND THESE GROUPS ARE UNDER DISCUSSION. !!
 #
-# These groups run the same 5-way split with the same markers, minus --coverage, so the
-# broad profile actually executes.
+# They were added on the premise that the groups above run under coverage, that
+# `_skip_coverage_unsupported` in test_sfpu_unary.py therefore skips every BROAD_SWEEP_OPS
+# variant there, and that the broad unary profile consequently ran in no automated job on
+# any architecture.
 #
-# Targeted at test_sfpu_unary.py rather than the whole directory. BROAD_SWEEP_OPS and
-# _skip_coverage_unsupported live only there, so pointing these at `.` would re-run every
-# other suite a second time per arch per night for no coverage that the instrumented
-# groups do not already have. They carry `coverage: false`, so
-# llk-e2e-impl skips the .info upload for them and the merge job still sees only the five
-# instrumented groups per arch. split_group is 6-10 rather than 1-5 because the artifact
-# names are keyed on it (`junit-report-<arch>-<split_group>`) and would otherwise collide.
+# The first link does not hold. No group in this file passes `--coverage` on either pytest
+# leg -- the only mentions of the flag here are in comments, this one included -- and all
+# four of the groups above carry `coverage: false`. `WITH_COVERAGE` is set solely by that
+# CLI option, and llk-e2e-impl.yaml runs `matrix.test-group.cmd` verbatim, with
+# `inputs.coverage` gating nothing but the artifact upload. So `_skip_coverage_unsupported`
+# is already a no-op in this workflow and the broad profile already runs nightly on both
+# arches, which makes these five groups per arch a duplicate rather than new coverage.
+#
+# Kept in place only so the discussion has something concrete to point at; see the review
+# thread on this file. The open question is not merely whether the rationale was right but
+# whether the underlying BROAD_SWEEP_OPS skip is still needed at all -- it cites tt-llk#1435,
+# an accuracy issue possibly caused by BIT11 leaking between tests, and the suggestion on
+# review is to re-run without the skip and either delete it or debug what scrambles the
+# values, rather than route around it.
+#
+# The mechanical notes, still accurate: targeted at test_sfpu_unary.py rather than `.`, since
+# BROAD_SWEEP_OPS and _skip_coverage_unsupported live only there and `.` would re-run every
+# other suite a second time per arch per night. split_group is 6-10 rather than 1-5 because
+# artifact names are keyed on it (`junit-report-<arch>-<split_group>`) and would collide.
 # ---------------------------------------------------------------------------------------
 
 - name: llk_e2e_wormhole_nocov group 1/5

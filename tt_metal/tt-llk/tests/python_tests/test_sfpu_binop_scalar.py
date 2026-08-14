@@ -17,9 +17,8 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
-    UNSPECIFIED_NAN_SIGN_SKIP_REASON,
     edge_spec,
-    nan_sign_is_unspecified,
+    specials_after_nan_sign_gate,
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -230,17 +229,17 @@ def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
         formats.input_format, formats.output_format, dest_acc
     )
 
-    # The unary sweep's gate, same cause in a second suite: ScalarRsub builds `c - x`
-    # through SFPMAD, so a NaN operand comes back out as a NaN of the kernel's own making
-    # rather than the one it was handed. See sfpu_domains.GENERATED_NAN_SIGN_OPS.
-    if (
-        specials
-        and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and nan_sign_is_unspecified(
-            mathop, formats.input_format, formats.output_format, dest_acc
-        )
-    ):
-        pytest.skip(reason=UNSPECIFIED_NAN_SIGN_SKIP_REASON.format(op=mathop.name))
+    # The unary sweep's gate, same rule and same helper: ScalarRsub builds `c - x` through
+    # SFPMAD, so a NaN operand comes back as a NaN of the kernel's own making rather than the
+    # one it was handed. See sfpu_domains.GENERATED_NAN_SIGN_OPS.
+    specials = specials_after_nan_sign_gate(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        specials,
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
 
     spec_A = edge_spec(
         mathop,

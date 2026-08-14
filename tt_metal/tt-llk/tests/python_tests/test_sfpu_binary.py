@@ -132,20 +132,33 @@ BINARY_CUSTOM_TOLERANCES = {
     # to Float32 would accept five times the error that format was measured to produce, on a
     # sweep whose whole point is the higher-precision regression coverage.
     #
-    # Only the two measured formats are listed. Float16 and Bfp8_b keep the conservative 0.6
-    # via the default below rather than inheriting a bound nobody measured for them, which
-    # makes this change a pure tightening of Float32 and nothing else. Measure before
-    # narrowing either of those.
+    # Float16 is listed because the widened domain needs it to be, not because it inherits
+    # anything: measured on a Wormhole n300 over x <= 8, the atol it requires is 0.0989 (see
+    # below for what "requires" means here) against a 0.05 format default. 0.12 is that with
+    # the same ~20% margin the other two carry.
     MathOperation.SfpuXlogy: {
         DataFormat.Float32: (0.14, None),  # 0.116 measured, same ~20% margin as bf16
         DataFormat.Float16_b: (0.6, None),
+        DataFormat.Float16: (0.12, None),  # 0.0989 measured
     },
 }
 
-# Fallback for an output format the per-format table does not list. Deliberately the widest
-# measured value, so an unlisted format keeps the behaviour it had rather than being handed a
-# tight bound derived from a different format's error.
-_XLOGY_DEFAULT_TOLERANCE = (0.6, None)
+# Fallback for an output format the per-format table does not list: no override at all, so
+# `helpers/utils.py`'s per-format tolerance applies. Bfp8_b is the only such format left, and
+# it does not need one -- its verdict comes from _bfp_block_aware_compare's lattice check
+# rather than from a flat atol, and it passes on the default.
+#
+# Emphatically *not* the widest measured value, which is the trap. xlogy had no custom
+# tolerance at base, so an unlisted format was on its format default -- atol 0.05 for Float16,
+# 0.1 for Bfp8_b. Handing those 0.6 to "keep the behaviour it had" would have loosened them
+# 12x and 6x instead, on columns the measurement never covered and a domain this PR doubled.
+#
+# Reading the measurement: passed_test judges with torch.isclose(golden, res, rtol, atol), so
+# the bound is atol + rtol * |res| and the atol a format actually needs is
+# max(|g - r| - rtol * |r|), not max|g - r|. The two differ by an order of magnitude here --
+# raw error reaches 1.0 at |golden| ~ 72 where rtol alone already allows 3.6 -- which is why
+# the raw figures above sit so far above the atols they justify.
+_XLOGY_DEFAULT_TOLERANCE = (None, None)
 
 
 def _custom_tolerances(mathop, output_format):

@@ -857,6 +857,18 @@ def _clip_high(spec: StimuliSpec, ceiling: float, op: MathOperation) -> None:
         spec.high = ceiling
 
 
+def _domain_of(spec: StimuliSpec) -> Tuple:
+    """The part of *spec* that says which values it draws, and nothing else.
+
+    `StimuliSpec` is a plain dataclass, so `==` also compares `distribution`, `seed` and the
+    per-face fields. Those say *how* the values are drawn, not *which*, and for_op applies
+    `distribution_a` / `distribution_b` before the ceiling -- so a whole-spec comparison
+    reports "distinct per-operand domains" for two operands over an identical range that
+    merely sample it differently.
+    """
+    return (spec.low, spec.high, tuple(spec.intervals or ()))
+
+
 def _apply_approx_ceiling(
     result: OperandSpecs,
     op: MathOperation,
@@ -875,7 +887,9 @@ def _apply_approx_ceiling(
     ceiling = _APPROX_ACCURACY_MAX.get(op)
     if ceiling is None:
         return
-    if result.spec_B is not None and result.spec_B != result.spec_A:
+    if result.spec_B is not None and _domain_of(result.spec_B) != _domain_of(
+        result.spec_A
+    ):
         raise ValueError(
             f"MathOperation.{op.name} has an approximation-mode ceiling but distinct "
             f"per-operand domains. _APPROX_ACCURACY_MAX is written for the unary exp "
@@ -2193,7 +2207,9 @@ SPECIALS_READY_OPS[MathOperation.Fill] = (
 # truncation it is; the substitution then reads a real sign.
 #
 # It also silently fixed Signbit(NaN), which reported 1.0 at dest_acc=No for the same reason.
-# Signbit is not enrolled for specials, so nothing was failing -- it was waiting to.
+# Signbit was not enrolled for specials *at that point*, so nothing was failing -- it was
+# waiting to. It is enrolled now, via _SPECIALS_READY_UNCHANGED above, which is only safe
+# because the cast was fixed first.
 #
 # The signed-zero rows were never blocking, for a reason worth keeping: a zero's sign is
 # invisible to this suite's comparator. passed_test() judges by torch.isclose plus a both-NaN
@@ -2217,11 +2233,11 @@ SPECIALS_READY_OPS[MathOperation.Fill] = (
 # unpack_to_dest split, measured independently of the signbit/sign/heaviside partition it was
 # inferred from -- see the coverage audit. The probe genuinely is not delivered on the
 # datacopy path, which is what scopes Sqrt's and Rsqrt's xfails to unpack-to-dest.
-_SPECIALS_NEXT_TRANCHE: FrozenSet[MathOperation] = frozenset(
-    {
-        MathOperation.Log,
-    }
-)
+#
+# Log is recorded above rather than in a constant. An earlier revision held it in a
+# `_SPECIALS_NEXT_TRANCHE` frozenset that nothing consumed -- typed and built like
+# SPECIALS_READY_OPS, so it read as a gate while gating nothing. A name that looks load-bearing
+# and is not is worse than the paragraph, which at least cannot be mistaken for a mechanism.
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
@@ -2374,6 +2390,18 @@ def nan_survives_to_l1(
 # the observed signs -- recording those would assert exactly what the ISA declines to promise.
 # See UnarySFPUGolden._NAN_SIGN_TRANSPARENT_OPS for the other side of the partition: Neg, Abs
 # and Identity move the sign bit, so for them it means something.
+#
+# Membership is by *observed disagreement*, not by kernel shape, and the two are not the same
+# question. GeluTanh (`half_x * t + half_x`) and Xielu (`1.0 * (+inf) + (-inf)`) build a NaN
+# through SFPMAD in the same `inf + (-inf)` shape as the gated GeluAppx, so shape alone would
+# enrol them. Read back raw at the -inf probe on Float32->Float32 dest_acc=Yes -- the one cell
+# that carries a NaN to L1 intact, so the sign is legible -- they come out `0x7FC00001`, sign
+# clear, where Cos, Mish and Silu come out `0xFFC00001`. They agree with the golden's
+# canonicalisation and are correctly out.
+#
+# That is a measurement on one part, and SFPMAD leaves the sign unspecified, so it is evidence
+# rather than a guarantee -- as it is for every op not in this list. If GeluTanh or Xielu ever
+# fails these five cells, the fix is to add it here, not to re-derive the shape argument.
 GENERATED_NAN_SIGN_OPS: FrozenSet[MathOperation] = frozenset(
     {
         MathOperation.Cos,
@@ -2410,18 +2438,40 @@ def nan_sign_is_unspecified(
     )
 
 
-# One string, two suites, so the two skips cannot drift apart. Deliberately a skip and not
-# an xfail: an xfail would claim the sign *is* wrong on Wormhole, and SFPMAD.md says only
-# that it may be either -- a NaN emitted with a clear sign bit is equally in spec, so the
-# same hardware could satisfy or break that claim on any given run. There is nothing here to
-# assert until the golden accepts both infinities on a substituted NaN, which is a change to
-# convert_nan_to_inf's contract rather than to this gate. See tt-metal#52938.
-UNSPECIFIED_NAN_SIGN_SKIP_REASON = (
-    "{op} emits a NaN of its own making, and this pipeline narrows it to a signed "
-    "infinity (nan_survives_to_l1 is False), so the variant would assert the NaN's sign. "
-    "SFPMAD.md leaves that sign unspecified on Wormhole -- 'the sign bit might or might "
-    "not be set' -- while guaranteeing 0x7fc00000 on Blackhole, where this still runs."
-)
+def specials_after_nan_sign_gate(
+    mathop: MathOperation,
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+    specials: bool,
+    on_wormhole: bool,
+) -> bool:
+    """*specials*, with cat B switched off where the NaN sign would be unspecified.
+
+    Turning the probe off rather than skipping the variant, because edge_values() puts the
+    cat-A, cat-D and cat-B probes in one list that edge_spec() wraps as a single
+    StimuliSpec.custom. Dropping the variant to avoid asserting a NaN sign would take the
+    pole and knee assertions sharing that tensor with it -- Hardmish's (-2.0, 0.0) knee and
+    Rsqrt's 0.0 pole, on five of their eight cells each, both of which Wormhole was asserting
+    before cat B was enrolled at all. Callers still skip when the narrowed spec comes back
+    None, which is the ops that have nothing but cat B to drive.
+
+    *on_wormhole* is passed rather than read here so this module stays free of the device
+    imports that ChipArchitecture pulls in; both edge sweeps share this one rule.
+
+    Not an xfail: an xfail would claim the sign *is* wrong on Wormhole, and SFPMAD.md says
+    only that it may be either -- a NaN emitted with a clear sign bit is equally in spec, so
+    the same hardware could satisfy or break that claim on any given run. There is nothing to
+    assert here until the golden accepts both infinities on a substituted NaN, which is a
+    change to convert_nan_to_inf's contract rather than to this gate. See tt-metal#52938.
+    """
+    if (
+        specials
+        and on_wormhole
+        and nan_sign_is_unspecified(mathop, input_format, output_format, dest_acc)
+    ):
+        return False
+    return specials
 
 
 def specials_safe_formats(
