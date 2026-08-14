@@ -72,6 +72,7 @@ def build_model(model_cfg: dict) -> tuple[DiT, int, int]:
         num_tokens=num_tokens,
         num_classes=model_cfg["num_classes"],
         mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
+        use_ttl_modulation=model_cfg.get("use_ttl_modulation", False),
     )
     return model, patch, num_tokens
 

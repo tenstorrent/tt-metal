@@ -70,3 +70,20 @@ loss must collapse).
   averages gradients with `ttml.sync_gradients` after backward, and reads
   losses/params through a concat composer (first replica kept). In-loop
   sampling is disabled under DDP; sample offline from checkpoints.
+
+## Optional: tt-lang fused adaLN modulation
+
+With the [tt-lang](https://github.com/tenstorrent/tt-lang) "light" wheel
+installed (`TTNN_DEP_MODE=external`, i.e. it runs against this tree's ttnn),
+set `use_ttl_modulation: true` in the model config (see
+`configs/model_configs/dit_s_p2_ttl.yaml`). The adaLN modulate
+(`y = x·(1+scale)+shift`) then runs as a single fused `@ttl.operation`
+(forward and backward) reading scale/shift at tile offsets from one packed
+D→4D modulation linear — replacing six D→D linears plus the broadcast
+mul/add chains. Standalone, the fused kernel measured 1.52–2.56× faster than
+the composed-ttnn equivalents on Blackhole, with gradients matching torch.
+
+Gate it with `python test_ttl_fused_ops.py` (skips cleanly without ttl);
+`--ab 500` additionally trains eager-vs-fused on identical batches and
+reports loss-curve agreement and throughput. Kernels JIT-compile per shape
+on first call (~30–60 s), then cache.

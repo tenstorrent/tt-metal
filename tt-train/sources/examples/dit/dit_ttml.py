@@ -194,17 +194,48 @@ def _modulate(x_norm, scale1p, shift):
 
 
 class DiTBlock(AbstractModuleBase):
-    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0, use_fused_sdpa: bool = False) -> None:
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        mlp_ratio: float = 4.0,
+        use_fused_sdpa: bool = False,
+        use_ttl_modulation: bool = False,
+    ) -> None:
         super().__init__()
+        self.dim = dim
+        self.use_ttl_modulation = use_ttl_modulation
         self.norm1 = LayerNorm(dim)
         self.attn = Attention(dim, num_heads, use_fused=use_fused_sdpa)
         self.norm2 = LayerNorm(dim)
         self.mlp = MLP(dim, mlp_ratio)
-        # order: shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp
-        self.modulation = FusedModulation(dim, 6, scale_slots=(1, 4))
+        if use_ttl_modulation:
+            # tt-lang path: one zero-init D->4D linear packs both modulate
+            # pairs [shift_msa, scale_msa, shift_mlp, scale_mlp]; the fused
+            # kernel reads scale/shift at tile offsets (no autograd split
+            # needed, and the +1 lives inside the kernel). Gates stay as
+            # separate linears since they feed a plain broadcast mul.
+            from ttl_fused_ops import make_fused_modulate
+
+            self._fused_modulate = make_fused_modulate()
+            self.mod_pairs = LinearLayer(dim, 4 * dim, True, weight_init=ttml.init.zeros(), bias_init=ttml.init.zeros())
+            self.gate_msa = LinearLayer(dim, dim, True, weight_init=ttml.init.zeros(), bias_init=ttml.init.zeros())
+            self.gate_mlp = LinearLayer(dim, dim, True, weight_init=ttml.init.zeros(), bias_init=ttml.init.zeros())
+        else:
+            # order: shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp
+            self.modulation = FusedModulation(dim, 6, scale_slots=(1, 4))
 
     def forward(self, x, c):
         add, mul = ttml.ops.binary.add, ttml.ops.binary.mul
+        if self.use_ttl_modulation:
+            dt = self.dim // 32  # tile offset unit
+            s = ttml.ops.unary.silu(c)
+            pairs = self.mod_pairs(s)  # [B,1,1,4D]: [sh_a | sc_a | sh_m | sc_m]
+            h = self._fused_modulate.apply(self.norm1(x), pairs, dt, 0)
+            x = add(x, mul(self.attn(h), self.gate_msa(s)))
+            h = self._fused_modulate.apply(self.norm2(x), pairs, 3 * dt, 2 * dt)
+            x = add(x, mul(self.mlp(h), self.gate_mlp(s)))
+            return x
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.modulation(c)
         h = _modulate(self.norm1(x), scale_msa, shift_msa)
         x = add(x, mul(self.attn(h), gate_msa))
@@ -224,6 +255,7 @@ class DiT(AbstractModuleBase):
         num_classes: int,
         mlp_ratio: float = 4.0,
         use_fused_sdpa: bool = False,
+        use_ttl_modulation: bool = False,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -240,9 +272,27 @@ class DiT(AbstractModuleBase):
         # ttnn's embedding_backward needs ids' last dim % 32 == 0, which a
         # single per-image label can't satisfy; one-hot @ W has no such limit.
         self.label_emb = LinearLayer(num_classes + 1, dim, False, weight_init=ttml.init.normal(0.0, 0.02))
-        self.blocks = ModuleList([DiTBlock(dim, num_heads, mlp_ratio, use_fused_sdpa) for _ in range(depth)])
+        self.use_ttl_modulation = use_ttl_modulation
+        if use_ttl_modulation:
+            from ttl_fused_ops import is_available
+
+            if not is_available():
+                raise ImportError(
+                    "use_ttl_modulation=True requires the tt-lang (ttl) package; "
+                    "install the tt-lang light wheel or disable the flag."
+                )
+        self.blocks = ModuleList(
+            [DiTBlock(dim, num_heads, mlp_ratio, use_fused_sdpa, use_ttl_modulation) for _ in range(depth)]
+        )
         self.final_norm = LayerNorm(dim)
-        self.final_modulation = FusedModulation(dim, 2, scale_slots=(1,))  # (shift, scale1p)
+        if use_ttl_modulation:
+            from ttl_fused_ops import make_fused_modulate
+
+            self._fused_modulate = make_fused_modulate()
+            # [shift | scale] pair for the final modulate, zero-init.
+            self.final_pairs = LinearLayer(dim, 2 * dim, True, weight_init=ttml.init.zeros(), bias_init=ttml.init.zeros())
+        else:
+            self.final_modulation = FusedModulation(dim, 2, scale_slots=(1,))  # (shift, scale1p)
         self.final_proj = LinearLayer(dim, in_dim, True, weight_init=ttml.init.zeros(), bias_init=ttml.init.zeros())
 
     def forward(self, tokens, t_feats, labels_onehot):
@@ -252,8 +302,12 @@ class DiT(AbstractModuleBase):
         c = add(t_emb, self.label_emb(labels_onehot))
         for block in self.blocks:
             x = block(x, c)
-        final_shift, final_scale = self.final_modulation(c)
-        x = _modulate(self.final_norm(x), final_scale, final_shift)
+        if self.use_ttl_modulation:
+            pairs = self.final_pairs(ttml.ops.unary.silu(c))
+            x = self._fused_modulate.apply(self.final_norm(x), pairs, self.dim // 32, 0)
+        else:
+            final_shift, final_scale = self.final_modulation(c)
+            x = _modulate(self.final_norm(x), final_scale, final_shift)
         return self.final_proj(x)
 
 
