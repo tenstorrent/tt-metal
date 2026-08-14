@@ -286,23 +286,13 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
 
-// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
-// bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
-// per-resolver comments). Used by every NOC-address resolver.
-static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
-static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
-
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
-// The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
-//  1. Worker L1 fields are 0-based in-slot offsets (from `get_write_ptr()` etc.),
-//     always < 2 MB, so the mask is an idempotent guard on the local field.
-//  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
-//     and the kernel-side per-bank addrgen helper produces an `addr` field
-//     that is the true in-bank offset (already includes
-//     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
-//     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
+// The decoded offset is bounded by the target core's own size, not masked into range: a
+// worker L1 field is a 0-based in-slot offset while a DRAM bank is GB-scale (2 GB on
+// Wormhole views, 4 GB on Blackhole), so no single mask fits both, and an offset that fits
+// neither belongs to no core.
 // Helper: get SWEmuleChip* from MetalContext cluster for a given device_id. (Relocated up from
 // later in this file — needed here for the PCIe branch below, and by the fabric teleport hooks
 // further down.)
@@ -339,10 +329,9 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
-    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space shares the 64-bit
-    // range with on-chip NOC addresses, and pcie_base_ alone cannot separate them — on Wormhole it
-    // is 0x8'0000'0000, below the bit-36 coordinate field, so every on-chip address clears it.
-    // Membership in the mapped-buffer registry is the discriminator; the threshold is a pre-filter.
+    // pcie_base alone cannot tell host-facing from on-chip: on Wormhole it is 0x8'0000'0000,
+    // below the bit-36 coordinate field, so every on-chip address clears it. Registry
+    // membership is the discriminator; the threshold is only a pre-filter.
     uint32_t device_id = __emule_self->chip_id;
     if (noc_addr >= get_pcie_base_cached(device_id)) {
         auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
@@ -357,8 +346,9 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         if (auto* host_ptr = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
             return host_ptr;
         }
-        // Registry miss — fall through and decode as on-chip. A genuine host-facing miss finds no
-        // core either and still returns nullptr, which callers like noc_semaphore_set_remote need.
+        // Miss: decode as on-chip. The bounds check below is what keeps an unmapped
+        // host-window address from landing on a core — it decodes to a real coord (the
+        // window carries no coordinates) but with an offset no core is that big.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -369,10 +359,13 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
-            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
-                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                                  : static_cast<uint32_t>(local_addr);
-            return it->second->l1_ptr(offset);
+            // An offset the target cannot hold is not an address on that core, so it is a
+            // resolve miss like any other. Bounding it by the core's own size, rather than
+            // masking it into range, is what keeps a bad address from silently landing on
+            // real memory.
+            if (local_addr < it->second->l1_size()) {
+                return it->second->l1_ptr(local_addr);
+            }
         }
     }
     return nullptr;
@@ -428,11 +421,10 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t y_start = (mcast_addr >> (NOC_LOCAL_BITS + 3 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t l1_offset = mcast_addr & NOC_LOCAL_MASK;
 
-    // The L1 offset is a 0-based in-slot offset (< 2 MB, from get_write_ptr() etc.), so masking
-    // with SLOT_MASK is an idempotent guard on the local field.
-    // Multicast targets only WORKER cores (DRAM cores are skipped by the role
-    // check in the delivery loop below), so the mask is L1-correct here.
-    l1_offset &= L1_SLOT_MASK;
+    // Left raw: the offset is a 0-based in-slot L1 offset (get_write_ptr() etc.), and an
+    // out-of-range one is a kernel bug, so Core::l1_ptr's bounds check should surface it
+    // rather than a mask hiding it. Multicast targets only WORKER cores; the delivery loop
+    // below skips the rest.
 
     emule_require_self(__func__);
     if (!__emule_self->core_map) {
@@ -481,7 +473,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_self->core_map->find(key);
             if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
-                uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+                uint8_t* dst = it->second->l1_ptr(l1_offset);
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
                         reinterpret_cast<uintptr_t>(dst) % alignof(std::atomic<uint32_t>) == 0,
@@ -1533,9 +1525,8 @@ static std::map<std::string, std::string> build_kernel_defines(
                 }
             }
         }
-        // A dataflow buffer carries the same LLK-facing entry metadata as a circular buffer, keyed
-        // by the same device slot, so it feeds the same tables — without this a program declaring
-        // DFBs instead of CBs (ttnn::typecast) reports page size 0 to its kernels.
+        // A DFB carries the same entry metadata at the same device slot, so it feeds the same
+        // tables; without this ttnn::typecast reports page size 0 to its kernels.
         // See tt-emule docs/cb-dataformat.md.
         for (const auto& dfb_impl : impl.dataflow_buffers_on_core(first_core)) {
             const uint32_t slot = dfb_impl->device_slot;
@@ -1547,7 +1538,14 @@ static std::map<std::string, std::string> build_kernel_defines(
                 EMULE_NUM_CBS,
                 MetalContext::instance().hal().get_arch_num_circular_buffers());
             const auto& dfb_cfg = dfb_impl->config;
-            tile_sizes[slot] = dfb_cfg.entry_size;
+            // Derived like the CB pass above, not from entry_size: that is the NOC-facing entry
+            // stride, which typecast deliberately aligns, and it belongs to the sync state only.
+            // Invalid format is skipped for the same reason set_dfb_data_fmt_and_tile skips it.
+            if (dfb_cfg.data_format == tt::DataFormat::Invalid) {
+                continue;
+            }
+            tile_sizes[slot] = dfb_cfg.tile.has_value() ? dfb_cfg.tile->get_tile_size(dfb_cfg.data_format)
+                                                        : Tile().get_tile_size(dfb_cfg.data_format);
             cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
             if (dfb_cfg.tile.has_value()) {
                 tile_r_dim[slot] = dfb_cfg.tile->get_height();
@@ -1761,10 +1759,8 @@ static void collect_kernels(
             // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
             // thread, so we set the corresponding macro based on the kernel's processor class.
             //
-            // PROCESSOR_INDEX — silicon's HAL emits it alongside the COMPILE_FOR_* defines, and
-            // get_hw_thread_idx() returns it, so the debug headers reaching it (waypoint, pause,
-            // assert, device_print) fail to compile without it. Taken from the HAL, not hard-coded,
-            // so it tracks tt-metal.
+            // PROCESSOR_INDEX backs get_hw_thread_idx(), so the debug headers that reach it
+            // (waypoint, pause, assert, device_print) will not compile without it.
             uint32_t processor_type_idx = 0;  // emule fuses TRISC0-2 into one compute fiber
             if (is_tensix) {
                 defines["COMPILE_FOR_TRISC"] = "1";
@@ -2325,10 +2321,12 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
         }
         return nullptr;
     }
-    uint32_t offset = (cit->second->role() == tt_emule::CoreRole::WORKER)
-                          ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                          : static_cast<uint32_t>(local_addr);
-    return cit->second->l1_ptr(offset);
+    // Bounded by the target's own size, as in __emule_resolve_noc_addr: an offset it cannot
+    // hold is a miss, not something to mask into range.
+    if (local_addr >= cit->second->l1_size()) {
+        return nullptr;
+    }
+    return cit->second->l1_ptr(local_addr);
 }
 
 // Destination chip for a fabric send from src_chip: the single ethernet-connected neighbor of a
@@ -2901,7 +2899,8 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
 // ---------------------------------------------------------------------------
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
-// Initialize CB-sync state on a core from the program's circular buffer list.
+// Initialize a core's CB-sync state: configure each cb_id from the CB that owns
+// it locally (a CB whose core_ranges() contain this core).
 static void init_core_cb_sync(
     tt_emule::Core* core,
     detail::ProgramImpl& impl,
@@ -2909,9 +2908,8 @@ static void init_core_cb_sync(
     std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
     // Record this core's globally-allocated (persistent) CB extents so Object-Intent
-    // exempts the kernel's writes anywhere in them (see §12). Its own pass — not folded
-    // into the configure lambda below, which also walks remote pass-2 CBs — to keep the
-    // exempt set exactly the local ones.
+    // exempts kernel writes anywhere in them (§12). Separate pass so the exempt set
+    // stays exactly the local CBs.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
         if (cb_impl->globally_allocated()) {
             uint32_t start = cb_impl->address();
@@ -2922,9 +2920,8 @@ static void init_core_cb_sync(
     bool configured[EMULE_NUM_CBS] = {};
     auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            // Loud, not clamped: an index past the ceiling means the host CircularBufferConfig
-            // did not cap at the arch's NUM_CIRCULAR_BUFFERS. Skipping it silently leaves the
-            // CB's sync state uninitialised, which surfaces far away as wrong tile data.
+            // Loud, not clamped: a silent skip leaves the CB's sync state uninitialised, which
+            // resurfaces far away as wrong tile data.
             TT_FATAL(
                 idx < EMULE_NUM_CBS,
                 "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap at the "
@@ -2938,7 +2935,16 @@ static void init_core_cb_sync(
             uint32_t page_size = cb_impl->page_size(idx);
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
-            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
+            // Carry the faced-tile geometry silicon's pack/unpack init reads off the
+            // CB when the config sets it, else the full-tile default (16/4).
+            uint32_t cb_face_r_dim = 16, cb_num_faces = 4;
+            const auto& cb_fg = cb_impl->unpack_face_geometry(idx);
+            if (cb_fg.has_value()) {
+                cb_face_r_dim = cb_fg->face_r_dim;
+                cb_num_faces = cb_fg->num_faces;
+            }
+            core->init_cb_sync(
+                idx, base, page_size, num_pages, cb_impl->globally_allocated(), cb_face_r_dim, cb_num_faces);
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
@@ -2946,16 +2952,10 @@ static void init_core_cb_sync(
                 lc.x, lc.y, idx, cb_addr, page_size, num_pages, (void*)base);
         }
     };
-    // Pass 1: CBs allocated on this core take precedence (own addresses).
+    // core_ranges-scoped, no global fill: blaze shares one cb_id across CBs on disjoint
+    // grids, so binding a CB whose grid excludes this core would install the wrong
+    // (addr, num_pages) for that shared cb_id.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-        configure(cb_impl, logical_core);
-    }
-    // Pass 2: register the remaining program CBs at their global L1 address so a
-    // kernel can get_write_ptr() a CB allocated only on a remote core (silicon CB
-    // addresses are program-global). Needed for multi-core topk, where local cores
-    // NOC-write into the final core's final_*_cb. Used only as cross-core NOC
-    // targets here; the masked L1 offset is what __emule_resolve_noc_addr routes.
-    for (auto& cb_impl : impl.circular_buffers()) {
         configure(cb_impl, logical_core);
     }
 }
@@ -2999,10 +2999,9 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         // MEM_ZEROS_BASE undisturbed for kernels that NOC-read the region.
         return {};
     }
-    // Tile counters are Quasar hardware; on WH/BH a DFB is the circular buffer the
-    // kernel-side DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
-    // Same predicate metal's own finalize_dataflow_buffer_configs() splits on.
-    // See docs/DFB_EMULATION.md §1.
+    // Tile counters are Quasar hardware. On WH/BH a DFB is the CB the kernel-side
+    // DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
+    // See tt-emule docs/DFB_EMULATION.md §1.
     const bool tc_backed = MetalContext::instance().hal().has_tile_counter_registers();
     // DFB fallback path: start the bump allocator at 0.  When Quasar bring-up needs
     // to protect MEM_ZEROS from bump-allocator overlap, dispatch its per-arch
@@ -3056,8 +3055,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
-        // On WH/BH this IS the DFB's sync state, and the slot is a CB index — host
-        // assign_dfb_device_slot() picks it below get_arch_num_circular_buffers().
+        // On WH/BH the slot is a CB index, so this IS the DFB's whole sync state.
         TT_FATAL(
             device_slot < EMULE_NUM_CBS,
             "DFB device slot {} exceeds the emulated CB ceiling ({}); the host assigns slots below the arch's "
@@ -3065,17 +3063,28 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             device_slot,
             EMULE_NUM_CBS,
             MetalContext::instance().hal().get_arch_num_circular_buffers());
-        core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries);
+        // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
+        uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
+        if (cfg.unpack_face_geometry.has_value()) {
+            dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
+            dfb_num_faces = cfg.unpack_face_geometry->num_faces;
+        }
+        core->init_cb_sync(
+            static_cast<uint8_t>(device_slot),
+            base,
+            cfg.entry_size,
+            cfg.num_entries,
+            /*globally_allocated=*/false,
+            dfb_face_r_dim,
+            dfb_num_faces);
 
-        // Quasar tile counters: STRIDED gets M TCs, ALL DM-DM gets P*C. Counter IDs are
-        // spaced by MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions. DFBSyncState is
-        // part of the same tile-counter model, so it is populated here too.
+        // STRIDED gets M TCs, ALL DM-DM gets P*C, spaced by MAX_TC_SLOTS_PER_DFB so DFBs cannot
+        // collide. DFBSyncState belongs to the same model, so it is populated here too.
         if (tc_backed) {
             core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
             if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
-                // counter_base below assigns out of NEO 0 only. Lifting this means spreading
-                // DFBs across NEOs and threading neo_id through populate_dfb_interface_slots
-                // and the cb_api CB->DFB bridge.
+                // counter_base assigns out of NEO 0 only. Lifting this means spreading DFBs
+                // across NEOs and threading neo_id through the CB->DFB bridge.
                 throw std::out_of_range(
                     "Quasar DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
             }
@@ -3128,10 +3137,8 @@ static void setup_core_state(
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
-        // Tile-counter and per-thread DFB-interface state is Quasar-only. Leaving both null
-        // on WH/BH keeps the cb_api CB->DFB bridge short-circuited, where a DFB is already
-        // CB-backed (allocate_dfbs_on_core) — and keeps a WH/BH slot, which may run to
-        // get_arch_num_circular_buffers(), from indexing the MAX_DFBS-sized interface array.
+        // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops
+        // a slot legal up to get_arch_num_circular_buffers() indexing the MAX_DFBS-sized array.
         bool has_tc_dfbs = !dfb_impls.empty() && MetalContext::instance().hal().has_tile_counter_registers();
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
 
