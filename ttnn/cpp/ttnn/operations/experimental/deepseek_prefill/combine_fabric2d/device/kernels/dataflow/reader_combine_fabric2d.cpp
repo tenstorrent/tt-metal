@@ -38,73 +38,26 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "combine_fabric2d_slot_tail.hpp"
+#define CMBF2D_READER_KERNEL
+#include "combine_fabric2d_kernel_protocol.hpp"
 
 void kernel_main() {
-    constexpr uint32_t num_l1_slots = get_compile_time_arg_val(0);
-    constexpr uint32_t token_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t slot_tail_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t batch = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t filled_addr = get_compile_time_arg_val(5);
-    constexpr uint32_t freed_addr = get_compile_time_arg_val(6);
-    constexpr uint32_t my_noc_x = get_compile_time_arg_val(7);
-    constexpr uint32_t my_noc_y = get_compile_time_arg_val(8);
-    constexpr uint32_t dram_in_base_addr = get_compile_time_arg_val(9);
-    constexpr uint32_t dram_out_base_addr = get_compile_time_arg_val(10);
-    constexpr uint32_t dram_fwd_base_addr = get_compile_time_arg_val(11);
-    constexpr uint32_t fwd_chunks_per_quarter = get_compile_time_arg_val(12);
-    constexpr uint32_t fwd_pages_per_chunk = get_compile_time_arg_val(13);
+    using namespace cmbf2d;
+    using ct = ReaderCtArgs;
     // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream producer uniquely
     // from the downstream chip's point of view, so we WRITE quarter q of the neighbour's buffer and READ
-    // quarter q of our own — the same q, because every chip runs this same code.
-    constexpr uint32_t my_quarter = get_compile_time_arg_val(14);
-    constexpr uint32_t num_incoming_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t fwd_sem_addr = get_compile_time_arg_val(16);
-    // The chip across our own cable. A destination equal to this is one hop away, so the neighbour can put
-    // it straight into its output region.
-    constexpr uint32_t nbr_chip_id = get_compile_time_arg_val(17);
-    constexpr uint32_t num_assignments = get_compile_time_arg_val(18);
-    constexpr uint32_t schedule_len = get_compile_time_arg_val(19);
-    // ---- The work itself lives in the control tensors, so what arrives here is where they are
-    // and the shape constants needed to index them.
-    constexpr uint32_t dram_meta_base_addr = get_compile_time_arg_val(20);
-    constexpr uint32_t dram_counts_base_addr = get_compile_time_arg_val(21);
-    constexpr uint32_t dram_region_base_addr = get_compile_time_arg_val(22);
-    constexpr uint32_t dram_expert_offsets_base_addr = get_compile_time_arg_val(23);
-    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(24);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(25);
-    // First of the `experts_per_chip` columns THIS chip hosts. Everything this kernel does is confined to
-    // those columns: they are the experts whose tokens are physically here.
-    constexpr uint32_t my_expert_base = get_compile_time_arg_val(26);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(27);
-    constexpr uint32_t dispatch_group_size = get_compile_time_arg_val(28);
-    // Our slice of the same-chip run, done after all the fabric work (see the local phase at the end).
-    constexpr uint32_t local_split_idx = get_compile_time_arg_val(29);
-    constexpr uint32_t local_split_count = get_compile_time_arg_val(30);
-    constexpr uint32_t my_row = get_compile_time_arg_val(31);
-    constexpr uint32_t control_addr = get_compile_time_arg_val(32);
-    // Work schedule: one entry per unit of work, high bit set = "relay forwarding chunk k", clear = "own
-    // assignment k". The order is the factory's call; this kernel just walks the list.
-    constexpr uint32_t SCHED_BASE = 34;
-    constexpr uint32_t SCHED_FWD = 0x80000000u;
-    // Per-assignment table: [dst_chip_id, dst_row, split_idx, split_count]. Read through
-    // kernel_compile_time_args (a constexpr std::array) because get_compile_time_arg_val needs a literal
-    // index and these tables are walked by a loop variable.
-    constexpr uint32_t ASSIGN_BASE = SCHED_BASE + schedule_len;
-    constexpr uint32_t ASSIGN_WORDS = 4;
-    constexpr uint32_t ACCESSOR_BASE = ASSIGN_BASE + ASSIGN_WORDS * num_assignments;
-    constexpr auto dram_in_args = TensorAccessorArgs<ACCESSOR_BASE>();
+    // quarter q of our own — the same q, because every chip runs this same code. It is also our slice of
+    // the same-chip run, done after all the fabric work (see the local phase at the end).
+    constexpr auto dram_in_args = TensorAccessorArgs<ct::accessor_base>();
     constexpr auto dram_out_args = TensorAccessorArgs<dram_in_args.next_compile_time_args_offset()>();
     constexpr auto dram_fwd_args = TensorAccessorArgs<dram_out_args.next_compile_time_args_offset()>();
     constexpr auto dram_meta_args = TensorAccessorArgs<dram_fwd_args.next_compile_time_args_offset()>();
     constexpr auto dram_counts_args = TensorAccessorArgs<dram_meta_args.next_compile_time_args_offset()>();
     constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
     constexpr auto dram_expert_offsets_args = TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
-    constexpr uint32_t slot_stride = token_size_bytes + slot_tail_bytes;
     // Re-forwarding reads the token AND the two metadata words that follow it in the page.
     constexpr uint32_t FWD_EXTRA_BYTES = 16;
-    constexpr uint32_t fwd_read_bytes = token_size_bytes + FWD_EXTRA_BYTES;
+    constexpr uint32_t fwd_read_bytes = ct::token_size_bytes + FWD_EXTRA_BYTES;
     // Routing metadata is PREFETCHED a batch at a time into pads at the front of the control region. Pads,
     // not one buffer, because a DRAM read needs a 64-byte-aligned L1 destination on Blackhole
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and a 12-byte record per token would not keep that.
@@ -112,32 +65,31 @@ void kernel_main() {
     // Batching is what makes the per-token loop cheap. A token's destination page comes from its metadata,
     // and turning that page into an address costs an interleaved-bank division — so if the metadata arrived
     // per token, that arithmetic would sit AFTER the read barrier, serialised between tokens. With the batch
-    // already in L1 the loop is: compute the tail, issue the token read, barrier.
-    // The arithmetic overlaps the 14 kB read instead of following it.
+    // already in L1 the loop is: compute the tail, issue the token read, barrier. The arithmetic overlaps
+    // the 14 kB read instead of following it.
     //
     // The batch is capped rather than sized to the run: run lengths are data-dependent and a whole expert
     // region could be tens of thousands of tokens, so a cap bounds L1 with no correctness risk. Reads are
     // issued back to back and awaited once, so one batch costs one DRAM latency, not `cap` of them.
-    constexpr uint32_t meta_pads_addr = control_addr;
+    constexpr uint32_t meta_pads_addr = ct::control_addr;
     constexpr uint32_t META_PAD_STRIDE = 64;
     constexpr uint32_t META_READ_BYTES = 64;
-    constexpr uint32_t META_PREFETCH_CAP = get_compile_time_arg_val(33);
-    constexpr uint32_t control_tables_addr = control_addr + META_PREFETCH_CAP * META_PAD_STRIDE;
+    constexpr uint32_t control_tables_addr = ct::control_addr + ct::meta_prefetch_cap * META_PAD_STRIDE;
 
     // Written only by the producer; we just read it.
-    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
-    const uint64_t my_filled_noc = get_noc_addr(my_noc_x, my_noc_y, filled_addr);
+    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct::freed_addr);
+    const uint64_t my_filled_noc = get_noc_addr(ct::filled_addr);
     // Bumped by the UPSTREAM chip's producer as it fills our quarter. A GlobalSemaphore rather than a raw L1
     // counter so the framework zeroes it before launch; a stale value here underflows the wait below.
-    volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_sem_addr);
+    volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct::fwd_sem_addr);
 
-    const auto dram_in = TensorAccessor(dram_in_args, dram_in_base_addr);
-    const auto dram_out = TensorAccessor(dram_out_args, dram_out_base_addr);
-    const auto dram_fwd = TensorAccessor(dram_fwd_args, dram_fwd_base_addr);
-    const auto dram_meta = TensorAccessor(dram_meta_args, dram_meta_base_addr);
-    const auto dram_counts = TensorAccessor(dram_counts_args, dram_counts_base_addr);
-    const auto dram_region = TensorAccessor(dram_region_args, dram_region_base_addr);
-    const auto dram_expert_offsets = TensorAccessor(dram_expert_offsets_args, dram_expert_offsets_base_addr);
+    const auto dram_in = TensorAccessor(dram_in_args, ct::dram_in_base_addr);
+    const auto dram_out = TensorAccessor(dram_out_args, ct::dram_out_base_addr);
+    const auto dram_fwd = TensorAccessor(dram_fwd_args, ct::dram_fwd_base_addr);
+    const auto dram_meta = TensorAccessor(dram_meta_args, ct::dram_meta_base_addr);
+    const auto dram_counts = TensorAccessor(dram_counts_args, ct::dram_counts_base_addr);
+    const auto dram_region = TensorAccessor(dram_region_args, ct::dram_region_base_addr);
+    const auto dram_expert_offsets = TensorAccessor(dram_expert_offsets_args, ct::dram_expert_offsets_base_addr);
 
     // ---- Control tensors, read once. All three are one row per page of `num_routed_experts` uint32:
     // expert_offsets has one row per ORIGIN chip (it is replicated along that axis so every chip sees all of
@@ -146,12 +98,12 @@ void kernel_main() {
     // transactions than the bytes saved.
     volatile tt_l1_ptr uint32_t* ctl_offsets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control_tables_addr);
     volatile tt_l1_ptr uint32_t* ctl_counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        control_tables_addr + dispatch_group_size * num_routed_experts * 4);
+        control_tables_addr + ct::dispatch_group_size * ct::num_routed_experts * 4);
     volatile tt_l1_ptr uint32_t* ctl_region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        control_tables_addr + (dispatch_group_size + 1) * num_routed_experts * 4);
+        control_tables_addr + (ct::dispatch_group_size + 1) * ct::num_routed_experts * 4);
     {
-        constexpr uint32_t row_bytes = num_routed_experts * 4;
-        for (uint32_t r = 0; r < dispatch_group_size; r++) {
+        constexpr uint32_t row_bytes = ct::num_routed_experts * 4;
+        for (uint32_t r = 0; r < ct::dispatch_group_size; r++) {
             noc_async_read(dram_expert_offsets.get_noc_addr(r), control_tables_addr + r * row_bytes, row_bytes);
         }
         noc_async_read(dram_counts.get_noc_addr(0), (uint32_t)ctl_counts, row_bytes);
@@ -162,16 +114,19 @@ void kernel_main() {
     // Where origin chip `row`'s tokens for expert `e` start, and where they end. The runs are laid out in
     // origin-chip order inside the expert's region, so one run ends where the next begins; the last one ends
     // at the expert's total count past its region base, which is the only thing expert_offsets cannot say.
-    auto run_begin = [&](uint32_t row, uint32_t e) -> uint32_t { return ctl_offsets[row * num_routed_experts + e]; };
+    auto run_begin = [&](uint32_t row, uint32_t e) -> uint32_t {
+        return ctl_offsets[row * ct::num_routed_experts + e];
+    };
     auto run_end = [&](uint32_t row, uint32_t e) -> uint32_t {
-        return row + 1 < dispatch_group_size ? ctl_offsets[(row + 1) * num_routed_experts + e]
-                                             : ctl_region[e] + ctl_counts[e];
+        return row + 1 < ct::dispatch_group_size ? ctl_offsets[(row + 1) * ct::num_routed_experts + e]
+                                                 : ctl_region[e] + ctl_counts[e];
     };
 
     // Page of a chunk within OUR quarter. The same formula serves both directions: the quarter index is ours
     // either way, only the chip differs, and the buffer's device-local address is uniform across the mesh.
     auto fwd_page = [](uint32_t chunk, uint32_t token) -> uint32_t {
-        return my_quarter * fwd_chunks_per_quarter * fwd_pages_per_chunk + chunk * fwd_pages_per_chunk + token;
+        return ct::my_quarter * ct::fwd_chunks_per_quarter * ct::fwd_pages_per_chunk + chunk * ct::fwd_pages_per_chunk +
+               token;
     };
 
     // `published` counts slots ANNOUNCED to the producer; `claimed` counts slots we have taken. They differ
@@ -202,23 +157,23 @@ void kernel_main() {
     // make the producer wait on slots we are holding back, which would deadlock us against each other.
     auto claim_slot = [&]() -> uint32_t {
         invalidate_l1_cache();
-        if (claimed - *freed >= num_l1_slots) {
+        if (claimed - *freed >= ct::num_l1_slots) {
             flush_publish();
             while (true) {
                 invalidate_l1_cache();
-                if (claimed - *freed < num_l1_slots) {
+                if (claimed - *freed < ct::num_l1_slots) {
                     break;
                 }
             }
         }
-        return claimed++ % num_l1_slots;
+        return claimed++ % ct::num_l1_slots;
     };
 
     // Announce `n` slots whose data is known to be in L1.
     auto publish_n = [&](uint32_t n) {
         published += n;
         pending_publish += n;
-        if (pending_publish >= batch) {
+        if (pending_publish >= ct::batch) {
             flush_publish();
         }
     };
@@ -237,17 +192,17 @@ void kernel_main() {
     // downstream forwarding chunk, and is ignored for a direct write.
     auto issue_token = [&](uint32_t in_page, uint32_t pad, bool direct, uint32_t dst_chip_id, uint32_t chunk_page) {
         const uint32_t slot = claim_slot();
-        const uint32_t slot_addr = ring_addr + slot * slot_stride;
+        const uint32_t slot_addr = ct::ring_addr + slot * ct::slot_stride;
         volatile tt_l1_ptr uint64_t* tail =
-            reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + token_size_bytes);
+            reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + ct::token_size_bytes);
         volatile tt_l1_ptr uint32_t* meta =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * META_PAD_STRIDE);
 
-        noc_async_read(dram_in.get_noc_addr(in_page), slot_addr, token_size_bytes);
+        noc_async_read(dram_in.get_noc_addr(in_page), slot_addr, ct::token_size_bytes);
         // Everything below runs while that read is in flight, which is the point of prefetching the metadata.
         // Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx; the destination chip is already
         // known from the run this token came out of.
-        const uint32_t out_page = meta[1] * num_experts_per_tok + meta[2];
+        const uint32_t out_page = meta[1] * ct::num_experts_per_tok + meta[2];
         // Computed once and then travelling with the token for however many hops it takes. Valid on any chip
         // because the output buffer's base address and interleaved bank mapping are uniform across the mesh.
         const uint64_t final_addr = dram_out.get_noc_addr(out_page);
@@ -273,32 +228,32 @@ void kernel_main() {
     // one (this chip -> that chip) term, and which expert a token sat under is not something the forwarding
     // protocol needs to know.
     auto do_own_assignment = [&](uint32_t a) {
-        const uint32_t dst_chip_id = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 0];
-        const uint32_t dst_row = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 1];
-        const uint32_t split_idx = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 2];
-        const uint32_t split_count = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 3];
-        const bool direct = (dst_chip_id == nbr_chip_id);
+        const uint32_t dst_chip_id = kernel_compile_time_args[ct::assignment_base + a * ASSIGNMENT_WORDS + 0];
+        const uint32_t dst_row = kernel_compile_time_args[ct::assignment_base + a * ASSIGNMENT_WORDS + 1];
+        const uint32_t split_idx = kernel_compile_time_args[ct::assignment_base + a * ASSIGNMENT_WORDS + 2];
+        const uint32_t split_count = kernel_compile_time_args[ct::assignment_base + a * ASSIGNMENT_WORDS + 3];
+        const bool direct = (dst_chip_id == ct::nbr_chip_id);
 
         uint32_t chunk_page = 0;  // position in the downstream chunk, continuous across our experts
-        for (uint32_t le = 0; le < experts_per_chip; le++) {
-            const uint32_t e = my_expert_base + le;
+        for (uint32_t le = 0; le < ct::experts_per_chip; le++) {
+            const uint32_t e = ct::my_expert_base + le;
             const uint32_t begin = run_begin(dst_row, e);
             const uint32_t n = run_end(dst_row, e) - begin;
             const uint32_t lo = slice_begin(begin, n, split_idx, split_count);
             const uint32_t hi = slice_begin(begin, n, split_idx + 1, split_count);
-            for (uint32_t base = lo; base < hi; base += META_PREFETCH_CAP) {
-                const uint32_t end = (hi - base) > META_PREFETCH_CAP ? base + META_PREFETCH_CAP : hi;
+            for (uint32_t base = lo; base < hi; base += ct::meta_prefetch_cap) {
+                const uint32_t end = (hi - base) > ct::meta_prefetch_cap ? base + ct::meta_prefetch_cap : hi;
                 prefetch_metadata(base, end);
                 // `batch` tokens' reads in flight at a time, then one barrier and one announcement.
                 for (uint32_t q = base; q < end;) {
-                    const uint32_t k = (end - q) > batch ? batch : (end - q);
+                    const uint32_t k = (end - q) > ct::batch ? ct::batch : (end - q);
                     for (uint32_t j = 0; j < k; j++) {
                         issue_token(q + j, q + j - base, direct, dst_chip_id, chunk_page);
                         if (!direct) {
                             chunk_page++;
                         }
                     }
-                    noc_async_read_barrier();  // every token of the batch is in L1 before any is announced
+                    noc_async_read_barrier();  // every token of the ct::batch is in L1 before any is announced
                     publish_n(k);
                     q += k;
                 }
@@ -316,8 +271,8 @@ void kernel_main() {
             // without this the decision would be undecidable and the chunk count downstream would drift. Both
             // words travel with a forwarded packet (token + 16 bytes), so it propagates hop to hop for free.
             const uint32_t slot = claim_slot();
-            volatile tt_l1_ptr uint64_t* tail =
-                reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ring_addr + slot * slot_stride + token_size_bytes);
+            volatile tt_l1_ptr uint64_t* tail = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(
+                ct::ring_addr + slot * ct::slot_stride + ct::token_size_bytes);
             tail[TAIL_FINAL_ADDR] = (uint64_t)dst_chip_id;
             tail[TAIL_DST_CHIP] = SENTINEL_DST_CHIP;
             tail[TAIL_CMD] = CMD_FORWARD;
@@ -367,11 +322,11 @@ void kernel_main() {
                 }
             }
             uint32_t k = *fwd_arrived - consumed;
-            if (k > batch) {
-                k = batch;
+            if (k > ct::batch) {
+                k = ct::batch;
             }
-            if (k > fwd_pages_per_chunk - i) {
-                k = fwd_pages_per_chunk - i;  // never read outside this chunk's own page range
+            if (k > ct::fwd_pages_per_chunk - i) {
+                k = ct::fwd_pages_per_chunk - i;  // never read outside this chunk's own page range
             }
 
             const uint32_t first_slot = claimed;  // slots come out consecutively, so the base is enough
@@ -380,16 +335,18 @@ void kernel_main() {
                 // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
                 // tail, because the page layout was chosen to match the slot layout exactly.
                 noc_async_read(
-                    dram_fwd.get_noc_addr(fwd_page(chunk, i + j)), ring_addr + slot * slot_stride, fwd_read_bytes);
+                    dram_fwd.get_noc_addr(fwd_page(chunk, i + j)),
+                    ct::ring_addr + slot * ct::slot_stride,
+                    fwd_read_bytes);
             }
             noc_async_read_barrier();
 
-            uint32_t used = 0;  // pages of this batch that really belong to the chunk
+            uint32_t used = 0;  // pages of this ct::batch that really belong to the chunk
             uint32_t pub = 0;   // of those, the ones we hand to the producer
             for (uint32_t j = 0; j < k; j++) {
-                const uint32_t slot_addr = ring_addr + ((first_slot + j) % num_l1_slots) * slot_stride;
+                const uint32_t slot_addr = ct::ring_addr + ((first_slot + j) % ct::num_l1_slots) * ct::slot_stride;
                 volatile tt_l1_ptr uint64_t* tail =
-                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + token_size_bytes);
+                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + ct::token_size_bytes);
                 const uint64_t dst_chip = tail[TAIL_DST_CHIP];
                 used++;
 
@@ -399,7 +356,7 @@ void kernel_main() {
                     // not for our neighbour: the downstream reader counts chunks positionally, so silently
                     // dropping one would shift every chunk after it.
                     if (!decided) {
-                        reforward = (tail[TAIL_FINAL_ADDR] != (uint64_t)nbr_chip_id);
+                        reforward = (tail[TAIL_FINAL_ADDR] != (uint64_t)ct::nbr_chip_id);
                         decided = true;
                     }
                     if (reforward) {
@@ -414,7 +371,7 @@ void kernel_main() {
                 }
 
                 if (!decided) {
-                    reforward = (dst_chip != (uint64_t)nbr_chip_id);
+                    reforward = (dst_chip != (uint64_t)ct::nbr_chip_id);
                     decided = true;
                 }
                 if (reforward) {
@@ -447,8 +404,8 @@ void kernel_main() {
 
     // ---- Walk the schedule. Forwarding chunks always appear in increasing order, so `consumed` stays a
     // valid watermark into our quarter however the own assignments are interleaved around them.
-    for (uint32_t si = 0; si < schedule_len; si++) {
-        const uint32_t entry = kernel_compile_time_args[SCHED_BASE + si];
+    for (uint32_t si = 0; si < ct::schedule_len; si++) {
+        const uint32_t entry = kernel_compile_time_args[ct::schedule_base + si];
         if (entry & SCHED_FWD) {
             do_forward_chunk(entry & ~SCHED_FWD);
         } else {
@@ -472,24 +429,24 @@ void kernel_main() {
         // scribble in; claim_slot() is still what proves at least one slot is free before we take it, and
         // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
         const uint32_t slot = claim_slot();
-        const uint32_t slot_addr = ring_addr + slot * slot_stride;
-        for (uint32_t le = 0; le < experts_per_chip; le++) {
-            const uint32_t e = my_expert_base + le;
-            const uint32_t begin = run_begin(my_row, e);
-            const uint32_t n = run_end(my_row, e) - begin;
-            const uint32_t lo = slice_begin(begin, n, local_split_idx, local_split_count);
-            const uint32_t hi = slice_begin(begin, n, local_split_idx + 1, local_split_count);
-            for (uint32_t base = lo; base < hi; base += META_PREFETCH_CAP) {
-                const uint32_t end = (hi - base) > META_PREFETCH_CAP ? base + META_PREFETCH_CAP : hi;
+        const uint32_t slot_addr = ct::ring_addr + slot * ct::slot_stride;
+        for (uint32_t le = 0; le < ct::experts_per_chip; le++) {
+            const uint32_t e = ct::my_expert_base + le;
+            const uint32_t begin = run_begin(ct::my_row, e);
+            const uint32_t n = run_end(ct::my_row, e) - begin;
+            const uint32_t lo = slice_begin(begin, n, ct::my_quarter, ct::local_split_count);
+            const uint32_t hi = slice_begin(begin, n, ct::my_quarter + 1, ct::local_split_count);
+            for (uint32_t base = lo; base < hi; base += ct::meta_prefetch_cap) {
+                const uint32_t end = (hi - base) > ct::meta_prefetch_cap ? base + ct::meta_prefetch_cap : hi;
                 prefetch_metadata(base, end);
                 for (uint32_t p = base; p < end; p++) {
                     volatile tt_l1_ptr uint32_t* meta =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + (p - base) * META_PAD_STRIDE);
-                    const uint32_t out_page = meta[1] * num_experts_per_tok + meta[2];
+                    const uint32_t out_page = meta[1] * ct::num_experts_per_tok + meta[2];
                     const uint64_t out_addr = dram_out.get_noc_addr(out_page);
-                    noc_async_read(dram_in.get_noc_addr(p), slot_addr, token_size_bytes);
+                    noc_async_read(dram_in.get_noc_addr(p), slot_addr, ct::token_size_bytes);
                     noc_async_read_barrier();
-                    noc_async_write(slot_addr, out_addr, token_size_bytes);
+                    noc_async_write(slot_addr, out_addr, ct::token_size_bytes);
                     // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
                     // has read it out. Overlapping these needs several buffers in flight, tracked separately
                     // from the producer's ring accounting.
@@ -503,8 +460,8 @@ void kernel_main() {
     // ---- End of stream. The producer cannot know the length up front, so it stops on this.
     {
         const uint32_t slot = claim_slot();
-        volatile tt_l1_ptr uint64_t* tail =
-            reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ring_addr + slot * slot_stride + token_size_bytes);
+        volatile tt_l1_ptr uint64_t* tail = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(
+            ct::ring_addr + slot * ct::slot_stride + ct::token_size_bytes);
         tail[TAIL_CMD] = CMD_END;
         published++;
         pending_publish++;

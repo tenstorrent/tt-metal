@@ -517,8 +517,6 @@ tt::tt_metal::CoreCoord get_forwarding_link_logical_eth_core(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    // Same list link_idx indexes into inside append_fabric_connection_rt_args, so this resolves the
-    // eth core that a connection opened on `link_idx` actually attaches to.
     const auto candidate_eth_chans =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
     TT_FATAL(

@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include <optional>
-#include <vector>
-
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -16,9 +13,8 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// Same call as ttnn::experimental::deepseek_prefill::combine, plus `expert_offsets`. Parameter names match
-// the production op exactly so one caller can dispatch to either without special-casing the argument list;
-// `use_fp8_combine` is accepted even though this op rejects it, for that reason.
+// Allocates and returns the combined output: (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim)
+// BFLOAT16 ROW_MAJOR per device. See the nanobind docstring for what each tensor carries.
 ttnn::Tensor combine_fabric2d(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
@@ -29,12 +25,11 @@ ttnn::Tensor combine_fabric2d(
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
-    uint32_t cluster_axis = 0,
-    uint32_t num_links = 2,
-    std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    bool init_zeros = false,
-    bool use_fp8_combine = false);
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    bool init_zeros);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
 

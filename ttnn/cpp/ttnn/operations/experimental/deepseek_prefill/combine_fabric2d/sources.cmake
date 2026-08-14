@@ -5,6 +5,7 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMBINE_FABRIC2D_API_HEADERS combine_f
 
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMBINE_FABRIC2D_SRCS
     device/combine_fabric2d_device_operation.cpp
+    device/combine_fabric2d_placement.cpp
     device/combine_fabric2d_program_factory.cpp
     combine_fabric2d.cpp
 )
