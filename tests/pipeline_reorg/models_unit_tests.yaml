@@ -1170,7 +1170,7 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
       tier: 3
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
