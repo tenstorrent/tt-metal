@@ -253,8 +253,7 @@ class TorchMoe(nn.Module):
         self.emb_dim = emb_dim
         self.expert_dispatch_table = expert_dispatch_table
 
-        # LatentMoE: the routed side may run narrower than emb_dim. Defaulting to emb_dim keeps
-        # DeepSeek / K2.6 / K2.7 / GLM bit-identical -- no latent projections are constructed at all.
+        # Defaulting to emb_dim constructs no latent projections at all.
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
         self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
         self.use_latent_moe = self.routed_emb_dim != emb_dim
@@ -270,8 +269,7 @@ class TorchMoe(nn.Module):
             else None
         )
 
-        # Create dispatch module. Dispatch moves LATENT rows: this is the whole point of the latent
-        # space -- halving the row width halves the fabric bytes per dispatched token.
+        # Dispatch moves latent rows, halving the fabric bytes per dispatched token.
         self.dispatch_module = TorchDispatchModule(
             dispatch_group_size=dispatch_group_size,
             experts_per_chip=experts_per_chip,
@@ -304,8 +302,7 @@ class TorchMoe(nn.Module):
         else:
             routed_weights, shared_weights = None, None
 
-        # Create experts. Routed experts live at routed_emb_dim; the shared expert stays at the full
-        # emb_dim on the pre-projection input, with its own (possibly wider) intermediate.
+        # The shared expert stays at emb_dim on the pre-projection input, with its own intermediate.
         use_identity = routed_weights is None
         act = dict(activation=activation, situ_beta=situ_beta, situ_linear_beta=situ_linear_beta)
         self.routed_experts = nn.ModuleList(
@@ -397,8 +394,7 @@ class TorchMoe(nn.Module):
             assert expert_region_offsets is not None
 
         # Step 1: Run shared expert on original input.
-        # Deliberately BEFORE the latent down-projection: the shared expert reads the full-width
-        # pre-projection hidden (upstream keeps it as ``identity``), not the latent.
+        # Before the down-projection: the shared expert reads the full-width pre-projection hidden.
         with torch.no_grad():
             shared_output = self.shared_expert(x.float())
 
@@ -448,8 +444,7 @@ class TorchMoe(nn.Module):
         routed_output = self.reduce_module(combined_output, weights=weights)
 
         # Step 5b: LatentMoE -- project back out of the latent space: RMSNorm then up-projection back to emb_dim.
-        # Note the ORDER: the norm sits after the weighted top-k sum, so it sees the summed latent,
-        # not per-expert outputs.
+        # The norm sits after the weighted top-k sum, so it sees the summed latent.
         latent_routed_output = None
         if self.use_latent_moe:
             latent_routed_output = routed_output

@@ -50,47 +50,17 @@ class KimiK3Config:
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
 
-    # Largest per-chip sequence the device gate fits in L1 at this expert count, measured on an 8x4
-    # Blackhole (11x10 core grid). 3200/chip x 8 SP chips = 25600 tokens total; 5x the 5K production
-    # target, which is 640/chip.
-    #
-    # The ceiling is moe_grouped_topk's, not the gate matmul's: that op sizes several circular buffers
-    # as multiples of width_tiles = NUM_ROUTED_EXPERTS/32, so K3's 896 experts need 28 tiles against
-    # Kimi-K2.6's 12 -- ~2.3x the L1 for CBs, fixed regardless of sequence. The gate input is
-    # height-sharded across the grid, so the per-core L1 tensor grows with the per-chip sequence
-    # (4096 -> 224 KB/core, 3200 -> 112 KB). At 4096 the two collide and the program fails to
-    # validate ("circular buffers ... clash with L1 buffers"). Confirmed to be the op and not the
-    # matmul by holding the tuned program config fixed and varying in0_block_w 56 -> 28: byte-identical
-    # clash addresses. Raising this needs moe_grouped_topk's CB footprint reduced.
-    #
-    # Consumed by TtMoEGateConfig.from_model_cfg both as the default per-chip depth and as the
-    # enforced ceiling on any explicit sp_dim. Callers that know their per-chip sequence pass it and
-    # are still bound by the ceiling -- the gate test at 640, TtMoe at its actual seq_len_per_chip.
+    # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
+    # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by
+    # TtMoEGateConfig as both the default per-chip depth and a ceiling on any explicit sp_dim.
     MAX_GATE_SEQ_LEN_PER_CHIP = 3200
 
-    # Device-mode scores-PCC bar for the gate test, relaxing the shared 0.93. Read by
-    # test_moe_gate_prefill2d only; nothing in the model path consults it.
-    #
-    # Measured on the same commit and inputs, two different 8x4 Blackhole Galaxies:
-    #   bh-glx-120-c04u02   0.9470 - 0.9521  across 8 chips
-    #   bh_sc1 CI runner    0.8856 - 0.8872  across 8 chips
-    # so the shared 0.93 sits *between* two boxes that both compute this correctly. 0.87 clears the
-    # lower observation by ~0.015.
-    #
-    # This is a tie-density effect, not a defect in K3's gate: 896 experts under sigmoid leave the
-    # 16th and 17th scores near-tied far more often than the 256/384-expert models do, so a small
-    # device-precision difference swaps a pick and moves the weight vector. recall (0.95) and logits
-    # (0.997) pass on both boxes -- selection and the matmul are fine; only the weights spread.
-    #
-    # Two samples is thin evidence for a bar. See #52569 for measuring across more boxes
-    # and deciding whether the normalize/scale step should accumulate in fp32 instead, which would
-    # make the shared 0.93 genuinely reachable and let this override be deleted.
+    # Gate-test device-mode scores bar, relaxing the shared 0.93; see #52569. 896 experts under sigmoid
+    # near-tie the 16th and 17th scores often enough that device precision swaps a pick, and the
+    # spread across Blackhole Galaxies (0.886 - 0.952) straddles the shared bar.
     GATE_SCORES_PCC_DEVICE = 0.87
-    # The shared expert is ONE dense MLP whose intermediate is moe_intermediate_size *
-    # num_shared_experts -- upstream ``KimiSparseMoeBlock.__init__`` builds a single ``KimiMLP``
-    # rather than ``num_shared_experts`` separate ones. Verified against the checkpoint:
-    # shared_experts.gate_proj.weight is [6144, 7168]. K2.6 hides this because its 2048 * 1 == 2048,
-    # which is why ``TtMoe`` could conflate it with MOE_INTERMEDIATE_SIZE until now.
+    # Upstream KimiSparseMoeBlock builds ONE KimiMLP for the shared expert, not num_shared_experts of
+    # them: shared_experts.gate_proj.weight is [6144, 7168].
     SHARED_EXPERT_INTERMEDIATE_SIZE = MOE_INTERMEDIATE_SIZE * NUM_SHARED_EXPERTS  # 6144
 
     # Model architecture
@@ -117,9 +87,7 @@ class KimiK3Config:
     # Deliberately NO ROPE_THETA / ROPE_SCALING_*: K3 has neither. Inventing them is exactly how the
     # softmax scale silently picks up a 2x mscale factor (see the module docstring).
 
-    # Hybrid layer schedule. ``full_attn_layers`` in the HF config is **1-indexed** -- the config
-    # class's own ``is_kda_layer`` tests ``(layer_idx + 1) in kda_layers``. Note 92 and 93 are
-    # adjacent, so the tail breaks the otherwise-strict 3 KDA : 1 MLA pattern.
+    # 1-indexed, as in the HF config. 92 and 93 are adjacent, breaking the 3 KDA : 1 MLA pattern.
     # fmt: off
     FULL_ATTN_LAYERS_1BASED = [4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48,
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
@@ -134,12 +102,8 @@ class KimiK3Config:
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
 
-    # LatentMoE norm + SiTU-GLU activation.
     LATENT_MOE_USE_NORM = True
-    # SiTU is the checkpoint's activation everywhere (routed experts, shared expert, layer-0 dense
-    # FFN). No TT kernel implements it yet -- see issue #51335 -- so the device path currently runs
-    # SiLU and these two scalars are consumed only by the torch reference. Do NOT read them as
-    # "the device does SiTU".
+    # Torch reference only: no TT kernel implements SiTU yet (#51335), so the device path runs SiLU.
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
@@ -170,26 +134,13 @@ class KimiK3Config:
 def kimi_k3_hf_config(max_seq: int = 8192):
     """HF-attribute-style config for the Kimi-K3 MLA and MoE paths.
 
-    Read by the unified ``ttMLA`` (MLA dims, NoPE + output gate) and by the MoE test harness
-    (``test_ttnn_moe.run_model`` takes ``n_group`` / ``topk_group`` / ``routed_scaling_factor`` from
-    here). See the MoE block at the bottom for the Kimi -> DeepSeek name bridge.
-
     Hand-built rather than loaded via ``AutoConfig`` because upstream ``modeling_kimi_linear.py``
     raises ``ImportError`` at module import without ``fla-core``, which is not installed here.
 
-    ``rope_scaling=None`` is deliberate and load-bearing: it is the real K3 value (the key is absent
-    from the checkpoint config entirely), and it is what exercises ``ttMLA``'s guard. Do NOT
-    substitute ``{"factor": 1.0, ...}`` the way ``glm_5_2_hf_config`` does -- that variant has RoPE
-    and merely no YaRN, whereas K3 has no rotary embedding at all.
-
-    ``rope_theta`` / ``max_position_embeddings`` / ``attention_bias`` / ``attention_dropout`` are
-    supplied only so the CPU reference's ``DeepseekV3Attention.__init__`` can construct
-    (``modeling_deepseek.py:666-705``). Under NoPE its ``rotary_emb`` is never called, so the value
-    of ``rope_theta`` is inert. ``max_position_embeddings`` is capped at ``max_seq`` rather than the
-    true 1M (``KimiK3Config.MAX_POSITION_EMBEDDINGS``) because that reference eagerly builds two
-    ``[max_position_embeddings, qk_rope_head_dim]`` cos/sin buffers
-    (``DeepseekV3RotaryEmbedding._set_cos_sin_cache``) -- 512 MB at 1M. Nothing on the device side
-    reads ``max_position_embeddings``; ``ttMLA``/``rope.py`` read ``max_seq_len``.
+    ``rope_scaling=None`` is the real K3 value and exercises ``ttMLA``'s guard; do not substitute
+    ``{"factor": 1.0, ...}`` as ``glm_5_2_hf_config`` does, since K3 has no rotary embedding at all.
+    ``max_position_embeddings`` is capped at ``max_seq`` because the CPU reference eagerly builds
+    ``[max_position_embeddings, qk_rope_head_dim]`` cos/sin buffers -- 512 MB at K3's true 1M.
     """
     return types.SimpleNamespace(
         vocab_size=KimiK3Config.VOCAB_SIZE,
@@ -217,22 +168,12 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         max_position_embeddings=max_seq,
         attention_bias=False,
         attention_dropout=0.0,
-        # MoE fields, under the names the TT cache-build path reads.
-        #
-        # This block is a NAME BRIDGE, and it is load-bearing. K3's own ``KimiLinearConfig`` uses
-        # Kimi names with no DeepSeek aliases -- ``num_experts``, ``num_experts_per_token``,
-        # ``moe_renormalize``, ``moe_router_activation_func``, ``num_expert_group`` -- whereas the TT
-        # MoE stack and its test harness read the DeepSeek names. ``KimiMoEGate``'s own docstring
-        # spells the correspondence out. Anything reading an HF config (rather than
-        # ``KimiK3Config``) needs the DeepSeek spelling, so supply both where they differ.
+        # MoE name bridge: the TT stack reads the DeepSeek spellings, the vendored
+        # KimiSparseMoeBlock / KimiMoEGate read K3's own, so both are supplied where they differ.
         first_k_dense_replace=KimiK3Config.NUM_DENSE_LAYERS,
         n_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
         num_experts_per_tok=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
         n_shared_experts=KimiK3Config.NUM_SHARED_EXPERTS,
-        # ...and the same three under K3's own names, so this namespace can also construct the
-        # vendored KimiSparseMoeBlock / KimiMoEGate. A one-way bridge is a trap: those classes read
-        # num_experts / num_experts_per_token / num_shared_experts and would otherwise die with
-        # "'types.SimpleNamespace' object has no attribute 'num_experts'".
         num_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
         num_experts_per_token=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
         num_shared_experts=KimiK3Config.NUM_SHARED_EXPERTS,
@@ -249,13 +190,8 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         # LatentMoE: the routed experts' reduced hidden dim, and the latent RMSNorm flag.
         routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        # Deliberately NOT ``use_grouped_topk``: the checkpoint sets it true, but upstream
-        # ``KimiMoEGate`` never reads it (it branches on ``num_expert_group > 1``, which is False).
-        # Transcribing it would invite a reader to wire up a grouped path that does not exist.
-        #
-        # ``hidden_act`` is the checkpoint's "situ", but no TT kernel implements SiTU yet (#51335),
-        # so the device path runs SiLU. Reported honestly here rather than claiming "situ": a
-        # consumer that trusted this field would silently build the wrong activation.
+        # The checkpoint says "situ", but no TT kernel implements it yet (#51335) and consumers of
+        # this field build the activation from it.
         hidden_act="silu",
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,

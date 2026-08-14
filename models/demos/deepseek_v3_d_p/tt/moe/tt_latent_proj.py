@@ -97,19 +97,9 @@ class TtLatentMoeProjections(LightweightModule):
         placeholder path exists only for the cache-only pass in ``build_ttnn_cache`` (device=None).
         """
         if torch_weights is not None:
-            # A dict is not automatically a complete dict. down_proj/up_proj are direct [...] lookups
-            # downstream so they would raise KeyError, but "norm" is fetched with .get() and handed to
-            # TtDistributedRmsNorm, whose no-weight/no-cache branch silently calls
-            # _create_random_sharded_weight() -- torch.rand * 2 - 1. That is the same silent-garbage
-            # outcome this guard exists to prevent, one missing key away, so check the keys here.
-            #
-            # Checked with .get(k) is None rather than `k not in`: a present-but-None entry is what a
-            # partial extraction actually produces (a state_dict.get(...) -> None threaded into the
-            # dict), and downstream it is indistinguishable from an absent key -- every consumer here
-            # either fetches with .get() or passes the value straight to torch_weight=, so None
-            # re-enters the same random / torch.empty branches. `is None` specifically, never
-            # truthiness: bool() on a multi-element tensor raises, and an all-zero weight is a
-            # legitimate value to cache.
+            # A missing "norm" reaches TtDistributedRmsNorm's no-weight branch, which fabricates a
+            # random gamma. `is None` rather than truthiness: bool() on a tensor raises, and an
+            # all-zero weight is legitimate.
             expected_keys = (*_PROJ_NAMES, "norm") if use_norm else tuple(_PROJ_NAMES)
             missing = [k for k in expected_keys if torch_weights.get(k) is None]
             if missing:
@@ -118,10 +108,8 @@ class TtLatentMoeProjections(LightweightModule):
                     f"expected {list(expected_keys)} (use_norm={use_norm})."
                 )
             return
-        # Deliberately a direct glob, NOT check_cache_complete: that goes through the
-        # fast_cache_checker global, which raises RuntimeError("Call init_checker(...) first") unless
-        # the caller happened to initialise it. A precondition that can fail for a reason unrelated to
-        # the precondition is worse than none, and this runs once per layer so the scan is free.
+        # A direct glob, not check_cache_complete: that needs the fast_cache_checker global to have
+        # been initialised, and would otherwise fail for a reason unrelated to this precondition.
         cache_is_usable = weight_cache_path is not None and cache_name_prefix is not None
         if cache_is_usable:
             expected = [f"{cache_name_prefix}.{proj}*.tensorbin" for proj in _PROJ_NAMES]
@@ -166,8 +154,7 @@ class TtLatentMoeProjections(LightweightModule):
                 return None
             return str(cache_path / f"{cache_name_prefix}.{name}")
 
-        # Transposed on the way in, as every other weight in this package: TTNN holds
-        # (in_features, out_features) so the matmul is x @ W with no transpose at runtime.
+        # TTNN holds (in_features, out_features), so the matmul is x @ W with no runtime transpose.
         if torch_weights is not None:
             down_w = torch_weights["down_proj"].T.contiguous()  # (emb_dim, routed_emb_dim)
             up_w = torch_weights["up_proj"].T.contiguous()  # (routed_emb_dim, emb_dim)
@@ -220,13 +207,8 @@ class TtLatentMoeProjections(LightweightModule):
         when the cache is already complete, in which case ``ttnn.as_tensor`` loads each file and writes
         nothing. Anything else raises rather than persisting placeholders -- see _require_weight_source.
         """
-        # Same precondition as __init__, and for the same reason: the placeholder branch below writes
-        # torch.empty (and the norm leg writes an uninitialised gamma for a dict missing only "norm"),
-        # and ttnn.as_tensor persists that to a tensorbin that check_cache_complete then reports as a
-        # good cache. Enforced HERE rather than left to callers because this is a public staticmethod:
-        # TtMoe.build_ttnn_cache already gates on `latent_weights` being truthy, but that convention
-        # lives in a comment at the call site, so a direct or future caller would silently bypass it and
-        # turn a failed weight extraction into a persistent, legitimate-looking cache of garbage.
+        # Enforced here rather than at the call site because this is public: without it the
+        # placeholder branch persists torch.empty as a cache check_cache_complete calls good.
         TtLatentMoeProjections._require_weight_source(torch_weights, cache_path, cache_name_prefix, use_norm)
         TtLatentMoeProjections._convert_and_cache_weights(
             torch_weights,
@@ -275,8 +257,6 @@ class TtLatentMoeProjections(LightweightModule):
             num_links / topology: CCL config for the TP-axis collectives (column axis).
         """
         super().__init__()
-        # Precondition FIRST, before any device interaction, so a misconfigured caller costs nothing
-        # and this stays checkable without a mesh.
         self._require_weight_source(torch_weights, weight_cache_path, cache_name_prefix, use_norm)
 
         self.mesh_device = mesh_device
@@ -325,10 +305,8 @@ class TtLatentMoeProjections(LightweightModule):
 
     # --------------------------------------------------------------- forward
 
-    # NOTE on coverage: the tp_factor == 1 branches below (no all-gather here, no reduce-scatter in
-    # from_latent) are reachable only from the linear-8 / mesh-4x2 params of test_kimi_k3_moe, which no
-    # CI stage selects -- both blaze rows pin fabric2d-mesh-8x4, i.e. tp=4. They are exercised by local
-    # runs only.
+    # The tp_factor == 1 branches here and in from_latent are exercised by local runs only; every CI
+    # row pins fabric2d-mesh-8x4.
     def to_latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """emb_dim (replicated) -> routed_emb_dim (replicated). Runs before dispatch.
 
@@ -372,9 +350,8 @@ class TtLatentMoeProjections(LightweightModule):
             f"latent up_proj expects TP-sharded latent {expected_in} "
             f"(= {self.routed_emb_dim}/{self.tp_factor}), got shape[-1]={y.shape[-1]}"
         )
-        # The distributed norm's rms_norm_pre_all_gather and all_gather(dim=3) are rank-4 only. Assert
-        # it here: passing rank 3 otherwise dies inside the op as "ShapeBase[] index out of range.
-        # 3 not in [-4, 3)", which says nothing about the actual mistake.
+        # The distributed norm is rank-4 only, and a rank-3 input dies inside the op with an index
+        # error that names nothing.
         assert len(y.shape) == 4, f"latent from_latent() requires a rank-4 tensor (norm is rank-4 only), got {y.shape}"
 
         if self.use_norm:
@@ -385,11 +362,8 @@ class TtLatentMoeProjections(LightweightModule):
         logger.debug(f"[LatentMoe.from_latent] after up_proj: {out_full.shape}")
 
         if self.tp_factor > 1:
-            # Plain reduce_scatter, as TtFfn does. TtSharedExpert instead reuses a persistent
-            # intermediate via TT_CCL.get_shared_rs_intermediate, which is a single whole-mesh buffer
-            # shaped by its FIRST caller; routing a second op with a different dtype through it would
-            # silently hand one of them a wrong-shaped buffer. Worth revisiting as a perf follow-up,
-            # but not while bringing the path up.
+            # Plain reduce_scatter rather than TtSharedExpert's persistent intermediate: that buffer
+            # is shaped by its first caller, so a second op with a different dtype would collide.
             out = ttnn.reduce_scatter(
                 out_full,
                 dim=-1,

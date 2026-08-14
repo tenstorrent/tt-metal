@@ -99,22 +99,9 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            # Kimi-K3: 896 experts -> per_core_N = 896/32 = 28, still divisible by out_block_w=4.
-            # in0_block_w stays 56 because K3's gating_dim is hidden_size (7168), same as K2.6, so
-            # per_device_emb_dim is the same 1792 = 7168/4. Only the expert count differs -- which is
-            # exactly why this key is needed: a miss is silent (TTNN auto-picks a config and the gate
-            # matmul quietly regresses) rather than an error.
-            #
-            # NOTE: this matmul is NOT what limits K3's device gate. At 896 experts the downstream
-            # moe_grouped_topk op's static CBs overflow L1 on the 11x10 grid once the per-chip token
-            # count is large (fails at sp_dim=4096, fits at 640/3200) -- verified by holding this
-            # config fixed and observing byte-identical clash addresses at in0_block_w 56 and 28.
-            # per_core_M is NOT free: for a height-sharded in0 the matmul asserts
-            # per_core_M == shard_height / 32, and shard_height = roundup32(ceil(sp_dim / num_cores)).
-            # K3 runs at sp_dim <= MAX_GATE_SEQ_LEN_PER_CHIP (3200), where ceil(3200/110) = 30 -> 32
-            # rows -> per_core_M = 1; the same holds at the MoE tests' 640. The other models sit at
-            # sp_dim 4096 -> 64 rows -> per_core_M = 2, which is why their entries differ here.
-            # out_block_h follows per_core_M down to 1.
+            # per_core_M is not free: for a height-sharded in0 the matmul asserts
+            # per_core_M == roundup32(ceil(sp_dim / num_cores)) / 32, which is 1 at K3's depths and 2
+            # at the other models' 4096. out_block_h follows it.
             (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
@@ -140,10 +127,8 @@ class TtMoEGateConfig:
 
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
-    # Hard ceiling on sp_dim, enforced in __post_init__. Set only by models that have one: at high
-    # expert counts moe_grouped_topk's circular buffers (sized by experts/32) stop fitting L1
-    # alongside the height-sharded scores, and the failure mode is an L1 allocation clash deep in the
-    # op rather than anything that names the sequence length. None = no known ceiling.
+    # Enforced in __post_init__. At high expert counts moe_grouped_topk's circular buffers stop
+    # fitting L1 alongside the height-sharded scores, and the clash names nothing useful.
     max_sp_dim: int | None = None
     n_routed_experts: int = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     n_shared_experts: int = DeepSeekV3Config.NUM_SHARED_EXPERTS  # PREVIOUS VALUE: 2 @ddjekic to check
@@ -186,19 +171,10 @@ class TtMoEGateConfig:
     @classmethod
     def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
         """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
-        # Optional per-model attributes. Kept in a dict merged UNDER **overrides so an explicit
-        # kwarg still wins, per this method's contract -- passing them as direct arguments instead
-        # would raise "got multiple values for keyword argument" the moment a caller overrode one.
+        # Merged under **overrides so an explicit kwarg still wins.
         model_defaults = {
-            # V4 variants ship SCORE_FUNC="sqrtsoftplus"; V3/Kimi omit it and keep the sigmoid default.
             "score_func": getattr(model_cfg, "SCORE_FUNC", cls.score_func),
-            # Kimi-K3 ships MAX_GATE_SEQ_LEN_PER_CHIP because moe_grouped_topk's circular buffers grow
-            # with the expert count and stop fitting L1 alongside the height-sharded input at the
-            # default depth; every other model omits it and keeps 4096. Callers that know their real
-            # per-chip sequence pass sp_dim explicitly and override this.
-            # ... and it doubles as the enforced ceiling, so a caller cannot override sp_dim PAST it.
-            # Without this the constant would only ever be a default, i.e. it would protect nothing on
-            # the path that actually hits the limit (TtMoe always passes its real seq_len_per_chip).
+            # Serves as both the default depth and the ceiling an explicit sp_dim cannot exceed.
             "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
             "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
         }
