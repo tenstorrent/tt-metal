@@ -15,7 +15,7 @@
 //      ceil_tile(count) so rows past the real token count are never touched.
 //
 // Raw-dataflow deviations are the reader's, for the same reasons. The transport vocabulary the two
-// kernels share lives in moe_fused_swiglu_dataflow.hpp; the measurements are in DESIGN_NOTES.md.
+// kernels share lives in moe_fused_swiglu_dataflow.hpp.
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -171,12 +171,12 @@ void kernel_main() {
     const uint32_t w_up_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
     const uint32_t wd_addr = get_arg_val<uint32_t>(3);
-    const uint32_t kr = get_arg_val<uint32_t>(4);
+    const uint32_t kr_rows = get_arg_val<uint32_t>(4);
     const uint32_t kstart = get_arg_val<uint32_t>(5);
     const uint32_t hstart = get_arg_val<uint32_t>(6);
-    const uint32_t hn = get_arg_val<uint32_t>(7);
+    const uint32_t hn_cols = get_arg_val<uint32_t>(7);
     const uint32_t ec = get_arg_val<uint32_t>(8);
-    const uint32_t jstart = get_arg_val<uint32_t>(9);
+    const uint32_t out_col_start = get_arg_val<uint32_t>(9);
     const uint32_t ec_group = get_arg_val<uint32_t>(10);
     const uint32_t jstart_group = get_arg_val<uint32_t>(11);
     const uint32_t my_col = get_arg_val<uint32_t>(12);
@@ -210,8 +210,8 @@ void kernel_main() {
     const uint32_t m_t = mb.m_t;
     const uint32_t m_blocks = mb.m_blocks;
     const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
-    const uint32_t wd_ec = wd_mgroup ? ec_group : ec;
-    const uint32_t wd_jstart = wd_mgroup ? jstart_group : jstart;
+    const uint32_t wd_out_width = wd_mgroup ? ec_group : ec;
+    const uint32_t wd_jstart = wd_mgroup ? jstart_group : out_col_start;
     // The destination rebase, in TILE-ROWS. `mb.start_row` is a token row the reader fetched from
     // start[global_expert_id]; flooring by TILE_HEIGHT mirrors ttnn::insert's writer exactly, and
     // the reader ASSERTs the alignment that makes the floor lossless. It MUST agree with the
@@ -228,7 +228,7 @@ void kernel_main() {
     (void)invites;
 #endif
     constexpr uint32_t WU_BLOCK_TILES = KR_PAD * HN_PAD;
-    // PERF 3 — the N-chunk the weight stream is published in (reader's twin). 1 == the whole block.
+    // The N-chunk the weight stream is published in (reader's twin). 1 == the whole block.
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
     constexpr uint32_t WU_CHUNK_TILES = KR_PAD * GU_CHUNK_W;
     constexpr uint32_t SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot in the parent
@@ -236,24 +236,22 @@ void kernel_main() {
     // The output block written but not yet barriered/popped — see the DEFERRED WRITE BARRIER below.
     uint32_t out_pending = 0;
 
-    for (uint32_t b = 0; b < m_blocks; ++b) {
+    for (uint32_t block_idx = 0; block_idx < m_blocks; ++block_idx) {
         // The RUNTIME token tile-rows this block works on — the SAME number the reader uses for its
         // multicast rounds and compute uses for its matmul shape (moe_fused_swiglu_common.hpp).
-        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
         const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
         const uint32_t out_rows = wd_mgroup ? MGROUP_ROWS : m_eff;
         const uint32_t out_ec_max = wd_mgroup ? EC_GROUP_MAX : EC_MAX;
         const uint32_t out_ec = wd_mgroup ? ec_group : ec;
-        const uint32_t out_jstart = wd_mgroup ? jstart_group : jstart;
+        const uint32_t out_jstart = wd_mgroup ? jstart_group : out_col_start;
         const uint32_t out_row_in_block = wd_mgroup ? (my_row / MGROUP_ROWS) * MGROUP_ROWS : 0;
         const uint32_t out_block_tiles = out_rows * out_ec_max;
 
-        // DEFERRED WRITE BARRIER, the twin of the reader's deferred READ barrier. The previous
-        // M-block's write-back is drained HERE, not where it was issued: barriering at the issue
-        // site made the last stage of block b pay full DRAM write latency with nothing else in
-        // flight, sitting exactly on the multi-M-block critical path. DEPTH_OUT >= 2 makes the
-        // extra outstanding block legal.
+        // DEFERRED WRITE BARRIER (twin of the reader's deferred read barrier): the previous block's
+        // write-back drains HERE, not at its issue site, where it paid full DRAM latency with
+        // nothing in flight on the critical path. DEPTH_OUT >= 2 makes the extra block legal.
         if (out_pending) {
             MaybeDeviceZoneScope("writer_out_drain");
             noc_async_write_barrier();
@@ -263,35 +261,43 @@ void kernel_main() {
             // reader invite peers to overwrite the same SRAM through cb_gather_gate. The value is
             // the next block index and is monotone, like every other same-core publication here.
             if constexpr (PHASE_CB_ALIAS) {
-                *phase_free_ptr = b;
+                *phase_free_ptr = block_idx;
             }
         }
 
         // ---- W_up: NoC1 half of the gate/up weight stream, same bank-run coalescing ----
         //
-        // PERF 3 — published in the same `GU_CHUNKS` N-chunks as the reader's W_gate twin, for the
-        // same reason: the up matmul starts on chunk 0 while chunk 1 is still in DRAM. See the
-        // reader's comment for why N (independent chunks, no extra accumulating pack) and not K.
+        // Published in the same GU_CHUNKS N-chunks as the reader's W_gate twin, so the up matmul
+        // starts on chunk 0 while chunk 1 is still in DRAM.
         {
             MaybeDeviceZoneScope("writer_wup");
-            // PERF 3 — ACTIVATION-FIRST. Hold this NoC1 weight stream until this core's reader has
-            // pulled its `x` tile-rows off DRAM. Every core does it, so the whole grid's 16.5 MB of
-            // gate/up weights stays behind the 3.67 MB of activation that EVERY core's matmul is
-            // blocked on. Intra-core: an L1 poll, no NoC traffic. Never entered when m_blocks == 0,
-            // so the zero-count dispatch still cannot hang.
+            // ACTIVATION-FIRST: hold this NoC1 weight stream until the reader has pulled its `x`
+            // rows. The weights are several times the activation bytes, and every core's matmul is
+            // blocked on the activation, so letting weights win the DRAM race stalls the whole grid.
+            // An L1 poll, no NoC traffic; skipped when m_blocks == 0.
             if constexpr (XPRIO) {
                 noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)), b + 1);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)), block_idx + 1);
             }
             for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                 cb_reserve_back(cb_w_up, WU_CHUNK_TILES);
-                const uint32_t wp = get_write_ptr(cb_w_up);
+                const uint32_t write_ptr = get_write_ptr(cb_w_up);
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
-                // Residency: M-block 0 only, because the read carries no `b`.
+                // Residency: M-block 0 only, because the read carries no `block_idx`.
                 moe_fused_swiglu::read_weight_chunk<BRG>(
-                    wu_acc, (b == 0) || (W_RESIDENT == 0), c, GU_CHUNK_W, kr, kstart, hstart, hn, HID_T, wp, W_TILE);
+                    wu_acc,
+                    (block_idx == 0) || (W_RESIDENT == 0),
+                    c,
+                    GU_CHUNK_W,
+                    kr_rows,
+                    kstart,
+                    hstart,
+                    hn_cols,
+                    HID_T,
+                    write_ptr,
+                    W_TILE);
 #else
-                (void)wp;
+                (void)write_ptr;
 #endif
                 noc_async_read_barrier();
                 cb_push_back(cb_w_up, WU_CHUNK_TILES);
@@ -299,10 +305,9 @@ void kernel_main() {
         }
 
         // ---- MY SHARE OF THE PHASE-2 W_down STREAM, on NOC_1 ----
-        // WD_SPLIT eighths of every K-block's hidden rows, read here so they do not compete with
-        // the h all-gather for the reader's NOC_0. All HGROUPS blocks go out as ONE batch: with
-        // residency every W_down read happens at b == 0, where all slots are free from kernel
-        // start. This RISC-V takes the TAIL rows, a contiguous run. See DESIGN_NOTES.md §4.
+        // WD_SPLIT eighths of each K-block's hidden rows, read here so they do not compete with the
+        // h all-gather for the reader's NOC_0. One batch for all HGROUPS blocks: with residency every
+        // W_down read is at block_idx == 0. This RISC-V takes the TAIL rows, a contiguous run.
         auto issue_wd_share = [&]() {
             MaybeDeviceZoneScope("writer_wd_issue");
             // The publish word. A plain volatile store like SEM_XSTAGED: producer and consumer are
@@ -311,14 +316,14 @@ void kernel_main() {
             // M-blocks and needs no reset — the same discipline as every other counter in this op.
             volatile tt_l1_ptr uint32_t* pub =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT));
-            if (!((b == 0) || (WD_RESIDENT == 0))) {
-                *pub = (b + 1) * HGROUPS;  // resident: nothing to read, the bytes are already there
+            if (!((block_idx == 0) || (WD_RESIDENT == 0))) {
+                *pub = (block_idx + 1) * HGROUPS;  // resident: nothing to read, the bytes are already there
                 return;
             }
             for (uint32_t r = 0; r < HGROUPS; ++r) {
                 const uint32_t hbase = moe_fused_swiglu::hidden_block_start(r, HID_T, HGROUPS, HN_PAD);
-                const uint32_t hn_r = moe_fused_swiglu::hidden_block_rows(r, HID_T, HGROUPS, HN_PAD);
-                const uint32_t k_w = (hn_r * WD_SPLIT) / 8;  // the TAIL rows, read HERE
+                const uint32_t block_hn_rows = moe_fused_swiglu::hidden_block_rows(r, HID_T, HGROUPS, HN_PAD);
+                const uint32_t k_w = (block_hn_rows * WD_SPLIT) / 8;  // the TAIL rows, read HERE
                 // ONE TRANSACTION ID PER K-BLOCK. Every block still goes to DRAM at once (that
                 // concurrency is the point of the batch); tagging lets the drain below release
                 // block r when IT lands rather than when the last one does.
@@ -326,10 +331,10 @@ void kernel_main() {
                 moe_fused_swiglu::read_wd_rows<BRD>(
                     wd_acc,
                     hbase,
-                    hn_r - k_w,
-                    hn_r,
+                    block_hn_rows - k_w,
+                    block_hn_rows,
                     wd_jstart,
-                    wd_ec,
+                    wd_out_width,
                     WD_EC_MAX,
                     EMB_T,
                     wd_base + (WD_PACKED ? hbase * WD_EC_MAX : r * WD_BLOCK_TILES) * W_TILE,
@@ -337,28 +342,29 @@ void kernel_main() {
             }
             noc_async_read_set_trid(0);  // back to untagged for the output write-back's cmd buf
             // DRAIN IN BLOCK ORDER, PUBLISHING AS WE GO. Costs the writer nothing over one blanket
-            // barrier, but the reader stops waiting for the whole 111 KB stream and waits only for
-            // the block it is about to push — worth +13 % at count 128.
+            // barrier, and the reader then waits only for the block it is about to push rather than
+            // for the whole stream.
             for (uint32_t r = 0; r < HGROUPS; ++r) {
                 noc_async_read_barrier_with_trid(r + 1);
-                *pub = b * HGROUPS + r + 1;
+                *pub = block_idx * HGROUPS + r + 1;
             }
         };
         issue_wd_share();
 
         // ---- REDUCE-SCATTER: contributor side + the finished-slice scatter ----
         // The ONE shared slice plan (moe_fused_swiglu_common.hpp), from the SAME (m_eff, KGROUPS)
-        // compute and the reader use. `sl_w` workers own `sl_a` tiles each; rows >= sl_w are idle
-        // for the reduce but still CONTRIBUTE, which is why the send loop below is unconditional.
-        const uint32_t sl_w = moe_fused_swiglu::slice_workers(gu_block_tiles, KGROUPS);
-        const uint32_t sl_a = gu_block_tiles / sl_w;
-        const uint32_t slice_bytes = sl_a * H_TILE;
+        // compute and the reader use. `slice_worker_count` workers own `slice_tiles_each` tiles each; rows >=
+        // slice_worker_count are idle for the reduce but still CONTRIBUTE, which is why the send loop below is
+        // unconditional.
+        const uint32_t slice_worker_count = moe_fused_swiglu::slice_workers(gu_block_tiles, KGROUPS);
+        const uint32_t slice_tiles_each = gu_block_tiles / slice_worker_count;
+        const uint32_t slice_bytes = slice_tiles_each * H_TILE;
         {
             MaybeDeviceZoneScope("writer_scatter");
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
             // KGROUPS invites per M-block is the generalisation of the tree's one-parent SEM_GO:
             // every peer's reader reserves its landing CBs and THEN invites the whole column, so
-            // this wait is what stops block b+1's contribution from overwriting a landing slot
+            // this wait is what stops block_idx+1's contribution from overwriting a landing slot
             // compute has not consumed yet. MONOTONE, never reset — the running total only grows.
             noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
 #endif
@@ -373,35 +379,36 @@ void kernel_main() {
                 // that case. Derive the identical physical slot directly from block index.
                 const auto& iface = get_local_cb_interface(cb_gather_gate);
                 const uint32_t base = iface.fifo_limit - iface.fifo_size;
-                gate_dst = base + ((b * GATHER_PAGES) % PHASE_ALIAS_PAGES) * H_TILE;
+                gate_dst = base + ((block_idx * GATHER_PAGES) % PHASE_ALIAS_PAGES) * H_TILE;
             }
             // The GATE half of the column all-to-all, on NOC_1. The reader carries the UP half on
             // NOC_0: split by PAYLOAD, not destination, so each RISC-V owns one
             // accumulator CB outright — two RISC-Vs popping one CB corrupt its shared `tiles_acked`
             // word the way two pushers corrupt `tiles_received`.
             if constexpr (SCATTER_ONE_SIGNAL) {
-                moe_fused_swiglu::scatter_payload_to(RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
-                while (mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] < b + 1) {
+                moe_fused_swiglu::scatter_payload_to(
+                    RT_PEERS, cb_gate_acc, gate_dst, slice_worker_count, slice_tiles_each, my_row, H_TILE);
+                while (mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] < block_idx + 1) {
                     invalidate_l1_cache();
                 }
                 // Both NoC payload barriers have now completed. One signal per source/destination
                 // pair proves both gate and up are resident in the target landing buffers.
-                moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, slice_worker_count);
             } else {
-                moe_fused_swiglu::scatter_payload_to(RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
-                moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                moe_fused_swiglu::scatter_payload_to(
+                    RT_PEERS, cb_gate_acc, gate_dst, slice_worker_count, slice_tiles_each, my_row, H_TILE);
+                moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, slice_worker_count);
             }
 #endif
             cb_pop_front(cb_gate_acc, gu_block_tiles);
         }
         // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----
-        // The gather IS the assembly. cb_h_local is never pushed or popped, so its write pointer
-        // is the CB base on every core — which is what lets this core use its OWN pointer as the
-        // root's. Flow control is the invite above, transitively: my send is downstream of the
-        // gather, which is downstream of the root's invite for this block.
-        if (my_row < sl_w) {
+        // The gather IS the assembly. cb_h_local is never pushed or popped, so its write pointer is
+        // the CB base on every core — which is what lets this core use its OWN pointer as the root's.
+        // Flow control is the invite above, transitively.
+        if (my_row < slice_worker_count) {
             MaybeDeviceZoneScope("writer_hslice");
-            cb_wait_front(cb_h_slice, sl_a);
+            cb_wait_front(cb_h_slice, slice_tiles_each);
 #ifndef ABLATE_NO_REDUCE_XFER
             uint32_t rvx;
             uint32_t rvy;
@@ -413,11 +420,11 @@ void kernel_main() {
                 // diagonal row aggregator, producing one contiguous HID_T-wide W_down operand.
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HROW_FREE))),
-                    b + 1);
+                    block_idx + 1);
                 rvx = row_agg_vx;
                 rvy = row_agg_vy;
                 dst = get_write_ptr(cb_h_local) + hstart * H_TILE;
-                bytes = hn * H_TILE;
+                bytes = hn_cols * H_TILE;
             } else {
                 rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
                 rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
@@ -429,7 +436,7 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
             noc_async_atomic_barrier();
 #endif
-            cb_pop_front(cb_h_slice, sl_a);
+            cb_pop_front(cb_h_slice, slice_tiles_each);
         }
 
         // Whole-round NoC1 ownership.  The receiver readers reserve/ack HACK_AHEAD slots, so this
@@ -439,10 +446,10 @@ void kernel_main() {
 #ifndef ABLATE_NO_H_XFER
         if (wd_mrow && !wd_mgroup && is_row_agg && h_round_on_writer(my_row)) {
             MaybeDeviceZoneScope("writer_hsend");
-            moe_fused_swiglu::sem_wait_min(SEM_HSLICE, (b + 1) * HGROUPS);
-            moe_fused_swiglu::sem_wait_min(SEM_H_FREE, (b + 1) * NUM_CORES);
+            moe_fused_swiglu::sem_wait_min(SEM_HSLICE, (block_idx + 1) * HGROUPS);
+            moe_fused_swiglu::sem_wait_min(SEM_H_FREE, (block_idx + 1) * NUM_CORES);
 
-            const uint32_t flag_slot = (b * KGROUPS + my_row) % DEPTH_H;
+            const uint32_t flag_slot = (block_idx * KGROUPS + my_row) % DEPTH_H;
             // The ordinary mrow path publishes one payload-free alignment slot after its eight
             // rows, so every block's physical cb_h write pointer restarts at the base.  Round r's
             // physical row is therefore r % DEPTH_H even though its VALID flag rotates globally.
@@ -452,7 +459,7 @@ void kernel_main() {
             h_slot_send_posted_noc1(flag_slot, hdst, HID_T * H_TILE);
 
             asm volatile("fence" ::: "memory");
-            mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = b + 1;
+            mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = block_idx + 1;
         }
 #endif
 
@@ -470,7 +477,7 @@ void kernel_main() {
                     // once. Do not pop here: issued DMAs still read this CB until the existing
                     // deferred barrier at the next block (or the epilogue) proves completion.
                     cb_wait_front(cb_out_tiles, (t + 1) * out_ec_max);
-                    const uint32_t row = b * M_BLOCK + out_row_in_block + t;
+                    const uint32_t row = block_idx * M_BLOCK + out_row_in_block + t;
                     if (row >= m_t) {
                         break;  // rows past ceil_tile(count) are never written
                     }

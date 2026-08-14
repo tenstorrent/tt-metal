@@ -105,7 +105,7 @@ std::vector<uint32_t> make_reader_ct(
         blocking.wd_resident,
         blocking.wd_mrow_rounds && blocking.wd_resident,
         blocking.wd_mgroups,
-        geo::WD_MGROUP_MIN_BLOCKS,
+        blocking.wd_mgroup_min_blocks,
         blocking.gu_chunks,
         geo::XPRIO,
         blocking.hack_ahead,
@@ -178,7 +178,7 @@ std::vector<uint32_t> make_writer_ct(
         geo::XPRIO,
         blocking.wd_mrow_rounds && blocking.wd_resident,
         blocking.wd_mgroups,
-        geo::WD_MGROUP_MIN_BLOCKS,
+        blocking.wd_mgroup_min_blocks,
         blocking.depth_h,
         geo::H_ROUND_NOC1_MASK,
         geo::SCATTER_ONE_SIGNAL,
@@ -225,7 +225,7 @@ std::vector<uint32_t> make_compute_ct(const geo::Blocking& blocking, bool activa
         blocking.wd_resident,
         blocking.wd_mrow_rounds && blocking.wd_resident,
         blocking.wd_mgroups,
-        geo::WD_MGROUP_MIN_BLOCKS,
+        blocking.wd_mgroup_min_blocks,
         blocking.gu_chunks,
         geo::ELTWISE_BLK,
         geo::DEST_LIMIT,
@@ -303,7 +303,15 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t counts_page =
         std::max(std::max<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size(), dram_alignment), start_page);
     const bool phase_alias = blocking.phase_cb_alias(output_tile);
-    const uint64_t l1_need = blocking.l1_bytes(activations_are_row_major, output_tile, true);
+    const auto allocations = blocking.cb_allocations(
+        activations_are_row_major, output_tile, idx_page, counts_page, /*enable_phase_alias=*/true);
+    // Sum the SAME allocations the descriptors below are built from, so the refusal is exact.
+    // Blocking::l1_bytes() assumes 64 B scratch pages because the constructor runs before the
+    // buffers exist; it can therefore understate this total by ~1 KB.
+    uint64_t l1_need = 0;
+    for (const auto& allocation : allocations) {
+        l1_need += allocation.total_size;
+    }
     TT_FATAL(
         l1_need <= blocking.l1_budget,
         "moe_fused_swiglu: needs {} bytes of CB L1 but budget is {} ({})",
@@ -311,8 +319,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         blocking.l1_budget,
         blocking.describe());
 
-    for (const auto& allocation : blocking.cb_allocations(
-             activations_are_row_major, output_tile, idx_page, counts_page, /*enable_phase_alias=*/true)) {
+    for (const auto& allocation : allocations) {
         CBDescriptor cb_descriptor{
             .total_size = allocation.total_size,
             .core_ranges = all_cores,

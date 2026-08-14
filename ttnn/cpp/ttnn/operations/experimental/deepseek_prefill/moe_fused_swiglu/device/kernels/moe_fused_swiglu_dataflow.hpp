@@ -23,13 +23,9 @@
 
 namespace moe_fused_swiglu {
 
-// ---------------------------------------------------------------------------
-// Semaphores. All but one are MONOTONE: never reset within a dispatch, always compared with a
-// running total, which is what makes them race-free across M-blocks. THE EXCEPTION is the h
-// all-gather's per-slot VALID cells (SEM_H_RDY_BASE + s), which are deliberately set and cleared
-// each round — that is a Flag signal, not a counter, and its safety comes from the linked-VC
-// ordering plus one cell per slot. These three spellings cover the monotone ones.
-// ---------------------------------------------------------------------------
+// Semaphores. All but one are MONOTONE — never reset within a dispatch, compared against a running
+// total, which is what makes them race-free across M-blocks. The exception is the h all-gather's
+// per-slot VALID cells (SEM_H_RDY_BASE + s): a Flag, set and cleared each round.
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem_ptr(uint32_t id) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(id)));
 }
@@ -40,11 +36,9 @@ FORCE_INLINE void sem_wait_min(uint32_t id, uint32_t target) { noc_semaphore_wai
 //: and the word has exactly one writer, so a plain volatile store is the whole handshake.
 FORCE_INLINE void sem_publish(uint32_t id, uint32_t value) { *sem_ptr(id) = value; }
 
-// ---------------------------------------------------------------------------
-// Peers. The whole grid COLUMN in virtual coordinates, KGROUPS (vx, vy) pairs in ROW order at
-// `RT_PEERS`. Row r is at index r on every core in the column, which is what makes "worker r owns
-// tiles [r*a, (r+1)*a)" agree grid-wide without a host-side plan table.
-// ---------------------------------------------------------------------------
+// Peers. The grid COLUMN in virtual coordinates, KGROUPS (vx, vy) pairs in ROW order at `RT_PEERS`.
+// Row r sits at index r on every core in the column, which is what lets "worker r owns tiles
+// [r*a, (r+1)*a)" agree grid-wide with no host-side plan table.
 struct Peer {
     uint32_t x, y;
 };
@@ -53,40 +47,39 @@ FORCE_INLINE Peer peer_at(uint32_t rt_peers, uint32_t r) {
     return Peer{get_arg_val<uint32_t>(rt_peers + 2 * r + 0), get_arg_val<uint32_t>(rt_peers + 2 * r + 1)};
 }
 
-// ---------------------------------------------------------------------------
 // Weight streams
-// ---------------------------------------------------------------------------
-//: One hidden-axis CHUNK of a gate/up weight block: the full K extent this row owns, `GU_CHUNK_W`
-//: hidden columns wide, laid out in the CB at row stride `chunk_w`. Reads are ISSUED only — the
-//: caller owns the barrier. `read` false reproduces the CB cycle with no DRAM traffic, which is
-//: both the residency skip (b > 0 re-reads bytes already in the slot) and the ablation stub.
-//:
-//: The ragged last column group narrows the last chunk; the host guarantees every chunk that has a
-//: real column reaches into its last in1 sub-block, so `w == 0` means "skip", not "malformed".
+//: One hidden-axis CHUNK of a gate/up block: this row's full K extent, `chunk_w` columns wide, at
+//: CB row stride `chunk_w`. Reads are ISSUED only — the caller owns the barrier. `read == false`
+//: reproduces the CB cycle with no DRAM traffic (the residency skip and the ablation stub).
 template <class Runs, class Acc>
 FORCE_INLINE void read_weight_chunk(
     const Acc& acc,
     bool read,
     uint32_t chunk,
     uint32_t chunk_w,
-    uint32_t kr,
+    uint32_t kr_rows,
     uint32_t kstart,
     uint32_t hstart,
-    uint32_t hn,
+    uint32_t hn_cols,
     uint32_t hid_t,
     uint32_t l1_base,
     uint32_t tile_bytes) {
-    const uint32_t h0 = chunk * chunk_w;
-    uint32_t w = (h0 < hn) ? (hn - h0) : 0;
+    const uint32_t chunk_col0 = chunk * chunk_w;
+    uint32_t w = (chunk_col0 < hn_cols) ? (hn_cols - chunk_col0) : 0;
     if (w > chunk_w) {
         w = chunk_w;
     }
     if (!read || w == 0) {
         return;
     }
-    for (uint32_t k = 0; k < kr; ++k) {
+    for (uint32_t k = 0; k < kr_rows; ++k) {
         Runs::read(
-            acc, (kstart + k) * hid_t, hstart + h0, hstart + h0 + w, l1_base + k * chunk_w * tile_bytes, tile_bytes);
+            acc,
+            (kstart + k) * hid_t,
+            hstart + chunk_col0,
+            hstart + chunk_col0 + w,
+            l1_base + k * chunk_w * tile_bytes,
+            tile_bytes);
     }
 }
 
@@ -99,30 +92,29 @@ FORCE_INLINE void read_wd_rows(
     uint32_t hbase,
     uint32_t k_lo,
     uint32_t k_hi,
-    uint32_t jstart,
+    uint32_t out_col_start,
     uint32_t ec,
     uint32_t ec_max,
     uint32_t emb_t,
     uint32_t slot_base,
     uint32_t tile_bytes) {
     for (uint32_t k = k_lo; k < k_hi; ++k) {
-        Runs::read(acc, (hbase + k) * emb_t, jstart, jstart + ec, slot_base + k * ec_max * tile_bytes, tile_bytes);
+        Runs::read(
+            acc,
+            (hbase + k) * emb_t,
+            out_col_start,
+            out_col_start + ec,
+            slot_base + k * ec_max * tile_bytes,
+            tile_bytes);
     }
 }
 
-// ---------------------------------------------------------------------------
 // The reduce-scatter gather leg
-// ---------------------------------------------------------------------------
 //: Unicast MY slice of one accumulator into every column peer's landing CB, then signal each.
 //:
-//: `scatter_payload()` uses this core's CB cursor as the remote address proxy. That is valid only
-//: when the logical landing capacity is also the physical capacity, so every whole logical push
-//: returns every core to the same base. A phase-aliased landing CB can have a larger physical LCM
-//: capacity; its caller must use `scatter_payload_to()` with a block-indexed physical address.
-//:
-//: The barrier before the signals is the data-before-signal proof and is load-bearing. The atomic
-//: barrier after them is not local flow control; it is dropped only by measurement, and that
-//: measurement said null.
+//: `scatter_payload()` uses this core's CB cursor as the remote address proxy, valid ONLY when the
+//: logical landing capacity equals the physical one. A phase-aliased CB has a larger LCM capacity,
+//: so its caller must use this block-indexed form. The barrier before the signals is load-bearing.
 FORCE_INLINE void scatter_payload_to(
     uint32_t rt_peers,
     uint32_t src_cb,

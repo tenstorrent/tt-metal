@@ -4,7 +4,9 @@
 #include "moe_fused_swiglu_geometry.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <numeric>
+#include <string_view>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -13,6 +15,65 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry {
 namespace {
+
+// Tuning overrides for the blocking knobs. Each defaults to the shipped constant, so an unset
+// environment reproduces the shipped geometry byte for byte.
+//
+// They do NOT participate in the program-cache key, so a shape whose program is already cached
+// keeps the geometry it was compiled with. Reading them ONCE per process (the statics below) makes
+// "set them before the first dispatch" an enforceable rule rather than a convention.
+//
+// Out-of-domain values are REFUSED, not clamped: a silently clamped knob makes a tuning sweep
+// report a number for a configuration it never ran. The domains are hardware limits, not taste —
+// see each knob's declaration in the header.
+uint32_t env_u32(const char* name, uint32_t fallback, uint32_t lo, uint32_t hi) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(raw, &end, 0);
+    TT_FATAL(
+        end != raw && *end == '\0' && parsed >= lo && parsed <= hi,
+        "moe_fused_swiglu: {}='{}' must be an integer in [{}, {}]",
+        name,
+        raw,
+        lo,
+        hi);
+    return static_cast<uint32_t>(parsed);
+}
+
+bool env_bool(const char* name, bool fallback) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') {
+        return fallback;
+    }
+    const std::string_view value{raw};
+    if (value == "0" || value == "false" || value == "False") {
+        return false;
+    }
+    TT_FATAL(value == "1" || value == "true" || value == "True", "moe_fused_swiglu: {}='{}' must be 0/1", name, raw);
+    return true;
+}
+
+// Read once per process, so the geometry cannot drift between one dispatch and the next.
+struct Knobs {
+    uint32_t depth_h = env_u32("MOE_DEPTH_H", DEPTH_H, 2, MAX_DEPTH_H);
+    uint32_t depth_x = env_u32("MOE_DEPTH_X", DEPTH_X, 1, 4);
+    uint32_t hack_ahead = env_u32("MOE_HACK_AHEAD", HACK_AHEAD, 1, MAX_DEPTH_H);
+    uint32_t wd_ahead = env_u32("MOE_WD_AHEAD", WD_AHEAD, 1, 8);
+    uint32_t wd_split = env_u32("MOE_WD_SPLIT", WD_SPLIT, 0, 8);
+    uint32_t gu_chunks = env_u32("MOE_GU_CHUNKS", GU_CHUNKS, 1, 64);
+    uint32_t wd_mgroup_min_blocks = env_u32("MOE_WD_MGROUP_MIN_BLOCKS", WD_MGROUP_MIN_BLOCKS, 1, 1u << 20);
+    bool wd_resident = env_bool("MOE_WD_RESIDENT", WD_RESIDENT);
+    bool wd_mrow = env_bool("MOE_WD_MROW", WD_MROW_ROUNDS);
+    bool wd_mgroups = env_bool("MOE_WD_MGROUPS", WD_MGROUPS);
+};
+
+const Knobs& knobs() {
+    static const Knobs instance;
+    return instance;
+}
 
 uint32_t pow2_ceil(uint32_t value) {
     uint32_t result = 1;
@@ -106,6 +167,10 @@ Blocking::Blocking(
     TT_FATAL(pow2_ceil(M_BLOCK) == M_BLOCK, "moe_fused_swiglu: M_BLOCK must be a power of two");
     TT_FATAL(m_eff_min <= M_BLOCK, "moe_fused_swiglu: gate/up subblock height exceeds M_BLOCK");
 
+    gu_chunks_target = knobs().gu_chunks;
+    // Runtime gate the kernels apply: grouped mode engages only when m_blocks >= this.
+    wd_mgroup_min_blocks = knobs().wd_mgroup_min_blocks;
+
     std::tie(kr_sizes, kr_starts) = split(emb_t, kgroups);
     kr_pad = *std::max_element(kr_sizes.begin(), kr_sizes.end());
 
@@ -128,7 +193,7 @@ Blocking::Blocking(
             hn_sizes[x] = hn_starts[x] >= hid_t ? 0 : std::min(hn_pad, hid_t - hn_starts[x]);
         }
     }
-    wd_mrow_rounds = WD_MROW_ROUNDS && kgroups == M_BLOCK;
+    wd_mrow_rounds = knobs().wd_mrow && kgroups == M_BLOCK;
 
     std::tie(ec_sizes, ec_starts) = split(emb_t, num_cores);
     ec_max = *std::max_element(ec_sizes.begin(), ec_sizes.end());
@@ -136,7 +201,8 @@ Blocking::Blocking(
     mgroup_cores = hgroups * mgroup_rows;
     std::tie(ec_group_sizes, ec_group_starts) = split(emb_t, mgroup_cores);
     ec_group_max = *std::max_element(ec_group_sizes.begin(), ec_group_sizes.end());
-    wd_mgroups = WD_MGROUPS && wd_mrow_rounds && M_BLOCK % 2 == 0 && kgroups == M_BLOCK && ec_group_max <= DEST_LIMIT;
+    wd_mgroups =
+        knobs().wd_mgroups && wd_mrow_rounds && M_BLOCK % 2 == 0 && kgroups == M_BLOCK && ec_group_max <= DEST_LIMIT;
     wd_ec_max = wd_mgroups ? ec_group_max : ec_max;
 
     TT_FATAL(
@@ -155,28 +221,53 @@ Blocking::Blocking(
         M_BLOCK % OUT_SUBBLOCK_H_GU == 0 && M_BLOCK % out_subblock_h_dn == 0,
         "moe_fused_swiglu: M_BLOCK must divide both subblock heights");
 
+    const uint32_t depth_h_req = knobs().depth_h;
+    const uint32_t hack_ahead_req = knobs().hack_ahead;
+
     max_m_blocks = (m_t_max + M_BLOCK - 1) / M_BLOCK;
-    depth_x = max_m_blocks > 1 ? DEPTH_X : 1;
+    depth_x = max_m_blocks > 1 ? knobs().depth_x : 1;
     depth_w = W_RESIDENT ? 1 : DEPTH_W;
-    wd_ahead = std::max(1u, std::min(WD_AHEAD, hgroups));
-    depth_h = DEPTH_H;
-    hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
-    wd_resident = WD_RESIDENT;
+    // Bounded by hgroups - 2, not hgroups: depth_wd must be >= wd_ahead + 2, so anything larger
+    // leaves min_depth_wd() with no legal depth to return.
+    wd_ahead = std::max(1u, std::min(knobs().wd_ahead, hgroups > 2 ? hgroups - 2 : 1u));
+    depth_h = depth_h_req;
+    hack_ahead = std::max(1u, std::min(hack_ahead_req, depth_h - 1));
+    wd_resident = knobs().wd_resident;
     depth_wd = wd_resident ? hgroups : min_depth_wd();
 
+    // ---- THE L1 FALLBACK LADDER ----------------------------------------------------------
+    // Ordered CHEAPEST-CONCESSION-FIRST: each step gives up the least performance for the bytes it
+    // reclaims, and only runs if the previous ones left us over budget. Nothing here can fail — if
+    // the ladder bottoms out still over, the program factory refuses with both numbers.
+    //
+    // Steps 1-4 deliberately evaluate `l1_bytes(true, ...)`, i.e. AS IF the input were row-major.
+    // That overstates a tiled input by (32 * x_stick - bfp8_tile) bytes of CB_X_IN, so the early
+    // concessions fire slightly earlier than a tiled shape strictly needs. Conservative on purpose:
+    // it keeps the resident-weight decisions identical for both activation formats, so the two
+    // formats share one geometry and one set of measured numbers. Only steps 5-6 use the real
+    // `x_is_rm`, because by then the decision is about x's own CBs.
+    // ---------------------------------------------------------------------------------------
+
+    // 1. Grouped mode wants h depth 3 but pays a wider wd_ec_max; drop the h slot before the mode.
     if (wd_mgroups && depth_h > 2 && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         depth_h = 2;
-        hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+        hack_ahead = std::max(1u, std::min(hack_ahead_req, depth_h - 1));
     }
+    // 2. Still over: give up grouped mode entirely and restore the h depth it was paying for.
     if (wd_mgroups && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         wd_mgroups = false;
         wd_ec_max = ec_max;
-        depth_h = DEPTH_H;
-        hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+        depth_h = depth_h_req;
+        hack_ahead = std::max(1u, std::min(hack_ahead_req, depth_h - 1));
     }
+    // 3. Drop the whole-h-row schedule: h_fast falls from hid_t to M_BLOCK*hn_pad, shrinking
+    //    CB_H and CB_H_LOCAL. Costs the phase-2 fast path but is cheaper than losing residency.
     if (wd_mrow_rounds && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         wd_mrow_rounds = false;
     }
+    // 4. The expensive concession: stop holding W_down resident and stream it instead. Streaming
+    //    is what SHRINKS CB_W_DOWN — resident depth is hgroups, streamed starts at wd_ahead + 2 —
+    //    then walk depth_wd down through the remaining legal depths.
     if (l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         wd_resident = false;
         depth_wd = min_depth_wd();
@@ -188,6 +279,8 @@ Blocking::Blocking(
             depth_wd = next;
         }
     }
+    // Consistency fixups, not budget steps: these keep mode flags that imply each other in sync
+    // after the ladder above may have cleared one of them.
     wd_packed = balanced_hn && wd_resident;
     if (balanced_hn && !wd_packed) {
         wd_mrow_rounds = false;
@@ -196,14 +289,18 @@ Blocking::Blocking(
         wd_mgroups = false;
         wd_ec_max = ec_max;
     }
+    // 5. Give up the cross-M-block x prefetch. Row-major ONLY: a tiled prefetch reserves a second
+    //    cb_x_tiles slot (PREFETCH_RESERVES_X_SLOT in the reader), and at depth 1 that reserve
+    //    deadlocks against compute on the second M-block.
     if (x_is_rm && depth_x > 1 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
         depth_x = 1;
     }
+    // 6. Last resort: two h slots, the smallest useful producer/consumer window.
     if (depth_h > 2 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
         depth_h = 2;
-        hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+        hack_ahead = std::max(1u, std::min(hack_ahead_req, depth_h - 1));
     }
-    wd_split = wd_resident && depth_wd == hgroups ? std::min(8u, WD_SPLIT) : 0;
+    wd_split = wd_resident && depth_wd == hgroups ? std::min(8u, knobs().wd_split) : 0;
     if (wd_split != 0 && hgroups > NOC_MAX_TRANSACTION_ID) {
         wd_split = 0;
     }
@@ -221,9 +318,10 @@ Blocking::HnChoice Blocking::choose_hn_pad() const {
         }
         std::vector<uint32_t> chunks(candidate);
         std::iota(chunks.begin(), chunks.end(), 1);
-        std::sort(chunks.begin(), chunks.end(), [](uint32_t a, uint32_t b) {
-            const uint32_t da = a > GU_CHUNKS ? a - GU_CHUNKS : GU_CHUNKS - a;
-            const uint32_t db = b > GU_CHUNKS ? b - GU_CHUNKS : GU_CHUNKS - b;
+        const uint32_t target = gu_chunks_target;
+        std::sort(chunks.begin(), chunks.end(), [target](uint32_t a, uint32_t b) {
+            const uint32_t da = a > target ? a - target : target - a;
+            const uint32_t db = b > target ? b - target : target - b;
             return da == db ? a < b : da < db;
         });
         for (const uint32_t chunk_count : chunks) {
@@ -267,6 +365,8 @@ bool Blocking::depth_wd_legal(uint32_t depth) const {
     return true;
 }
 
+// Shallowest legal streamed W_down depth. Falls back to hgroups when the grid is too short to hold
+// wd_ahead + 2 slots — only reachable on a 2-row grid, where the streamed path has no legal depth.
 uint32_t Blocking::min_depth_wd() const {
     for (uint32_t depth = wd_ahead + 2; depth <= hgroups; ++depth) {
         if (depth_wd_legal(depth)) {
@@ -285,9 +385,14 @@ uint32_t Blocking::next_smaller_depth_wd(uint32_t depth) const {
     return depth;
 }
 
+// The full CB size table, annotated with what each term scales with, is in the header. This is that
+// table as code — every page count here is a product of M_BLOCK, a depth, and one of the four
+// derived widths (kr_pad, hn_pad, ec_max, wd_ec_max).
 std::vector<CbView> Blocking::cb_layout(
     bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const {
     const uint32_t output_tile = requested_out_tile == 0 ? bfp8_tile : requested_out_tile;
+    //: One whole gate/up output block, and the h block phase 2 broadcasts. `h_fast` is the whole
+    //: hidden row under the wd_mrow schedule and just this column's block otherwise.
     const uint32_t gu = M_BLOCK * hn_pad;
     const uint32_t h_fast = wd_mrow_rounds ? hid_t : gu;
     const uint32_t out_block = std::max(M_BLOCK * ec_max, wd_mgroups ? mgroup_rows * ec_group_max : 0u);

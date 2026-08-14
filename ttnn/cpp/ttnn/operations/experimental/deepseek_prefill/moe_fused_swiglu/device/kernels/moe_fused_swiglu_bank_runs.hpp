@@ -18,8 +18,8 @@
 //
 // SHARD_W == 0 — interleaved. Consecutive n land in DIFFERENT banks by construction, so there is no
 // contiguous run to exploit and every page is its own transaction. That is correct, and slower.
-// Coalescing interleaved placement means walking the stride-NUM_BANKS bank runs instead, which was
-// built, measured a NET NEGATIVE over two full guard-set samples, and is deliberately not here.
+// Coalescing it would mean walking stride-NUM_BANKS runs, whose per-run bookkeeping costs more than
+// the transactions it saves at these run lengths.
 
 #pragma once
 

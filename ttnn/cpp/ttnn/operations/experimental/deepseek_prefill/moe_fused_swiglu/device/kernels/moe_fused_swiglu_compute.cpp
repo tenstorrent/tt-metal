@@ -22,7 +22,6 @@
 // count: the M-block trip count must be identical on all three TRISCs, and `cb_wait_front` in a
 // compute kernel is UNPACK-only, so a CB handoff would let MATH and PACK diverge.
 //
-// The measurement behind every choice here is in perf_experiments/DESIGN_NOTES.md.
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -84,7 +83,7 @@ constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
-constexpr uint32_t cb_x_ready = CT(CB_X_STAGE);  // legacy host/CT name; carries completion, not x payload
+constexpr uint32_t cb_tilize_done = CT(CB_X_STAGE);  // the compute->reader per-row completion edge
 constexpr uint32_t cb_mailbox_compute = CT(CB_MAILBOX_COMPUTE);
 constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
 constexpr uint32_t cb_w_up = CT(CB_W_UP);
@@ -104,32 +103,23 @@ constexpr uint32_t cb_h_slice = CT(CB_H_SLICE);
 
 constexpr uint32_t TILE_H = 32;
 
-// ---------------------------------------------------------------------------
-// BLOCKED ELTWISE PASSES. `input(cb)`/`output(cb)` default to per-TILE lifecycles, and
-// `eltwise_chain` SILENTLY clamps `block_size` to 1 unless every CB uses a compatible policy — so
-// the convenient spelling costs one full DEST sync round trip PER TILE against a budget of 8.
-// These specs opt into the chunked lifecycle; `OperandKind::Block` is required, not decorative
-// (getting it wrong is a compile error, not a wrong answer). See DESIGN_NOTES.md §7.
+// BLOCKED ELTWISE. `eltwise_chain` SILENTLY clamps block_size to 1 unless every CB opts into the
+// chunked lifecycle, costing a DEST sync per tile against a budget of 8. `OperandKind::Block` is
+// required, not decorative.
 constexpr auto blk_in(uint32_t cb) { return input(cb, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block); }
 constexpr auto blk_out(uint32_t cb) { return output(cb, ReservePolicy::PerChunk, PushPolicy::PerChunk); }
 ALWI auto blk_shape(uint32_t n) { return EltwiseShape::tiles(n, ELTWISE_BLK); }
 
-// `dest_acc` — the running sum lives in DEST for the WHOLE fold, packed to L1 exactly ONCE.
-// `add_tiles_init(IN, IN, acc_to_dest=true)` makes `add_tiles` compute `DEST[dst] += A + B`, so one
-// call folds TWO contributors with no repack between. Worth nc-1 packs, nc-1 re-reads and nc-2
-// inits per DEST window, at no extra L1. See DESIGN_NOTES.md §7.
-//
-// RAW compute API on purpose: `eltwise_chain` would need one element per contributor reading the
-// same CB at a RUNTIME tile offset, and element specs are compile-time.
+// The running sum stays in DEST for the WHOLE fold, packed to L1 once: `acc_to_dest` makes one
+// `add_tiles` fold two contributors. Raw compute API because `eltwise_chain` element specs are
+// compile-time and this reads one CB at a RUNTIME tile offset.
 template <uint32_t ACC, uint32_t IN>
-ALWI void fold_dest(uint32_t nc, uint32_t n) {
-    cb_wait_front(IN, nc * n);
+ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
+    cb_wait_front(IN, num_contributors * n);
     cb_reserve_back(ACC, n);
-    // RECONFIG BEFORE INIT, and BOTH sides. The `*_init` calls below set the math MOP; they do NOT
-    // set the unpacker's DATA FORMAT registers, which still hold whatever the gate/up matmul left
-    // (cb_w_gate / cb_x_tiles). Omitting the srcA/srcB reconfig produced `inf` at pcc = 1.000000 —
-    // the right pattern read through the wrong format — and it did so even with every accumulate
-    // removed, i.e. it is the raw block's format state, not the accumulation.
+    // RECONFIG BEFORE INIT, BOTH sides: `*_init` sets the math MOP but NOT the unpacker's format
+    // registers, which still hold the gate/up matmul's operands. Without this the tiles are decoded
+    // through the wrong format — the right bit pattern, the wrong exponents.
     reconfig_data_format(IN, IN);
     pack_reconfig_data_format(ACC);
     for (uint32_t t0 = 0; t0 < n; t0 += ELTWISE_BLK) {
@@ -138,12 +128,11 @@ ALWI void fold_dest(uint32_t nc, uint32_t n) {
             w = ELTWISE_BLK;
         }
         tile_regs_acquire();
-        // SEED, always — never accumulate onto DEST's entry state. Measured, not defensive:
-        // relying on "DEST is zero after acquire" produced `inf` at pcc = 1.000000. Parity decides
-        // the seed WIDTH so the remainder pairs up exactly: odd nc -> one `copy_tile`, even nc ->
-        // one non-accumulating `add_tiles`. Both OVERWRITE DEST.
+        // SEED, always: `tile_regs_acquire()` does not zero DEST, so accumulating onto its entry
+        // state folds in whatever the previous window left. Parity picks the seed WIDTH so the
+        // remainder pairs up exactly; both spellings OVERWRITE rather than accumulate.
         uint32_t c;
-        if (nc & 1u) {
+        if (num_contributors & 1u) {
             copy_tile_to_dst_init_short(IN);
             for (uint32_t i = 0; i < w; ++i) {
                 copy_tile(IN, t0 + i, i);
@@ -159,7 +148,7 @@ ALWI void fold_dest(uint32_t nc, uint32_t n) {
         // ...and the rest, TWO contributors per call, straight into the sticky DEST accumulator.
         // Slice `c` starts at tile `c * n` of the landing CB.
         add_tiles_init(IN, IN, /*acc_to_dest=*/true);
-        for (; c + 1 < nc; c += 2) {
+        for (; c + 1 < num_contributors; c += 2) {
             for (uint32_t i = 0; i < w; ++i) {
                 add_tiles(IN, IN, c * n + t0 + i, (c + 1) * n + t0 + i, i);
             }
@@ -180,42 +169,42 @@ ALWI void fold_dest(uint32_t nc, uint32_t n) {
     // against a static CB sequence this raw block is invisible to — so the hardware must already
     // match, whether or not the chain re-emits.
     reconfig_data_format(ACC, IN);
-    cb_pop_front(IN, nc * n);
+    cb_pop_front(IN, num_contributors * n);
     cb_push_back(ACC, n);
 }
 
-// Fold `nc` contributors of `IN` into `ACC`. All `nc` accumulate in DEST behind ONE pack; see
-// `fold_dest` for why that is worth 2.6-4.0 % and for the reconfig-before-init trap it hides.
+// Fold `num_contributors` contributors of `IN` into `ACC`, all accumulating in DEST behind ONE pack. See
+// `fold_dest` for the reconfig-before-init requirement this hides.
 template <uint32_t ACC, uint32_t IN>
-ALWI void fold_chain(uint32_t nc, uint32_t n) {
-    fold_dest<ACC, IN>(nc, n);
+ALWI void fold_chain(uint32_t num_contributors, uint32_t n) {
+    fold_dest<ACC, IN>(num_contributors, n);
 }
 
 // Per-K-block FMA step count for the gate/up matmul: the padded K slot is KR_PAD tiles wide but
-// only `kr` of them are real, so the loop bound shrinks and the pad tiles are never touched.
+// only `kr_rows` of them are real, so the loop bound shrinks and the pad tiles are never touched.
 struct KrSteps {
-    uint32_t kr;
-    ALWI uint32_t operator()(uint32_t, uint32_t) const { return kr; }
+    uint32_t kr_rows;
+    ALWI uint32_t operator()(uint32_t, uint32_t) const { return kr_rows; }
 };
 
 // Per-K-block FMA step count for the `down` matmul. Uniform-start grids narrow only their last
 // block; balanced grids may narrow several blocks, but the fixed HN_PAD CB stride is unchanged.
 struct HnSteps {
-    ALWI uint32_t operator()(uint32_t block, uint32_t) const {
-        return moe_fused_swiglu::hidden_block_rows(block, HID_T, HGROUPS, HN_PAD);
+    ALWI uint32_t operator()(uint32_t hn_block, uint32_t) const {
+        return moe_fused_swiglu::hidden_block_rows(hn_block, HID_T, HGROUPS, HN_PAD);
     }
 };
 
 struct PackedWdOffset {
-    ALWI uint32_t operator()(uint32_t block) const {
-        return moe_fused_swiglu::hidden_block_start(block, HID_T, HGROUPS, HN_PAD) * WD_EC_MAX;
+    ALWI uint32_t operator()(uint32_t hn_block) const {
+        return moe_fused_swiglu::hidden_block_start(hn_block, HID_T, HGROUPS, HN_PAD) * WD_EC_MAX;
     }
 };
 
 void kernel_main() {
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
-    const uint32_t kr = get_arg_val<uint32_t>(1);
-    const uint32_t hn = get_arg_val<uint32_t>(2);
+    const uint32_t kr_rows = get_arg_val<uint32_t>(1);
+    const uint32_t hn_cols = get_arg_val<uint32_t>(2);
     const uint32_t ec = get_arg_val<uint32_t>(3);
     const uint32_t ec_group = get_arg_val<uint32_t>(4);
     const uint32_t my_col = get_arg_val<uint32_t>(5);  // grid column == this core's x-injection slot
@@ -225,7 +214,7 @@ void kernel_main() {
     // SiLU rides the packer thread of the root's final reduce add; the helpers never issue this.
     ActivationInitHelper<KernelActivation::SILU>::init();
 
-    CircularBuffer x_ready(cb_x_ready);
+    CircularBuffer tilize_done(cb_tilize_done);
     CircularBuffer mailbox_compute(cb_mailbox_compute);
     // UNPACK waits on the reader's program-local mailbox publication, then
     // broadcasts the two scalar loop bounds to MATH and PACK through the
@@ -278,12 +267,12 @@ void kernel_main() {
     // destination address.
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;
 
-    for (uint32_t b = 0; b < m_blocks; ++b) {
+    for (uint32_t block_idx = 0; block_idx < m_blocks; ++block_idx) {
         // The RUNTIME token tile-rows this block works on — the same number the reader uses for its
         // x-multicast rounds and the writer for its CB waits (moe_fused_swiglu_common.hpp). Every
         // shape and trip count below is derived from it, so count 128 does HALF the gate/up matmul,
         // reduce and `down` work of count 256 instead of the same amount.
-        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
         const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t x_slot_tiles = m_eff * KR_PAD;
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
@@ -292,58 +281,45 @@ void kernel_main() {
         const uint32_t out_ec_max = wd_mgroup ? EC_GROUP_MAX : EC_MAX;
         const uint32_t out_block_tiles = down_rows * out_ec_max;
 
-        // PAGE ACCOUNTING vs ARITHMETIC. Everything above is a PAGE count and stays on `m_eff`,
-        // because those are what must divide M_BLOCK and agree across cores without communication.
-        // `m_rows` is the ARITHMETIC count — the rows the GATE/UP matmul actually produces. It is
-        // <= m_eff, and strictly less exactly when this is a tail block whose remainder is not a
-        // power of two: m_t 5 computes 5 rows of an 8-row block, m_t 3 computes 3 of 4.
+        // PAGE vs ARITHMETIC. Everything above is a PAGE count on `m_eff` — those must divide
+        // M_BLOCK and agree across cores. `m_rows` is the ARITHMETIC count the gate/up matmul really
+        // produces, smaller only on a tail block whose remainder is not a power of two.
         //
-        // Only gate/up may use it, and that is a property of the HELPER's input policy rather than a
-        // choice: both calls use the retaining `WaitAndRetainPerMSubblock` lifecycle, with its
-        // runtime shape bit selecting a progressive prefix wait or one bulk wait. Neither pops
-        // because gate/up has num_k_blocks == 1. This kernel pops x itself at `x_slot_tiles`
-        // (= m_eff * KR_PAD) below. `down` has no such freedom — see shape_dn.
-        const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, b, M_BLOCK);
+        // GATE/UP ONLY, and that is the helper's policy rather than a choice: both calls retain via
+        // WaitAndRetainPerMSubblock and neither pops (num_k_blocks == 1), so this kernel pops x
+        // itself below. `down` has no such freedom — see shape_dn.
+        const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, block_idx, M_BLOCK);
 
-        // gate/up: [m_eff, HN_PAD] = x[m_eff, kr] @ W[kr, HN_PAD]. ONE K-block whose width is the
+        // gate/up: [m_eff, HN_PAD] = x[m_eff, kr_rows] @ W[kr_rows, HN_PAD]. ONE K-block whose width is the
         // whole per-row K extent, which is what lets both matmuls read the same resident in0.
-        // PERF 3 — the in1 sub-blocking is now WITHIN one N-chunk; the host keeps HN_BLOCK a divisor
-        // of GU_CHUNK_W, so at GU_CHUNKS == 1 (GU_CHUNK_W == HN_PAD) this is the Phase-0 shape.
+        // The in1 sub-blocking sits WITHIN one N-chunk; the host keeps HN_BLOCK a divisor of
+        // GU_CHUNK_W, so GU_CHUNKS == 1 degenerates to one sub-block over the whole HN_PAD.
         constexpr uint32_t GU_IN1_SUBBLOCKS = GU_CHUNK_W / HN_BLOCK;
 
         // down: [m_eff, ec] = h[m_eff, HGROUPS*HN_PAD] @ W_down[.., ec], HGROUPS K-blocks.
-        // The FMA width is the real `ec`, but the in1 read stride and the output row stride are the
-        // uniform EC_MAX so every phase-2 CB increment is core-independent.
-        // Start from the height safe for the uniform EC_MAX stride, then let narrower cores use
-        // more of DEST: at 11x8, ec=3 stays 2x3 while ec=2 grows to 4x2. Every height considered is
-        // a power of two, so it still divides the power-of-two runtime m_eff exactly.
+        // The FMA width is the real `ec`; the in1 read stride and output row stride stay the uniform
+        // EC_MAX so every phase-2 CB increment is core-independent. Narrower cores then take more of
+        // DEST (ec=3 stays 2x3, ec=2 grows to 4x2), always at power-of-two heights.
         uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
         while (sbh_dn * 2 <= OUT_SUBBLOCK_H_DN_MAX && sbh_dn * 2 <= m_eff && sbh_dn * 2 * ec <= DEST_LIMIT) {
             sbh_dn *= 2;
         }
-        // `down` STAYS ON m_eff — the `m_rows` shrink deliberately does not reach it. Its in0 is `h` under
-        // `InputPolicy::WaitAndPopPerKBlock`, and the helper derives BOTH the wait and the pop from
-        // the shape (`in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks`,
-        // matmul_block_helpers.inl:196). Shrinking the shape shrinks the pop, so cb_h_local drifts by
-        // (m_eff - m_rows) * HN_PAD tiles per K-block and the op HANGS — measured at M 192.
-        //
-        // The escape hatch is in0_policy = NoWaitNoPop with a caller-owned wait/pop at m_eff, but
-        // that means ONE wait for the whole h block instead of one per K-block, which serialises the
-        // column gather against the matmul it currently overlaps. That trade is the opposite of the
-        // one this knob is trying to make, so `down` is left alone.
+        // `down` STAYS ON m_eff: WaitAndPopPerKBlock derives the POP from the shape, so shrinking it
+        // to m_rows drifts cb_h_local by (m_eff - m_rows) * HN_PAD per K-block and HANGS (seen at
+        // M 192). The NoWaitNoPop escape hatch would serialise the column gather against the matmul.
         const MatmulBlockShape shape_dn = MatmulBlockShape::of(m_eff / sbh_dn, 1, sbh_dn, ec, HN_PAD, HGROUPS);
 
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
         if constexpr (INPUT_FORMAT == 0) {
             MaybeDeviceZoneScope("compute_tilize");
-            const uint32_t x_slot_offset = (b % DEPTH_X) * M_BLOCK * KR_PAD;
+            const uint32_t x_slot_offset = (block_idx % DEPTH_X) * M_BLOCK * KR_PAD;
             const uint32_t t_first = moe_fused_swiglu::inject_first(my_col);
             for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
                 // The reader reserved the whole resident slot before publishing cb_x_in. Pack the
                 // converted row straight into its final multicast offset but leave cb_x_tiles'
                 // FIFO state untouched: the reader remains its only pusher. The tiny ready CB is
                 // the compute->reader completion edge that cb_x_stage's payload used to provide.
-                x_ready.reserve_back(1);
+                tilize_done.reserve_back(1);
                 tilize<
                     KR_PAD,
                     cb_x_in,
@@ -354,7 +330,7 @@ void kernel_main() {
                     tilize_config::Fp32Mode::Fast,
                     tilize_config::RemapMode::Configure,
                     tilize_config::OutputPolicy::CallerOwned>(1, TILE_H, x_slot_offset + t * KR_PAD);
-                x_ready.push_back(1);
+                tilize_done.push_back(1);
             }
         }
 
@@ -370,10 +346,10 @@ void kernel_main() {
             reconfig_data_format(cb_w_gate, cb_x_tiles);
             pack_reconfig_data_format(cb_gate_acc);
             for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                // The ragged column (hn < HN_PAD) narrows the FMA width of the chunk it falls in;
+                // The ragged column (hn_cols < HN_PAD) narrows the FMA width of the chunk it falls in;
                 // the host guarantees every chunk keeps at least one real column. 0 means "full".
-                const uint32_t h0 = c * GU_CHUNK_W;
-                const uint32_t valid = (hn > h0) ? (hn - h0) : 0;
+                const uint32_t chunk_col0 = c * GU_CHUNK_W;
+                const uint32_t valid = (hn_cols > chunk_col0) ? (hn_cols - chunk_col0) : 0;
                 if (valid == 0) {
                     // This chunk is entirely PAD on the ragged column. The dataflow kernels still
                     // push it (unread) so cb_w_gate/cb_w_up's residency wrap is core-independent, so
@@ -423,8 +399,8 @@ void kernel_main() {
                         NoIn1BaseOffset,
                         /*caller_owns_pack_target=*/true,
                         NoneActivation,
-                        // Every gate/up call has identical operand formats; the phase-level
-                        // reconfig above is sufficient for either order. Measured at up to 1.19x.
+                        // Every gate/up call has identical operand formats, so the phase-level
+                        // reconfig above already covers either order.
                         matmul_config::DataFormatReconfig::NONE>(
                         x_buf,
                         weight_buf,
@@ -436,10 +412,10 @@ void kernel_main() {
                         /*in1_per_core_w=*/GU_CHUNK_W,
                         /*out_row_width=*/HN_PAD,
                         {},
-                        KrSteps{kr},
+                        KrSteps{kr_rows},
                         {},
                         {},
-                        /*out_col_offset=*/h0);
+                        /*out_col_offset=*/chunk_col0);
                 }
             }
             gate_buf.push_back(gu_block_tiles);
@@ -450,28 +426,25 @@ void kernel_main() {
             pack_reconfig_l1_acc(0);
         }
 
-        // MY SLICE of this block's m_eff*HN_PAD tiles, from the ONE shared plan in
-        // moe_fused_swiglu_common.hpp — a pure function of (m_eff, KGROUPS, my_row), the same
-        // three numbers on every core and every RISC-V, which is what keeps the all-to-all
-        // deadlock-free. 0 = an idle core: it still contributes its partial, it just owns no
-        // slice to reduce.
+        // MY SLICE of this block's m_eff*HN_PAD tiles, from the one shared plan in common.hpp — a
+        // pure function of (m_eff, KGROUPS, my_row), identical on every core, which is what keeps
+        // the all-to-all deadlock-free. 0 = idle: still contributes a partial, owns no slice.
         const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
 
         // ---- 3. cross-column reduce + SwiGLU ----
         {
             MaybeDeviceZoneScope("compute_reduce");
-            // REDUCE-SCATTER, worker side. Every KGROUPS contributor has pushed its slice into
-            // slot `row` of my two landing CBs, so the reduce is `slice_tiles` wide instead of the
-            // whole block — that factor IS the win. PACK must be the ONLY pusher of the slice CBs:
-            // `cb_push_back` writes the shared `tiles_received` word with the pushing RISC-V's own
-            // count, and a second pusher hung round 1 of this experiment.
+            // REDUCE-SCATTER, worker side: every contributor pushed its slice into slot `row`, so
+            // the reduce is `slice_tiles` wide rather than the whole block — that factor IS the win.
+            // PACK must be the ONLY pusher of the slice CBs: `cb_push_back` writes the shared
+            // `tiles_received` word from the pushing RISC-V's own count, so two pushers corrupt it.
             if (slice_tiles) {
                 // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
                 fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
-                // The final gate add, with SiLU on the packer thread. A slice is at most one DEST
-                // window, so the root's m_eff-call bias walk (the helper's bias index does not
-                // advance with in0_subblock, bias_add_helpers.inl:141) collapses to ONE call FOR
-                // FREE — that collapse is a large part of the measured win, not a side effect.
+                // The final gate add, with SiLU on the packer thread. Chunked to DEST_LIMIT because
+                // a slice can exceed one DEST window (slice_tiles is m_eff*HN_PAD/workers, e.g. 9 at
+                // HN_PAD 9); the bias index does not advance with in0_subblock, so each chunk is one
+                // bias call.
                 gg_buf.wait_front(slice_tiles);
                 for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
                     uint32_t w = slice_tiles - t0;
@@ -503,11 +476,9 @@ void kernel_main() {
 
         {
             MaybeDeviceZoneScope("compute_swiglu");
-            // The SwiGLU multiply on MY SLICE ONLY, straight into the CB the writer unicasts out
-            // of. Nothing here assembles the column's h block: the workers' finished slices tile
-            // the ROOT's cb_h_local as they LAND, so the gather IS the assembly — no landing CB
-            // and no root-side copy (measured worth 8.6 % and 52 224 B/core against the version
-            // that lands them separately and copies).
+            // SwiGLU on MY SLICE ONLY, straight into the CB the writer unicasts from. The workers'
+            // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
+            // landing CB and no root-side copy.
             if (slice_tiles) {
                 // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
                 // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
@@ -575,11 +546,9 @@ void kernel_main() {
                 }
                 wd_buf.pop_front(WD_RESIDENT_TILES);
             } else if constexpr (WD_PACKED) {
-                // Balanced hidden slices live contiguously in the resident W_down payload while
-                // the producer still publishes fixed HN_PAD*EC_MAX blocks for CB flow control.
-                // Keep the read pointer at the CB base, wait cumulatively for each published
-                // block, and address its packed rows explicitly. This path is only used by a
-                // short tail; full M blocks take the one-shot K=HID_T row schedule above.
+                // Balanced hidden slices sit contiguously in the resident W_down payload while the
+                // producer still publishes fixed HN_PAD*EC_MAX blocks for flow control: hold the read
+                // pointer at the CB base and address the packed rows explicitly. Short tails only.
                 constexpr uint32_t WD_BLOCK_TILES = HN_PAD * WD_EC_MAX;
                 constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * WD_BLOCK_TILES;
                 auto wait_packed_wd = [&](uint32_t block, uint32_t, bool) {

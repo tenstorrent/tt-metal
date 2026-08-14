@@ -87,7 +87,11 @@ SUPPORTED = {
     # The activation's dtype x layout cross, collapsed to the two real combinations.
     "input_format": ["bf16_rm", "bfp8_tile"],
     "weight_dtype": list(WEIGHT_DTYPES),
-    "emb": [6144, 7168],
+    # Embedding widths in the model family. `hidden` is NOT an axis — the op reads it from
+    # w_gate and accepts any tile-aligned value; 3584 is the one paired with hidden 3072.
+    # Whether a given (emb, hidden, weight_dtype) fits L1 is a runtime feasibility question
+    # (the device op refuses with its computed byte counts), not a universe question.
+    "emb": [3584, 6144, 7168],
     "capacity": [1024, 2048, 5120],
     "fill": ["balanced", "partial", "full", "empty"],
 }

@@ -18,7 +18,7 @@
 // RAW-DATAFLOW DEVIATIONS, each because no in-tree helper expresses the thing:
 //   * weight/activation/output DRAM traffic uses raw `noc_async_read` over a contiguous RUN of
 //     pages; the page-granular TensorAccessor helper issues one transaction per tile, which is
-//     transaction-rate-bound at ~5 GB/s/core. Address computation still goes through TensorAccessor.
+//     transaction-rate-bound rather than bandwidth-bound. Addresses still go via TensorAccessor.
 //   * the reduce-scatter transport is raw unicast + counting semaphores: mcast_pipe's SenderPipe is
 //     a rectangle multicast, while a gather leg is point-to-point with a different destination per
 //     peer, and the fan-in needs counting.
@@ -26,7 +26,6 @@
 //   * the token-count publish is a raw L1 mailbox because compute needs a scalar loop bound on ALL
 //     THREE TRISCs and `cb_wait_front` in a compute kernel is UNPACK-only.
 //
-// The measurement behind every choice here is in perf_experiments/DESIGN_NOTES.md.
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -51,10 +50,8 @@ using namespace dataflow_kernel_lib;
 // and give any new fast path its own zone. Budget: 8 records per M-block against a 125-per-core
 // cap, so a profiled run resolves per-stage time for m_blocks <= 15.
 
-// ---------------------------------------------------------------------------
 // Compile-time block model. Every trip count and CB increment below is derived
 // from these; none is a literal.
-// ---------------------------------------------------------------------------
 MOE_DECLARE_CT_ENUM(MOE_READER_CT_ARGS);
 
 constexpr uint32_t INPUT_FORMAT = CT(INPUT_FORMAT);  // 0 = bf16 RM sticks, 1 = bfp8 tiles
@@ -94,8 +91,8 @@ constexpr uint32_t COUNTS_PAGE = CT(COUNTS_PAGE);
 constexpr uint32_t IDX_PAGE = CT(IDX_PAGE);
 constexpr uint32_t W_TILE = CT(W_TILE_BYTES);  // weight tile stride: bfp4 576, bfp8 1088, bf16 2048
 constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
-// h is bfp8, like x, the output and the reduce operands. bfp4 h was measured and is a precision
-// failure (pcc=nan on 8 of 9 cells: the packer emits bfp8 into a bfp4 CB).
+// h is bfp8, like x, the output and the reduce operands. It cannot be bfp4: the packer emits bfp8,
+// so a bfp4 h CB would be decoded through the wrong format.
 constexpr uint32_t H_TILE = BFP8_TILE;
 constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
 
@@ -104,7 +101,7 @@ constexpr uint32_t WD_AHEAD = CT(WD_AHEAD);
 // Smallest legal `m_eff`. One host definition, identical in all three kernels — see m_tiles_eff().
 constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 // Cross-M-block weight residency: every weight read is a pure function of this core's
-// kstart/hstart/jstart with no M-block index, so b > 0 re-reads bytes still in the CB slot. The
+// kstart/hstart/out_col_start with no M-block index, so block_idx > 0 re-reads bytes still in the CB slot. The
 // reserve/push handshake is untouched; only the DRAM read loops are skipped.
 constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
@@ -125,19 +122,16 @@ constexpr uint32_t WG_SHARD_W = CT(WG_SHARD_W);
 constexpr uint32_t WD_SHARD_W = CT(WD_SHARD_W);
 constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
 
-// ---- SHARED-BUFFER REGION MODE (the fused extract / insert) ----
-// NEED_START: fetch start[global_expert_id] in phase 0 and publish it to the mailbox. Set when
-// EITHER side of the fusion is on, because the WRITER's half arrives through that mailbox and this
-// kernel is the only one that touches DRAM before it.
-// READ_X_AT_OFFSET: x is a SHARED buffer and this expert's tokens begin at start[global_id]
-// instead of row 0 — what ttnn::extract used to do, with no temp buffer and no DRAM round-trip.
+// SHARED-BUFFER REGION MODE (fused extract / insert). NEED_START: fetch start[global_expert_id] and
+// publish it to the mailbox — set when EITHER side is on, since the writer's half arrives that way.
+// READ_X_AT_OFFSET: this expert's tokens begin at start[global_id], not row 0.
 constexpr uint32_t NEED_START = CT(NEED_START);
 constexpr uint32_t READ_X_AT_OFFSET = CT(READ_X_AT_OFFSET);
 constexpr uint32_t START_PAGE = CT(START_PAGE);
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
-constexpr uint32_t cb_x_ready = CT(CB_X_STAGE);  // legacy host/CT name; carries completion, not x payload
+constexpr uint32_t cb_tilize_done = CT(CB_X_STAGE);  // the compute->reader per-row completion edge
 constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
 constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
 constexpr uint32_t cb_h = CT(CB_H);
@@ -165,11 +159,9 @@ constexpr bool kPrefetchNextX = true;
 constexpr uint32_t P2_READ_TRID = 14;
 constexpr uint32_t NEXT_X_TRID = 15;
 
-// Runtime-arg layout. The scalar block, then the whole COLUMN in virtual coordinates as KGROUPS
-// (vx, vy) pairs in ROW order: the invite fan-out and the up-gather destinations. Row `r` is at
-// index `r` on every core in the column, which is what makes "worker r owns tiles
-// [r*sl_a, (r+1)*sl_a)" agree grid-wide.
-// Two extra ownership pairs (ordinary and grouped) extend the scalar block from 15 to 17 words.
+// Runtime-arg layout: the 17-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
+// order — the invite fan-out and up-gather destinations. Row r at index r on every core is what
+// makes the slice ownership agree grid-wide.
 constexpr uint32_t RT_PEERS = 17;
 constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
 constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
@@ -181,22 +173,9 @@ constexpr auto xmc = McastArgs<CT_XMCAST, RT_XMCAST, HGROUPS>();
 constexpr auto hmc = McastArgs<CT_HMCAST, RT_HMCAST, HGROUPS * KGROUPS>();
 constexpr uint32_t RT_HGROUP_RECT = hmc.next_runtime_args_offset();
 
-// The h multicast. `H_MCAST_POSTED` selects the ONE wire property that differs between the two
-// variants — whether the payload write posts — and nothing else: the linked chain, the flag, the
-// exclude-source fan-out and the barrier structure below are shared, so an A/B on this define is
-// an A/B on posting alone.
-//
-// POSTED (1, default). The Flag path already takes no acked write barrier, but the write is
-// non-posted, so all NUM_CORES-1 destinations return write-acks. Posting removes that traffic and
-// nothing else: the VALID flag stays NON-posted and LINKED on the same VC, so it cannot overtake
-// the payload — which is the invariant mcast_pipe's Flag path already depends on today. Posting
-// changes whether acks come back, never the wire order. See DESIGN_NOTES.md §3.
-//
-// NON-POSTED (0). The conservative fallback, and what mcast_pipe's library path already does for
-// the x multicast: acks return and the payload write is tracked, so correctness no longer rests
-// on the linked-chain ordering guarantee alone. Keep this reachable — the posted variant's failure
-// mode would be a receiver reading a half-written slot, i.e. a SILENT PCC drift rather than a
-// hang, so the cheap way to test the ordering claim is to measure both.
+// POSTED (default) drops the NUM_CORES-1 payload write-acks and changes nothing else: the VALID
+// flag stays non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0
+// reachable — if that ordering ever fails a receiver reads a half-written slot, silently.
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
@@ -263,13 +242,11 @@ using BRD = moe_fused_swiglu::WeightRuns<WD_SHARD_W>;  // W_down
 // The W_down NoC split: WD_SPLIT eighths of every phase-2 K-block's hidden rows are read by the
 // WRITER on NOC_1; this kernel keeps the head rows. The writer takes the TAIL rows so both sides
 // read a contiguous run and the coalescing is unchanged on either side.
-inline uint32_t wd_rows_writer(uint32_t hn_r) { return (hn_r * WD_SPLIT) / 8; }
+inline uint32_t wd_rows_writer(uint32_t block_hn_rows) { return (block_hn_rows * WD_SPLIT) / 8; }
 
-// The cross-RISC completion gate. `noc_async_read_barrier()` is PER-RISC-V, so this kernel's
-// barrier proves nothing about the writer's share of the SAME K-blocks; publishing without this
-// hands the `down` matmul a half-written weight tile. `wd_done` is this kernel's running total of
-// published blocks and the counter is the writer's of completed ones — both monotone, so waiting
-// for `wd_done + n` before pushing n blocks is the tightest legal gate.
+// Cross-RISC completion gate. `noc_async_read_barrier()` is PER-RISC-V, so it proves nothing about
+// the writer's share of the SAME K-blocks — publishing without this hands `down` a half-written
+// tile. Both counters are monotone, so `wd_done + n` is the tightest legal gate.
 inline void wd_split_gate(uint32_t& wd_done, uint32_t n) {
     wd_done += n;
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT)), wd_done);
@@ -282,12 +259,12 @@ void kernel_main() {
     const uint32_t w_down_addr = get_arg_val<uint32_t>(3);
     const uint32_t counts_addr = get_arg_val<uint32_t>(4);
     const uint32_t idx_addr = get_arg_val<uint32_t>(5);
-    const uint32_t kr = get_arg_val<uint32_t>(6);      // real K tiles this grid ROW owns
-    const uint32_t kstart = get_arg_val<uint32_t>(7);  // first emb tile index this row owns
-    const uint32_t hstart = get_arg_val<uint32_t>(8);  // first hidden linear index this COLUMN owns
-    const uint32_t hn = get_arg_val<uint32_t>(9);      // real hidden tiles this column owns
-    const uint32_t ec = get_arg_val<uint32_t>(10);     // output emb tiles this CORE owns
-    const uint32_t jstart = get_arg_val<uint32_t>(11);
+    const uint32_t kr_rows = get_arg_val<uint32_t>(6);  // real K tiles this grid ROW owns
+    const uint32_t kstart = get_arg_val<uint32_t>(7);   // first emb tile index this row owns
+    const uint32_t hstart = get_arg_val<uint32_t>(8);   // first hidden linear index this COLUMN owns
+    const uint32_t hn_cols = get_arg_val<uint32_t>(9);  // real hidden tiles this column owns
+    const uint32_t ec = get_arg_val<uint32_t>(10);      // output emb tiles this CORE owns
+    const uint32_t out_col_start = get_arg_val<uint32_t>(11);
     const uint32_t ec_group = get_arg_val<uint32_t>(12);  // paired-row output ownership
     const uint32_t jstart_group = get_arg_val<uint32_t>(13);
     const uint32_t my_col = get_arg_val<uint32_t>(14);
@@ -310,36 +287,32 @@ void kernel_main() {
     const auto start_acc = TensorAccessor(start_args, start_addr, START_PAGE);
     const uint32_t wd_base = get_write_ptr(cb_w_down);
 
-    // Program-local runtime-count mailbox. The compute and writer mailbox CBs
-    // have independent FIFO state but alias CB_X_STAGE's 64-byte allocation.
-    // CB_X_STAGE itself is not published here: it remains exclusively the
-    // compute->reader per-row tilization edge, so its event cannot be consumed
-    // by two different readers at startup.
+    // The compute and writer mailbox CBs have independent FIFO state but alias CB_X_STAGE's 64 B
+    // allocation. CB_X_STAGE itself is NOT published here — it stays the compute->reader per-row
+    // tilization edge, so its event cannot be consumed by two readers at startup.
     cb_reserve_back(cb_mailbox_compute, 1);
     cb_reserve_back(cb_mailbox_writer, 1);
     const uint32_t mailbox_addr = get_write_ptr(cb_mailbox_compute);
-    ASSERT(mailbox_addr == get_write_ptr(cb_x_ready));
+    ASSERT(mailbox_addr == get_write_ptr(cb_tilize_done));
     ASSERT(mailbox_addr == get_write_ptr(cb_mailbox_writer));
     volatile tt_l1_ptr uint32_t* mailbox_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
     mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = 0;
     mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] = 0;
 
-    // -----------------------------------------------------------------------
     // Phase 0 — the device-resident count. count = counts[ idx[local_expert_id] ].
     // Two one-page reads into unpushed scratch CBs, read back through a volatile L1 pointer.
-    // -----------------------------------------------------------------------
     const uint32_t l1_idx = get_write_ptr(cb_idx_scratch);
     const uint32_t l1_cnt = get_write_ptr(cb_counts_scratch);
     // Both accessors fetch page zero into distinct scratch pages.  Only the L1 lookup below
-    // depends on `g`; the counts PAGE address does not, so issue the two independent DRAM reads
+    // depends on `global_expert_id`; the counts PAGE address does not, so issue the two independent DRAM reads
     // together and pay one completion round-trip.  The optional region-start read remains later:
     // it deliberately reuses l1_cnt after `count` is extracted.
     noc_async_read(idx_acc.get_noc_addr(0), l1_idx, IDX_PAGE);
     noc_async_read(cnt_acc.get_noc_addr(0), l1_cnt, COUNTS_PAGE);
     noc_async_read_barrier();
     invalidate_l1_cache();
-    const uint32_t g = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[LOCAL_EXPERT_ID];
-    const uint32_t count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[g];
+    const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[LOCAL_EXPERT_ID];
+    const uint32_t count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id];
 
     uint32_t m_t = (count + TILE_H - 1) / TILE_H;
     if (m_t > M_T_MAX) {
@@ -347,27 +320,24 @@ void kernel_main() {
     }
     const uint32_t m_blocks = (m_t + M_BLOCK - 1) / M_BLOCK;
     // One dispatch owns one resident W_down payload layout. Group only when every block is full,
-    // so a ragged tail can never switch jstart/ec underneath the weights loaded at b == 0.
+    // so a ragged tail can never switch out_col_start/ec underneath the weights loaded at block_idx == 0.
     const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
-    const uint32_t wd_ec = wd_mgroup ? ec_group : ec;
-    const uint32_t wd_jstart = wd_mgroup ? jstart_group : jstart;
+    const uint32_t wd_out_width = wd_mgroup ? ec_group : ec;
+    const uint32_t wd_jstart = wd_mgroup ? jstart_group : out_col_start;
 
-    // This expert's REGION BASE in a shared x / output buffer, in token rows. Read over
-    // cb_counts_scratch's page, which is dead the moment `count` is extracted above and is exactly
-    // the right size: `start` and `counts` are both one uint32 entry per GLOBAL expert and the host
-    // validates the two lengths equal, so the fused mode costs zero extra L1 in an op whose L1
-    // budget is a hard guard. Nothing reads counts after this point (compute and the writer take
-    // the count from the mailbox below).
+    // This expert's REGION BASE in a shared buffer, in token rows. Reuses cb_counts_scratch's page,
+    // dead once `count` is extracted and exactly the right size (host validates equal lengths), so
+    // the fused mode costs zero extra L1.
     uint32_t start_row = 0;
     if constexpr (NEED_START) {
         const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
         noc_async_read(start_acc.get_noc_addr(0), l1_start, START_PAGE);
         noc_async_read_barrier();
         invalidate_l1_cache();
-        start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[g];
+        start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
         // Region bases are tile-aligned by construction (the dispatch lays experts out in whole
         // tile-rows) and every consumer floors by TILE_H, so a misaligned base would silently
-        // shift this expert's rows. Caught here under --dev rather than as a PCC mystery.
+        // shift this expert's rows rather than fail.
         ASSERT(start_row % TILE_H == 0);
     }
 
@@ -381,10 +351,8 @@ void kernel_main() {
     const uint32_t x_stick_base = READ_X_AT_OFFSET ? start_row : 0;
     const uint32_t x_tile_base = READ_X_AT_OFFSET ? (start_row / TILE_H) * EMB_T : 0;
 
-    // -----------------------------------------------------------------------
     // Collective pipes. Receivers are constructed before any ack, so their local flag init is
     // race-free (see mcast_pipe.hpp SEMAPHORE LIFECYCLE).
-    // -----------------------------------------------------------------------
     Noc noc;
     auto x_recv = xmc.receiver(noc);
     auto x_send = xmc.sender(noc);
@@ -392,7 +360,7 @@ void kernel_main() {
     const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
     volatile tt_l1_ptr uint32_t* sem_data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_data);
     uint32_t data_arrivals = 0;
-    // PERF 2 — the h-slice gather counter (scatter path, roots only). Monotone and cumulative.
+    // The h-slice gather counter (scatter path, roots only). Monotone and cumulative.
     volatile tt_l1_ptr uint32_t* sem_h_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE)));
     uint32_t h_arrivals = 0;
@@ -411,7 +379,7 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t WG_BLOCK_TILES = KR_PAD * HN_PAD;  // one gate weight K-block (num_k_blocks == 1)
-    // PERF 3 — the N-chunk the weight stream is published in. GU_CHUNKS == 1 restores the whole-block
+    // The N-chunk the weight stream is published in. GU_CHUNKS == 1 restores the whole-block
     // push byte for byte (the chunk IS the block, and its row stride is HN_PAD again).
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
     constexpr uint32_t WG_CHUNK_TILES = KR_PAD * GU_CHUNK_W;
@@ -422,10 +390,9 @@ void kernel_main() {
     // On the bf16 path `dst` is one cb_x_in stick-row slot; on the tiled path it is the resident
     // cb_x_tiles row. Completion and CB publication stay with the caller.
     //
-    // THE ONE PLACE x MEETS DRAM, which is why the fused extract is two additions here and nothing
-    // anywhere else: `row` is a REGION-RELATIVE tile-row (callers clamp it against M_T_MAX, this
-    // expert's region height, so clamp-then-rebase composes for free) and the base below moves the
-    // whole read into this expert's slice of a shared buffer.
+    // THE ONE PLACE x MEETS DRAM, which is why the fused extract is two additions and nothing else:
+    // `row` is REGION-RELATIVE (callers clamp against M_T_MAX, so clamp-then-rebase composes) and
+    // the base moves the read into this expert's slice.
     auto issue_x_row = [&](uint32_t row, uint32_t dst) {
 #ifndef ABLATE_NO_XSTAGE_XFER
         if constexpr (INPUT_FORMAT == 0) {
@@ -434,10 +401,10 @@ void kernel_main() {
                 noc_async_read(
                     x_acc.get_noc_addr(x_stick_base + row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
                     dst + s * X_SLICE,
-                    kr * BF16_TILE_ROW_BYTES);
+                    kr_rows * BF16_TILE_ROW_BYTES);
             }
         } else {
-            for (uint32_t i = 0; i < kr; ++i) {
+            for (uint32_t i = 0; i < kr_rows; ++i) {
                 noc_async_read(
                     x_acc.get_noc_addr(x_tile_base + row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
             }
@@ -455,11 +422,11 @@ void kernel_main() {
 
     // `count == 0` -> m_blocks == 0 on every core: no CB traffic, no collective round, no
     // semaphore. Uniform across the grid, so it cannot hang.
-    for (uint32_t b = 0; b < m_blocks; ++b) {
+    for (uint32_t block_idx = 0; block_idx < m_blocks; ++block_idx) {
         // The RUNTIME token tile-rows this block actually works on. Identical on every core (it is
         // a pure function of the same mailbox words), which is what keeps the three collectives'
         // round counts and landing addresses in lockstep across the grid.
-        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
         const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t x_slot_tiles = m_eff * KR_PAD;   // resident in0 block, one slot
         const uint32_t h_block_tiles = m_eff * HN_PAD;  // one phase-2 K-block of h
@@ -478,34 +445,31 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
 
-        // REFINEMENT 3 — the weight DRAM read happens on M-block 0 only when the block is resident.
-        // `cb_pop_front` advances a read pointer without touching the bytes, and each weight CB has
-        // a single producer, so the slot a later M-block re-reserves still holds what block 0 read
-        // into it. Everything else — reserve, push, barrier, trip counts — is unchanged, which is
-        // what keeps compute bit-for-bit identical.
-        const bool read_wg = (b == 0) || (W_RESIDENT == 0);
-        const bool read_wd = (b == 0) || (WD_RESIDENT == 0);
+        // Resident weights read DRAM on M-block 0 only: `cb_pop_front` advances a read pointer
+        // without touching bytes, and each weight CB has a single producer, so a later block's slot
+        // still holds block 0's data. Reserve/push/barrier/trip counts are unchanged.
+        const bool read_wg = (block_idx == 0) || (W_RESIDENT == 0);
+        const bool read_wd = (block_idx == 0) || (WD_RESIDENT == 0);
 
         // ---- Phase 1a: stage x, then multicast it along the grid row ----
         // cb_x_tiles is ONE slot, so its write pointer is the same L1 address on every core in the
-        // row — which mcast_pipe requires of the landing address. W_gate is issued before the x
-        // chain and published after it as before; compute starts early on W_up, whose independent
-        // writer stream is already live while these rounds run.
+        // row — what mcast_pipe requires of the landing address. W_gate is issued before the chain
+        // and published after it.
         auto issue_wg_chunk = [&](uint32_t c) {
             cb_reserve_back(cb_w_gate, WG_CHUNK_TILES);
             MaybeDeviceZoneScope("reader_wg_issue");
             const uint32_t wg_wp = get_write_ptr(cb_w_gate);
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
             moe_fused_swiglu::read_weight_chunk<BRG>(
-                wg_acc, read_wg, c, GU_CHUNK_W, kr, kstart, hstart, hn, HID_T, wg_wp, W_TILE);
+                wg_acc, read_wg, c, GU_CHUNK_W, kr_rows, kstart, hstart, hn_cols, HID_T, wg_wp, W_TILE);
 #else
             (void)wg_wp;
 #endif
         };
         // WHERE the tail chunks are issued is the whole result: issuing all GU_CHUNKS here
-        // measured +17 / +6 / +5 %, because the x staging prologue's blanket read barrier is
-        // all-or-nothing and drained the whole weight block before a single stick was tilized.
-        // Chunk 0 here; chunks 1..N-1 after that barrier. See DESIGN_NOTES.md §4.
+        // matters: the x staging prologue's read barrier is all-or-nothing, so issuing every chunk
+        // up front drains the whole weight block before a single stick is tilized.
+        // Chunk 0 here; chunks 1..N-1 after that barrier.
 
         const bool staged_early = x_prefetched;
         x_prefetched = false;
@@ -521,19 +485,18 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("reader_xstage");
             // WHICH tile-row this column stages, and in WHAT ORDER its sticks are read. The walk
-            // starts at `(my_col + my_row) % TILE_H` and wraps: the one rotation that moves which
-            // BANK a core is on at a given instant, worth ~0.5 %. Rotating which COLUMN injects
-            // instead was a measured null, twice. See DESIGN_NOTES.md §4.
+            // starts at `(my_col + my_row) % TILE_H` and wraps, so cores in a row are spread across
+            // DRAM banks at any instant instead of contending for one.
             const uint32_t t_first = moe_fused_swiglu::inject_first(my_col);
             for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
                 const uint32_t dst = x_base + t * X_ROW_BYTES;
-                uint32_t row = b * M_BLOCK + t;
+                uint32_t row = block_idx * M_BLOCK + t;
                 if (row >= M_T_MAX) {
                     row = M_T_MAX - 1;  // rows past the sized region are UNDEFINED; stay in bounds
                 }
                 if constexpr (INPUT_FORMAT == 0) {
                     // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks. Compute tilizes
-                    // it DIRECTLY into `dst`; cb_x_ready is only a one-page completion channel, so
+                    // it DIRECTLY into `dst`; cb_tilize_done is only a one-page completion channel, so
                     // the reader remains the sole owner of cb_x_tiles' push/write-pointer state.
                     if (!staged_early) {
                         cb_reserve_back(cb_x_in, TILE_H);
@@ -542,8 +505,8 @@ void kernel_main() {
                         cb_push_back(cb_x_in, TILE_H);
                     }
 
-                    cb_wait_front(cb_x_ready, 1);
-                    cb_pop_front(cb_x_ready, 1);
+                    cb_wait_front(cb_tilize_done, 1);
+                    cb_pop_front(cb_tilize_done, 1);
                 } else {
                     // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
                     if (!staged_early) {
@@ -554,11 +517,11 @@ void kernel_main() {
             }
         }
 
-        // PERF 3 — this core's `x` is off DRAM. Release the writer's W_up stream (XPRIO). A plain
+        // This core's `x` is off DRAM. Release the writer's W_up stream (XPRIO). A plain
         // volatile store, not a NoC semaphore op: producer and consumer are two RISC-Vs on the SAME
         // core sharing one L1, and this word has exactly one writer. Monotone, so no reset.
         if constexpr (XPRIO) {
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = b + 1;
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = block_idx + 1;
         }
 
         // The staging prologue's barriers are behind us, so this prefetch has the multicast chain
@@ -566,21 +529,16 @@ void kernel_main() {
         issue_wg_chunk(0);
 
         // ---- x multicast chain ----
-        // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and half
-        // the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles' write
-        // pointer stays block-aligned and identical on every core in the row (which mcast_pipe
-        // requires of the landing address). A full M block stays wholly reserved but publishes each
-        // completed row separately; smaller blocks retain the cheaper one-push handoff.
+        // m_eff rounds, not M_BLOCK: at count 128 that is half the handshake chain and half the
+        // staged bytes. m_eff divides M_BLOCK, so the write pointer stays block-aligned and equal on
+        // every core in the row. Full blocks publish per row; smaller ones keep the one-push handoff.
         {
             MaybeDeviceZoneScope("reader_xmcast");
             for (uint32_t t = 0; t < m_eff; ++t) {
 #ifndef ABLATE_NO_X_XFER  // /perf-measure: drop the x transport, keep cb_x_tiles' reserve/push
                 if constexpr (xmc.active) {
-                    // PERF 13 — round `t` carries tile-row `t` (unchanged); only the LANE that
-                    // sends it is skewed by the grid row, which is what turns a round's injector set
-                    // from a column into a diagonal. Every core in the row derives the same lane
-                    // from the same `my_row`, so sender and receivers agree by construction, and the
-                    // lane value IS the sender's column so the coord table needs no change.
+                    // Round `t` carries tile-row `t`, injected by column `t % HGROUPS`. The lane
+                    // value IS the sender's column, so the coord table needs no indirection.
                     const uint32_t round = t % HGROUPS;
                     if (round == my_col) {
                         x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
@@ -615,12 +573,11 @@ void kernel_main() {
             }
         }
 
-        // -------------------------------------------------------------------
         // Phase 1b' — W_down for ALL WD_AHEAD phase-2 K-blocks, ISSUED as one batch, so the
         // reads land under the reduce rendezvous instead of in front of the round that needs them.
         constexpr uint32_t WD_BLOCK_TILES = HN_PAD * WD_EC_MAX;
         constexpr bool CAN_PREFETCH_X = HGROUPS >= M_BLOCK;
-        const bool prefetch_next_x = kPrefetchNextX && CAN_PREFETCH_X && (b + 1 < m_blocks);
+        const bool prefetch_next_x = kPrefetchNextX && CAN_PREFETCH_X && (block_idx + 1 < m_blocks);
         if (prefetch_next_x) {
             // Transaction id zero is the legacy/untagged stream and cannot be waited through the
             // scoped barrier on this architecture. Tag phase 2 before its first W_down issue.
@@ -630,11 +587,11 @@ void kernel_main() {
             const uint32_t nblocks = wd_mrow ? HGROUPS : WD_AHEAD;
             cb_reserve_back(cb_w_down, nblocks * WD_BLOCK_TILES);
             MaybeDeviceZoneScope("reader_wd_issue");
-            const uint32_t wp = get_write_ptr(cb_w_down);
-            (void)wp;
+            const uint32_t write_ptr = get_write_ptr(cb_w_down);
+            (void)write_ptr;
             for (uint32_t r = 0; r < nblocks; ++r) {
                 const uint32_t hbase = moe_fused_swiglu::hidden_block_start(r, HID_T, HGROUPS, HN_PAD);
-                const uint32_t hn_r = moe_fused_swiglu::hidden_block_rows(r, HID_T, HGROUPS, HN_PAD);
+                const uint32_t block_hn_rows = moe_fused_swiglu::hidden_block_rows(r, HID_T, HGROUPS, HN_PAD);
 #ifndef ABLATE_NO_W_XFER
                 // The writer takes the TAIL rows on NOC_1; this is the head.
                 if (read_wd) {
@@ -642,12 +599,12 @@ void kernel_main() {
                         wd_acc,
                         hbase,
                         0,
-                        hn_r - wd_rows_writer(hn_r),
+                        block_hn_rows - wd_rows_writer(block_hn_rows),
                         wd_jstart,
-                        wd_ec,
+                        wd_out_width,
                         WD_EC_MAX,
                         EMB_T,
-                        WD_PACKED ? wd_base + hbase * WD_EC_MAX * W_TILE : wp + r * WD_BLOCK_TILES * W_TILE,
+                        WD_PACKED ? wd_base + hbase * WD_EC_MAX * W_TILE : write_ptr + r * WD_BLOCK_TILES * W_TILE,
                         W_TILE);
                 }
 #endif
@@ -655,12 +612,12 @@ void kernel_main() {
         };
         issue_wd_batch();
 
-        // Start block b+1's activation read before block b's reduce + phase 2. At the supported
+        // Start block_idx+1's activation read before block_idx's reduce + phase 2. At the supported
         // grids HGROUPS >= M_BLOCK, so each core injects at most one row and the existing one-row
         // cb_x_in is sufficient. Smaller grids retain the ordinary next-block prologue.
         bool prefetch_has_local_row = false;
         if (prefetch_next_x) {
-            const uint32_t next_m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b + 1, M_BLOCK, M_EFF_MIN);
+            const uint32_t next_m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx + 1, M_BLOCK, M_EFF_MIN);
             uint32_t next_x_base = 0;
             if constexpr (PREFETCH_RESERVES_X_SLOT) {
                 cb_reserve_back(cb_x_tiles, next_m_eff * KR_PAD);
@@ -669,7 +626,7 @@ void kernel_main() {
             const uint32_t t = moe_fused_swiglu::inject_first(my_col);
             if (t < next_m_eff) {
                 prefetch_has_local_row = true;
-                uint32_t row = (b + 1) * M_BLOCK + t;
+                uint32_t row = (block_idx + 1) * M_BLOCK + t;
                 if (row >= M_T_MAX) {
                     row = M_T_MAX - 1;
                 }
@@ -685,30 +642,27 @@ void kernel_main() {
         }
 
         // ---- Phase 1c: the cross-column reduce, RECEIVER side ----
-        // SEM_GO is the invite — the flow control that stops a contributor overwriting a landing
-        // slot compute has not consumed. MY SLICE comes from the ONE shared plan
-        // (moe_fused_swiglu_common.hpp): `slice_workers` cores own `slice_tiles` each, identical
-        // on every core and every RISC-V.
-        const uint32_t sl_w = moe_fused_swiglu::slice_workers(h_block_tiles, KGROUPS);
-        const uint32_t sl_a = (sl_w != 0) ? (h_block_tiles / sl_w) : 0;  // uniform slice size
-        const uint32_t slice_tiles = (my_row < sl_w) ? sl_a : 0;         // 0 = an idle core
+        // SEM_GO is the invite: the flow control stopping a contributor from overwriting a landing
+        // slot compute has not consumed. The slice comes from the one shared plan in common.hpp.
+        const uint32_t slice_worker_count = moe_fused_swiglu::slice_workers(h_block_tiles, KGROUPS);
+        const uint32_t slice_tiles_each =
+            (slice_worker_count != 0) ? (h_block_tiles / slice_worker_count) : 0;           // uniform slice size
+        const uint32_t slice_tiles = (my_row < slice_worker_count) ? slice_tiles_each : 0;  // 0 = an idle core
         MaybeDeviceZoneScope("reader_reduce");
         // Reserve the landing CBs WHOLE first, THEN invite the whole column, then wait for every
         // contributor and push WHOLE. This is also cb_h_local's flow control, transitively: my
-        // invite for block b+1 is issued after my phase 2 of block b has read it, and no worker's
-        // h-slice send for b+1 can precede this invite. So the h landing needs no second handshake.
+        // invite for block_idx+1 is issued after my phase 2 of block_idx has read it, and no worker's
+        // h-slice send for block_idx+1 can precede this invite. So the h landing needs no second handshake.
         if (slice_tiles) {
             cb_reserve_back(cb_gather_gate, GATHER_PAGES);
             cb_reserve_back(cb_gather_up, GATHER_PAGES);
         }
-        // cb_gather_gate aliases cb_h_slice and cb_out_tiles for BFP8 output. Reserving changes
-        // only this logical view's FIFO state, but the invite below authorises PEERS to write its
-        // physical SRAM. Block b therefore cannot send the invite until this core's writer has
-        // drained block b-1's output DMA from that same SRAM. This target-local edge is required:
-        // a peer's own writer progress says nothing about this core's outstanding output read.
+        // cb_gather_gate aliases cb_h_slice and cb_out_tiles at bfp8 output. Reserving touches only
+        // this view's FIFO state, but the invite authorises PEERS to write the shared physical SRAM
+        // — so block_idx must wait for this core's writer to drain block_idx-1's output DMA.
         if constexpr (PHASE_CB_ALIAS) {
-            if (b != 0) {
-                moe_fused_swiglu::sem_wait_min(SEM_PHASE_FREE, b);
+            if (block_idx != 0) {
+                moe_fused_swiglu::sem_wait_min(SEM_PHASE_FREE, block_idx);
             }
         }
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
@@ -726,26 +680,34 @@ void kernel_main() {
 #ifndef ABLATE_NO_REDUCE_XFER
             // The UP half of the column all-to-all, on NOC_0; the writer carries the GATE half.
             // Wait for the WHOLE column's invites first, exactly as the writer does: every core
-            // invites once per peer per M-block, so (b+1)*KGROUPS is the exact total.
-            moe_fused_swiglu::sem_wait_min(SEM_GO, (b + 1) * KGROUPS);
+            // invites once per peer per M-block, so (block_idx+1)*KGROUPS is the exact total.
+            moe_fused_swiglu::sem_wait_min(SEM_GO, (block_idx + 1) * KGROUPS);
             if constexpr (SCATTER_ONE_SIGNAL) {
-                moe_fused_swiglu::scatter_payload(RT_PEERS, cb_up_acc, cb_gather_up, sl_w, sl_a, my_row, BFP8_TILE);
+                moe_fused_swiglu::scatter_payload(
+                    RT_PEERS, cb_up_acc, cb_gather_up, slice_worker_count, slice_tiles_each, my_row, BFP8_TILE);
                 // The payload barrier in scatter_payload is the data-before-publish proof.  The
                 // writer invalidates while polling this monotone mailbox word, then signals the
                 // destination only after its independent gate payload has landed too.
                 asm volatile("fence" ::: "memory");
-                mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] = b + 1;
+                mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] = block_idx + 1;
             } else {
                 moe_fused_swiglu::scatter_leg(
-                    RT_PEERS, cb_up_acc, cb_gather_up, SEM_DATA, sl_w, sl_a, my_row, BFP8_TILE);
+                    RT_PEERS,
+                    cb_up_acc,
+                    cb_gather_up,
+                    SEM_DATA,
+                    slice_worker_count,
+                    slice_tiles_each,
+                    my_row,
+                    BFP8_TILE);
             }
 #endif
             cb_pop_front(cb_up_acc, h_block_tiles);
         }
         if (slice_tiles) {
 #ifndef ABLATE_NO_REDUCE_XFER
-            // Ordinarily there is one signal per payload.  The experimental path retains the two
-            // concurrent payloads but has their source writer signal once after both have landed.
+            // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent
+            // but has the source writer signal once, after both have landed.
             data_arrivals += (SCATTER_ONE_SIGNAL ? 1 : 2) * KGROUPS;
             noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
 #endif
@@ -754,10 +716,9 @@ void kernel_main() {
         }
 
         // ---- Phase 2: broadcast h and consume W_down ----
-        // Full M-blocks run one whole-H broadcast per M row against the complete resident W_down
-        // shard. Ragged blocks retain the hidden-slice rounds and their deferred read barrier:
-        // each W_down read lands under the next grid-wide multicast rather than being drained on
-        // the spot. `wd_pending` carries that issued-but-unpublished block between rounds.
+        // Full M-blocks broadcast whole H per M row against the resident W_down shard. Ragged blocks
+        // keep the hidden-slice rounds and their deferred barrier, so each W_down read lands under
+        // the next multicast; `wd_pending` carries the issued-but-unpublished block between rounds.
         {
             MaybeDeviceZoneScope("reader_wd_wait");
             if (prefetch_next_x) {
@@ -771,16 +732,16 @@ void kernel_main() {
             }
         }
         cb_push_back(cb_w_down, (wd_mrow ? HGROUPS : WD_AHEAD) * WD_BLOCK_TILES);
-        // PERF 2 — on the scatter path this column's h block is ASSEMBLED IN cb_h_local BY THE
+        // On the scatter path this column's h block is ASSEMBLED IN cb_h_local BY THE
         // WORKERS' NoC WRITES, not packed by compute, so the root's handshake is the SEM_HSLICE
-        // counter rather than a CB front. `sl_w` slices land per M-block; the counter is monotone and
+        // counter rather than a CB front. `slice_worker_count` slices land per M-block; the counter is monotone and
         // cumulative, like every other semaphore in this op.
         if (wd_mrow) {
             if (is_row_agg) {
                 h_arrivals += HGROUPS;
             }
         } else if (is_root) {
-            h_arrivals += sl_w;
+            h_arrivals += slice_worker_count;
         }
         if (prefetch_next_x) {
             // Every read issued from here to the end of phase 2 is either a W_down head or the
@@ -832,7 +793,7 @@ void kernel_main() {
                     writer_owns_send = false;
 #endif
                     const uint32_t slot =
-                        wd_mgroup ? ((b * MGROUP_ROWS + lr) % DEPTH_H) : ((b * KGROUPS + r) % DEPTH_H);
+                        wd_mgroup ? ((block_idx * MGROUP_ROWS + lr) % DEPTH_H) : ((block_idx * KGROUPS + r) % DEPTH_H);
                     if (i_send && !writer_owns_send) {
 #ifndef ABLATE_NO_REDUCE_XFER
                         noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
@@ -854,7 +815,7 @@ void kernel_main() {
                         // reader-owned sender.  The writer publishes only after its NoC1 self-copy
                         // and linked payload+flag chain have flushed, so this is both local-data
                         // readiness and source-slot reuse safety.
-                        while (mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] < b + 1) {
+                        while (mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] < block_idx + 1) {
                             invalidate_l1_cache();
                         }
                     } else {
@@ -878,11 +839,10 @@ void kernel_main() {
                 }
             } else {
                 bool wd_pending = false;
-                // HACK_AHEAD — how many rounds' senders this core acks in one go. The all-gather costs
-                // 3.12 us of FIXED per-round rendezvous against 2.06 us of work, so acking ahead is the
-                // round-cost lever; legal only because the VALID cells are per-slot. The real bound is
-                // runtime (`blocks_cap = DEPTH_H * M_BLOCK / m_eff`) because m_eff is, so it is clamped
-                // here rather than host-side. See DESIGN_NOTES.md §3.
+                // HACK_AHEAD — rounds' senders acked in one go. The all-gather's per-round rendezvous
+                // is a fixed cost that exceeds the work it guards, so amortizing it over several
+                // rounds is the lever; legal only because the VALID cells are per-slot. Clamped here
+                // because m_eff is runtime.
                 const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
                 uint32_t hack_ahead = HACK_AHEAD;
                 if (hack_ahead > blocks_cap - 1) {
@@ -933,7 +893,7 @@ void kernel_main() {
                         // Self-copy cb_h_local -> this round's cb_h slot, so the send below is
                         // `src == dst` and therefore EXCLUDE-source. A src != dst send is a LOOPBACK
                         // multicast whose rotating-sender flag reset races this core's own in-flight
-                        // VALID: measured as PCC drifting 0.959-0.979 run to run on a fixed input.
+                        // VALID, so the slot can be read before the write lands.
                         // cb_h_local needs no CB front — the workers' NoC writes assemble it.
 #ifndef ABLATE_NO_REDUCE_XFER  // the workers' sends are stubbed too, so this wait must go with them
                         noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
@@ -966,7 +926,7 @@ void kernel_main() {
                                 h_free_expected);
                             // `src == dst`, so exclude-source: a src != dst send is a LOOPBACK
                             // multicast whose flag reset races this core's own in-flight VALID.
-                            h_slot_send_posted((b * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
+                            h_slot_send_posted((block_idx * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
                         }
 #endif
                     } else {
@@ -978,15 +938,16 @@ void kernel_main() {
                         // ReceiverPipe because that class's ctor sets the cell INVALID and would clobber
                         // a VALID a sender running ahead had already broadcast.
                         if constexpr (hmc.active) {
-                            volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + ((b * HGROUPS + r) % DEPTH_H))));
+                            volatile tt_l1_ptr uint32_t* hf =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(
+                                    get_semaphore(SEM_H_RDY_BASE + ((block_idx * HGROUPS + r) % DEPTH_H))));
                             MaybeDeviceZoneScope("p2_hwait");
                             noc_semaphore_wait(hf, VALID);
                             noc_semaphore_set(hf, INVALID);
                         }
 #endif
                         if (wd_pending) {
-                            // PERF 15 — the REAL per-round W_down wait. `reader_wd_wait` covers only the
+                            // The REAL per-round W_down wait. `reader_wd_wait` covers only the
                             // WD_AHEAD=1 prologue block (1 of 11) and I misread it as "down never waits
                             // for its weights"; this is every other round, on the non-sending cores.
                             MaybeDeviceZoneScope("p2_wdbar");
@@ -1006,9 +967,9 @@ void kernel_main() {
                     const uint32_t pre = r + WD_AHEAD;
                     if (pre < HGROUPS) {
                         const uint32_t hbase = moe_fused_swiglu::hidden_block_start(pre, HID_T, HGROUPS, HN_PAD);
-                        const uint32_t hn_r = moe_fused_swiglu::hidden_block_rows(pre, HID_T, HGROUPS, HN_PAD);
+                        const uint32_t block_hn_rows = moe_fused_swiglu::hidden_block_rows(pre, HID_T, HGROUPS, HN_PAD);
                         cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
-                        const uint32_t wp = get_write_ptr(cb_w_down);
+                        const uint32_t write_ptr = get_write_ptr(cb_w_down);
 #ifndef ABLATE_NO_W_XFER
                         // The writer already has the tail rows in flight on NOC_1 (it issued every
                         // K-block as one batch back in phase 1), so this reads only the head.
@@ -1017,16 +978,16 @@ void kernel_main() {
                                 wd_acc,
                                 hbase,
                                 0,
-                                hn_r - wd_rows_writer(hn_r),
+                                block_hn_rows - wd_rows_writer(block_hn_rows),
                                 wd_jstart,
-                                wd_ec,
+                                wd_out_width,
                                 WD_EC_MAX,
                                 EMB_T,
-                                WD_PACKED ? wd_base + hbase * WD_EC_MAX * W_TILE : wp,
+                                WD_PACKED ? wd_base + hbase * WD_EC_MAX * W_TILE : write_ptr,
                                 W_TILE);
                         }
 #else
-                        (void)wp;
+                        (void)write_ptr;
 #endif
                         wd_pending = true;
                     }
