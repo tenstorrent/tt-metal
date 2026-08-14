@@ -247,7 +247,7 @@ Three numbers from the same configuration, reconciled
 | | value | source |
 | --- | --- | --- |
 | roofline | **8.829 ms/token** | 4,520,382,464 B/device ÷ 512 GB/s |
-| device-time decode | **22.838 ms/token** | 39 x 431.48 µs + 13 x 409.16 µs + 691.07 µs |
+| device-time decode | **22.908 ms/token** | 39 x 431.578 µs + 13 x 414.279 µs + 690.973 µs |
 | end-to-end token-out | **23.298 ms/token** | `evidence_perf.json`, min of 3 |
 | end-to-end logits-only | **22.656 ms/token** | same run, decode trace alone |
 
@@ -266,18 +266,35 @@ construction. What it establishes is that one peak is assumed for every row, and
 GB/s is the number the tool's own model uses for this part.
 
 **The roofline fraction is 37.9 %, and the reason is structural rather than a missing
-knob.** Of the 431.48 µs sliding layer (the 1122.551 µs window minus the 691.07 µs
+knob.** Of the 431.578 µs sliding layer (the 1122.551 µs window minus the 690.973 µs
 terminal term), **252.41 µs is the six DRAM-sharded projections** — `wqkv` 21.577,
 `o_proj` 21.368, `attn_gate` 19.195 and MLP gate/up/down 63.208 / 63.393 / 63.665 — and
-the remaining **179.07 µs is everything else**: 8.7 µs hidden-size RMSNorms and 4.6 µs
+the remaining **179.17 µs is everything else**: 8.7 µs hidden-size RMSNorms and 4.6 µs
 per-head norms, a 15.136 µs `SdpaDecode`, two reduce-scatter + all-gather pairs at
 54.886 µs together, 3.7–3.9 µs paged cache updates, 2.7–2.8 µs rotary applications, head
 create/concat, and the layout conversions. None of that moves DRAM bytes for the roofline
 to count, and the projections themselves run at 52.27–77.12 % of peak. A model built from
 many small ops sits lower on the roofline; the requirement is the explanation, and the
 explanation is that **41.5 %** of the layer is latency-bound rather than bandwidth-bound
-work. Every figure in this paragraph is a row or a group of the audit table below, which
-is a partition of the cited CSV.
+work. Every *projection* figure in this paragraph is a row of the audit table below, which
+is a partition of the cited CSV — but the layer/terminal **split** is not one of its groups,
+because the audit groups ops by kind, not by whether they run once per step. Round 12 of the
+stage review caught this paragraph claiming otherwise, and the terminal term being a hardcoded
+constant behind it. The terminal term is now derived from a named id list: **3145** (token
+lookup), **3158**/**3161** (the two RoPE tables), **3201** (embedding all-gather), **3137** and
+**3147** (the two terminal norms), **3139** (LM head), **3140**/**3196** (softcap), **3193**/
+**3197** (its input reshard and output unshard) and **3143**/**3254** (the position and RoPE
+advance) — **690.973 µs**, which the figure gate sums from the CSV rather than storing. The
+previous constant, 691.07, was 0.097 µs above that sum and supported by nothing.
+
+**The full-attention window does not share all of it.** The full layers are NoPE
+(`tt/optimized_decoder.py`: `rope_theta` is set for the sliding kind only), so
+`decode_full_perf_report.csv` contains no `RotaryEmbeddingHfDeviceOperation` and only one
+`EmbeddingsDeviceOperation` against the sliding capture's three. The two RoPE-table lookups
+(**5.024 µs**) are therefore sliding-path work, not shared terminal work, and the full layer is
+its own window minus the terminal *without* them: 1100.228 − (690.973 − 5.024) = **414.279 µs**.
+The earlier accounting subtracted the whole term from both windows, which understated the full
+layer by 5.024 µs each and the step by 65 µs.
 
 One row in the committed profile looks like it contradicts "no host gap" and does not.
 It is restated from *this* capture, and the first version of this paragraph got both the
@@ -299,13 +316,13 @@ the first op of the graph, so its "previous operation" is the last op of the *wa
 replay that ran before the signpost, across a profiler flush.
 
 What bounds it is arithmetic rather than the mechanism: summed device time is
-**22.838 ms** against a measured logits-only replay of **22.656 ms**, so there is no room
+**22.908 ms** against a measured logits-only replay of **22.656 ms**, so there is no room
 for a real 311 µs per-step bubble in the un-profiled run — and the steady-state loop's
 token, position and synchronisation counters are all zero per token
 ([`evidence_accuracy.json`](evidence_accuracy.json)`:fallback_audit`). Every percentage
 in this document comes from device-time sums, which exclude gap entirely.
 
-**Device time is 0.8 % *above* the traced replay it is meant to explain** (22.838 ms
+**Device time is 1.1 % *above* the traced replay it is meant to explain** (22.908 ms
 against 22.656 ms of logits-only replay), which is worth naming rather than hiding.
 `tt-perf-report` merges a 4-device capture by taking the **max** per op, so a step
 where different devices peak on different ops sums higher than any one device's
@@ -1315,7 +1332,7 @@ Twelve cases are new (three of them parametrizations of one test) and each pins 
 | watcher clean, separate from profiler | yes | `WATCHER_CLEAN` on the ten-case gated set and on both opt-in prefill-trace cases run together; Tracy ran after a reset, in its own process. The one configuration that trips is limitation 6, it trips after every test has passed, and it is recorded with its positive control rather than excluded |
 | context contract preserved | yes | 131072, unreduced, rebuilt from this stage's evidence |
 | `$qualitative-check` after the selected optimization, with a control | yes | byte-identical to the previous-stage control on all six prompts |
-| every reported figure resolves to a committed artifact | yes | `bench/check_reported_figures.py`, which also compares every literal it resolves back to the README text (digit-bounded, so `1.0` no longer matches `21.05`) and asserts its check count, the assertion/binding split within it, and the set of artifacts it actually **opened** — recorded by its readers, not tested with `is_file()`, which round 4 pointed out is an existence check wearing a coverage label (it caught two: `work_log.md` was read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened). Round 3 was right that a frozen count is not coverage: the gate passed 328/328 with six wrong figures in sections it never read, and the sections it missed — the prefill-128 capture, the audit table's µs column, the teacher-forcing rates and `work_log.md` — are all bound now. Round 8 was right that a *document-wide* search is not binding either: a figure that appears twice can be changed in one place and found in the other, and swapping a table's before/after columns leaves both literals present. The headline table is bound cell by cell with the columns asserted not interchanged, the audit table's `ids` and `µs` columns are parsed from the README and checked against the CSV, and the duplicated figures are bound to the section that claims them. `perf_summary.json` and `doc/context_contract.json` — where round 8 found the staleness, because the gate read four fields of one and one string of the other — are now exhausted field by field, with `refresh_context_contract.py --check` run as part of this gate |
+| every reported figure **in a table** resolves to a committed artifact, and the named prose figures with it | yes, with the perimeter stated | `bench/check_reported_figures.py`, which also compares every literal it resolves back to the README text (digit-bounded, so `1.0` no longer matches `21.05`) and asserts its check count, the assertion/binding split within it, and the set of artifacts it actually **opened** — recorded by its readers, not tested with `is_file()`, which round 4 pointed out is an existence check wearing a coverage label (it caught two: `work_log.md` was read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened). Round 3 was right that a frozen count is not coverage: the gate passed 328/328 with six wrong figures in sections it never read, and the sections it missed — the prefill-128 capture, the audit table's µs column, the teacher-forcing rates and `work_log.md` — are all bound now. Round 8 was right that a *document-wide* search is not binding either: a figure that appears twice can be changed in one place and found in the other, and swapping a table's before/after columns leaves both literals present. The headline table is bound cell by cell with the columns asserted not interchanged, the audit table's `ids` and `µs` columns are parsed from the README and checked against the CSV, and the duplicated figures are bound to the section that claims them. `perf_summary.json` and `doc/context_contract.json` — where round 8 found the staleness, because the gate read four fields of one and one string of the other — are now exhausted field by field, with `refresh_context_contract.py --check` run as part of this gate. The rule was made structural in a later round rather than enumerated: **every numeric cell of every table** must resolve to an artifact, be an op id in a committed CSV, be a capacity value of the built model, or sit in `UNBOUND_TABLE_NUMBERS` with a written reason. The perimeter that leaves, stated so it can be checked rather than assumed: **numerals inside tables**, plus the prose figures and the four units that are bound by name. Prose figures not on that list, numbers spelled as words, and unit swaps outside the four are **not** covered — round 12 demonstrated all three. `bench/mutate_figure_gate.py` is the standing evidence: 65 mutations, every one a defeat some round demonstrated, each required to make this gate fail |
 
 ## How to reproduce
 
@@ -1547,7 +1564,7 @@ Evidence:
 | `logs/decode_rebind_prefix_negative_control.log`, `logs/trace_release_failclosed_negative_control.log`, `logs/deferred_free_negative_control.log` | the three committed negative controls: each new trace-lifecycle test failing against the code it replaced, on the assertion that separates them. The third was asked for by the round after the fix it controls — round 9 had shipped a test that *looked* like it pinned its property and did not, which is what round 10 found, so inference is not enough here |
 | `logs/` | every console log named above |
 | `bench/check_reported_figures.py` | resolves the figures in this document against the artifacts above, and asserts its advertised check count, its assertion/binding split and the artifacts it opened; `FIGURES_OK` |
-| `bench/mutate_figure_gate.py` | mutation-tests that gate: 46 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
+| `bench/mutate_figure_gate.py` | mutation-tests that gate: 65 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
 
 ## Stage review
 

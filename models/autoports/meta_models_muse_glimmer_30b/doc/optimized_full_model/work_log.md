@@ -366,17 +366,17 @@ directly readable, which is what `perf_summary.json`'s device-time term is built
 
 `perf_summary.json`. Roofline **8.829 ms/token** (4,520,382,464 B/device ÷ 512 GB/s,
 where the bandwidth is back-derived from `tt-perf-report`'s own DRAM% columns rather than
-a data sheet), device time **22.838 ms/token**, end-to-end token-out **23.298 ms/token**,
+a data sheet), device time **22.908 ms/token**, end-to-end token-out **23.298 ms/token**,
 end-to-end logits-only **22.656 ms/token**.
 
 Two gaps, both named:
 
-* **roofline to device (37.9 %)** — 179.07 µs of a 431.48 µs sliding layer is non-matmul
+* **roofline to device (37.9 %)** — 179.17 µs of a 431.578 µs sliding layer is non-matmul
   work that moves no weight bytes: 4 norms, `SdpaDecode`, two collectives, two cache
   updates, rotary, head create/concat, layout conversions. The projections themselves run
   at 52.27–77.12 % of peak. This is the "modules built from many small ops sit lower" case, and
   the explanation is the requirement;
-* **device to end-to-end (−0.8 %)** — device time comes out *above* the traced replay,
+* **device to end-to-end (−1.1 %)** — device time comes out *above* the traced replay,
   because `tt-perf-report` merges a 4-device capture by taking the max per op. The sign
   is the useful part: there is no room for host work between them, which the zero
   per-token refresh counters say independently.
@@ -761,7 +761,7 @@ to the new cache and the stale entry could never be invalidated again.
 | the matched contrast was the one contrast the multiplicity paragraph did not correct | corrected: **p = 0.36**. The gate computes all three corrections from its own Fisher values and requires the text's rounding to be a rounding of *that*, not of an already-rounded p — which is where the previous `0.0013` came from |
 | the prefill-trace arm's evidence predated the four `capability_report()` flags | regenerated (`TTFT 49.76 ms`); all three perf arms are now asserted to carry the block and to disagree exactly where the arms disagree |
 | the round-6 conclusion sat in this log with no supersession marker | marked, with a pointer to the round-7 restatement and to limitation 6 |
-| §8 disagreed with the README on two figures from the same partition | corrected to the README's (**179.07 µs** of a 431.48 µs layer; the projections at **52.27–77.12 %**) |
+| §8 disagreed with the README on two figures from the same partition | corrected to the README's (**179.17 µs** of a 431.578 µs layer; the projections at **52.27–77.12 %**) |
 
 The suite is **58** cases (46 inherited + 12 new), forward and reverse.
 
@@ -857,12 +857,42 @@ audit partition without ever reading those columns.
 
 | finding | what was done |
 | --- | --- |
-| **P2** 33 of 54 fresh mutations survived; the README claimed every figure resolves | the by-construction coverage rule above, plus the dtype/fidelity table bound to the CSV, plus twelve of the 33 added to the harness as regression cases (**58 mutations, all caught**). Units remain enumerated rather than structural — the rule is digit-based and cannot see µs printed as ms — so two more unit bindings were added and the limitation is stated rather than left implicit |
+| **P2** 33 of 54 fresh mutations survived; the README claimed every figure resolves | the by-construction coverage rule above, plus the dtype/fidelity table bound to the CSV, plus twelve of the 33 added to the harness as regression cases (**65 mutations, all caught**). Units remain enumerated rather than structural — the rule is digit-based and cannot see µs printed as ms — so two more unit bindings were added and the limitation is stated rather than left implicit |
 | **P2** the round-10 fix had no committed negative control, while the Artifacts table said every test in the family had one | `logs/deferred_free_negative_control.log`: the unconditional free restored, the test failing on *"a live sampling trace's captured input must not be freed"*, source restored. Bound by the gate to pytest's summary line, as the other two are. There are three controls and the table now says three |
 | **P2** `_deferred_frees` was keyed on "any sampler orphan outstanding", not on ownership | keyed per tensor now (`_tensors_a_held_sampling_trace_reads`, identity against the sampler's held slots), so a stuck orphan no longer pins every later rebind's logits or the prefill traces' buffers; the misleading warning is corrected; `teardown()` reports what it leaves unfreed; and the test asserts **exactly one** deferred tensor with a prefill trace released in the same call |
 | the retry was reachable only from a genuine stale-signature release | the no-trace short-circuit now retries first when anything is outstanding, so a stuck orphan is not stranded for the life of the generator |
 | drains were counted inconsistently | every drain in both release paths and in the retry increments `counters["synchronizations"]` |
 | the shared file's unhealthy-path effect on other callers was unrecorded | stated in the Artifacts table: they retain rather than drop, and without a `retry_orphaned_traces()` call the slot is pinned rather than silently leaked — the safer of the two |
+
+### Round 12 — `more-work-needed`
+
+No P1. Four P2s, and the one with teeth is the **terminal term**: `691.07 µs` was a hardcoded
+constant in the figure gate that no artifact supported, and four load-bearing figures rested on
+it — the device-time reconciliation, both per-layer splits, the latency-bound remainder, and
+the `0.691 ms` addend of the floor-plus-terminal comparison the goal's 10–15 % gate is measured
+against. Worse, the README claimed *"every figure in this paragraph is a row or a group of the
+audit table"*, which was false: the audit groups ops by **kind**, and the layer/terminal split
+is by **frequency** (once per step vs per layer).
+
+It is derived now, from a named id list the README prints and the gate sums: **690.973 µs**.
+The old constant was 0.097 µs above that. And the two windows do not share all of it — the full
+layers are NoPE, so `decode_full_perf_report.csv` has no rotary op and only one embedding
+lookup against the sliding capture's three. The two RoPE-table lookups (**5.024 µs**) are
+sliding-path work, so the full layer is `1100.228 − (690.973 − 5.024) = 414.279 µs`, not
+409.16. The corrected step is **22.908 ms** (was 22.838), which moves the device-vs-replay gap
+from 0.8 % to **1.1 %** and changes no conclusion: device time still sits above the 22.656 ms
+replay, so there is still no room for a per-step host bubble.
+
+| finding | what was done |
+| --- | --- |
+| **P2** the carried-forward decoder contract table was bound to nothing, though it says it is read off the capacity block — ten of its twelve cells were flippable, including the `changed?` column | every cell is bound to its own field in `capacity["carried_forward_decoder_contract"]` (dtypes, both collectives, the persistent-buffer verdict, the fractured-norm gate, the residual core count, the `o_proj` geometry, the SDPA grid, the sampler geometry), the `changed?` column included, and six of the flips are in the harness |
+| **P2** `46 mutations` in the Artifacts table was stale against 58, and an allowlist entry whose reason did not describe it was hiding it | corrected and bound to `len(MUTATIONS)`; `"46"` is gone from the allowlist and the inherited-case count is bound instead |
+| **P2** the terminal term was a hardcoded constant, and the paragraph resting on it claimed a provenance it did not have | derived from named ids as above, with the RoPE asymmetry priced and the claim corrected |
+| **P2** the by-construction rule reached only numerals in non-indented table rows, while the README's checklist row still claimed everything | the parser strips indentation, and the checklist row now **states the perimeter**: numerals in tables plus the named prose figures and four units, with prose figures, worded numbers and other unit swaps explicitly outside it |
+
+The perimeter statement is the point. Five rounds widened the gate and re-asserted completeness;
+this one widens it *and* narrows the claim to what it covers, so the next reviewer's test is
+whether the stated perimeter is honest rather than whether the claim is true.
 
 ## 11. Commits
 
@@ -882,7 +912,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `20f77bb0fcd` | the negative control for the fail-closed release: the test's failure against round 7's code, committed and bound by the gate |
 | `9abea54b55b` | round-9 review fixes: the sampling trace brought inside the fail-closed policy (in `models/common/sampling/generator.py`), the bookkeeping-before-drain ordering and `try/finally` sequencing, unconditional invalidation on every entry point, atomic `set_kv_cache`, two new acceptance cases, and a figure gate that checks structure, units, cross-section consistency and its own mutation log's provenance |
 | `bd39469e555` | round-10 review fixes: deferred frees so a live sampling trace's captured input is never handed back, the measured per-call invalidation cost, cell-level bindings for the thirteen figures round 10 falsified, and the corrected file inventory |
-| *(this commit)* | round-11 review fixes: by-construction numeric coverage over every README table, the dtype/fidelity table bound to the CSV, per-tensor deferred frees, the third negative control, and the retry reachable from the short-circuit |
+| `562c529f4f2` | round-11 review fixes: by-construction numeric coverage over every README table, the dtype/fidelity table bound to the CSV, per-tensor deferred frees, the third negative control, and the retry reachable from the short-circuit |
+| *(this commit)* | round-12 review fixes: the terminal term derived from named ids with the NoPE asymmetry priced, the carried-forward decoder contract bound cell by cell, the stale mutation count, and the gate's perimeter stated rather than overclaimed |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:

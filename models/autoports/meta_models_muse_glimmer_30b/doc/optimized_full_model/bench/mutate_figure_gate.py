@@ -129,8 +129,8 @@ MUTATIONS = [
     (
         "device time in the accounting section",
         "doc/optimized_full_model/README.md",
-        "| device-time decode | **22.838 ms/token**",
-        "| device-time decode | **12.838 ms/token**",
+        "| device-time decode | **22.908 ms/token**",
+        "| device-time decode | **12.908 ms/token**",
     ),
     (
         "fallback synchronizations counter",
@@ -178,8 +178,8 @@ MUTATIONS = [
     (
         "work log accounting device figure",
         "doc/optimized_full_model/work_log.md",
-        "device time **22.838 ms/token**",
-        "device time **12.838 ms/token**",
+        "device time **22.908 ms/token**",
+        "device time **12.908 ms/token**",
     ),
     (
         "work log per-layer floor row",
@@ -348,10 +348,54 @@ MUTATIONS = [
         "| **total long-lived** | **7,178,958,080** | **7.18 GB** of 31.46 GiB |",
         "| **total long-lived** | **9,178,958,080** | **9.18 GB** of 31.46 GiB |",
     ),
+    # Round 12's set: the carried-forward decoder contract (ten of its twelve cells were
+    # flippable), the terminal term, the stale mutation count, and an indented-table row.
+    (
+        "the carried-forward KV-cache dtype",
+        "doc/optimized_full_model/README.md",
+        "| KV-cache dtype | `BFLOAT8_B` | no |",
+        "| KV-cache dtype | `BFLOAT16` | no |",
+    ),
+    (
+        "the carried-forward persistent-buffer verdict",
+        "doc/optimized_full_model/README.md",
+        "| persistent CCL staging buffers | **off**",
+        "| persistent CCL staging buffers | **on**",
+    ),
+    (
+        "the carried-forward residual core count",
+        "doc/optimized_full_model/README.md",
+        "`WIDTH_SHARDED` L1, 16 cores, `[32, 416]` shards",
+        "`WIDTH_SHARDED` L1, 8 cores, `[32, 416]` shards",
+    ),
+    (
+        "the carried-forward changed? column",
+        "doc/optimized_full_model/README.md",
+        "| decode SDPA | `max_cores_per_head_batch=32` | no |",
+        "| decode SDPA | `max_cores_per_head_batch=32` | yes |",
+    ),
+    (
+        "the carried-forward SDPA grid",
+        "doc/optimized_full_model/README.md",
+        "| decode SDPA | `max_cores_per_head_batch=32` | no |",
+        "| decode SDPA | `max_cores_per_head_batch=16` | no |",
+    ),
+    (
+        "the carried-forward prefill collective",
+        "doc/optimized_full_model/README.md",
+        "BFP8 payload, 4 RS workers, AG barrier on",
+        "BFP4 payload, 2 RS workers, AG barrier off",
+    ),
+    (
+        "the terminal term",
+        "doc/optimized_full_model/README.md",
+        "terminal term is now derived from a named id list: **3145**",
+        "terminal term is now derived from a named id list: **3146**",
+    ),
     (
         "the mutation count in the Artifacts table",
         "doc/optimized_full_model/README.md",
-        "mutation-tests that gate: 46 mutations,",
+        "mutation-tests that gate: 65 mutations,",
         "mutation-tests that gate: 96 mutations,",
     ),
     (

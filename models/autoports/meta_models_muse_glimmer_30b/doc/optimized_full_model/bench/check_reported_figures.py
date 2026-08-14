@@ -47,11 +47,11 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 938
+ADVERTISED_CHECKS = 972
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
-ADVERTISED_BINDINGS = 35
+ADVERTISED_BINDINGS = 37
 
 
 #: Numbers that appear in a README table and are **not** resolved by any check above, listed
@@ -159,7 +159,6 @@ UNBOUND_TABLE_NUMBERS = {
     "22",
     "25",
     "33",
-    "46",
     "55",
     "1.9",
     "2.1",
@@ -533,7 +532,7 @@ def main() -> int:
     # ------------------------------------------------------ performance accounting
     ps = load(D / "perf_summary.json")
     close("perf_summary roofline ms", ps["roofline_ms_per_token_estimate"], 8.829)
-    close("perf_summary device ms", ps["decode_ms_per_token_device"], 22.838)
+    close("perf_summary device ms", ps["decode_ms_per_token_device"], 22.908)
     same(
         "perf_summary e2e matches the run",
         ps["decode_ms_per_token_e2e"],
@@ -885,11 +884,13 @@ def main() -> int:
         [],
     )
     same("...and that is six files", len(changed_code), 6)
+    inherited = suite_cases - len(new_cases) - 2  # three of the new tests are parametrized x3
     same(
         "...and the inherited/new split adds up to the suite",
-        f"(46 inherited + {suite_cases - 46} new)" in readme,
+        f"({inherited} inherited + {suite_cases - inherited} new)" in readme,
         True,
     )
+    bind("the README states the inherited-case count", str(inherited))
     same("tracy integrity check passed", "TRACY_INTEGRITY_OK" in text(D / "logs/run_tracy.log"), True)
     same("the overflowed two-layer capture is preserved", (D / "logs/run_tracy_two_layer_overflow.log").is_file(), True)
 
@@ -1063,13 +1064,45 @@ def main() -> int:
         252.41,
         tol=1e-4,
     )
-    terminal = 691.07
-    layer = round(sum(float(r["Device Time"]) for r in sliding) - terminal, 2)
-    close("the sliding layer, window minus terminal", layer, 431.48, tol=1e-4)
+    # Round 12: this was a hardcoded 691.07 that no artifact supported, and four load-bearing
+    # figures rested on it.  The terminal term is the ops that run **once per step** rather than
+    # per layer, named by id here and in the README, and summed from the CSV.
+    TERMINAL_IDS = [
+        "3145",  # token embedding lookup
+        "3158",  # RoPE cos table
+        "3161",  # RoPE sin table
+        "3201",  # embedding all-gather
+        "3137",  # terminal norm
+        "3147",  # terminal norm
+        "3139",  # LM head
+        "3140",  # softcap tanh
+        "3196",  # softcap multiply
+        "3193",  # LM-head input reshard
+        "3197",  # LM-head output unshard
+        "3143",  # position advance
+        "3254",  # RoPE index advance
+    ]
+    ROPE_TABLE_IDS = ["3158", "3161"]
+    terminal = round(sum(device_time(sliding, i) for i in TERMINAL_IDS), 3)
+    rope_tables = round(sum(device_time(sliding, i) for i in ROPE_TABLE_IDS), 3)
+    close("the terminal term, summed from the ids the README names", terminal, 690.973, tol=1e-6)
+    same(
+        "...and the README names exactly those ids",
+        all(f"**{i}**" in readme for i in TERMINAL_IDS),
+        True,
+    )
+    close("the two RoPE-table lookups the full window does not share", rope_tables, 5.024, tol=1e-6)
+    same(
+        "the full capture really has no rotary op",
+        [r["ID"] for r in csv_rows("decode_full_perf_report.csv") if "Rotary" in r["OP Code"]],
+        [],
+    )
+    layer = round(sum(float(r["Device Time"]) for r in sliding) - terminal, 3)
+    close("the sliding layer, window minus terminal", layer, 431.578, tol=1e-4)
     close(
         "the latency-bound remainder of the layer",
         round(layer - sum(device_time(sliding, i) for i in six), 2),
-        179.07,
+        179.17,
         tol=1e-4,
     )
     close(
@@ -1731,7 +1764,7 @@ def main() -> int:
     )
     # Round 6: the comparator is not a lower bound, and the README now says so with this
     # arithmetic.  Assert the arithmetic rather than the adjective.
-    terminal_ms = 0.691  # the common terminal device term, priced in the profile
+    terminal_ms = round(terminal / 1e3, 3)  # the terminal device term, derived above
     close("bare layers plus the terminal term", round(floor256 + terminal_ms, 3), 23.112, tol=1e-3)
     close(
         "the measured step beats that sum by",
@@ -1772,8 +1805,9 @@ def main() -> int:
     # The full-attention window, which no check read before round 8 even though the device
     # figure's own formula is stated in terms of it.
     full_rows = csv_rows("decode_full_perf_report.csv")
-    full_layer = round(sum(float(r["Device Time"]) for r in full_rows) - terminal, 2)
-    close("the full-attention layer, window minus terminal", full_layer, 409.16, tol=1e-4)
+    # The full window shares the terminal *minus* the RoPE tables: its layers are NoPE.
+    full_layer = round(sum(float(r["Device Time"]) for r in full_rows) - (terminal - rope_tables), 3)
+    close("the full-attention layer, window minus the terminal it shares", full_layer, 414.279, tol=1e-4)
     ri = ps["roofline_inputs"]
     ps_expected = {
         "workload/prompt_len": 128,
@@ -1847,8 +1881,11 @@ def main() -> int:
         round(float(next(r for r in sliding if r["ID"] == "3145")["Op-to-Op Gap"]), 3),  # 310.959 us
         round(oc["wall_issue_ms"], 2),  # 62.75 ms prefill window
         round(trace["capture_ms"], 2),  # 98.16 ms capture
-        round(layer, 2),  # 431.48 us sliding layer
-        round(full_layer, 2),  # 409.16 us full layer
+        round(layer, 3),  # the sliding layer
+        round(full_layer, 3),  # the full layer
+        terminal,  # the terminal term, summed from its ids
+        rope_tables,  # the RoPE tables the full window does not share
+        round((round((39 * layer + 13 * full_layer + terminal) / 1e3, 3) / 22.656 - 1) * 100, 1),  # device vs replay %
         terminal_ms,  # 0.691 ms terminal term
         round(floor256 + terminal_ms, 3),  # 23.112
         round(floor256 + terminal_ms - after["traced_decode_logits_only_ms_per_token"]["min"], 3),  # 0.456
@@ -1857,14 +1894,10 @@ def main() -> int:
         55.08,  # ...and drain ms
         20.93,  # the collective dispatches' share, ms
         round(abs(improvement), 1),  # the prefill trace's TTFT improvement %, from the two arms
-        0.8,  # device-vs-replay %
         12.1,  # the withdrawn BF16 collective figure, named as withdrawn
         0.27,  # the two prefill norms, ms
         0.4390,  # per-layer sliding at ctx 256
         0.4077,  # ...and full
-        691.07,  # the terminal window, us
-        431.48,  # the sliding layer, us
-        409.16,  # the full layer, us
     }
     ps_prose = " ".join(
         [ps["device_time_source"], ps["layer_stack_comparator_note"], ri["bandwidth_source"], *ps["named_limitations"]]
@@ -2524,6 +2557,14 @@ def main() -> int:
     harness = importlib.util.module_from_spec(harness_spec)
     harness_spec.loader.exec_module(harness)
     same("the harness covers every defeat the log records", len(harness.MUTATIONS), mutation_count)
+    # ...and the README's count of them, which round 12 found stale at 46 against 58 and hidden
+    # by an allowlist entry whose stated reason did not describe it.
+    same(
+        "the README states how many mutations the harness runs",
+        f"mutation-tests that gate: {len(harness.MUTATIONS)} mutations," in readme,
+        True,
+    )
+    bind("the README states the harness's mutation count", str(len(harness.MUTATIONS)))
     same(
         "...and the log was produced by *this* table, mutation for mutation",
         logged_digests,
@@ -2770,6 +2811,80 @@ def main() -> int:
         round(after["token_out_decode_ms_per_token"]["min"], 3),
     )
 
+    # ------------------------ the carried-forward decoder contract, cell by cell
+    #
+    # The table says it is "read off the built model (evidence_accuracy.json:capacity), not
+    # restated", and nothing read that block: round 12 flipped ten of its twelve cells -- the
+    # KV-cache dtype, the CCL implementations, the persistent-buffer verdict, the residual core
+    # count, the SDPA grid, even the ``changed?`` column -- and the gate stayed green.  This is
+    # the table that certifies the goal contract's central preservation requirement, so every
+    # cell is now the capacity block's own field.
+    carried = load(D / "evidence_accuracy.json")["capacity"]["carried_forward_decoder_contract"]
+    contract_rows = {row[0]: row for row in table_rows(contract_table) if len(row) == 3}
+    same("the carried-forward table has the rows this gate checks", len(contract_rows), 15)
+    same(
+        "...and every one of them says the contract is unchanged",
+        sorted({row[2] for row in contract_rows.values()}),
+        ["changed?", "no"],
+    )
+
+    def dt(name: str) -> str:
+        return str(carried[name]).replace("DataType.", "")
+
+    for label, expected in (
+        ("activation dtype", [f"`{dt('activation_dtype')}`"]),
+        ("KV-cache dtype", [f"`{dt('kv_cache_dtype')}`"]),
+        ("weight dtypes", [f"attention `{dt('weight_dtype_wqkv')}`", f"MLP `{dt('weight_dtype_mlp_gate')}`"]),
+        (
+            "prefill collective",
+            [
+                f"`{carried['prefill_ccl_impl']}`",
+                f"{dt('prefill_ccl_dtype').replace('BFLOAT8_B', 'BFP8')} payload",
+                f"{carried['prefill_ccl_rs_workers']} RS workers",
+                "AG barrier on" if carried["ccl_ag_barrier"] else "AG barrier off",
+            ],
+        ),
+        (
+            "decode collective",
+            [
+                f"`{carried['decode_ccl_impl']}` `{carried['decode_ccl_mode']}`",
+                f"{carried['decode_ccl_rs_workers']} RS worker",
+            ],
+        ),
+        (
+            "persistent CCL staging buffers",
+            ["**off**" if carried["ccl_persistent_buffers_rejected_and_off"] else "**on**"],
+        ),
+        (
+            "fractured prefill norm",
+            ["on, gated at " + str(carried["prefill_fractured_norm_min_rows"]) + " rows"],
+        ),
+        ("inter-layer decode residual", [f"{carried['boundary_cores']} cores"]),
+        (
+            "`o_proj` decode geometry",
+            [f"{carried['decode_matmul_o_proj'][0]} cores / `in0_block_w={carried['decode_matmul_o_proj'][1]}`"],
+        ),
+        ("decode SDPA", [f"`max_cores_per_head_batch={carried['max_cores_per_head_batch']}`"]),
+        (
+            "LM-head dtype / fidelity / geometry",
+            [
+                f"`{str(cap['lm_head_dtype']).replace('DataType.', '')}`",
+                f"cores={cap['lm_head_cores']}",
+                f"`in0_block_w={cap['lm_head_in0_block_w']}`",
+            ],
+        ),
+        ("sampler vocab masking", [f"tail width {cap['sampler_invalid_vocab_tail_width']}"]),
+        (
+            "sampler topk geometry",
+            [
+                f"{cap['sampler_topk_pieces']} pieces",
+                f"{cap['sampler_candidates_per_device']} candidates/device",
+            ],
+        ),
+    ):
+        for needle in expected:
+            same(f"the carried-forward table's {label!r} cell states {needle}", needle in contract_rows[label][1], True)
+
     # -------------------------------------- the dtype/fidelity table, against the CSV itself
     #
     # This table is the stage's carried-forward-policy evidence, and the review skill names
@@ -2813,7 +2928,7 @@ def main() -> int:
     same(
         "every checklist verdict is one of the vocabulary this stage uses",
         sorted({row[1] for row in table_rows(checklist) if len(row) == 3 and row[0] != "item"}),
-        ["inherited", "inherited + extended", "mostly", "n/a", "recorded", "yes"],
+        ["inherited", "inherited + extended", "mostly", "n/a", "recorded", "yes", "yes, with the perimeter stated"],
     )
     same(
         "the checklist does not claim the datatype frontier search this stage is told not to run",
@@ -2868,10 +2983,11 @@ def main() -> int:
         for extra in (1, 2):
             resolved_forms.add(f"{value:.{decimals + extra}f}")
     unresolved_cells: list[str] = []
-    for line in readme.splitlines():
+    for raw_line in readme.splitlines():
+        line = raw_line.strip()  # indented tables count too: round 12 slipped a row past this
         if not line.startswith("| ") or not (set(line) - set("| -:\n")):
             continue
-        for cell in line.strip().strip("|").split("|"):
+        for cell in line.strip("|").split("|"):
             for token in re.findall(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\d])", cell.strip()):
                 token = token.rstrip(",")
                 if (
