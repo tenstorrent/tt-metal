@@ -97,6 +97,7 @@ Primary before/after used the same 128/128/1 `run_vllm_server` workload, greedy 
 Fresh independent stage rereview: `clean-pass` in `stage_review.md`.
 
 - Nested vLLM TT-plugin observability: `6bd775d` (`Add opt-in device sampling route audit`).
-- Root stage evidence/checkpoint: pending this commit.
+- Root stage evidence/checkpoint: `7e14ba84874` (`Record optimized Mistral vLLM serving evidence`).
+- SHA-record update: this follow-up documentation commit.
 
 No push was performed.
