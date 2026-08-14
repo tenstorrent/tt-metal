@@ -102,6 +102,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         auto mesh_buffer =
             std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
         mesh_buffer->initialize_device_buffers();
+        Inspector::mesh_buffer_created(mesh_buffer.get());
         return mesh_buffer;
     }
 
@@ -167,6 +168,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         mesh_buffer->initialize_device_buffers();
     }
 
+    Inspector::mesh_buffer_created(mesh_buffer.get());
     return mesh_buffer;
 }
 
@@ -228,38 +230,6 @@ bool MeshBuffer::is_allocated() const {
         return false;
     }
     return true;
-}
-
-MeshBuffer::MeshBuffer(
-    const MeshBufferConfig& config,
-    const DeviceLocalBufferConfig& device_local_config,
-    DeviceAddr device_local_size,
-    MeshDevice* mesh_device,
-    std::shared_ptr<Buffer> backing_buffer) :
-    config_(config),
-    device_local_config_(device_local_config),
-    mesh_device_(mesh_device->shared_from_this()),
-    address_(backing_buffer->address()),
-    device_local_size_(device_local_size),
-    buffers_(MeshShape(mesh_device->shape())),
-    state_(OwnedBufferState{std::move(backing_buffer)}) {
-    Inspector::mesh_buffer_created(this);
-}
-
-MeshBuffer::MeshBuffer(
-    const MeshBufferConfig& config,
-    const DeviceLocalBufferConfig& device_local_config,
-    DeviceAddr address,
-    DeviceAddr device_local_size,
-    MeshDevice* mesh_device) :
-    config_(config),
-    device_local_config_(device_local_config),
-    mesh_device_(mesh_device->shared_from_this()),
-    address_(address),
-    device_local_size_(device_local_size),
-    buffers_(MeshShape(mesh_device->shape())),
-    state_(ExternallyOwnedState{}) {
-    Inspector::mesh_buffer_created(this);
 }
 
 MeshBuffer::~MeshBuffer() {

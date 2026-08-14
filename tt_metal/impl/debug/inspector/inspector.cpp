@@ -309,6 +309,9 @@ void Inspector::mesh_buffer_created(const distributed::MeshBuffer* mesh_buffer) 
         // is simply a no-op in that case.
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
         data->mesh_buffers_data.insert(mesh_buffer);
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_created(mesh_buffer);
+        }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh buffer created: {}", e.what());
     }
@@ -325,6 +328,9 @@ void Inspector::mesh_buffer_destroyed(const distributed::MeshBuffer* mesh_buffer
     try {
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
         data->mesh_buffers_data.erase(mesh_buffer);
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_destroyed(mesh_buffer);
+        }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh buffer destroyed: {}", e.what());
     }
@@ -435,7 +441,7 @@ void Inspector::emit_debug_entry(
             slot.operation_name = operation_name;
             slot.tensor_specs = std::move(tensor_specs);
             slot.trace_id = trace_id;
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         } else {
@@ -452,7 +458,7 @@ void Inspector::emit_debug_entry(
             } else {
                 data->runtime_entries_write_pos++;
             }
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         }

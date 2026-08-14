@@ -71,11 +71,13 @@ private:
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
     std::unordered_set<const distributed::MeshBuffer*> mesh_buffers_data;
+    bool mesh_buffer_logging_enabled{false};
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
     size_t runtime_entries_write_pos{0};
+    bool runtime_entries_logging_enabled{false};
     std::mutex trace_runtime_entries_mutex;
     std::unordered_map<tt::tt_metal::distributed::MeshTraceId, std::vector<inspector::MeshWorkloadRuntimeEntry>>
         trace_runtime_entries;
