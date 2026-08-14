@@ -26,16 +26,13 @@ this file is the thin vLLM interface wrapper over it:
 
 Because the block-emission core has no vLLM import, the reduced-surface serving
 driver drives the identical contract on device without the (container-gated) vLLM
-stack. See ``doc/vllm_integration/README.md``.
+stack.
 
 Contract gaps handled here vs deferred to #47488 (upstream tenstorrent/vllm)
 --------------------------------------------------------------------------
-The current TT runner assumes **one committed token per decode step** — hard
-``assert num_out_tokens == 1`` at ``model_runner.py:2471``, ``[sz, 1]`` sampled-id
-shape (``:2378``, ``:1878``), single-token ``_build_runner_output`` (``:2437``),
-and a ``+1`` host position advance (``_apply_sampled_tokens_to_state`` ``:2479`` /
-``:2508``). Emitting a 256-token block therefore needs the runner/scheduler to (a)
-accept a ``[num_reqs, 256]`` block output, (b) advance ``num_computed_tokens`` /
+The current TT runner assumes **one committed token per decode step**. Emitting a
+256-token block therefore needs the runner/scheduler to (a) accept a
+``[num_reqs, 256]`` block output, (b) advance ``num_computed_tokens`` /
 ``num_tokens`` by ``canvas_length`` per decode step, and (c) bound-check
 ``start_idx + 256 <= max_model_len``. That runner+scheduler change is **#47488**;
 this adapter is written to that block contract so it works once #47488 lands.
@@ -238,18 +235,14 @@ def _coarse_prefill_buckets_enabled() -> bool:
 def _reveal_buckets_enabled() -> bool:
     """Whether the up-front denoise trace binds a per-request reveal-span bucket.
 
-    Default ON, and safe by construction: with DG_REVEAL_OUTPUT_BUDGET unset,
-    admission provisions the full ceiling, so captures bind exactly the span
-    the fixed-span deployment binds and mid-request growth can never fire —
-    identical memory behaviour, no new risk. The speed win engages when the
-    deployment states its output cap via DG_REVEAL_OUTPUT_BUDGET: admission
-    then provisions prompt + canvas + budget (461 -> ~195 ms/step for a 16K
-    eval window against the 262144 worst case, P150x4 2026-08-10/11), every
-    recapture runs between requests, and mid-request growth remains only as a
-    hardened fallback for requests exceeding the budget (reserved controller
-    holes; a failure costs one request, not the engine — see tt-shield run
-    31448367055 for why). DG_DENOISE_REVEAL_BUCKETS=0 restores the single
-    deployment-wide span outright.
+    Default ON. With DG_REVEAL_OUTPUT_BUDGET unset, admission provisions the
+    full ceiling, so captures bind exactly the span the fixed-span deployment
+    binds and mid-request growth can never fire. With DG_REVEAL_OUTPUT_BUDGET
+    set, admission provisions prompt + canvas + budget, every recapture runs
+    between requests, and mid-request growth remains only a hardened fallback
+    for requests exceeding the budget (a failure costs one request, not the
+    engine). DG_DENOISE_REVEAL_BUCKETS=0 restores the single deployment-wide
+    span outright.
     """
     return os.environ.get("DG_DENOISE_REVEAL_BUCKETS", "1").strip().lower() in (
         "1",
@@ -287,17 +280,12 @@ def _reveal_output_budget() -> int | None:
     """Output tokens provisioned into the admission bucket (DG_REVEAL_OUTPUT_BUDGET).
 
     Unset (default): admission provisions the full ceiling — no mid-request
-    recapture can ever fire, at the cost of capturing the worst-case span (the
-    pre-buckets behaviour). An explicit value provisions
-    ``prompt + canvas + budget`` — the deployment states how much output its
-    workload emits (an eval pins max_gen_toks; a serving profile knows its cap)
-    and every recapture happens at ADMISSION, between requests, where memory is
-    quiet and the release-recapture path is production-proven
-    (DG_UPFRONT_LAZY_PREFILL_RECAPTURE). Mid-request upshift remains only as
-    the fallback for requests that exceed the budget: at the 256K geometry
-    steady-state DRAM runs ~99% allocated and a mid-request recapture OOMed
-    placing the controller's [canvas, vocab] noise buffer (tt-shield run
-    31448367055).
+    recapture can ever fire, at the cost of capturing the worst-case span. An
+    explicit value provisions ``prompt + canvas + budget`` — the deployment
+    states how much output its workload emits (an eval pins max_gen_toks; a
+    serving profile knows its cap) and every recapture happens at ADMISSION,
+    between requests, where memory is quiet. Mid-request upshift remains only
+    the fallback for requests that exceed the budget.
     """
     raw = os.environ.get("DG_REVEAL_OUTPUT_BUDGET", "").strip()
     if not raw:
@@ -420,20 +408,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
     diffusion block engine instead of the autoregressive one.
     """
 
-    # Serving-feature reality on the TT path (documented in the stage evidence):
-    #  * prefix caching: force-disabled for sliding-window models (platform.py:512),
-    #    and block-diffusion recomputes canvas K/V every step → declare False.
+    # Serving-feature reality on the TT path:
+    #  * prefix caching: the vLLM APC contract needs paged-cache ownership + a
+    #    block pool (#47488), which is NOT wired here; the TT plugin also
+    #    force-disables it for sliding-window models, and block-diffusion
+    #    recomputes canvas K/V every step → declare False.
     #  * async decode: the per-BLOCK async contract is unproven without the #47488
     #    runner; never advertise async without proof → declare False (safe default).
     #  * on-device sampling: the canvas Gumbel-max / entropy-budget / renoise path
     #    runs on device (no host argmax, no full-logits readback) → True.
-    #  * prefix caching: the vLLM APC contract needs paged-cache ownership + a
-    #    block pool (#47488), which is NOT wired here → advertise False. A serving-layer
-    #    frozen-prefix KV reuse prototype used to sit behind DG_PREFIX_CACHE; it was deleted
-    #    2026-07-28 (only its exact-full-match tier could fire from serving, the proper-prefix
-    #    tier measured 57/256 flipped tokens, and under the shipped up-front capture every
-    #    admitted prompt length is pre-enumerated anyway). See doc/vllm_integration/prefix_cache/
-    #    for the design note; the real path is #47488.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
@@ -481,42 +464,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
         self._model_owned_page_tables_per_layer = page_tables_per_layer
-        # DEFAULT "device" is the on-device seeded Gumbel: it removes the ~313 ms/step
-        # host RNG and the ~256 MiB/step replicated PCIe DMA that the deleted per-step host-torch
-        # Gumbel mode paid, measured here at ~53.6 vs ~36.3 tokens/block/s steady (~1.48x).
+        # DEFAULT "device" is the on-device seeded SFPU Gumbel source: no per-step host
+        # RNG and no per-step replicated PCIe DMA. It DEPENDS on the lane-salted Blackhole
+        # rand kernel (tt-metal#52024); without that fix this default corrupts generated
+        # text.
         #
-        # HISTORY, because this default has moved twice. It was flipped to "device" on 2026-07-24,
-        # reverted to the host IID mode on 2026-07-25 after "device" corrupted generated text on
-        # 2 of 4 matched seeds, and restored here once the CAUSE was fixed. The cause was never in
-        # this module: for the production noise shape (1, 1, 256, vocab) the then-used
-        # permuted-vocab draw put the 256 canvas positions on the ttnn.rand width axis, and the
-        # Blackhole SFPU PRNG was a sliding window over one stream -- element (read t, lane i)
-        # carried stream[t + i], so 64 of 256 positions held a byte-identical COPY of another
-        # position's noise and picked the same token together. The window-advance dilution that
-        # first fixed this (4-seed A/B 4/4 on both arms, degeneracy guard silent) has since been
-        # superseded by the lane-salted counter RNG from tt-metal#52024, and the permuted-vocab
-        # workaround itself was removed.
-        #
-        # This default therefore DEPENDS on that kernel fix. The residual correlation it does not
-        # remove (cross-position max |r| 0.618 against 0.035 for a host IID control) is pinned by
-        # test_rand_independence.py, which ships with the ttnn.rand kernel-fix PR rather than
-        # this branch; if that gate regresses, revisit this default.
-        #
-        # WHY THERE IS NO LONGER A "host" MODE: the per-step full-vocab torch Gumbel source was
-        # the suspected cause of TT language drift and was measured NOT to be -- it drifts on
-        # exactly the same prompts as "device", repairs 0 of them, and costs 1.40x per request.
-        # The real cause was the canvas attending the prefill pad keys, fixed in d0936d4da4f, so
-        # the mode was deleted. (The torch-noise INJECTION helpers in tt/generate.py stay: they
-        # replay a torch run's exact noise for HF<->TT determinism, they are not a serving mode.)
-        #
-        # MEMORY ENVELOPE: "device" materializes a full-vocabulary (262144) tensor per step.
-        # context_contract.json once recorded that materialization as an OOM in the DRAM left
-        # after a 256K-KV allocation; the "chunked" descriptor mode that dodged it was removed
-        # 2026-08-10 (bring-up-era workaround, known QB2 1024-wide RNG bias, ~25 s per block —
-        # a standing perf trap). If the 256K envelope resurfaces, pursue the TP-sharded denoise
-        # terminal (unimplemented design note at the bottom of tt/sampling.py) instead. "argmax"
-        # remains the fast deterministic RUN control (requires DG_UPFRONT_CAPTURE=0; the captured
-        # path raises on any other mode than "device").
+        # MEMORY ENVELOPE: "device" materializes a full-vocabulary (262144) tensor per
+        # step. If that envelope stops fitting at 256K, pursue the TP-sharded denoise
+        # terminal (unimplemented design note at the bottom of tt/sampling.py). "argmax"
+        # is the fast deterministic RUN control (requires DG_UPFRONT_CAPTURE=0; the
+        # captured path raises on any other mode than "device"). The torch-noise
+        # INJECTION helpers in tt/generate.py replay a torch run's exact noise for
+        # HF<->TT determinism; they are not a serving mode.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single model-owned hybrid cache backs
         # one active sequence today (see module docstring); the dict is keyed by
@@ -560,11 +519,6 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # so a wrapper built after a bucketed one (tests, restarts in-process) must not
         # inherit a stale bucket — None restores env/default resolution.
         set_active_reveal_pmax(self._upfront_reveal_bucket)
-        # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
-        # shared across sessions so a request whose aligned prompt is a prefix of the
-        # resident contiguous-cache prompt can skip its prefill. Inert unless
-        # (the DG_PREFIX_CACHE reuse tier was deleted 2026-07-28); safe for
-        # max_num_seqs=1 (one contiguous cache = one resident prompt).
 
     # ── construction ────────────────────────────────────────────────────
     @classmethod
@@ -848,8 +802,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             # A span equal to the whole cache is legal but is the most expensive one: the
             # per-step prefix read takes the full-span branch (a whole-cache clone per layer
             # per step) and the persistent reveal mask is sized for the full span. Pinning
-            # DG_DENOISE_REVEAL_PMAX to the context actually served is the cheap path — this
-            # is exactly why the span used to be mandatory rather than derived.
+            # DG_DENOISE_REVEAL_PMAX to the context actually served is the cheap path.
             logger.warning(
                 f"[DiffusionGemma vLLM] fixed reveal span p_max={p_max} equals the whole allocated "
                 f"KV span: every denoise step reads the full prefix and the reveal mask is sized "
@@ -1007,7 +960,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
 
         Returning only after the new 48-trace set is complete makes publication
         atomic from the serving wrapper's point of view. The old trace cannot be
-        retained while compiling: that ordering reproduced a multi-device CCL hang.
+        retained while compiling: that ordering can hang the multi-device CCL.
         """
         if getattr(self, "_upfront_rebuild_in_progress", False):
             raise RuntimeError("concurrent up-front cold-shape rebuild is unsupported")
@@ -1097,13 +1050,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
 
         When the prefill shape is already warm the prefill cannot miss the
         program cache, so it may run while the old traces are still resident —
-        with the full free pool available for its transients (a 32K chunked
-        prefill needs a contiguous 134 MB chunk embedding, which did not fit
-        between hole reservations in the release-first ordering; SPEED-Bench
-        2026-08-11). Only afterwards is the old capture released and the new
-        span captured back-to-back, with no big allocations in between beyond
-        what the release itself just freed (the [canvas, vocab] noise buffers
-        live in the model-lifetime pool).
+        with the full free pool available for its transients. Only afterwards is
+        the old capture released and the new span captured back-to-back, with no
+        big allocations in between beyond what the release itself just freed
+        (the [canvas, vocab] noise buffers live in the model-lifetime pool).
         """
         if getattr(self, "_upfront_rebuild_in_progress", False):
             raise RuntimeError("concurrent up-front rebuild is unsupported")
@@ -1328,9 +1278,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # standalone ``serving_smoke`` driver keeps its own session-level stop.
         #
         # This does NOT disarm the degeneracy guard's stop set: the session resolves that
-        # separately from the tokenizer's special ids (``_resolve_degeneracy_stop_ids``). The two
-        # were one field until 2026-07-28, and emptying the stop policy here also blinded the guard,
-        # so it rejected the terminal block of 110 of 198 requests on the 07-27 eval.
+        # separately from the tokenizer's special ids (``_resolve_degeneracy_stop_ids``).
         denoise_block_fn = upfront_traced_denoise_block if self._upfront else None
         _metric(
             "session_create",
@@ -1481,31 +1429,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             "releasing the resident trace before compile and recapture"
                         )
                     else:
-                        # FAIL THIS REQUEST, NOT THE SERVER.
+                        # FAIL THIS REQUEST, NOT THE SERVER. In vLLM V1 an exception out of
+                        # ``execute_model`` is unconditionally fatal: EngineCore exits, and every
+                        # request already queued behind it is answered with an empty completion and
+                        # HTTP 200. One unservable request must cost one request.
                         #
-                        # This used to `raise`, and in vLLM V1 an exception out of ``execute_model`` is
-                        # unconditionally fatal: EngineCore exits, and every request already queued
-                        # behind it is answered with an empty completion and HTTP 200. On 2026-07-28 a
-                        # single out-of-band 21-token `curl` smoke test against a live server therefore
-                        # destroyed 135 of 198 answers, 56 minutes into the run, and the eval still
-                        # wrote a normal-looking 23.74% results file. One unservable request must cost
-                        # one request.
-                        #
-                        # Compiling the missing shape here instead is NOT the fallback: it is the
-                        # documented cause of a reproduced four-device AllBroadcast hang needing
-                        # `tt-smi -r` (doc/optimize_perf/upfront_earlyhalt_gpqa_20260722.md -- warming
-                        # the 160-token prefill before capture was the controlled fix). So the request
-                        # ends, loudly, with the same stop-id block the degeneracy guard's terminal path
+                        # Compiling the missing shape here is NOT the fallback: a program-cache miss
+                        # while a trace is resident can hang the multi-device CCL (needs `tt-smi -r`).
+                        # Padding up to the nearest warmed length is an unmeasured alternative (the
+                        # reveal mask hides pad keys from the CANVAS, but prefill still writes their
+                        # K/V, and the commit path is not the denoise path). So the request ends,
+                        # loudly, with the same stop-id block the degeneracy guard's terminal path
                         # already uses.
-                        #
-                        # WORTH REVISITING: the reason padding up to the nearest warmed length was not an
-                        # acceptable fallback was that the extra pad keys were decision-changing, and
-                        # DG_DENOISE_HIDE_PREFILL_PADS was default OFF. It is default ON since 2026-07-29,
-                        # so those keys are now masked out of the reveal -- which makes "pad up to the
-                        # nearest warmed shape" a candidate for replacing this rejection entirely. That
-                        # needs its own measurement (the mask hides the pads from the CANVAS; prefill still
-                        # writes their K/V, and the commit path is not the denoise path), so it is recorded
-                        # here rather than assumed.
                         logger.error(
                             f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill "
                             f"execution length {execution_len} (cache_len={cache_len}) was not warmed before trace capture "
@@ -1532,9 +1467,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                                 f"the request instead."
                             )
                         # Register the row as an ALREADY-FINISHED session rather than dropping it.
-                        # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is just
-                        # as engine-fatal as the one being replaced here -- so a dropped row would move
-                        # the crash one step later instead of removing it. A finished session takes
+                        # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is
+                        # engine-fatal too -- a dropped row would move the crash one step later
+                        # instead of removing it. A finished session takes
                         # decode_forward's existing stop-id branch, and release_request cleans it up and
                         # emits the usual request_release line.
                         session.finished = True
@@ -1614,10 +1549,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 halted=emission.halted,
                 dram=dram,
             )
-            # Committed ids for every block, so accuracy is observable DURING a multi-hour eval.
+            # Committed ids for every block, so accuracy is observable DURING a multi-hour eval:
             # lm_eval writes its samples only at the end, and nothing else in the serving path
-            # carries the generated text, so a 4-hour run was previously unobservable until it
-            # finished. Scored by doc/decision_fidelity/gate/live_score.py.
+            # carries the generated text.
             _metric(
                 "block_ids",
                 row=row,
@@ -1764,8 +1698,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         A ZERO-token emission is the degeneracy guard's terminal signal: the canvas was refused and
         NOT committed, so the request ends here and keeps the healthy blocks it already produced
         (``serving.decode_block``). Every row must still fill its slot, so it pads with the stop id
-        exactly as the already-finished path does. Reshaping the empty tensor instead is what killed
-        EngineCore on the first degenerate block of a served run.
+        exactly as the already-finished path does.
         """
         count = int(emission.tokens.numel())
         if count == 0:

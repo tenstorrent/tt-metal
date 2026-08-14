@@ -10,21 +10,17 @@ and then zeros 120/128 via the routing weights. Only the top-8 experts per token
 This module replaces it, for prefill, with a **ragged** dispatch: pack each expert's routed tokens
 into compact expert-homogeneous tile groups (zero-drop — there is no capacity to overflow), gather
 the rows with ``ttnn.embedding``, run gate/up/down as ``ttnn.sparse_matmul`` per group, then scatter
-back weighted by the routing weights and all-reduce. QB2-verified bit-identical to the shared
-128-expert path (26B-A4B, 30 layers, prompts up to 2048: logits + KV cache max_abs=0) at 26-57x
-lower prefill latency, and chunked along the token dim so it scales past the DRAM / int32-index
-limits of a single full-S call.
+back weighted by the routing weights and all-reduce. Bit-identical to the shared 128-expert path,
+and chunked along the token dim so it scales past the DRAM / int32-index limits of a single
+full-S call.
 
 Why this is legal on the (1,4) TP mesh: the input is REPLICATED across TP (experts are TP-sharded
 on the intermediate dim, NOT expert-parallel), so gather/scatter over the token dim is LOCAL per
 device. Only the down-projection needs the existing TP all-reduce. No cross-device token dispatch
 (unlike deepseek's all_to_all, which needs a 16-row ring).
 
-**This module is prefill-only.** Denoise used to live here too: a GShard-style fixed-capacity
-token-gather dispatch behind ``DG_SPARSE_MOE``, with a dense-128 reference behind
-``DG_ALLOW_DENSE_MOE``. Both were deleted on 2026-07-29 because the gather path does not let the
-denoise trajectory converge, and the expert compute-kernel configs they shared moved out with them.
-The denoise MoE is now entirely in tt/concat_moe.py; nothing in this file is on the denoise path.
+**This module is prefill-only.** The denoise MoE lives entirely in tt/concat_moe.py; nothing in
+this file is on the denoise path.
 
 NEVER edits gemma4 — composes over ``moe.router`` and ``moe.experts.weights`` only.
 """
@@ -44,19 +40,16 @@ TILE = 32
 RAGGED_MAX_M_BLOCKS = 4
 
 # Default token-dim chunk length for long-prompt ragged prefill (see
-# ``chunked_ragged_sparse_prefill_forward``). Matches the QB2-validated single-call ceiling.
+# ``chunked_ragged_sparse_prefill_forward``). Matches the single-call ceiling.
 RAGGED_PREFILL_CHUNK = 4096
 
 # Segment-count ladder for the ragged groups. WHY THIS EXISTS: each group is handed to
 # ``ttnn.sparse_matmul`` as [1, group_size, m_blocks*TILE, H] with nnz=group_size, and
 # ``group_size`` is the number of expert-segments that happen to have that m_blocks -- i.e. it is
-# ROUTING-dependent. A new prompt routes differently, so the geometry is new, so ~3 sparse_matmuls
-# x 30 layers x N groups all MISS the program cache and get built ON THE HOST. Measured on QB2
-# 2026-07-31 with DG_PREFILL_CPU_PROBE: 4.0-7.98 s at cache_len 128 and 5.0-17.4 s at 2048, with
-# thread_cpu_frac 0.947-0.982, i.e. the spike is host compile, not device work, and py-spy lands in
-# ragged_sparse_prefill_forward's sparse_matmul. Rounding group_size onto this ladder collapses the
-# shape space to at most len(_GROUP_LADDER) x RAGGED_MAX_M_BLOCKS programs, all reused across
-# prompts and warmable at startup.
+# ROUTING-dependent. A new prompt routes differently, so without the ladder every sparse_matmul
+# geometry misses the program cache and gets compiled on the host. Rounding group_size onto this
+# ladder collapses the shape space to at most len(_GROUP_LADDER) x RAGGED_MAX_M_BLOCKS programs,
+# all reused across prompts and warmable at startup.
 #
 # The ladder is finer than powers of two on purpose: padded segments cost real device work (their
 # rows are zeroed by slot_valid, so they compute 0 x W = 0), so the ceiling on waste matters.
@@ -90,8 +83,8 @@ def _quantize_ragged_groups(groups, token_slot, packed_rows):
 
     ``sparsity`` must keep exactly one non-zero per group row: ``nnz`` is passed as the (now padded)
     ``group_size``, and ttnn documents that ``nnz != count_nonzero(sparsity)`` HANGS the kernel
-    (matmul_nanobind.cpp:1053 -- the receiver loops nnz times while the sender multicasts once per
-    non-zero). Padded rows are therefore pointed at expert 0 rather than left all-zero.
+    (the receiver loops nnz times while the sender multicasts once per non-zero). Padded rows are
+    therefore pointed at expert 0 rather than left all-zero.
 
     ``token_slot`` holds absolute row indices into the concatenated groups, so padding a group
     shifts every later group's base and the indices must be rebased.
@@ -143,12 +136,10 @@ class RaggedRouting:
 
 # Host-side cache of the router per-expert scale, keyed by device tensor id.
 #
-# The value keeps a STRONG REFERENCE to the device tensor it was read from, and that
-# reference is what makes ``id()`` a sound key. ``id()`` is unique only among LIVE
-# objects, so a cache that stored the host scale alone would silently serve a stale
-# scale once the original tensor was collected and a new one was allocated at the same
-# address -- wrong routing weights, no error raised. Pinning costs nothing real here:
-# the tensor is a ``[num_experts]`` router weight that already lives for the model's
+# The value keeps a STRONG REFERENCE to the device tensor it was read from; that pin is
+# what makes ``id()`` a sound key (``id()`` is unique only among LIVE objects, so caching
+# the host scale alone would silently serve a stale scale after address reuse). The pin
+# is cheap: the tensor is a ``[num_experts]`` router weight that lives for the model's
 # lifetime.
 _ROUTER_SCALE_HOST_CACHE = {}
 
@@ -266,9 +257,8 @@ def _ragged_prefill_program_config(m_blocks, output_width):
 def _ragged_metadata_host(dense_routing, num_experts, top_k, max_m_blocks=RAGGED_MAX_M_BLOCKS):
     """Pack routed assignments into zero-drop, expert-homogeneous tile groups.
 
-    This CPU metadata builder is intentionally vectorized: the previous
-    assignment-by-assignment Python prototype took ~39 ms for 1024 tokens,
-    while this implementation takes <1 ms on the same host.
+    This CPU metadata builder is intentionally vectorized; a per-assignment
+    Python loop is orders of magnitude too slow for long prompts.
     """
     import torch
 
@@ -312,9 +302,7 @@ def _ragged_metadata_host(dense_routing, num_experts, top_k, max_m_blocks=RAGGED
         if active_entries.shape[0] == S * top_k:
             # The router contract is exactly top_k nonzero entries per token.
             # nonzero() is row-major, so expert ids are already in the reduction
-            # order that matches the dense path (QB2-verified bit-identical: the
-            # host-side per-expert scale rounds the same as the on-device bf16
-            # multiply, so logits + KV match the shared path exactly).
+            # order that matches the dense path.
             expert_index = active_entries[:, -1].reshape(S, top_k)
             route_weight = routing[active_mask].reshape(S, top_k)
         else:
@@ -431,9 +419,8 @@ def ragged_sparse_prefill_forward(
 ):
     """Zero-drop sparse prefill with compact ragged expert batches.
 
-    QB2-verified bit-identical to the shared 128-expert path (26B-A4B, 30 layers,
-    prompts up to 2048 incl. multi-segment packing: logits + KV cache max_abs=0),
-    at 26-57x lower prefill latency.
+    Bit-identical to the shared 128-expert path (logits + KV cache), at a small
+    fraction of its prefill latency.
     """
     del prefill_sparsity
     mesh = mesh_device or hidden_states.device()
@@ -570,8 +557,8 @@ def ragged_sparse_prefill_forward(
 def ragged_prefill_chunk_size():
     """Token-dim chunk length for long-prompt ragged prefill (``DG_PREFILL_RAGGED_CHUNK``).
 
-    Defaults to ``RAGGED_PREFILL_CHUNK`` (4096), the largest single-call length the ragged path
-    has been exercised at. Must be a positive multiple of the tile height so every chunk (and the
+    Defaults to ``RAGGED_PREFILL_CHUNK`` (4096), the single-call ceiling for the ragged path.
+    Must be a positive multiple of the tile height so every chunk (and the
     32-multiple-padded tail) is a legal ragged prefill shape."""
     raw = os.environ.get("DG_PREFILL_RAGGED_CHUNK")
     if raw is None or not raw.strip():
@@ -596,7 +583,7 @@ def chunked_ragged_sparse_prefill_forward(
 
     MoE is per-token, so a long prefill is processed in ``ragged_prefill_chunk_size()``-token
     slices along the sequence dim: the full-S ``RaggedRouting`` (computed once by the router hook)
-    and ``hidden_states`` are sliced by the same boundaries, each slice runs the QB2-validated
+    and ``hidden_states`` are sliced by the same boundaries, each slice runs
     ``ragged_sparse_prefill_forward`` UNCHANGED (including its per-slice TP all-reduce), and the
     per-chunk ``[1, 1, chunk, H]`` outputs are concatenated on the token dim. This is bit-identical
     to a single full-S ragged call — the router (RMSNorm/softmax/top-k) is strictly per-token so a

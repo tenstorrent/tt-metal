@@ -117,13 +117,9 @@ def _snapshot_download_with_retry(repo_id: str, *, attempts: int = 5, **kwargs):
     """``snapshot_download`` with backoff, because one transient 5xx must not cost an hour.
 
     This is the FIRST thing that runs when a server starts on a host with a cold weight cache, and
-    it raises straight out of ``initialize_vllm_model`` -> ``load_model`` -> ``_init_executor``, where
-    an exception is fatal to the vLLM EngineCore. On 2026-07-28 a single
-    ``HTTP 500`` from ``us.aws.cdn.hf.co`` partway through a ~50 GB fetch therefore killed a CI eval
-    before any DiffusionGemma code had run, and the harness then sat on a QB2 runner for the rest of
-    its 3600 s health-check timeout. The download had already succeeded on a different runner in the
-    same label pool, whose docker volume was warm -- so the failure was pure infrastructure, and pure
-    bad luck about which host the job landed on.
+    it raises straight out of ``initialize_vllm_model`` -> ``load_model`` -> ``_init_executor``,
+    where an exception is fatal to the vLLM EngineCore -- so a single transient CDN error partway
+    through a ~50 GB fetch would kill the engine before any DiffusionGemma code has run.
 
     Retries are on transport/server errors only. A missing repo, a gated repo or bad credentials fail
     immediately: retrying those just burns the same hour more slowly.

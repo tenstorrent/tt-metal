@@ -5,12 +5,10 @@
 
 A block-diffusion step commits a whole 256-token canvas at once, so degeneration has a shape the
 autoregressive detectors do not have: the committed canvas itself collapses onto one token id, or
-onto a short cycle. The observed GPQA failure emitted a canvas of ``\\ \\ \\ ...`` and then a
-canvas that was a solid wall of ``1``.
-
-That is directly measurable on the committed tensor, before it reaches the KV cache -- no entropy
-proxy needed. The entropy scalars the halt gate already reads cannot separate this from a healthy
-finish: a block that has legitimately run out of things to say also has near-zero entropy.
+onto a short cycle. That is directly measurable on the committed tensor, before it reaches the KV
+cache -- no entropy proxy needed. The entropy scalars the halt gate already reads cannot separate
+this from a healthy finish: a block that has legitimately run out of things to say also has
+near-zero entropy.
 
 This module is measurement plus a policy hook; it does not decide the default.
 """
@@ -23,28 +21,16 @@ import torch
 
 POLICIES = ("off", "warn", "stop", "retry")
 # `stop` is the default: it refuses to commit a collapsed canvas, which is the only setting that
-# actually prevents degenerate output. The `host` Gumbel default removes the FREQUENT corruption
-# but not degeneration itself -- across 10 GPQA docs re-run under it, one still committed a canvas
-# that was 85.2% a single content token. `warn` would have logged that and emitted it anyway.
-# `off` disables the measurement entirely.
+# actually prevents degenerate output. `warn` logs the collapse and emits it anyway; `off`
+# disables the measurement entirely.
 DEFAULT_POLICY = "stop"
-# Calibrated on 192 committed canvases (the 10-doc GPQA re-check plus both 4-seed sweeps), taking
-# only the ones NOT dominated by a stop token, since those are terminations rather than content:
+# The thresholds sit well above what healthy canvases reach while staying below observed
+# collapses; max_run 64 leaves the margin that ordinary long runs (markdown rules, table
+# separators, padding in code blocks) need.
 #
-#   healthy (n=136):  max top_frac 0.1836,  max max_run 18
-#   degenerate (n=1):     top_frac 0.8516,      max_run 86
-#
-# 0.5 sits 2.7x above the healthy maximum and 1.7x below the degenerate one. max_run 64 is 3.5x
-# above the healthy maximum -- the margin that ordinary long runs (markdown rules, table
-# separators, padding in code blocks) need -- and still under the observed 86.
-#
-# These numbers hold for the CONTENT region only, which is why :func:`is_degenerate` measures
-# there. Applied to the whole canvas they are wrong by construction: the terminal block of every
-# answer shorter than the canvas ends in a stop-token run, and a >=64-long run or a >=50% share of
-# <eos> padding is what a NORMAL completion looks like. Measured on the tt-shield eval of
-# 2026-07-27 (run 30285823000), that mistake ended 110 of 198 requests mid-answer; the discarded
-# blocks held a median of 107 real tokens each, 11135 in total. See
-# doc/decision_fidelity/degenerate_output_fix.md.
+# These thresholds apply to the CONTENT region only, which is why :func:`is_degenerate` measures
+# there: the terminal block of an answer shorter than the canvas legitimately ends in a
+# stop-token run, so whole-canvas measurement misreads normal completions as degenerate.
 DEFAULT_TOP_FRAC = 0.5
 DEFAULT_MAX_RUN = 64
 
@@ -74,10 +60,9 @@ def longest_run(ids: torch.Tensor) -> int:
 def terminal_stop_run(ids: torch.Tensor, stop_ids) -> int:
     """Length of the trailing run of stop tokens — the padding a finished answer leaves behind.
 
-    A canvas is committed whole, so an answer that ends at position 149 pads the remaining 107
-    positions with <eos>. That tail is not content and must not be measured as if it were: it is
-    what makes a NORMAL completion score top_frac 0.58 / max_run 107 and trip a gate calibrated on
-    content-only canvases (see :func:`is_degenerate`).
+    A canvas is committed whole, so an answer that ends early pads the remaining positions with
+    <eos>. That tail is not content and must not be measured as if it were: a NORMAL completion
+    would otherwise trip a gate calibrated on content-only canvases (see :func:`is_degenerate`).
     """
     if not stop_ids or ids.numel() == 0:
         return 0
@@ -161,9 +146,9 @@ def is_degenerate(
     with stray content, not a collapse. Both are benign.
 
     Without stop ids the whole-canvas statistics are used, which cannot make the distinction. That
-    is the pre-2026-07-28 behaviour and it is deliberately kept for callers that declare no stop
-    set, because narrowing it there would silently weaken the gate rather than fix it — the fix is
-    for the caller to declare its stop ids (``tt/serving.py`` does).
+    is deliberately kept for callers that declare no stop set, because narrowing it there would
+    silently weaken the gate rather than fix it — the fix is for the caller to declare its stop
+    ids (``tt/serving.py`` does).
     """
     benign = _as_id_set(stop_token_ids)
     if benign and stats.get("top_id") in benign:
@@ -252,10 +237,8 @@ def check_committed_block(
     :class:`DegenerateBlockError` so the caller can end the generation without committing.
 
     NOTE: production does not call this — ``tt/generate.py`` inlines the same policy over
-    :func:`evaluate` + :func:`describe`. That duplication is real and the fix is to unify on one
-    of them, not to delete this one: the ten policy assertions in ``tests/test_degeneracy.py``
-    exercise this function, and moving them onto the generate.py branch would trade tested pure
-    logic for an untested integration path.
+    :func:`evaluate` + :func:`describe`. The fix for that duplication is to unify on one of them,
+    not to delete this one: ``tests/test_degeneracy.py`` exercises this function.
     """
     policy = resolve_policy()
     if policy == "off":

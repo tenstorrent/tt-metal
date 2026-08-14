@@ -12,9 +12,6 @@ The supported path is deliberately narrow:
   ``DG_DENOISE_REVEAL_BUCKETS`` the wrapper re-captures at a per-request
   power-of-two ``p_max`` — each capture is still one fixed span);
 * require the released one-step stability criterion.
-
-Legacy fixed-count, grouped-window, lazy-capture, frozen-prefix, prefix-growth
-recapture, and trace-seeded chunked-RNG variants do not live in this module.
 """
 
 from __future__ import annotations
@@ -92,8 +89,8 @@ def upfront_capture_enabled() -> bool:
     Up-front capture is the shipped serving path: capture the 48 released denoise
     steps once during startup and replay them for every request. Set
     ``DG_UPFRONT_CAPTURE=0`` to opt out and run the ordinary eager per-step loop
-    (~1.7-2.3x slower, and the supported choice when per-step trajectory records
-    are needed — replayed traces do not produce them).
+    (slower, and the supported choice when per-step trajectory records are
+    needed — replayed traces do not produce them).
     """
     return os.environ.get("DG_UPFRONT_CAPTURE", "1").lower() in ("1", "true", "yes", "on")
 
@@ -156,16 +153,12 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
         raise RuntimeError("up-front denoise capture requires a MutablePrefixKVReader prefix source")
     set_read_span(p_max)
     # The fixed span is now bound and never changes, so when it covers the whole cache the
-    # per-layer prefix read can hand back the model-owned cache instead of cloning it. That
-    # clone is ~2 whole-cache copies per layer per step of data that is identical across all
-    # 48 steps of a block.
-    #
-    # Two things make borrowing safe, and BOTH were required: denoise_hidden_forward consults
+    # per-layer prefix read can hand back the model-owned cache instead of cloning it.
+    # Borrowing is safe only because BOTH hold: denoise_hidden_forward consults
     # ``owns_result`` before freeing, and denoise_attention compares BUFFERS (not object
-    # identity) before freeing its ``to_memory_config`` result. That second one is not
-    # theoretical — ``to_memory_config`` returns a fresh Tensor object that aliases the input
-    # buffer when no conversion is needed, so the old ``is not`` check deallocated the model
-    # KV cache and the next op failed with "Input Tensor is not allocated".
+    # identity) before freeing its ``to_memory_config`` result — ``to_memory_config``
+    # returns a fresh Tensor object that aliases the input buffer when no conversion is
+    # needed, so an identity check would free the model KV cache.
     if hasattr(reader, "borrow_full_span"):
         reader.borrow_full_span = prefix_borrow_enabled()
         logger.info(
@@ -183,13 +176,10 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
     window_layers = {}
     # Gated on the RETENTION mask, not on a flag of its own: the bounded read is bit-identical when
     # retention is enforced (see sliding_read_span) and would silently change visibility without it.
-    # DG_DENOISE_SLIDING_SPAN was deleted 2026-07-29 -- there was nothing left for it to select.
     #
-    # This WIDENED the input contract of this function, which is worth stating because the three
-    # fallbacks below cannot catch it: adapter.tt_model must expose `.layers` (dereferenced before the
-    # no-sliding-layers fallback can fire) and the reader must expose prepare_window_buffers /
-    # refresh_windows. Every real model and MutablePrefixKVReader do; it was an under-specified test
-    # double that noticed first, because before the flip nothing ever reached this code by default.
+    # Input contract, which the fallbacks below cannot catch: adapter.tt_model must expose
+    # `.layers` (dereferenced before the no-sliding-layers fallback can fire) and the reader must
+    # expose prepare_window_buffers / refresh_windows.
     if enforce_window:
         window = _sliding_window_for_denoise(adapter.tt_model, 0)
         if window:
@@ -215,17 +205,15 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
     if window_layers:
         reader.prepare_window_buffers(window_layers)
         reader.refresh_windows(prompt_len)
-        # Derive the report from the ACTUAL per-layer spans. Counting "layers in window_layers" as
-        # sliding was wrong once the canvas-tail path started adding the full-attention layers too,
-        # and it understated the key rows by pricing them at the bounded span.
+        # Derive the report from the ACTUAL per-layer spans: window_layers can also carry
+        # full-attention layers (canvas-tail path), so counting its keys as "sliding" would
+        # misprice the key rows.
         n_layers = len(adapter.tt_model.layers)
         bounded = sum(1 for span in window_layers.values() if sliding_span and span == sliding_span)
         key_rows_before = n_layers * (p_max + canvas_len)
         key_rows_after = sum(window_layers.get(i, p_max) + canvas_len for i in range(n_layers))
-        # "bounded sliding read:" is a stable, greppable engagement contract -- it is how a run's log
-        # proves the bounded read actually took effect. It deliberately does NOT name an env var:
-        # the old "DG_DENOISE_SLIDING_SPAN=1:" marker outlived its flag, and a marker naming a
-        # deleted knob is exactly the kind of label that lies.
+        # "bounded sliding read:" is a stable, greppable engagement marker -- it is how a run's
+        # log proves the bounded read actually took effect. It deliberately names no env var.
         logger.info(
             f"[DiffusionGemma up-front] bounded sliding read: {bounded}/{n_layers} layers "
             f"bounded to {sliding_span}, rest at {p_max}; "
@@ -269,10 +257,8 @@ def _vocab_noise_pool(adapter) -> dict:
 
     These buffers are span-independent (~134 MB each at the production vocab), so
     reallocating them on every bucket recapture both churns DRAM and — once
-    heterogeneous rebuilds have fragmented memory — simply stops fitting (the 32K
-    SPEED-Bench admission rebuild OOMed on exactly this allocation, 2026-08-11).
-    Allocated once per model, at startup, while memory is clean; released only
-    with the mesh.
+    heterogeneous rebuilds have fragmented memory — can stop fitting. Allocated
+    once per model, at startup, while memory is clean; released only with the mesh.
     """
     tt_model = getattr(adapter, "tt_model", None)
     if tt_model is None:
@@ -563,11 +549,10 @@ class UpfrontTracedDenoiseController:
         self._prepare_adapter_for_capture(adapter, start_pos=start_pos)
         self._initialize_gumbel(gumbel_noise_fn)
         # Long-context traces heavily fragment DRAM during capture. Preserve the
-        # contiguous 256 MiB hole left by the initial materialized Gumbel draw so
-        # every replay can allocate its fresh RNG tensor, copy into gumbel_buf,
-        # and return that same hole. Without this reservation 256K capture
-        # succeeds but the first refresh fails with only ~26 MiB as the largest
-        # per-bank free block (the draw needs 32 MiB).
+        # contiguous hole left by the initial materialized Gumbel draw so every
+        # replay can allocate its fresh RNG tensor, copy into gumbel_buf, and
+        # return that same hole; without the reservation the first refresh after
+        # a long-context capture can find no large-enough per-bank free block.
         # A bucketed startup capture may bind the 4K floor even though the
         # deployment ceiling can later upshift beyond 64K. Allocate the
         # span-independent reservation while startup memory is clean in that

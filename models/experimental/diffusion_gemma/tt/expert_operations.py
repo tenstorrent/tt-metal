@@ -17,13 +17,7 @@ _dispatcher_lock = Lock()
 
 
 def apply_gelu(value):
-    """Apply the checkpoint's GELU variant (``hidden_activation: gelu_pytorch_tanh``).
-
-    A ``DG_GELU_TANH=0`` arm used to select ``fast_and_approximate_mode`` here. It was deleted
-    2026-07-28: it is wrong math against this checkpoint, and because the flag was also read in
-    four other places it simultaneously swapped the shared-MLP code path and its CCL call, so it
-    could not serve the activation bisect it was retained for.
-    """
+    """Apply the checkpoint's GELU variant (``hidden_activation: gelu_pytorch_tanh``)."""
     return ttnn.gelu(value, variant=ttnn.GeluVariant.Tanh)
 
 
@@ -57,9 +51,8 @@ def _legacy_geglu_with_release(gate, up):
 
     Reproduces ``models.demos.gemma4.tt.experts.operations.apply_geglu`` exactly --
     ``fast_and_approximate_mode`` GELU, *not* this checkpoint's tanh variant -- and adds the
-    ``deallocate`` that the shared copy does not do. DiffusionGemma used to get that free by
-    editing the shared file; keeping the release DG-local is what lets ``models/demos/gemma4``
-    stay byte-identical to ``main`` (see ``.agent/scripts/check_no_shared_gemma4_edits.sh``).
+    ``deallocate`` that the shared copy does not do. Keeping the release DG-local is what lets
+    ``models/demos/gemma4`` stay byte-identical to ``main``.
 
     Only reachable when the tanh contextvar is unset, which the live path never does
     (``prefill_moe.py`` pins ``tanh_gelu = True``); it exists so that a future caller which
@@ -89,9 +82,7 @@ def _install_contextual_geglu() -> None:
 def use_tanh_expert_activations(enabled: bool = True):
     """Select DG tanh-GELU for shared expert fallbacks in this call context.
 
-    ``enabled`` is retained because ``prefill_moe`` threads a computed value through it; the
-    ``DG_GELU_TANH`` env consult it used to fall back to was deleted 2026-07-28 (the OFF arm is
-    wrong math against this checkpoint).
+    ``enabled`` exists because ``prefill_moe`` threads a computed value through it.
     """
     if not enabled:
         yield

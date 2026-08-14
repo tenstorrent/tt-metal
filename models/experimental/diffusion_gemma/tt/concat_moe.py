@@ -3,46 +3,6 @@
 
 """Concat-experts MoE for the DiffusionGemma denoise step — the only denoise MoE path.
 
-## Why this exists
-
-The denoise MoE used to be a token-gather "sparse" path in :mod:`tt.sparse_moe`: build a
-capacity dispatch matrix, gather each expert's tokens with ``disp^T @ hidden``, run a batched
-per-expert matmul, then scatter back with ``comb @ down_flat``. That path — and the dense-128
-reference that sat behind it — were deleted on 2026-07-29, together with the ``DG_MOE_CONCAT``
-selector that chose between them, for two independent reasons.
-
-**The gather path did not converge.** Same 2-question smoke, same everything else, the selector the
-only difference:
-
-    token-gather   halted  0/9   min halt_entropy_final 0.44021   2 degenerate, 2 guard kills
-    concat         halted 19/19  min halt_entropy_final 0.000588  0 degenerate, 0 kills
-
-At 0.44 the mean entropy sits ~100x above the 0.005 halt threshold, so the early halt cannot fire,
-every block runs the full 48 steps and commits an unsettled canvas, and the degeneracy guard ends
-roughly two thirds of requests. With concat the trajectory reaches ~6e-4 and halts in 8-27 steps.
-The fold itself is numerically validated at PCC 0.99992 on device (``213ac50f221``).
-
-**And it was slower.** The gather shape only pays for itself when the capacity is much smaller
-than the token count. It was not, any more — the capacity default moved to the canvas length (256)
-on 2026-07-15 because anything smaller silently dropped 41-84% of the active routes. At
-``C = S = 256`` the arithmetic was:
-
-    E=128, C=256, H=2816, I_dev=192          (config.py; weights.py pads I/tp up to a tile)
-
-    expert gate+up+down MACs   5.31e10   — identical to computing every expert densely
-    gather   [EC,S] @ [S,H]    2.36e10
-    combine  [S,EC] @ [EC,H]   2.36e10
-    ------------------------------------
-    total                      1.00e11   = +89% over the dense-equivalent 5.31e10
-
-plus two ~184 MiB intermediates (``dispatched``, ``down_flat``) that were each written to DRAM and
-read back. The gathered ``[1,E,C,H]`` was ~94% zero rows, because the capacity dispatch placed
-token *t* of expert *e* at column ``e*C + slot`` and only ~top_k/E of the slots are ever filled.
-
-So the "sparse" path paid the full dense expert cost and then added the dispatch on top.
-
-## What this does instead
-
 Relayout the per-expert weights ONCE so all experts are one wide matmul, and fold the routing
 weights into the GeGLU output so the down projection is also one matmul:
 
@@ -64,41 +24,30 @@ cheap matmul — the alternative is a reshape of a very wide tensor, which is a 
 
 ## What it costs
 
-The concatenated gate/up are a SECOND copy of those weights: ``H * E*I * 2 B`` = **132 MiB each**,
-so ``2 * 132 = 264 MiB per layer per device`` at bf16, i.e. **~7.7 GiB across 30 layers** (measured
-7.773 GiB). The originals cannot simply be freed — prefill still runs the ragged top-8 path over
-them. ``down_cat`` is free: at bf16 in TILE layout ``[1,E,I,H] -> [1,1,E*I,H]`` is the same byte
-order (expert *e* occupies row-blocks ``[6e, 6e+6)`` either way), so it is a metadata reshape —
-a **view**, which is why :meth:`ConcatExpertWeights.deallocate` must not force-free it.
-:func:`verify_down_concat_is_free` checks that on device rather than trusting the argument.
+The concatenated gate/up are a SECOND copy of those weights: ~264 MiB per layer per device at
+bf16, ~7.7 GiB across 30 layers. The originals cannot simply be freed — prefill still runs the
+ragged top-8 path over them. ``down_cat`` is free at bf16: in TILE layout ``[1,E,I,H] ->
+[1,1,E*I,H]`` is the same byte order, so it is a metadata reshape — a **view**, which is why
+:meth:`ConcatExpertWeights.deallocate` must not force-free it. :func:`verify_down_concat_is_free`
+checks that on device rather than trusting the argument.
 
-That accounting is the **bf16** case, and it is the only case where ``down_cat`` is free. Quantized
-experts come from ``DG_EXPERTS_DTYPE`` / ``DG_EXPERTS_BFP8`` in :mod:`tt.precision_build`, which
-quantize at build time and therefore apply to these concat weights too — that is the whole supported
-route now that the sparse path's runtime ``DG_MOE_EXPERT_BFP8`` is gone. At a block format the
-relayout has to round-trip through bf16 (``_RELAYOUT_SAFE_DTYPES``) and ``down_cat`` becomes a real
-third tensor rather than a view, so the shape of the cost changes, not just its size: re-measure with
-:func:`verify_down_concat_is_free` instead of scaling the 7.7 GiB figure.
+That accounting is the **bf16** case, and it is the only case where ``down_cat`` is free.
+Quantized experts (``DG_EXPERTS_DTYPE`` / ``DG_EXPERTS_BFP8`` in :mod:`tt.precision_build`)
+quantize at build time and therefore apply to these concat weights too. At a block format the
+relayout has to round-trip through bf16 (``_RELAYOUT_SAFE_DTYPES``) and ``down_cat`` becomes a
+real third tensor rather than a view: re-measure with :func:`verify_down_concat_is_free` instead
+of scaling the bf16 figure.
 
 **Blast radius.** This is not denoise-only. The batched commit runs the same layer body and calls
-the same ``_denoise_moe_forward`` seam (``tt/commit_batched.py``), and batched commit is the shipped
-default — so this folds the **commit** MoE too, and commit hidden states are what the
-committed-prefix KV is built from, so it compounds across blocks. That is deliberate: commit is
-meant to be numerically the same body as denoise. Prefill is genuinely untouched — it has its own
-ragged top-8 path in :mod:`tt.sparse_moe`, which is why the original ``[1,E,H,I]`` gate/up weights
-must stay live.
+the same ``_denoise_moe_forward`` seam (``tt/commit_batched.py``), so this folds the **commit**
+MoE too — deliberate, since commit is meant to be numerically the same body as denoise. Prefill
+is untouched — it has its own ragged top-8 path in :mod:`tt.sparse_moe`, which is why the
+original ``[1,E,H,I]`` gate/up weights must stay live. ``DG_TRACE_REGION_SIZE`` must be
+right-sized to leave room for the concat weights — an oversized trace reservation is an OOM.
 
-7.7 GiB does not fit next to a 12 GiB trace reservation, and it does not have to: the 48 resident
-traces measure ~1.44 GiB (doc/vllm_integration/traced_serving.md), so ~10 GiB of that reservation
-is unusable slack. Since this path is no longer optional, ``DG_TRACE_REGION_SIZE`` has to be
-right-sized for it (``doc/optimize_perf/bisect_trace_region.sh``) — an oversized trace reservation
-is now an OOM, not a forgone optimization.
-
-This path is **not bit-identical** to the deleted gather path — the routing weight is applied to
-the GeGLU output in bf16 before a single 24576-long reduction, where the gather path accumulated
-the down projection per expert and applied the routing weight in the combine matmul. So a
-``committed_sha256`` recorded before 2026-07-29 cannot be compared against one recorded after;
-quality across that boundary is an absolute measurement (the GPQA arm), not a hash match.
+Numerics: the routing weight is applied to the GeGLU output in bf16 before a single long
+reduction, not per expert in the down accumulation, so outputs are not bit-identical to a
+per-expert-accumulated MoE.
 """
 
 from __future__ import annotations
@@ -124,44 +73,11 @@ _EXPERT_FP32_FULL_SYNC_CFG_CACHE = {}
 
 def default_expert_compute_kernel_config():
     """HiFi2 for the expert matmuls. ``DG_SPARSE_MOE_HIFI4=1`` raises it to HiFi4, which is what
-    the gemma4 dense reference (``models/demos/gemma4/tt/experts/prefill.py``) uses.
-
-    On the flag names: ``DG_SPARSE_MOE_HIFI4`` and ``DG_SPARSE_EXPERT_FP32_FULL_SYNC`` say "sparse"
-    because they predate this module — they were the token-gather MoE's knobs and moved here with
-    the expert matmuls when that path was deleted on 2026-07-29. The names are deliberately kept so
-    existing launcher scripts and the recorded runs still address the same thing.
-
-    The fidelity gap against that reference is real and is a contributor to the pcc-vs-dense gap,
-    but raising it is NOT a net win. **Scope caveat: the numbers below were measured on the retired
-    token-gather MoE.** They are why the default is HiFi2 and why flipping it needs a fresh paired
-    run; they are not evidence about this MoE body. Measured over paired 16K runs on the same
-    prompts, seed, span, traced path and noise mode, with only the fidelity differing:
-
-        HiFi2   2/13 collapsed   1 empty output   11 answered   10 correct
-        HiFi4   4/13 collapsed   0 empty output    9 answered    9 correct
-
-    HiFi4 won only the empty-output case: q007's block 0 goes from 48 steps / not halted /
-    109 of 256 positions still flipping to 30 steps / halted / 0, so that request stops emitting
-    nothing. But collapses double and one fewer answer is correct, because many blocks converge
-    right AT the 48-step cap -- q012's block 0 halted on step 45 of 48 under HiFi2 and tips over
-    under HiFi4 -- so a numerical change moves blocks in BOTH directions.
-
-    Cost was not the obstacle -- it is small, because the expert matmuls are weight-bound and these
-    blocks are dominated by attention and DRAM traffic, so the extra math passes hide behind the
-    DRAM read. Per-block latency at 16K, on the two questions with a clean before/after:
-
-        q012   HiFi2 24.112 s/blk (10.62 tok/s)   HiFi4 25.556 s/blk (10.02 tok/s)   +6.0%
-        q013   HiFi2 27.786 s/blk ( 9.21 tok/s)   HiFi4 27.685 s/blk ( 9.25 tok/s)   -0.4%
-
-    So if a paired run on THIS path ever shows HiFi4 net-positive, the throughput will not stand in
-    the way. What is needed is that measurement, not another single-prompt result: this default was
-    briefly flipped to HiFi4 on three data points and had to be reverted, which is the same mistake
-    that shipped a corrupting DG_VLLM_GUMBEL_MODE default for two weeks.
-
-    fp32_dest_acc_en stays False. It was originally False so the retired path's tuned out_subblock
-    (product up to 8) stayed legal — fp32_dest_acc caps it at 4 — and it stays False now because
-    every quality number on record was taken with it False; flipping it changes expert numerics and
-    owes its own paired run."""
+    the gemma4 dense reference (``models/demos/gemma4/tt/experts/prefill.py``) uses; the
+    ``DG_SPARSE_*`` flag names are legacy naming. A fidelity change moves block convergence in
+    BOTH directions, so flipping the default needs a fresh paired run, not a single-prompt result.
+    ``fp32_dest_acc_en`` stays False: flipping it changes expert numerics and owes its own paired
+    run."""
     fidelity = ttnn.MathFidelity.HiFi4 if os.environ.get("DG_SPARSE_MOE_HIFI4", "0") != "0" else ttnn.MathFidelity.HiFi2
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
@@ -269,13 +185,13 @@ class ConcatExpertWeights:
     """Per-layer concat weights plus the shared expand matrix.
 
     Built lazily on the first denoise forward of each layer and cached on the layer, so a
-    reduced-layer bench pays the 264 MiB/layer relayout only for the layers it actually runs.
+    reduced-layer bench pays the ~264 MiB/layer relayout only for the layers it actually runs.
 
-    The 7.7 GiB is **process-lifetime**: nothing reserves or pre-checks it before the lazy build,
+    The ~7.7 GiB is **process-lifetime**: nothing reserves or pre-checks it before the lazy build,
     and :meth:`deallocate` currently has no caller (no teardown path frees these), so the only
-    release is process exit. That was tolerable while this path was opt-in; now that it is the only
-    denoise MoE, a run whose ``DG_TRACE_REGION_SIZE`` is not right-sized for it OOMs, and the
-    reservation is validated nowhere (``tt/generator_vllm.py`` only checks that it parses as > 0).
+    release is process exit. A run whose ``DG_TRACE_REGION_SIZE`` is not right-sized for it OOMs,
+    and the reservation is validated nowhere (``tt/generator_vllm.py`` only checks that it parses
+    as > 0).
     """
 
     __slots__ = ("gate_cat", "up_cat", "down_cat", "num_experts", "intermediate")
@@ -290,8 +206,8 @@ class ConcatExpertWeights:
     def deallocate(self):
         """Release the concat weights **without** freeing anything they alias.
 
-        ``down_cat`` is a *view* of ``experts.weights.down_proj`` at bf16 (that is exactly why the
-        relayout costs 7.7 GiB and not 11.6). ``deallocate(True)`` bypasses the not-sole-owner guard
+        ``down_cat`` is a *view* of ``experts.weights.down_proj`` at bf16.
+        ``deallocate(True)`` bypasses the not-sole-owner guard
         and reaches the root holder, so force-freeing it would free the live row-parallel down
         weights that the ragged prefill path still reads — and the failure would surface inside
         prefill, far from here. ``deallocate(False)`` is correct in both cases: the aliasing bf16

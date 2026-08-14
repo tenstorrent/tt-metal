@@ -4,7 +4,7 @@
 """Block-autoregressive multi-canvas generation (reference, #47464).
 
 The outer loop that assembles per-block denoise trajectories into a full
-generation (plan.md §2.1): for each 256-token block, initialize a random canvas,
+generation: for each 256-token block, initialize a random canvas,
 denoise it to convergence, commit the clean argmax, and append it to the
 generated sequence so the model's prefix grows — then the next block. This is
 the text-first e2e algorithm (#47464); on device the growing prefix is the
@@ -139,7 +139,7 @@ def generate_blocks(
     ``denoise_block``) the per-step regenerated sample/renoise noise, so a single
     seeded generator reproduces the whole generation. ``sampler`` selects the
     HF-faithful ``multinomial`` (default) or ``gumbel``; pass the ``*_noise_fn``
-    hooks to inject the torch run's exact noise (token-for-token, R5). Pass
+    hooks to inject the torch run's exact noise (token-for-token). Pass
     ``init_canvas_fn`` to replay exact per-block canvases in device-vs-reference
     acceptance tests.
     """

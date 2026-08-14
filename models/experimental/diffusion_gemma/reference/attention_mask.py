@@ -8,9 +8,8 @@ by concatenating encoder K/V **in front of** the canvas K/V (prefix-style). So
 for canvas *queries* the key axis is ``[prompt (P) ; canvas (C)]`` of length
 ``P + C`` and the additive mask is ``[C, P + C]`` (0 = attend, -inf = masked).
 
-HF VISIBILITY (corrected 2026-07-24, see #51080). Full-attention layers are fully
-bidirectional. Sliding layers do **not** apply a ``abs(q_idx - kv_idx) <= sliding_window``
-staircase — this module previously claimed and implemented that, and it was wrong:
+HF VISIBILITY (#51080). Full-attention layers are fully bidirectional. Sliding
+layers do **not** apply a ``abs(q_idx - kv_idx) <= sliding_window`` staircase:
 
 * ``DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask`` returns ``None`` for
   both masks on the ordinary unpadded ``DynamicCache`` path, so no sliding mask exists at all;
@@ -56,9 +55,8 @@ def build_canvas_reveal_denoise_mask(
 
     Unlike :func:`build_canvas_denoise_mask`, the key axis prefix span is a CONSTANT
     ``p_max`` (not the growing ``prompt_len``), so the mask — and therefore the traced
-    denoise attention graph — is shape-invariant across blocks (capture-once/replay-many,
-    see ``doc/optimize_perf/paged_prefix_denoise_design.md``). The growing committed prefix
-    is exposed purely through the mask CONTENT:
+    denoise attention graph — is shape-invariant across blocks (capture-once/replay-many).
+    The growing committed prefix is exposed purely through the mask CONTENT:
 
     - Canvas queries are anchored at the TRUE committed ``prompt_len`` (``q_abs = prompt_len + i``),
       NOT ``p_max`` — decoupling the read span from the reveal length is the whole point.
@@ -72,17 +70,12 @@ def build_canvas_reveal_denoise_mask(
     right-pads the prompt to a tile multiple and writes K/V for the pad tokens, and the reveal
     predicate is evaluated with the PADDED length, so those keys are revealed even though they are
     garbage — and they sit immediately before the canvas, making the canvas's nearest context noise.
-    Measured on the reference with the same geometry injected (seeded canvas, otherwise identical):
-    hiding them takes q096 from the 48-step cap back to 20 steps, and q106/q095 from 35 back to
-    12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md`` section 16.
 
-    ``enforce_sliding_window=False`` (Phase 1) → committed keys are all-attend (matches today's
-    maskless production denoise path; the reveal is the ONLY masking). ``True`` → additionally
-    hide committed keys HF's sliding cache no longer retains, i.e. keep only absolute positions
-    ``>= prompt_len - (sliding_window - 1)``. That is a per-KEY predicate with no query
-    dependence (see the module docstring); it is a decision change vs today's TT output and needs
-    its own re-validation against fp32 HF — but it moves TOWARD HF, which currently sees fewer
-    keys than TT does. ``layer_type='full_attention'`` ignores the window.
+    ``enforce_sliding_window=False`` (Phase 1) → committed keys are all-attend (the reveal is the
+    ONLY masking). ``True`` → additionally hide committed keys HF's sliding cache no longer
+    retains, i.e. keep only absolute positions ``>= prompt_len - (sliding_window - 1)`` — a
+    per-KEY predicate with no query dependence (see the module docstring).
+    ``layer_type='full_attention'`` ignores the window.
     """
     if p_max < prompt_len:
         raise ValueError(f"p_max ({p_max}) must be >= prompt_len ({prompt_len})")
@@ -107,9 +100,7 @@ def build_canvas_reveal_denoise_mask(
             raise ValueError("sliding_window must be positive for sliding_attention")
         # HF retains only the last ``sliding_window - 1`` COMMITTED tokens in a sliding layer's
         # cache. Visibility is therefore a per-KEY property of the committed prefix with no
-        # query dependence; the canvas is always fully visible. (The previous implementation
-        # applied a per-(q,k) ``abs(q_abs - k_abs) <= sliding_window`` staircase, which HF does
-        # not do and which would hide up to canvas_len-1 keys per row that HF attends.)
+        # query dependence; the canvas is always fully visible.
         keep_from = prompt_len - (sliding_window - 1)
         retained = torch.zeros(total_k, dtype=torch.bool, device=device)
         retained[:p_max] = prefix_abs >= keep_from
@@ -264,8 +255,7 @@ def build_canvas_denoise_mask(
         # Non-causal (denoise) sliding visibility is a per-KEY predicate: HF's sliding cache
         # retains only the last ``sliding_window - 1`` committed prompt positions, and the whole
         # canvas is always visible. It is NOT a ``abs(q_abs - k_abs) <= sliding_window``
-        # staircase — see the module docstring and #51080. The old staircase both hid committed
-        # keys HF attends and revealed prompt keys HF has already evicted.
+        # staircase — see the module docstring and #51080.
         keep_from = prompt_len - (sliding_window - 1)
         prompt_abs = torch.arange(prompt_len, device=device)
         allowed = torch.zeros(canvas_len, total_k, dtype=torch.bool, device=device)

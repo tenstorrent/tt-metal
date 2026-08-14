@@ -3,19 +3,18 @@
 
 """DG-local model construction with a MoE experts weight-dtype knob (#47475 datatype sweep).
 
-DiffusionGemma's MoE expert weights (gate/up/down proj) are ~88.6% of the on-device weight
-DRAM (~11.6 GiB/chip) and a large fraction of the compute-bound denoise step. The shared
-Gemma4 backbone builds every module at the model-wide default dtype (``ttnn.bfloat16``)
-unless ``models/demos/gemma4/precision_overrides.json`` carries an override; there is no
-entry for ``gemma-4-26B-A4B-it``, so DiffusionGemma's experts currently load as bf16.
+DiffusionGemma's MoE expert weights (gate/up/down proj) are the large majority of the
+on-device weight DRAM. The shared Gemma4 backbone builds every module at the model-wide
+default dtype (``ttnn.bfloat16``) unless ``models/demos/gemma4/precision_overrides.json``
+carries an override; there is no entry for ``gemma-4-26B-A4B-it``, so DiffusionGemma's
+experts load as bf16.
 
 This module lets DiffusionGemma flip ONLY the expert gate/up/down weights to
 ``ttnn.bfloat8_b`` via an env knob (``DG_EXPERTS_BFP8=1`` or ``DG_EXPERTS_DTYPE=bfp8``)
-WITHOUT editing the shared backbone (the hard no-shared-edits rule). For the default (no
-override) case it delegates to the shared ``create_tt_model`` unchanged; only when an
-override is requested does it replicate ``create_tt_model``'s body so it can pass a
-``Gemma4Precision`` with an ``experts`` override into ``Gemma4Model`` (the copy-shared-into-DG
-convention: we may not edit the shared constructor, so we reproduce it here).
+WITHOUT editing the shared backbone. For the default (no override) case it delegates to
+the shared ``create_tt_model`` unchanged; only when an override is requested does it
+replicate ``create_tt_model``'s body so it can pass a ``Gemma4Precision`` with an
+``experts`` override into ``Gemma4Model``.
 
 Decision-path precision is preserved: the override touches ONLY the ``experts`` module. The
 router (``MoEBlock`` keeps ``router_dtype=bf16``), attention, shared MLP, embedding, lm_head,

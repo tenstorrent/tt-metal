@@ -90,13 +90,13 @@ def canvas_sample_from_params(
 ):
     """Apply duck-typed TT sampling params to the device canvas sampler.
 
-    This is the small vLLM seam for W4: callers pass the vLLM-owned
-    ``TTSamplingParams`` object (or a dict with the same fields), and the helper
-    maps temperature/seed onto the per-position DiffusionGemma canvas sampler.
-    ``top_k``/``top_p`` remain parsed-only until the reference sampler ships those
-    filters. Seed-regenerated Gumbel noise uses the plain vocab-innermost
-    ``ttnn.rand`` draw; the SFPU RNG is lane-salted per element since
-    tt-metal#52024, so no axis workaround is needed.
+    This is the small vLLM seam: callers pass the vLLM-owned ``TTSamplingParams``
+    object (or a dict with the same fields), and the helper maps temperature/seed
+    onto the per-position DiffusionGemma canvas sampler. ``top_k``/``top_p``
+    remain parsed-only until the reference sampler ships those filters.
+    Seed-regenerated Gumbel noise uses the plain vocab-innermost ``ttnn.rand``
+    draw; the SFPU RNG is lane-salted per element (tt-metal#52024), so no axis
+    workaround is needed.
     """
     from models.experimental.diffusion_gemma.tt import sampling as TS
 

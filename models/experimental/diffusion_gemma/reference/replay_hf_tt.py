@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Replay one DiffusionGemma denoise block through HF and TT.
 
-This is a focused bring-up harness for R0.5/#48291 fidelity debugging. It drives
+This is a focused harness for #48291 fidelity debugging. It drives
 both implementations with the same prompt, initial canvas, Gumbel noise, and
 renoise tokens, then saves the decision-level trajectory comparison.
 """
@@ -1094,8 +1094,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("bfloat16", "float32"),
         default="bfloat16",
         help="HF backbone compute dtype. bfloat16 is the production reference; float32 gives the "
-        "quantization-ideal trajectory for the #48291 bf16-floor self-consistency control "
-        "(see doc/decision_fidelity/measure_bf16_floor.py). Forbidden under --stage-gate.",
+        "quantization-ideal trajectory for the #48291 bf16-floor self-consistency control. "
+        "Forbidden under --stage-gate.",
     )
     parser.add_argument(
         "--capture-logits-topk",
@@ -1230,9 +1230,7 @@ def _validate_stage_gate_args(args) -> None:
         raise ValueError("--stage-gate requires --mesh P150x4")
     if args.num_layers is not None:
         raise ValueError("--stage-gate requires the full model (omit --num-layers)")
-    # A DG_SPARSE_MOE=1 check used to sit here, so the gate could not be run on a reference MoE.
-    # The selectable MoE paths were deleted on 2026-07-29 (tt/concat_moe.py is the only denoise MoE),
-    # so there is no longer anything to assert — do not re-add a check on a flag that does nothing.
+    # tt/concat_moe.py is the only denoise MoE, so no MoE-path flag needs asserting here.
     if getattr(args, "hf_dtype", "bfloat16") != "bfloat16":
         raise ValueError("--stage-gate requires the bf16 HF reference (--hf-dtype bfloat16)")
 

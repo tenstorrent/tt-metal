@@ -10,38 +10,19 @@ chunk's. The shared backbone nevertheless ends every non-decode forward in
 ``Gemma4Model._apply_lm_head`` -- a 262k-vocab matmul, three softcap elementwise
 ops, and, at tp > 1, a TP all-gather.
 
-That all-gather is the expensive part, and not because of its bytes (a
-[1, 1, 32, vocab/tp] bf16 gather is single-digit MB). ``ccl_allgather``
-(``models/demos/gemma4/tt/ccl.py:131``) calls plain ``ttnn.all_gather``, whose
-program factory calls ``create_global_semaphore`` three times
-(``ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_program_factory.cpp:37-44``),
-and ``GlobalSemaphore::setup_buffer`` is a blocking ``enqueue_write_mesh_buffer``
-ending in ``FDMeshCommandQueue::finish_nolock`` -- a full command-queue drain. That
-is the same mechanism ``tt/ccl.py`` removed from the ~90 all_reduces per forward
-(291a241ae76); this call site survived it because it sits in the SHARED lm_head,
-which DG cannot reach by re-pointing imports, and because it is reached on a
-program-cache MISS only, so it is intermittent rather than constant.
-
-Measured on tt-shield benchmarks run 30640405931 (2026-07-31, 30 layers, QB2,
-32 served requests): prefill is bimodal, with a fast path that scales correctly
-with prompt length (0.134 / 0.332 / 0.575 / 1.058 / 2.099 s at cache_len 128 /
-1024 / 2048 / 4096 / 8192) and a slow path of 5.8-29.3 s that is prompt-length
-INDEPENDENT (median 17.2 s at 2048 > 13.8 s at 4096 > 10.7 s at 8192) -- one
-event per prefill, which is exactly this call's cardinality. Traced denoise is
-immune for the documented reason: trace replay never rebuilds a program, so the
-48 per-block ``_apply_lm_head`` calls inside the denoise trace never reach the
-factory, and the denoise step stays flat at 195.8 ms while prefill swings 100x.
+That all-gather is the expensive part, and not because of its bytes: on a
+program-cache MISS its plain ``ttnn.all_gather`` builds GlobalSemaphores whose
+setup is a blocking write ending in a full command-queue drain, and it sits in
+the SHARED lm_head, which DG cannot reach by re-pointing imports -- so the cost
+is intermittent rather than constant.
 
 The skip uses the backbone's own ``_prefill_trace_mode`` hook, which returns
-post-norm hidden states before the last-token slice and the lm_head
-(``models/demos/gemma4/tt/model.py:860``). It exists because baking a 262k-vocab
-lm_head into a prefill trace is ~40x the model body at 4k tokens; gemma4's own
-generator sets it the same way (``gemma4/tt/generator.py:150-163``). Nothing in
-the shared tree is edited.
+post-norm hidden states before the last-token slice and the lm_head; gemma4's
+own generator sets it the same way. Nothing in the shared tree is edited.
 
-This is output-neutral by construction, not by measurement: K/V is written inside
-the decoder layers, before ``self.norm`` and before the branch this flag takes, and
-the tensor it changes is one the caller deallocates unread. The DENOISE path is
+This is output-neutral by construction: K/V is written inside the decoder
+layers, before ``self.norm`` and before the branch this flag takes, and the
+tensor it changes is one the caller deallocates unread. The DENOISE path is
 unaffected -- ``denoise_forward`` calls ``_apply_lm_head`` directly rather than
 through the forward, so it never consults this flag.
 """

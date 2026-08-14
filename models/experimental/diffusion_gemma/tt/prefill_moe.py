@@ -4,18 +4,15 @@
 """DiffusionGemma-local causal-prefill MoE optimizations.
 
 The dense fallback tunes sparse-matmul geometry. The default ragged path packs
-only routed token/expert pairs into compact, zero-drop batches and preserves the
-shared BF16 operation/reduction order. Verified bit-identical to the shared path
-on QB2 (26B-A4B, 30 layers, prompts up to 2048 incl. multi-segment expert
-packing: logits + KV cache max_abs=0), while cutting the 128-expert prefill down
-to only the routed experts (26-57x faster on device, scaling with prompt length).
+only routed token/expert pairs into compact, zero-drop batches, preserves the
+shared BF16 operation/reduction order, and is bit-identical to the shared
+128-expert path while computing only the routed experts.
 
 Prompts longer than ``RAGGED_PREFILL_CHUNK`` are processed in ``RAGGED_PREFILL_CHUNK``-token slices
-through the same validated ragged path (``chunked_ragged_sparse_prefill_forward``, default on via
-``DG_PREFILL_RAGGED_LONG``), removing the shared dense fallback that recomputed all 128 experts and
-was ~16x slower (the ">4096 cliff": 3213 -> 379 tok/s at 16K). Chunking also keeps the ``top_k*S*H``
-index volumes under the int32 limit that a single full-S call would hit past ~128K context. Verified
-bit-identical to the dense path on QB2 (logits + KV max_abs=0 at 4096/6144/8192, 30 layers).
+through the same ragged path (``chunked_ragged_sparse_prefill_forward``, default on via
+``DG_PREFILL_RAGGED_LONG``) instead of the shared dense fallback that recomputes all 128 experts.
+Chunking also keeps the ``top_k*S*H`` index volumes under the int32 limit that a single full-S
+call would hit past ~128K context.
 
 The shared Gemma4 source remains untouched. A context-local selector activates
 these paths only for the current DiffusionGemma prefill.
@@ -81,7 +78,7 @@ def tuned_prefill_moe_enabled() -> bool:
 
 
 def ragged_prefill_moe_enabled() -> bool:
-    """Whether zero-drop compact sparse prefill is enabled (default ON; QB2-verified bit-identical to the shared path)."""
+    """Whether zero-drop compact sparse prefill is enabled (default ON; bit-identical to the shared path)."""
 
     return os.environ.get(RAGGED_FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
 
@@ -90,11 +87,9 @@ def ragged_long_prefill_enabled() -> bool:
     """Whether the ragged path is extended past ``RAGGED_PREFILL_CHUNK`` via token-dim chunking.
 
     Default ON: long prefill is processed in ``RAGGED_PREFILL_CHUNK``-token slices through the
-    validated ragged path (see ``chunked_ragged_sparse_prefill_forward``), eliminating the >4096
-    128-expert dense cliff (~4.7x faster at 8192, widening with context). QB2-verified bit-identical
-    to the shared dense prefill — logits + full KV cache max_abs=0 at 4096/6144/8192, 30 layers
-    (doc/optimize_perf/chunked_ragged_prefill_bitident.json). Set ``DG_PREFILL_RAGGED_LONG=0`` to
-    force the shared 128-expert dense fallback for prompts beyond one chunk."""
+    ragged path (see ``chunked_ragged_sparse_prefill_forward``), bit-identical to the shared dense
+    prefill. Set ``DG_PREFILL_RAGGED_LONG=0`` to force the shared 128-expert dense fallback for
+    prompts beyond one chunk."""
 
     return os.environ.get(RAGGED_LONG_FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
 

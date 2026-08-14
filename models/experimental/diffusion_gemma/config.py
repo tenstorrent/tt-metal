@@ -6,12 +6,8 @@
 Hyperparameters for the DiffusionGemma text backbone (identical to the Gemma-4
 26B-A4B MoE) and the discrete-diffusion generation procedure.
 
-Provenance of each field is marked:
-  * ``# verified`` — confirmed against the HF ``config.json`` / model card /
-    vLLM blog during plan review (see ``plan.md`` §2).
-  * ``# TODO(confirm)`` — not surfaced from a primary source yet; the value is a
-    Gemma-lineage default or a plan-stated value to reconcile against the real
-    ``config.json`` during the #47461 weight-mapping pass.
+Fields marked ``# verified`` are confirmed against the HF ``config.json`` /
+model card.
 
 This is plain config — no torch / ttnn import — so it is importable without the
 gated checkpoint, transformers ``diffusion_gemma``, or hardware.
@@ -57,13 +53,10 @@ class TextConfig:
     # for the 30-layer 26B-A4B (configs/gemma-4-26B-A4B-it/config.json).
     sliding_window_pattern: int = 6  # verified (derived from layer_types)
     # K=V tying applies to full-attn (global) layers ONLY; sliding/local layers
-    # keep a real separate V. See gemma4 tt/attention/__init__.py:34.
-    # PROVENANCE: this is the **gemma-4-26B-A4B base** config value (the backbone we
-    # reuse — its config.json has attention_k_eq_v=True). The *DiffusionGemma* config
-    # OMITS the key (modular_diffusion_gemma.py:101 sets attention_k_eq_v=AttributeError(),
-    # i.e. DG deletes it and derives K=V tying from layer geometry). We keep True
-    # because the backbone loads through the gemma4 path; the weight diff confirms it
-    # (v_proj present on 25 sliding layers, absent on the 5 K=V-tied full layers).
+    # keep a real separate V. This is the gemma-4-26B-A4B base config value: the
+    # DiffusionGemma config omits the key and derives K=V tying from layer
+    # geometry, but the backbone loads through the gemma4 path, so True is kept
+    # (the checkpoint has v_proj on sliding layers only).
     attention_k_eq_v: bool = True  # verified (gemma-4-26B-A4B base config.json + weight-key diff)
 
     # --- RoPE (dual theta, per layer type) -------------------------------
@@ -135,10 +128,10 @@ class DiffusionConfig:
     """
 
     # All values below are the **released** defaults from the checkpoint's
-    # generation_config.json, cross-checked against the canonical
-    # transformers `generation_diffusion_gemma.py` (DiffusionGemmaGenerationConfig
-    # defaults, lines ~224-229). Field names are kept descriptive; the HF
-    # generation_config key each maps to is noted in parentheses.
+    # generation_config.json, cross-checked against the canonical transformers
+    # `generation_diffusion_gemma.py` (DiffusionGemmaGenerationConfig defaults).
+    # Field names are kept descriptive; the HF generation_config key each maps
+    # to is noted in parentheses.
     canvas_length: int = 256  # verified (config.json canvas_length / generation_config max_new_tokens)
     max_denoise_steps: int = 48  # verified (generation_config: max_denoising_steps)
 

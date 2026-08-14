@@ -3,10 +3,10 @@
 
 """Device denoise-loop helpers for DiffusionGemma.
 
-This module starts with the single-step decision kernel composition used by the
-full W3 loop: sample, entropy, entropy-budget accept, and renoise. The model
-forward remains injected by callers so the same helper can be used by synthetic
-tests and the real W2 denoise logits path.
+Single-step decision kernels for the denoise loop — sample, entropy,
+entropy-budget accept, renoise — plus trace-safe step variants and the
+on-device early-halt scalars. The model forward is injected by callers so the
+same helpers serve synthetic tests and the real denoise logits path.
 """
 
 from __future__ import annotations
@@ -32,12 +32,6 @@ def _sample_and_argmax(logits, temperature: float, gumbel_noise):
     two returned tensors are distinct objects (independent ownership: callers deallocate
     ``sampled`` while keeping ``argmax`` as the commit candidate), so the free/readback contract is
     preserved with no aliasing.
-
-    A ``DG_DEDUP_ARGMAX`` fast path used to collapse these into one reduction in the
-    ``gumbel_noise is None`` regime. It was deleted 2026-07-28: it is structurally unreachable
-    under the shipped ``DG_UPFRONT_CAPTURE=1`` (the up-front controller rejects a ``None`` Gumbel
-    source in three places), it was not bit-identical by its own docstring, and it measured +0.5%
-    with an identical committed sha.
     """
     sampled = TS.gumbel_max(logits, temperature, gumbel_noise)
     sampled = ttnn.typecast(sampled, ttnn.uint32)
@@ -82,9 +76,8 @@ def make_denoise_constants(device, *, batch: int, canvas_len: int, budget: float
 def entropy_budget_accept(entropy, budget: float, *, budget_t=None, zeros=None):
     """Device entropy-budget accept mask using the HF exclusive-prefix rule.
 
-    This path is load-bearing for the Part I decision-fidelity bar: device sort
-    regressions must show up as accept-mask/count mismatches against the host
-    oracle, not as silent trajectory drift.
+    Device sort regressions must surface as accept-mask/count mismatches against
+    the host oracle, not as silent trajectory drift.
 
     ``budget_t`` / ``zeros`` may be preallocated (persistent) tensors so the op
     is trace-safe; when ``None`` they are allocated per call for the eager path.
@@ -225,13 +218,12 @@ def denoise_step_next_canvas(
     return res.canvas, res.argmax
 
 
-# --- Data-dependent early-halt: on-device halt-scalar reduction (dg-08 lever 8) ------
+# --- Data-dependent early-halt: on-device halt-scalar reduction ----------------------
 #
 # Early-halt must NOT trace the whole variable-length loop (a static Metal trace fixes
 # the step count). Instead the trace-safe single denoise step (or a fixed K-step window)
 # computes ONE tiny halt scalar per step ON DEVICE, and the HOST reads that scalar after
-# each replay and branches continue/stop. This is the anti-pattern-avoiding replacement
-# for the retired 5-tensor/step host readback (``bench_loop_readback.py`` = 27.76 ms/step).
+# each replay and branches continue/stop.
 #
 # The halt condition mirrors the eager reference (:func:`denoise_block` /
 # ``reference/denoise_loop.denoise_block``, ``StableAndConfidentStoppingCriteria``):
@@ -358,8 +350,7 @@ def denoise_step_next_canvas_and_halt(
 def read_halt_scalars(halt_bufs: "HaltBuffers") -> "tuple[float, float]":
     """Read the two tiny halt scalars to host: ``(mean_entropy, mismatch_count)``.
 
-    This is the ONLY host interaction per step/window — an 8-byte-logical readback, not the
-    retired 5×256-wide (argmax/entropy/sampled/accept/canvas) per-step readback.
+    This is the ONLY host interaction per step/window — an 8-byte-logical readback.
     """
     mean_entropy = float(_to_host_torch(halt_bufs.mean_entropy).reshape(-1)[0].item())
     mismatch = float(_to_host_torch(halt_bufs.mismatch).reshape(-1)[0].item())

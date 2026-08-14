@@ -77,8 +77,8 @@ def denoise_block(
     ``init_canvas`` is ``[B, L]`` (random token ids — the diffusion prior).
     ``sampler`` is ``"multinomial"`` (HF-faithful oracle, default) or ``"gumbel"``
     (device path). Optional ``gumbel_noise_fn(step)`` / ``noise_tokens_fn(step)``
-    inject the torch run's exact noise for token-for-token PCC determinism (R5,
-    forces the gumbel path); ``generator`` seeds regenerated noise otherwise so a
+    inject the torch run's exact noise for token-for-token PCC determinism
+    (forces the gumbel path); ``generator`` seeds regenerated noise otherwise so a
     single seeded generator reproduces the whole trajectory.
     """
     canvas = init_canvas

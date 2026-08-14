@@ -8,8 +8,4 @@ backbone is identical to ``models/demos/gemma4``; the net-new work is the
 block-autoregressive multi-canvas *generation procedure* — bidirectional canvas
 attention, a three-phase KV-cache state machine, entropy-budget acceptance
 sampling, and self-conditioning.
-
-See ``plan.md`` for the implementation plan, spec, and status (Part III tracks
-what is implemented vs blocked-on-environment) and ``AGENTS.md`` for working
-context.
 """

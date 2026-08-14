@@ -4,9 +4,8 @@
 """Device generation helpers for DiffusionGemma (#47464).
 
 This module owns the outer block-generation glue that is specific to
-DiffusionGemma. It starts with the commit step: once the denoise controller has
-chosen the clean argmax canvas, append those tokens to the frozen KV cache using
-the DiffusionGemma-local commit decode path.
+DiffusionGemma: prompt prefill, per-block denoise, committing each clean argmax
+canvas to the frozen KV cache, and host-side decode helpers.
 """
 
 from __future__ import annotations
@@ -193,9 +192,8 @@ def _assert_chat_template_honors_thinking(tokenizer, messages, *, add_generation
 
     ``apply_chat_template`` forwards unrecognised kwargs into the jinja context, so a template
     with no thinking branch renders the *same* string and the caller walks away holding a
-    non-thinking prompt while believing it asked for thinking. That silent drop is how the
-    offline DiffusionGemma path measured the halt gates against a malformed contract (#48291),
-    so an explicit ``enable_thinking=True`` must fail loudly rather than degrade.
+    non-thinking prompt while believing it asked for thinking. An explicit
+    ``enable_thinking=True`` must fail loudly rather than degrade (#48291).
     """
     render_kwargs = {"add_generation_prompt": add_generation_prompt, "tokenize": False}
     plain = tokenizer.apply_chat_template(messages, **render_kwargs)
@@ -221,7 +219,7 @@ def tokenize_prompt(
 
     ``enable_thinking`` selects DiffusionGemma's thinking contract, which the chat template
     renders as an extra ``<|think|>`` system turn. It defaults to ``None`` = pass nothing to
-    the template, which reproduces the previous render byte-for-byte; ``True``/``False`` are
+    the template; ``True``/``False`` are
     forwarded explicitly. An ignored ``True`` raises (see
     :func:`_assert_chat_template_honors_thinking`) instead of silently handing back the
     non-thinking prompt.
@@ -279,14 +277,10 @@ def _embed_tokens_dg(tt_model, tt_tokens):
     ``create_global_semaphore`` three times. A gather moves data without
     arithmetic, so this is a structural identity, not an accuracy trade.
 
-    Why it matters here: this is DG's LAST remaining semaphore-creating collective
-    on the non-traced path once the prefill lm_head is skipped
-    (``tt/prefill_logits.py``), and ``embed_host_tokens`` is called by BOTH prefill
-    and per-block commit -- which is why commit latency is bimodal in the same way
-    prefill is (p50 0.203 s, mean 0.683 s, max 4.512 s on tt-shield run
-    30640405931). Semaphore setup blocks in ``finish_nolock``; measured on QB2 at
-    0.87 s per cache-missing call with anything queued behind it, versus 0.003 s
-    when the queue is empty and 0.000 s on a cache hit.
+    Why it matters: with the prefill lm_head skipped (``tt/prefill_logits.py``)
+    this would be DG's last semaphore-creating collective on the non-traced path,
+    semaphore setup blocks in ``finish_nolock``, and ``embed_host_tokens`` is
+    called by BOTH prefill and per-block commit.
     """
     if tt_model.embedding_weight is None:
         raise RuntimeError("Embedding weights not loaded")
@@ -362,10 +356,9 @@ def prefill_prompt_tokens(
     cache_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
     cache_len = cache_tokens.shape[1]
     chunk_size = int(os.environ.get("DG_PREFILL_CHUNK_SIZE", "4096"))
-    # A 32K monolithic prefill materializes a 352 MiB all-reduce output. After
-    # the 32K denoise trace is captured, that temporary no longer fits beside
-    # the resident trace on QB2, so the next request kills EngineCore. Keep the
-    # boundary itself in the same bounded-memory regime as larger prefills.
+    # A 32K monolithic prefill materializes a ~352 MiB all-reduce temporary
+    # that cannot fit beside a resident 32K denoise trace, so the 32K boundary
+    # itself must stay in the same bounded-memory regime as larger prefills.
     use_fixed_chunks = fixed_prefill_chunks_enabled()
     use_bounded_chunks = use_fixed_chunks or (execution_len is not None and int(execution_len) >= 32768)
     if execution_len is None:
@@ -557,7 +550,11 @@ def _validate_gumbel_noise_blocks(blocks) -> None:
 
 
 def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
-    """Create ``generate_blocks`` Gumbel noise hooks from fixed host noise tensors."""
+    """Create ``generate_blocks`` Gumbel noise hooks from fixed host noise tensors.
+
+    Injection hook: replays a recorded torch run's noise for HF<->TT determinism
+    checks; it is not a serving mode.
+    """
     blocks = [[noise.clone() for noise in block] for block in host_gumbel_noise]
     _validate_gumbel_noise_blocks(blocks)
 
@@ -574,7 +571,11 @@ def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
 
 
 def make_host_noise_tokens_fn(mesh_device, host_noise_tokens):
-    """Create ``generate_blocks`` renoise hooks from fixed host token tensors."""
+    """Create ``generate_blocks`` renoise hooks from fixed host token tensors.
+
+    Injection hook: replays a recorded torch run's noise for HF<->TT determinism
+    checks; it is not a serving mode.
+    """
     blocks = [[tokens.clone() for tokens in block] for block in host_noise_tokens]
     _validate_replay_canvas_blocks(blocks, kind="host_noise_tokens")
 
@@ -683,9 +684,8 @@ def make_seeded_gumbel_noise_fn(
 ):
     """Create deterministic device Gumbel noise hooks for ``generate_blocks``.
 
-    Draws plain vocab-innermost device noise. The SFPU RNG is lane-salted per
-    element (tt-metal#52024), so no axis-permutation workaround is needed; see
-    the comment on the draw below for the axis-choice history.
+    Draws plain vocab-innermost device noise; the SFPU RNG is lane-salted per
+    element (tt-metal#52024), so the plain draw is the trusted path.
     """
     _check_random_token_args(batch, canvas_len, vocab_size)
     seed = TS._validate_ttnn_rand_seed(seed)
@@ -696,12 +696,8 @@ def make_seeded_gumbel_noise_fn(
         block_seed = seed + block_idx * 1_000_003 + attempt * 7_919_003
 
         def gumbel_noise_for_step(step: int):
-            # Vocab innermost, deliberately. The retired permuted-vocab workaround collapsed
-            # every other axis into the rand width -- for this shape the 256 CANVAS POSITIONS --
-            # relocating the old RNG degeneracy onto the axis where it made different positions
-            # pick the same token (measured 154/256 vs 253/256 distinct flat-logit winners at
-            # canvas 256 / vocab 262144). With the lane-salted SFPU RNG (tt-metal#52024) the
-            # plain draw is the trusted path and the workaround was removed.
+            # Vocab innermost, deliberately: the lane-salted SFPU RNG (tt-metal#52024)
+            # makes the plain draw safe.
             return TS.sample_gumbel_noise(
                 (batch, 1, canvas_len, vocab_size),
                 device=mesh_device,
@@ -898,12 +894,11 @@ def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -
 def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> Callable[..., None]:
     """Pick the commit path: batched single-prefill for contiguous or DG hybrid KV.
 
-    The batched commit (``tt.commit_batched``, now the torch-verified-correct
-    default) supports the contiguous cache and DG's identity-mapped model-owned
-    per-layer hybrid cache.  A legacy/shared page table can carry arbitrary vLLM
-    block ownership, so it still uses the sequential path. Imported lazily so
-    that path keeps no import dependency on ``tt.commit_batched`` (which imports
-    helpers from this module).
+    The default batched commit (``tt.commit_batched``) supports the contiguous
+    cache and DG's identity-mapped model-owned per-layer hybrid cache. A
+    legacy/shared page table can carry arbitrary vLLM block ownership, so it
+    still uses the sequential path. Imported lazily so that path keeps no import
+    dependency on ``tt.commit_batched`` (which imports helpers from this module).
     """
     from models.experimental.diffusion_gemma.tt.commit_batched import select_commit_fn
 
@@ -936,8 +931,9 @@ def denoise_and_commit_block(
     is a ``DenoiseLogitsAdapter`` this helper updates its ``q_rope_offset`` so
     canvas RoPE positions advance with each committed block.
 
-    ``commit_fn`` defaults to the torch-verified-correct batched single-prefill
-    commit (:func:`commit_canvas_tokens_batched`) for contiguous caches, falling
+    ``commit_fn`` defaults to the batched single-prefill commit for contiguous
+    caches, falling back to the sequential :func:`commit_canvas_tokens` when a
+    shared page table is supplied (see :func:`_resolve_default_commit_fn`).
     """
     if commit_fn is None:
         commit_fn = _resolve_default_commit_fn(page_table, page_tables_per_layer)
@@ -1002,8 +998,7 @@ def denoise_and_commit_block(
                 degeneracy_stats["top_frac"],
                 degeneracy_stats["max_run"],
                 # The content region is the decision basis; without it in the telemetry a later
-                # triage cannot tell a rejected collapse from a rejected normal completion, which
-                # is exactly what the 07-27 eval log could not answer.
+                # triage cannot tell a rejected collapse from a rejected normal completion.
                 degeneracy_stats.get("stop_tail", "na"),
                 degeneracy_stats.get("content_tokens", "na"),
                 degeneracy_stats.get("content_top_id", "na"),
@@ -1025,9 +1020,7 @@ def denoise_and_commit_block(
         logger.warning(f"{message}; re-denoising with fresh noise (attempt {attempt}/{max_attempts - 1})")
 
     # Same probe as the prefill one (tt/serving.py): commit is the other hot NON-traced
-    # dispatch, and its latency is bimodal the same way (p50 0.19 s, mean 0.68 s, max 4.51 s
-    # on tt-shield run 30640405931). Prefill's spike turned out to be host program builds, so
-    # the first thing to know about commit is whether wall time is this thread's CPU too.
+    # dispatch; the probe splits its wall time into this thread's CPU vs device wait.
     commit_probe = os.environ.get("DG_PREFILL_CPU_PROBE", "0") == "1"
     commit_cpu0 = (time.process_time(), time.thread_time()) if commit_probe else None
     commit_t0 = time.perf_counter()
@@ -1107,8 +1100,7 @@ def generate_blocks(
 
     ``init_canvas_fn(block_idx, start_pos)`` supplies the initial device canvas
     for each block. Use ``make_host_canvas_init_fn`` when replaying fixed torch /
-    HF canvases; the full prompt/tokenizer path will later own default canvas
-    creation. This helper owns commit-append and absolute position advancement.
+    HF canvases. This helper owns commit-append and absolute position advancement.
     """
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)

@@ -30,8 +30,7 @@ layers keep a circular 1024-token physical window and full-attention layers keep
 the full served context; DG-local readers expose the contiguous prefix/window
 shape denoise attention consumes. A single deterministic identity page-table set
 still backs one active sequence. Arbitrary vLLM block-pool ownership and
-concurrent per-request tables remain #47488/#47557; see
-``doc/vllm_integration/README.md``.
+concurrent per-request tables remain #47488/#47557.
 """
 
 from __future__ import annotations
@@ -63,21 +62,13 @@ from models.experimental.diffusion_gemma.tt.generate import (
     prefill_prompt_tokens,
 )
 
-# Sampling modes exposed to the serving layer. "device" is the production mode
-# (on-device seeded SFPU RNG, lane-salted per tt-metal#52024) and the only *materialized* one, so it is the only
-# mode usable under up-front capture (DG_UPFRONT_CAPTURE=1). "argmax" is the greedy
-# RUN-first speed/determinism control.
-# A "chunked" mode (per-vocab-chunk noise descriptors) was removed 2026-08-10: it was
-# a bring-up-era bounded-memory workaround with a known QB2 1024-wide RNG distribution
-# bias, and it cost ~25 s per 256-token block in host-driven paths — a standing perf
-# trap. If full-vocab noise ever OOMs again at 256K contexts, pursue the TP-sharded
-# denoise terminal (unimplemented design note at the bottom of tt/sampling.py) instead
-# of resurrecting it.
-# A "host" mode (IID full-vocabulary torch Gumbel drawn per step) was removed: it
-# repaired 0 of the drifting prompts while costing 1.40x per request, because the
-# language drift was the canvas attending the prefill pad keys (fixed in d0936d4da4f),
-# not the RNG. Injecting a torch run's exact noise for HF<->TT parity is a different
-# thing and still lives in tt/generate.py: make_host_gumbel_noise_fn.
+# Sampling modes exposed to the serving layer. "device" (on-device seeded SFPU RNG,
+# lane-salted per tt-metal#52024) is the production mode and the only one usable under
+# up-front capture (DG_UPFRONT_CAPTURE=1); "argmax" is the greedy speed/determinism control.
+# Injecting a torch run's exact noise for HF<->TT parity is a different concern:
+# tt/generate.py:make_host_gumbel_noise_fn. If full-vocab noise ever OOMs at 256K contexts,
+# pursue the TP-sharded denoise terminal (unimplemented design note at the bottom of
+# tt/sampling.py).
 GUMBEL_MODES = ("argmax", "device")
 
 
@@ -232,7 +223,7 @@ class BlockDiffusionServingSession:
         # ``None`` selects ordinary eager denoise. The vLLM wrapper passes only the
         # up-front model-lifetime denoise function when DG_UPFRONT_CAPTURE is enabled.
         self._denoise_block_fn = denoise_block_fn
-        # Frozen prompt-prefix KV reuse (APC prototype, #47466). Off unless a
+        # No prompt-prefix KV reuse; both fields feed the prefill_block0 metric.
         self.prefill_reused = False
         self.prefill_time_s = 0.0
 
@@ -250,10 +241,9 @@ class BlockDiffusionServingSession:
             _normalize_eos_token_ids(self.stop_token_ids)
         # The degeneracy guard needs to know which ids are stop tokens for a DIFFERENT reason than
         # the stop policy does: to tell an answer's terminal <eos> padding from a collapsed canvas.
-        # Those two must not share one field. The vLLM path deliberately sets stop_token_ids=[]
-        # ("vLLM owns the stop decision") and that emptied the guard's knowledge too, so every
-        # terminal block looked like a wall of one token and was thrown away uncommitted -- 110 of
-        # 198 requests on the 2026-07-27 eval, each losing the block its answer was in.
+        # Those two must not share one field: the vLLM path deliberately sets stop_token_ids=[]
+        # ("vLLM owns the stop decision"), and a guard fed from that field would reject every
+        # terminal block as a wall of one token.
         self.degeneracy_stop_token_ids = _resolve_degeneracy_stop_ids(
             degeneracy_stop_token_ids,
             stop_token_ids=self.stop_token_ids,
@@ -327,10 +317,9 @@ class BlockDiffusionServingSession:
         aligned = _pad_prompt_tokens_for_prefill(prompt_tokens)
         cache_len = int(aligned.shape[1])
 
-        # prefill_reused stays False: the DG_PREFIX_CACHE reuse tier was deleted 2026-07-28 (only
-        # the exact-full-match tier could ever fire from serving, and vLLM advertises
-        # supports_prefix_caching: False). The field and prefill_time_s are KEPT — generator_vllm
-        # emits both in the prefill_block0 metric that run_upfront_gpqa.sh greps.
+        # prefill_reused stays False (no prefix-cache reuse; vLLM advertises
+        # supports_prefix_caching: False). The field and prefill_time_s are KEPT —
+        # generator_vllm emits both in the prefill_block0 metric.
         self.prefill_reused = False
         self.prefill_time_s = 0.0
         execution_len = getattr(self, "prefill_execution_len", None)
@@ -419,18 +408,14 @@ class BlockDiffusionServingSession:
                 denoise_block_fn=self._denoise_block_fn,
                 timings=timings,
                 # The guard's stop set, NOT the session's stop policy (see __init__): this argument
-                # only tells the degeneracy check which ids are terminal padding. Passing
-                # self.stop_token_ids here is what broke the vLLM path, where it is empty by design.
+                # only tells the degeneracy check which ids are terminal padding. Never pass
+                # self.stop_token_ids here — the vLLM path leaves it empty by design.
                 stop_token_ids=self.degeneracy_stop_token_ids,
                 # Both are needed by DG_DEGENERACY_POLICY=retry: the noise factory so a retry can
                 # draw different noise, and the canvas factory because the denoise path consumes
-                # the canvas it is handed.
-                #
-                # The factory must be bound to THIS block. denoise_and_commit_block calls
-                # retry_noise_fn(attempt) with one positional argument, so passing the raw
-                # gumbel_noise_for_block(block_idx, attempt=0) made the attempt number land on
-                # block_idx while attempt stayed 0 -- and for block_idx == attempt that reproduces the
-                # original draw exactly, i.e. block 1's first retry was a silent no-op.
+                # the canvas it is handed. The noise factory must be bound to THIS block:
+                # denoise_and_commit_block calls retry_noise_fn(attempt) with one positional
+                # argument.
                 retry_noise_fn=_bind_retry_noise(self._gumbel_noise_fn, block_idx),
                 retry_init_canvas_fn=lambda: self._init_canvas_fn(block_idx, start_pos),
             )

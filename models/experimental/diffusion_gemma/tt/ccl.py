@@ -25,9 +25,7 @@ import ttnn
 
 # DG reuses Gemma-4's CCLManager unchanged: it pre-creates the double-buffered
 # reduce-scatter / all-gather / barrier semaphores before trace capture, which is
-# all the DG collectives below need. (DG once carried a near-identical copy whose
-# only delta was a buffer-depth kwarg that nothing ever passed; the tests already
-# exercised DG collectives with the gemma4 manager, proving interchangeability.)
+# all the DG collectives below need.
 from models.demos.gemma4.tt.ccl import CCLManager, default_num_links  # noqa: F401  (re-exported)
 
 

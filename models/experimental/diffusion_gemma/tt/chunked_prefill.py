@@ -3,31 +3,17 @@
 
 """DiffusionGemma-local chunked (bounded-memory) long-context prefill (#47466).
 
-Why this module exists
-----------------------
-The shared gemma4 backbone does **not** honor the vLLM multi-chunk prefill
-contract. In ``models/demos/gemma4/tt/model.py`` both ``chunk_start_idx`` and
-``chunk_page_table`` are accepted for signature-compat and then ``del``'d
-(``prepare_inputs_prefill`` line ~1298, ``ttnn_prefill_forward`` line ~1436).
-Consequences:
+The shared gemma4 backbone accepts ``chunk_start_idx`` / ``chunk_page_table``
+for signature compat and then discards them, so on its own it gets multi-chunk
+prefill wrong three ways: chunk RoPE is always sliced from position 0, a
+chunk's SDPA never reads the KV written by prior chunks, and the single-chunk
+prefill materializes the whole prompt at once (memory scales with prompt
+length). This module composes over the unmodified backbone: it copies the
+gemma4 single-user prefill-attention routine, fixes those three defects
+locally, and drives the backbone one bounded chunk at a time.
 
-* **Wrong RoPE offset** — prefill RoPE is always sliced ``cos[:, :, :seq_len]``
-  (``_get_rope_mats``), i.e. positions ``0..seq_len-1``. A second chunk's tokens
-  get positions ``0..L-1`` instead of ``chunk_start_idx..chunk_start_idx+L-1``.
-* **No cross-chunk attention** — a chunk's SDPA never reads the KV written by a
-  prior chunk, so attention is broken past a single chunk.
-* **Unbounded memory** — the single-chunk prefill projects / RoPEs / fills the
-  *whole* prompt at once, so prefill L1+DRAM scales with the full prompt length
-  (OOM past ~64k).
-
-The shared backbone must not be edited (``git diff main -- models/demos/gemma4``
-stays empty), so this module **composes over** it: it copies the gemma4
-single-user prefill-attention routine (``attention/prefill.py::_prefill_forward_single``)
-and fixes the three defects locally, then drives the *unmodified* backbone graph
-one bounded chunk at a time.
-
-The correct contract (mirrors ``models/tt_transformers/tt/attention.py`` +
-``generator.py``, the reference that already implements chunked prefill):
+The chunk contract (mirrors ``models/tt_transformers/tt/attention.py`` +
+``generator.py``):
 
 * ``page_table``       — the **full** per-user page table (logical blocks
   ``0 .. chunk_end``). Passed to the SDPA op so a chunk's queries attend the
@@ -39,35 +25,27 @@ The correct contract (mirrors ``models/tt_transformers/tt/attention.py`` +
   the per-chunk RoPE slice offset and the SDPA causal-mask offset
   (``chunked_scaled_dot_product_attention(chunk_start_idx=...)``).
 
-Because only one chunk's activations are resident at a time (prior chunks live
-in the paged KV cache and are read directly by the SDPA op — never
-materialized), prefill memory is bounded by ``O(chunk_size)`` instead of
-``O(prompt_len)``.
+Only one chunk's activations are resident at a time (prior chunks live in the
+paged KV cache and are read directly by the SDPA op — never materialized), so
+prefill memory is ``O(chunk_size)`` instead of ``O(prompt_len)``.
 
-Scope (prototype, not wired into the serving path — see the module README)
---------------------------------------------------------------
+Scope:
 * Single-user (``batch_size == 1``) bounded-memory prefill. Batched chunked
   prefill is the #47557 batched-canvas / #47488 paged-ownership follow-up.
 * Full-attention layers get true cross-chunk attention via the paged
-  ``chunked_scaled_dot_product_attention`` op, reading all prior chunks straight
-  from the paged KV cache. Memory bound: ``O(chunk_size)`` prefill scratch (prior
-  chunks live in the paged cache, never materialized).
-* Sliding-window layers work for prompts of *any* length — including *longer*
-  than the sliding window (1024). The paged chunked SDPA op is **causal-only**
-  (no window mask), so sliding layers cannot use it once total context exceeds
-  the window (over-attention). Instead each sliding layer threads a **bounded
-  rolling in-memory K/V window buffer** (``<= sliding_window + chunk_size``
-  positions) across chunks: every chunk appends its RoPE'd K/V to the buffer,
-  runs the overlapping-window causal+sliding SDPA (gemma4
-  ``chunked_prefill_sdpa_sliding``, copied below) over the buffer for this
-  chunk's queries, then trims the buffer back to the last ``sliding_window``
-  positions. A sliding query at absolute pos ``p`` only depends on K/V in
-  ``(p - window, p]``, so the trimmed buffer always contains every key any of the
-  chunk's queries can attend — making the bounded result identical to a single
-  full-length sliding-window prefill. Memory bound: ``O(chunk_size + window)``.
-
-Both attention kinds therefore stay bounded-memory, so prompts far past the
-single-chunk ``O(prompt_len)`` OOM cliff (>64k) prefill in a fixed footprint.
+  ``chunked_scaled_dot_product_attention`` op. Memory bound: ``O(chunk_size)``.
+* Sliding-window layers work for prompts of any length, including longer than
+  the sliding window. The paged chunked SDPA op is **causal-only** (no window
+  mask), so sliding layers cannot use it once total context exceeds the window.
+  Instead each sliding layer threads a **bounded rolling in-memory K/V window
+  buffer** (``<= sliding_window + chunk_size`` positions) across chunks: every
+  chunk appends its RoPE'd K/V to the buffer, runs the causal+sliding SDPA over
+  the buffer for this chunk's queries, then trims the buffer back to the last
+  ``sliding_window`` positions. A sliding query at absolute pos ``p`` only
+  depends on K/V in ``(p - window, p]``, so the trimmed buffer always contains
+  every key any of the chunk's queries can attend — making the bounded result
+  identical to a single full-length sliding-window prefill. Memory bound:
+  ``O(chunk_size + window)``.
 """
 
 from __future__ import annotations
@@ -483,11 +461,9 @@ def _swap_prefill_attention():
 
     ``Gemma4Attention.__call__`` resolves ``prefill_forward`` from the
     ``models.demos.gemma4.tt.attention`` package globals. Rebinding that name for
-    the duration of a chunked-prefill call swaps in the fixed attention **without
-    editing any gemma4 file** (this is runtime composition, not a source edit —
-    the diff against gemma4 stays empty). The whole backbone graph (layers, MoE,
-    KV-sharing, norms, lm_head) is otherwise the *real* unmodified backbone, so a
-    chunked-vs-single comparison is apples-to-apples. Restored on exit.
+    the duration of a chunked-prefill call swaps in the fixed attention at
+    runtime; the rest of the backbone graph (layers, MoE, KV-sharing, norms,
+    lm_head) runs unmodified. Restored on exit.
     """
     saved = _gemma4_attn.prefill_forward
     _gemma4_attn.prefill_forward = chunked_prefill_attention_forward

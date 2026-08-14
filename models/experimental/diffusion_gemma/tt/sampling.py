@@ -1,30 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device (ttnn) entropy + Gumbel-max primitives for the PCC harness (#47468; cross-ref #47472).
-
-The accuracy harness must validate the diffusion *decisions* — not just logits.
-Two of those decisions have **no entropy / −Σ p·log p computation anywhere in
-gemma4**, so they are net-new and built here on `ttnn.max/exp/log/div/mul/sum` (+
-`argmax`):
+"""On-device (ttnn) entropy + Gumbel-max primitives for the PCC harness (#47468).
 
   * :func:`token_entropy` — per-position Shannon entropy ``H = −Σ p·log p`` of
     ``softmax(logits / T)``. Mirrors ``reference/sampling.token_entropy`` /
     ``torch.distributions.Categorical(logits).entropy()``.
   * :func:`gumbel_max` — ``argmax(logits / T + gumbel)`` over the vocab axis, with
     the Gumbel noise **injected** (not regenerated) so device argmax decisions can
-    be matched token-for-token against the torch oracle (on-device RNG won't
-    reproduce torch's RNG bit-exactly — issue #47468 "Determinism requires noise
-    injection").
+    be matched token-for-token against the torch oracle (on-device RNG cannot
+    reproduce torch's RNG bit-exactly).
 
-These let the harness diff entropy *values* and Gumbel-max *argmax agreement*
-device-vs-torch, including under **bfp8** where small-probability drift can flip
-accept/renoise (the whole reason the harness validates decisions, not logits).
-``tests/test_sampling.py`` measures both on QB2.
-
-Numerical note: entropy is computed as ``H = logsumexp(z) − Σ softmax(z)·z``.
-This is algebraically equivalent to ``−Σ p·log p`` while avoiding ``log(p)``
-underflow and reducing accept-boundary flips at the 256-token canvas length.
+Numerical note: entropy is computed as ``H = logsumexp(z) − Σ softmax(z)·z``,
+algebraically equivalent to ``−Σ p·log p`` while avoiding ``log(p)`` underflow.
 """
 
 from __future__ import annotations
@@ -37,10 +25,8 @@ def argmax_last_dim(x, *, keepdim: bool = True):
 
     ``ttnn.argmax`` runs **single-core** on TILE input but **multi-core** on
     ROW_MAJOR input for a last-dim reduction, and it always emits UINT32 ROW_MAJOR
-    output. Converting the input to ROW_MAJOR first is ~86x faster over the 262144
-    production vocab (measured on QB2: 1240ms TILE -> 14.4ms ROW_MAJOR) and is
-    bit-identical to the TILE result (verified exact match). The output layout/dtype
-    contract (UINT32 ROW_MAJOR) is unchanged, so downstream consumers are unaffected.
+    output — so converting the input to ROW_MAJOR first is far faster over the
+    production vocab, bit-identical, and leaves the output contract unchanged.
     """
     rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     out = ttnn.argmax(rm, dim=-1, keepdim=keepdim)
@@ -101,8 +87,8 @@ def gumbel_max(logits, temperature: float, noise):
     run's exact injected Gumbel(0,1) noise (issue #47468 determinism). Returns
     argmax indices ``[..., 1]``. ``noise`` all-zeros reduces to plain
     ``argmax(logits)`` (temperature scaling preserves the argmax). ``noise=None``
-    is an explicit RUN-first shortcut for argmax sampling without allocating the
-    full-vocab Gumbel buffer.
+    is an explicit shortcut for argmax sampling without allocating the full-vocab
+    Gumbel buffer.
     """
     z = temperature_scale(logits, temperature)
     if noise is None:
@@ -117,7 +103,7 @@ def gumbel_max(logits, temperature: float, noise):
 
 
 def canvas_sample(logits, temperature: float, gumbel_noise):
-    """Deterministic canvas sampler for W4 using injected Gumbel noise.
+    """Deterministic canvas sampler using injected Gumbel noise.
 
     This is the released per-position canvas draw used by the diffusion loop:
     ``argmax(logits / T + gumbel)`` over every canvas position. The noise is
@@ -127,11 +113,9 @@ def canvas_sample(logits, temperature: float, gumbel_noise):
 
 
 def _gumbel_from_uniform(u, *, deallocate_input: bool = True):
-    # This transform used to retain six full-shape intermediates until the end.
-    # At the production [1, 1, 256, 256K] shape that is 1.5 GiB of avoidable
-    # device traffic and makes post-trace Gumbel refresh impossible. Consume the
-    # uniform draw in place (the default contract already deallocates it); keep
-    # the uncommon non-consuming path by cloning once.
+    # Consume the uniform draw in place: at the production [1, 1, 256, 256K] shape,
+    # retaining full-shape intermediates costs ~1.5 GiB of device traffic and blocks
+    # post-trace Gumbel refresh. The non-consuming path clones once.
     gumbel = u if deallocate_input else ttnn.clone(u)
     ttnn.add(gumbel, 1.0e-10, output_tensor=gumbel)
     ttnn.log(gumbel, output_tensor=gumbel)
@@ -187,8 +171,5 @@ def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
 
 
 # UNIMPLEMENTED design note: a TP-sharded denoise terminal (argmax / global-max / entropy on the
-# per-device vocab shard, skipping the per-step full-vocab all-gather; #47465, path to 100 t/s)
-# was sketched here but none of it exists — the lm_head shard reductions, the cross-shard tie
-# fold and ``build_vocab_shard_offsets`` would all be net-new code. See the design discussion on
-# #47465 before building it; the entropy combine is NOT bf16-bit-identical (same #48291
-# re-association class as the full-canvas norm) and is decision-gated.
+# per-device vocab shard, skipping the per-step full-vocab all-gather) is sketched on #47465 but
+# none of it exists here; the entropy combine is not bf16-bit-identical, so it is decision-gated.

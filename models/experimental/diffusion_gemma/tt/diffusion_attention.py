@@ -90,24 +90,9 @@ def _resolve_sdpa_grid(device):
     """Resolve the SDPA compute grid from ``DG_SDPA_GRID`` (default ``device``).
 
     ``device`` takes the full compute-with-storage grid — what ttnn itself picks when no program
-    config is supplied. ``8x1`` reproduces the historical pin; ``<x>x<y>`` pins an explicit grid.
-
-    The pin cost real work. The denoise SDPA issues ``B * NQH * ceil(C / q_chunk)`` work units —
-    ``1 * 4 * 8 = 32`` for the 256-token canvas — so an 8-core grid ran 4 serial rounds on a device
-    whose compute grid is ~110 cores. It was not a tuning decision either: both branches of the
-    ``head_dim >= 512`` split it came from set the identical ``(8, 1)``, i.e. it was a stale copy of
-    a Gemma4 config. ``doc/optimize_perf/qchunk_sweep_20260724.md`` annotated "half of the 8×1 grid
-    idle" and then swept only the q-chunk; ``return_lse_kernel_plan.md`` recorded "the task brief
-    said grid (8,4); the live code is (8,1) — reconcile before build" and it was never reconciled.
-
-    Measured 2026-07-27 (30L, traced up-front, canvas 256, reveal_pmax 4096, 3 interleaved reps):
-    **−8.9% traced block latency, committed tokens bit-identical.** Bit-exactness is expected —
-    the grid regroups the Q axis across cores and leaves the flash K-reduction untouched
-    (``k_chunk_size`` unchanged) — and it was confirmed by an identical ``committed_sha256``.
-    See ``doc/optimize_perf/winter_borrow_20260727.md``.
-
-    Falls back to the pin when the device cannot be queried, so a mock/None device keeps the
-    previous behaviour instead of raising.
+    config is supplied; ``<x>x<y>`` pins an explicit grid. The grid only regroups the Q axis
+    across cores (``k_chunk_size`` is untouched), so changing it keeps outputs bit-identical.
+    Falls back to ``8x1`` when the device cannot be queried, so a mock/None device works.
     """
     spec = os.environ.get("DG_SDPA_GRID", "device").strip().lower()
     if spec == "device":
@@ -128,9 +113,9 @@ def _resolve_sdpa_grid(device):
 def _sdpa_exp_approx_mode() -> bool:
     """Whether the SDPA softmax may use the fast exp approximation.
 
-    ttnn's own default is ``true``; DiffusionGemma has always forced ``false``.
-    Kept off by default because it perturbs the softmax and every denoise
-    decision is committed as a clean argmax with no temperature cushion.
+    ttnn's own default is ``true``; kept off here because it perturbs the softmax
+    and every denoise decision is committed as a clean argmax with no temperature
+    cushion.
     """
     return os.environ.get("DG_SDPA_EXP_APPROX", "0").strip().lower() not in ("0", "false", "no", "off")
 
@@ -140,9 +125,7 @@ def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, *, device=None)
 
     Mirrors the Gemma4 prefill tuning (default 32-tile chunks) but allows
     ``q_seq_len != k_seq_len`` (canvas Q vs prompt+canvas K), so chunk sizes must
-    independently divide each axis. ``head_dim`` no longer selects the grid: both
-    branches of the old head_dim split set the identical ``(8, 1)``, so the split
-    was a stale copy of a Gemma4 tuning rather than a live decision.
+    independently divide each axis.
     """
     grid = _resolve_sdpa_grid(device)
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", TILE_SIZE))
@@ -205,17 +188,11 @@ def _apply_rope_chunked(
             sin.deallocate(True)
         return out
 
-    # One pass over the whole ``[1, H, C, hd]`` tensor. ``apply_rope_dram`` is shape-agnostic, so
-    # this is bit-identical to the per-(seq,head)-chunk loop it replaced (verified torch.equal)
-    # while replacing ~H*(C/32) tiny slice/concat ops per call with one — a large trace-size and
-    # dispatch cut for the 256-token denoise canvas.
+    # One pass over the whole ``[1, H, C, hd]`` tensor: ``apply_rope_dram`` is shape-agnostic,
+    # so a single call replaces ~H*(C/32) tiny per-chunk slice/concat ops.
     #
-    # OWNERSHIP: this CONSUMES ``tensor``. The deleted chunk loop had an early return for
-    # <=32-row/1-head inputs that did NOT deallocate, so collapsing the two blindly would have
-    # given small callers a different ownership contract than large ones — the exact shape of the
-    # two use-after-free paths this module shipped in 427450c6a25. All four live callers pass a
-    # 256-row canvas (``:531``, ``:536``, ``commit_batched.py:600``, ``:610``); the assert makes a
-    # future small caller fail loudly instead of silently double-freeing.
+    # OWNERSHIP: this CONSUMES ``tensor``. The assert makes a small (<=32-row) caller fail
+    # loudly rather than inherit a different ownership contract than large callers.
     seq_len = tensor.shape[-2]
     assert seq_len > TILE_SIZE, (
         f"_apply_rope_chunked consumes its input; a {seq_len}-row caller would have relied on the "
@@ -230,12 +207,8 @@ def _apply_rope_chunked(
 def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, layer_idx=None):
     q_seq_len = tt_q.shape[-2]
     k_seq_len = tt_k.shape[-2]
-    # ONE fused-SDPA call over the full canvas. The deleted alternative was a python-level loop of
-    # ceil(C/32) q-slices + per-chunk SDPA + concat; the SDPA op already chunks Q internally via its
-    # program_config (``_largest_tile_divisor(256, 32)``), so the result was bit-identical and the
-    # loop only cost dispatch. Its stated justification — that small chunks avoid the L1 CB clash —
-    # was also wrong: the ``_manual_gqa_attention`` fallback below is guarded by ``attn_mask is
-    # None`` either way, and two independent probes measured 0/30 fallback layers.
+    # One fused-SDPA call over the full canvas; the SDPA op chunks Q internally via its
+    # program_config, so no python-level Q-slicing loop is needed.
     program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, device=tt_q.device())
     kwargs = {
         "is_causal": False,
@@ -328,8 +301,7 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
             owns_k_group = False
             owns_v_group = False
 
-        # QKt via fused transpose_b (bit-exact vs explicit permute; drops the standalone
-        # Kt-materialization Permute op that was ~97% of per-layer device-fw, see #47465).
+        # QKt via fused transpose_b, avoiding a separately materialized K transpose.
         scores = ttnn.matmul(q_group, k_group, transpose_b=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
         outputs.append(ttnn.matmul(probs, v_group, memory_config=ttnn.DRAM_MEMORY_CONFIG))

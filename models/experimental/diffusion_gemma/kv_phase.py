@@ -21,7 +21,7 @@ class KVCachePhase(str, Enum):
     Only ``DENOISE_READONLY`` needs diffusion-specific handling: ``PREFILL_WRITE``
     and ``COMMIT_APPEND`` are exactly the stock Gemma4 prefill / decode write
     behavior, so they are served by the shared backbone unchanged. The enum is a
-    diffusion-side label that selects which forward path to call; it is no longer
+    diffusion-side label that selects which forward path to call; it is not
     threaded into the shared ``models.demos.gemma4`` attention op.
     """
 

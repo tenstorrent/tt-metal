@@ -95,9 +95,9 @@ def build_device_canvas_reveal_mask(
     """Build a constant-shape ``[1, 1, C, p_max + C]`` reveal mask on device (Phase 1).
 
     Content reveals committed prefix ``[0:prompt_len]`` + all canvas, hides the uncommitted
-    tail ``[prompt_len:p_max]`` with ``NEG``. ``enforce_sliding_window=False`` matches today's
-    maskless all-attend production path (bit-exact to the recapture golden on the committed
-    span); ``True`` additionally applies HF's bidirectional window (Phase 2, decision change).
+    tail ``[prompt_len:p_max]`` with ``NEG``. ``enforce_sliding_window=False`` matches the
+    maskless all-attend production path; ``True`` additionally applies HF's bidirectional
+    window.
     """
     mask = build_canvas_reveal_denoise_mask(
         prompt_len,
@@ -153,38 +153,22 @@ def build_device_canvas_reveal_window_mask(
 def sliding_read_span(sliding_window: int, p_max: int) -> int:
     """Tile-aligned rows a sliding layer must read to cover HF's retained window.
 
-    HF retains ``sliding_window - 1`` tokens, which is not tile-aligned (1023), so read one whole
-    tile more and let the mask drop the extra column(s). Never exceed ``p_max``.
+    HF retains ``sliding_window - 1`` tokens, which is not tile-aligned, so read one whole
+    tile more and let the mask drop the extra column(s). Never exceed ``p_max``. This is the
+    perf half of the sliding-window work (#51080): a sliding layer only needs the
+    ``sliding_window - 1`` most recent committed tokens, so it need not read the whole
+    ``p_max`` prefix.
 
-    This is the perf half of the sliding-window work (#51080 item 3): a sliding layer only needs the
-    ``sliding_window - 1`` most recent committed tokens, so reading the whole ``p_max`` prefix on 25
-    of 30 layers is wasted SDPA key rows. Bounding the read takes the per-step key rows from
-    ``30*(p_max+C)`` to ``25*(span+C) + 5*(p_max+C)`` — at ``p_max=16384, C=256, span=1024`` that is
-    499,200 -> 115,200, a 4.33x reduction, measured at **-18.9% s/block**.
+    The bounded read is output-identical to a full-span read only while the retention mask is
+    enforced, which is why it is gated on :func:`denoise_sliding_window_enabled` at its one
+    decision point in ``tt/traced_denoise.py`` rather than on a flag of its own. Without
+    retention a bounded read would silently CHANGE visibility instead of implementing it;
+    :meth:`DenoiseLogitsAdapter.prepare_reveal_mask_buffers` independently raises on a span
+    without ``enforce_window``.
 
-    It is BIT-IDENTICAL, and that is why there is no flag for it any more (``DG_DENOISE_SLIDING_SPAN``
-    was deleted 2026-07-29). Retention keeps ``[prompt_len-1023, prompt_len)``, a SUBSET of the window
-    ``[prompt_len-1024, prompt_len)``; the one window position that is not retained is masked either
-    way; and every key outside the window is masked in the full-span read. The attended set is
-    therefore the same, so the only difference is how many exactly-zero terms are summed, and an
-    all-``-inf`` flash-SDPA block moves neither the running max nor the sum. Measured: completions
-    byte-identical (sha256) 10/10 in two independent pairings, plus an earlier 4096 run recorded
-    ``committed_sha256`` bit-identical (doc/optimize_perf/README.md).
-
-    The argument depends on the retention mask being enforced, which is why the bounded read is gated
-    on :func:`denoise_sliding_window_enabled` at its one decision point in ``tt/traced_denoise.py``
-    rather than on a flag of its own. Without retention a bounded read would silently CHANGE
-    visibility instead of implementing it. That is also enforced independently:
-    :meth:`DenoiseLogitsAdapter.prepare_reveal_mask_buffers` raises on a span without
-    ``enforce_window``, so the invariant survives the gate regressing.
-
-    "Bit-identical" is about OUTPUT, not about memory: it is **not free in DRAM**. The block-resident
-    window buffers cost ~50 MiB/chip at ``p_max=16384``, while the smaller sliding-layer reveal mask
-    saves only ~7.5 MiB (masks are keyed by layer TYPE, so there is ONE sliding mask, not 25) — a net
-    **+42.5 MiB/chip resident**. Resident break-even is ``p_max`` ~103k, far above anything served
-    today; the win is the transient per-step read, not residency. ~1% of the measured 4 GiB headroom,
-    and a 71-question run at 16384 completed with it on, so it is affordable — but do not describe
-    this change as costless.
+    Output-identical is not memory-free: the block-resident window buffers add per-chip DRAM
+    residency (masks are keyed by layer TYPE, so there is ONE sliding mask, not one per layer);
+    the win is the transient per-step read, not residency.
     """
     needed = int(sliding_window)  # (sliding_window - 1) rounded up to the next tile == sliding_window when W%32==0
     span = ((needed + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -205,70 +189,23 @@ def sliding_read_offset(prompt_len: int, span: int, p_max: int) -> int:
 
 
 def hide_prefill_pads_enabled() -> bool:
-    """Whether the reveal mask hides the prefill pad slots (block-0 fidelity).
+    """Whether the reveal mask hides the prefill pad slots (block-0 fidelity). Default ON.
 
     ``generate._pad_prompt_tokens_for_prefill`` right-pads the prompt to a tile multiple and prefill
     writes K/V for those pad tokens, while the reveal predicate is evaluated with the PADDED length --
-    so the canvas attends up to 31 garbage keys sitting IMMEDIATELY before it, making its nearest
-    context noise. That is what destroys the thinking-template prefix at canvas positions 0-4, which
-    is the whole accept budget the first block bootstraps from.
-
-    Injecting the same geometry into the HF reference (seeded canvas, otherwise identical) takes it
-    from 18 denoise steps to the 48-step CAP on q096, and from 12/10 to 35/35 on q106/q095; hiding the
-    pads restores 20/12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md``
-    section 16.
-
-    Default **ON** since 2026-07-29. Attending the pad keys is what makes TT answer English prompts
-    in Chinese, and it does so by cutting generation short: the pads destroy the thinking-template
-    prefix at canvas positions 0-4, block 0 bootstraps from a poisoned accept budget, the reply ends
-    early, and with too little English context the language choice goes with block 0.
-
-    WHAT IT REPAIRS, measured:
-
-    * doc/decision_fidelity/device_gumbel_restored.md section 18 -- the seven questions that collapse
-      on block 0 all stop collapsing, 7 of 7, and block 0 halts in every case where six of seven
-      previously ran the full 48 steps and committed an unsettled canvas.
-    * Language drift on 16 trivial-English probes through the shipped vLLM server: 2/16 -> 0/16,
-      matching the A100 CUDA reference's 0/16, at no latency cost (24.6 s vs 24.5 s per request).
-      That A/B also ruled the SAMPLER out: DG_VLLM_GUMBEL_MODE=host (IID) drifted on the same two
-      prompts as device, repairing 0, at 1.40x the cost -- which is why the host mode was deleted.
-
-    WHAT DECIDED IT -- the A100 reference as an absolute yardstick, 2026-07-29. The same 11 prompts
-    (the ones that drifted on TT, plus clean controls) at the same 5632-token budget on both
-    platforms, so neither platform nor generation budget is confounded:
-
-                        drift      guard kills   empty   mean chars
-        A100 reference   0/11           --          0       11069
-        TT, pads attend  5/9 non-empty   3          2        2507
-        TT, pads hidden  0/11            0          0        8514
-
-    Every drifted prompt is repaired, both empty replies come back, the guard stops firing, and the
-    four clean controls are untouched -- matching the reference's 0/11. doc 8 is the clearest case:
-    0.41 CJK in 2181 chars with 43 Latin words becomes clean English in 12902 chars with 1746.
-
-    The length recovery is what shows this is the cause rather than a coincidence: 2507 -> 8514 mean
-    chars, i.e. 24% -> 77% of the reference. Language and length recover together, which is why the
-    two symptoms always appeared together.
-
-    An earlier revert on 2026-07-28 read "repairs 3, breaks 28" from a paired 44-prompt comparison.
-    That comparison is void -- both arms ran on the token-gather denoise MoE, which cannot converge at
-    all (entropy plateaus at ~0.46 against the 0.005 halt threshold, every block commits an unsettled
-    canvas), and the arms were not matched on it either. That path was deleted in 7417bd7d69d.
-
-    Still true and worth remembering: this is decision-changing for every prompt whose length is not a
-    32-multiple, so it must be re-gated on the full 198-question GPQA score, not only on drift.
+    so without this gate the canvas attends up to 31 garbage keys sitting IMMEDIATELY before it,
+    corrupting the block-0 template prefix the first block bootstraps from.
 
     Decision-changing for every prompt whose length is not a 32-multiple; prompts that ARE aligned
-    have no pad slots, so the mask is unchanged there (verified: doc 47 is byte-identical across both
-    arms). Set DG_DENOISE_HIDE_PREFILL_PADS=0 for the old maskless behaviour.
+    have no pad slots, so the mask is unchanged there. Set DG_DENOISE_HIDE_PREFILL_PADS=0 for the
+    old maskless behaviour.
 
-    Composes with the bounded sliding read, which is now unconditional on the traced path whenever
-    retention is enforced. That combination used to raise NotImplementedError; the bounded builder
-    takes the same absolute-position span, because its key axis already carries absolute positions and
-    needs no column arithmetic. In a sliding layer the predicate is self-retiring: the pads sit at the
-    start of the prompt, so once the window has scrolled past them it is a no-op and the mask returns
-    to its prompt_len-independent steady state. The 5 full-attention layers read the whole p_max
-    prefix and keep hiding the pads for the whole run.
+    Composes with the bounded sliding read: the bounded builder takes the same absolute-position
+    span, because its key axis already carries absolute positions and needs no column arithmetic.
+    In a sliding layer the predicate is self-retiring: the pads sit at the start of the prompt, so
+    once the window has scrolled past them it is a no-op and the mask returns to its
+    prompt_len-independent steady state. The full-attention layers read the whole p_max prefix and
+    keep hiding the pads for the whole run.
     """
     return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "1").lower() in ("1", "true", "yes", "on")
 
@@ -291,17 +228,10 @@ def denoise_sliding_window_enabled() -> bool:
     """Whether denoise applies HF's sliding-layer key retention (#51080). Default ON.
 
     HF's sliding layers hold only the last ``sliding_window - 1`` committed tokens, so a maskless
-    all-attend denoise attends keys HF does not have, on 25 of 30 layers, for every committed prefix
-    past 1024 tokens. Enabling this makes TT match HF; below 1024 the window never binds and the mask
-    is bit-identical, so the change is confined to the regime where TT was wrong.
-
-    Gated and flipped on the GPQA-Diamond decision-agreement run
-    (``doc/decision_fidelity/device_gumbel_restored.md`` section 10). The evidence the old default was
-    waiting for: 56 of the 64 shipped-config collapses happen at or after the block where the
-    committed prefix crosses 1023, clustered at blocks 12-14, matching the growth of the excess keys
-    TT attended (267 at block 4, 2577 at block 13 against 1023 legitimate). Retention was measured on
-    the reference rather than assumed -- HF caches exactly 1023 committed keys on sliding layers and
-    the full prompt on full layers (``doc/decision_fidelity/ref_sliding_retention.py``).
+    all-attend denoise attends keys HF does not have, for every committed prefix past the window.
+    Enabling this makes TT match HF; below the window the mask never binds and the result is
+    bit-identical, so the change is confined to longer prefixes. HF caches exactly
+    ``sliding_window - 1`` committed keys on sliding layers and the full prompt on full layers.
 
     Set ``DG_DENOISE_SLIDING_WINDOW=0`` to restore the old maskless behaviour.
     """
@@ -317,10 +247,9 @@ def _layer_type_for_denoise(tt_model, layer_idx: int) -> str | None:
 
 
 def _sliding_window_for_denoise(tt_model, layer_idx: int) -> int | None:
-    # Validation-only override. The real window (1024) masks just P-(W-1) keys, which at
-    # P=1056 is 2.5% of the attended span — enough to be a fidelity difference but far too
-    # small to reliably flip an argmax, so an end-to-end output A/B cannot prove the plumbing
-    # is live. Forcing a small window makes the effect large enough to be unmistakable.
+    # Validation-only override. The real window masks too few keys to reliably flip an argmax,
+    # so an end-to-end output A/B cannot prove the plumbing is live; forcing a small window
+    # makes the effect unmistakable.
     override = os.environ.get("DG_DENOISE_SLIDING_WINDOW_OVERRIDE", "").strip()
     if override:
         value = int(override)
@@ -339,9 +268,8 @@ def _sliding_layer_needs_denoise_mask(prompt_len: int, canvas_len: int, sliding_
 
     HF's sliding cache retains the last ``sliding_window - 1`` committed tokens and the canvas is
     always fully visible, so a mask is needed exactly when some committed position has been
-    evicted: ``prompt_len > sliding_window - 1``. ``canvas_len`` does not enter — the old
-    ``prompt_len + canvas_len - 1 > sliding_window`` threshold came from a per-(q,k) staircase
-    that HF does not implement (see reference/attention_mask.py and #51080).
+    evicted: ``prompt_len > sliding_window - 1``. ``canvas_len`` does not enter the predicate
+    (see reference/attention_mask.py and #51080).
     """
     del canvas_len  # not part of the predicate; kept for call-site compatibility
     return prompt_len > sliding_window - 1
@@ -467,27 +395,16 @@ def _deallocate_prompt_source(prompt_source) -> None:
 
 
 # ---------------------------------------------------------------------------------------------
-# HIGH-4 (dg-08 L1 pass): collapse the chunked RMSNorm to ONE full-canvas width-sharded rms_norm.
+# Full-canvas RMSNorm: ONE width-sharded rms_norm over the whole canvas instead of per-32-row
+# chunks. gemma4 RMSNorm's width-sharded fast path only takes 32-row slices, and ``norm.forward``
+# on the full canvas falls to the slow plain-interleaved path; the chunked route pays extra
+# slices, a DRAM concat, extra sharded-norm launches, and I2S/S2I round-trips per norm call.
 #
-# DiffusionGemma chunks the 256-row canvas into 8x 32-row slices (``_chunked_norm_forward`` /
-# ``_rms_norm_dram``) SO THAT each slice hits gemma4 RMSNorm's width-sharded fast path
-# (``_forward_sharded``, block_h=1, 32-row-only); ``norm.forward`` on the full 256 rows falls to the
-# slow plain-interleaved path (rms_norm.py:145-176). That costs 7 extra slices + 1 DRAM concat +
-# 7 extra sharded-norm launches + 8 I2S/S2I round-trips PER norm call (~6-8 norm calls/layer x 30).
-#
-# RMSNorm normalizes each ROW independently over the hidden width, so one 256-row op is per-row
-# equivalent to 8x 32-row ops -- the cross-core width reduction is per-row regardless of block_h.
-# It runs one 256-row width-sharded rms_norm (reusing ``norm.tt_weight`` — reading the weight is
-# data-use, NOT a gemma4 edit) and hands the L1 output straight back, dropping the slice/concat glue.
-#
-# This was DG_NORM_FULLCANVAS, default OFF. The flag was DELETED 2026-07-30. The blocker was that
-# the two shapes were not bit-identical, which the tree attributed to "~2e-6/norm (PCC 0.999998)"
-# reduction ORDER -- a figure with no measurement behind it (the bench that produced it reports
-# PCC > 1.0 elsewhere, so its floor is ~5e-5). Measured properly the delta was 5.73 bf16 ULP, and its
-# cause was ttnn's rmsnorm default of bf16 partial accumulation. With fp32 accumulation
-# (_norm_compute_kernel_config) the two shapes are bit-identical -- 0 of 69,206,016 elements over 96
-# device slices -- so there is no decision to gate. Measured -20.4%/block on the full 198-question
-# GPQA run, which also scored 71.21% vs 66.67% for the previous full run on the same questions.
+# RMSNorm normalizes each ROW independently over the hidden width, so one full-canvas op is
+# per-row equivalent to the 32-row chunks -- the cross-core width reduction is per-row regardless
+# of block_h. This path runs one width-sharded rms_norm (reusing ``norm.tt_weight``) and hands the
+# output straight back, dropping the slice/concat glue. With fp32 accumulation
+# (_norm_compute_kernel_config) the full-canvas and chunked shapes are bit-identical.
 # ---------------------------------------------------------------------------------------------
 
 _NORM_FULLCANVAS_CFG_CACHE = {}
@@ -545,25 +462,16 @@ _NORM_ACC_CFG_CACHE = {}
 
 
 def _norm_compute_kernel_config(device):
-    """fp32 destination accumulation for the DG-owned RMSNorms. Measured free, and 2.8x more accurate.
+    """fp32 destination accumulation for the DG-owned RMSNorms.
 
-    ttnn's rmsnorm default is HiFi4 with **fp32_acc = false** (ttnn/cpp/.../rmsnorm/rmsnorm.cpp), so
-    each of the 88 per-core partial sums of squares is rounded to bf16 before the cross-core combine.
-    Nothing in DiffusionGemma or gemma4 ever passed a compute_kernel_config to a norm, so every
-    denoise norm ran that way. Measured on QB2 at the shipped shape ([1,1,256,2816] bf16), against an
-    fp64 reference over the SAME bf16 inputs (tests/test_denoise_forward.py):
-
-        bf16 accumulate   rel p50 3.99e-3   p99 1.31e-2   max 2.15e-2   rmse 5.43e-3
-        fp32 accumulate   rel p50 1.42e-3   p99 4.38e-3   max 5.76e-3   rmse 1.94e-3   (2.8x better)
-
-    It also removes the dependence on the combine TREE: with bf16 partials, one 256-row norm and 8x
-    32-row norms disagree by up to 5.73 bf16 ULP; with fp32 partials they are BIT-IDENTICAL. That is
+    ttnn's rmsnorm default is HiFi4 with **fp32_acc = false**, so each per-core partial sum of
+    squares is rounded to bf16 before the cross-core combine. fp32 partials remove the dependence
+    on the combine TREE: the full-canvas norm and the 32-row chunks become bit-identical, which is
     what lets the full-canvas shape be a pure perf choice rather than a decision change.
 
-    Cost: **-2.3%**, i.e. none. It is free *here* because these configs land on block_w=1 /
-    subblock_w=1, so halving DST capacity has nothing to take away. Do not generalise "fp32 is slow"
-    to this shape without measuring it -- that intuition is right for wide output blocks and wrong
-    here.
+    Cost is negligible here because these configs land on block_w=1 / subblock_w=1, so halving
+    DST capacity has nothing to take away; do not generalise that to wide output blocks without
+    measuring.
     """
     key = id(device)
     cfg = _NORM_ACC_CFG_CACHE.get(key)
@@ -584,7 +492,7 @@ def _sharded_rms_norm_rows(norm, hidden_states, rows):
 
     Both the full-canvas (rows = canvas) and the chunked (rows = 32) shapes go through here, so the
     only difference between them is ``block_h`` -- and with fp32 accumulation that difference is
-    bit-identical (measured). The 32-row config this builds is the same one gemma4's
+    bit-identical. The 32-row config this builds is the same one gemma4's
     ``RMSNorm._build_sharded_cfg`` picks (same grid search, same block_w, block_h=1), so routing the
     chunks here instead of through ``norm.forward`` changes the accumulator and nothing else.
 
@@ -632,13 +540,10 @@ def _sharded_rms_norm_rows(norm, hidden_states, rows):
 
 
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
-    # A SCALELESS norm keeps its own path, and this test has to come FIRST. It used to sit below the
-    # full-canvas attempt, so the MoE router's weightless norm was captured
-    # by the full-canvas path and never reached _rms_norm_dram -- silently swapping its reduction topology
-    # from 8 cores / block_w=11 / single-stage (_width_sharded_rms_norm) to 88 cores / block_w=1 /
-    # two-stage. That is a structurally different summation tree, not the block_h difference the flag
-    # was documented as making, and nothing asked for it: the full-canvas path was written for the
-    # WEIGHTED norms and swallowed this one by ordering alone.
+    # A SCALELESS norm keeps its own path, and this test has to come FIRST: the full-canvas path
+    # below is written for the WEIGHTED norms and, ordered first, would capture the MoE router's
+    # weightless norm and silently swap its reduction topology (a structurally different
+    # summation tree, not just a block_h difference).
     if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
         return _rms_norm_dram(
             hidden_states,
@@ -650,16 +555,8 @@ def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
     if seq_len <= chunk_size:
         return norm.forward(hidden_states)
 
-    # ONE width-sharded norm over the whole canvas, not 8x 32 rows. This was DG_NORM_FULLCANVAS,
-    # default OFF; the flag was deleted on 2026-07-30 because there was nothing left to select.
-    #
-    # It is 9.85x per norm and -20.4% per block end-to-end, and the two reasons it stayed opt-in are
-    # both gone. (1) "Not bit-identical": that was true only because ttnn's rmsnorm default accumulates
-    # partials in bf16. With the fp32 accumulator this path now uses, the 256-row and 8x32-row shapes
-    # are bit-identical -- 0 of 69,206,016 elements over 96 device slices, against 13.0% at bf16.
-    # (2) "Answers get 27% shorter": a 10-question artifact. It shrank to -10% at 71 questions and to
-    # nothing at 198 (mean 11,069 chars, longer than any prior full run), while the score went
-    # 66.67% -> 71.21% on the same 198.
+    # ONE width-sharded norm over the whole canvas, not per-32-row chunks; with the fp32
+    # accumulator this path uses, the two shapes are bit-identical.
     out = _sharded_rms_norm_rows(norm, hidden_states, seq_len)
     if out is not None:
         return out
@@ -718,16 +615,7 @@ def _denoise_router_forward(router, hidden_states):
 def _denoise_moe_forward(moe, router_input, expert_input):
     """Router + concat-experts MoE. The single denoise (and batched-commit) MoE body.
 
-    This used to select between three implementations. The other two — the token-gather capacity
-    dispatch (``DG_SPARSE_MOE``) and the dense-128 reference behind it (``DG_ALLOW_DENSE_MOE``) —
-    were deleted on 2026-07-29 along with the ``DG_MOE_CONCAT`` selector, because the gather path
-    leaves the denoise trajectory at ~100x the halt-entropy threshold: no block ever settles, and
-    roughly two thirds of requests end degenerate. It was also the slower of the two at the shipped
-    capacity=256, where the gather/combine matmuls add ~89% MACs on top of an expert MAC count
-    already equal to computing every expert. tt/concat_moe.py carries the evidence, the arithmetic,
-    and the ~7.7 GiB weight-duplication cost this path pays for it.
-
-    Prefill is a different MoE and is untouched: it keeps the ragged top-8 path in tt/sparse_moe.py.
+    Prefill is a different MoE: it keeps the ragged top-8 path in tt/sparse_moe.py.
     """
     dense_routing = _denoise_router_forward(moe.router, router_input)
     out = concat_experts_forward(moe.experts, expert_input, dense_routing)
@@ -752,11 +640,9 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
 # empty (nothing skipped). See ``_SKIP_TOKENS`` for the authoritative list:
 #   attn / shared / moe   the denoise attention, shared MLP, and router+expert path
 #
-# Only the DENOISE layer body is ablatable. There is deliberately no token for self-conditioning or
-# for the commit body: ``sc``/``cattn``/``cshared``/``cmoe`` were once listed here but never had a
-# consumer, so they validated clean and then measured the UNABLATED step -- exactly the failure this
-# tool's validator exists to prevent. They are gone; ``DG_SKIP=cattn`` now raises. If the commit body
-# ever needs pricing, add the token AND the seam in ``commit_batched.py`` in the same change.
+# Only the DENOISE layer body is ablatable; there is deliberately no token for self-conditioning
+# or for the commit body. If the commit body ever needs pricing, add the token AND the seam in
+# ``commit_batched.py`` in the same change.
 #
 # The output of a skipped run is garbage BY CONSTRUCTION — never feed a DG_SKIP run into a
 # committed_sha256 comparison or a quality gate. Note also that zeroing the MoE feeds an all-zero
@@ -765,9 +651,8 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
 # ---------------------------------------------------------------------------------------------
 
 
-# Every token DG_SKIP honours. Validated on read: an unrecognised token used to be silently ignored,
-# which meant a typo (``DG_SKIP=moe1``) measured the UNABLATED step and reported it as an ablation --
-# the worst possible failure for a measurement tool, because the number looks plausible.
+# Every token DG_SKIP honours. Validated on read: a silently ignored typo (``DG_SKIP=moe1``)
+# would measure the UNABLATED step and report it as an ablation.
 _SKIP_TOKENS = frozenset(
     {
         "attn",  # denoise attention: QKV, RoPE, SDPA, o_proj, all-reduce
@@ -1310,13 +1195,9 @@ class MutablePrefixKVReader:
         # FAIL LOUD on prefill-from-non-zero. The bounded read derives its absolute offset as
         # ``sliding_read_offset(prompt_len, span, p_max)`` and passes that straight through as
         # ``seq_len_start`` (below, and again in refresh_windows) -- it does NOT add
-        # ``self.seq_len_start`` the way the unbounded read does. While every production construction
-        # passes 0 that is invisible, but "prefill-from-non-zero" is the declared keystone of the
-        # vLLM-native plan (doc/vllm_integration), and the day it lands 25 of 30 layers would read the
-        # wrong 1024 rows with no error anywhere. This used to be reachable only by opting into
-        # DG_DENOISE_SLIDING_SPAN; the bounded read is the default now, so the hole has to be a raise
-        # rather than a dormant note. Fix is to fold seq_len_start into the offset in BOTH places and
-        # delete this guard, with a test at a non-zero base.
+        # ``self.seq_len_start`` the way the unbounded read does, so at a non-zero base the sliding
+        # layers would read the wrong rows with no error anywhere. Fix is to fold seq_len_start into
+        # the offset in BOTH places and delete this guard, with a test at a non-zero base.
         if self.seq_len_start != 0:
             raise NotImplementedError(
                 f"bounded sliding read does not support a non-zero prefix base yet "
@@ -1484,11 +1365,9 @@ class DenoiseLogitsAdapter:
     previous step's *full* ``[1,1,C,vocab]`` logits, freshly allocated every step
     (``self.prev_logits``). A fixed Metal trace bakes in buffer addresses and one
     fixed unrolled graph, and this chained fresh-alloc cross-step state does not
-    replay bit-exactly — the whole-loop trace committed argmax diverged (60.5%
-    match) with self-cond ON while a self-cond-OFF / stateless loop traced at
-    100% (``doc/optimize_perf/probe_traced_denoise_loop.py``). The trace-safe
-    variant carries the cross-step state as the small ``[1,1,C,hidden]``
-    soft-embedding **signal** in a persistent, preallocated buffer updated
+    replay bit-exactly. The trace-safe variant carries the cross-step state as the
+    small ``[1,1,C,hidden]`` soft-embedding **signal** in a persistent,
+    preallocated buffer updated
     **in-place** each step (``ttnn.copy``), so its device address is fixed. Step 0
     still uses the ``condition(None)`` branch (``post_norm(embed)``) and only
     *writes* the buffer; steps 1+ *read* the buffer written by the immediately
@@ -1533,12 +1412,8 @@ class DenoiseLogitsAdapter:
         self.trace_safe_self_conditioning = False
         self.signal_buf = None
         # Ping-pong (double-buffered) signal: read buffer != write buffer within a step.
-        # Added to test whether an in-place signal_buf read+write was the "self-cond trace
-        # race" — it is NOT: the in-place default is decision-fidelity-preserving and
-        # ping-pong is BIT-IDENTICAL to it on device (the race was a probe harness bug —
-        # a reused init buffer allocated after trace capture, clobbered by trace scratch;
-        # see perf_progress.md session 8). Kept opt-in (default off) as a verified-equivalent
-        # option; the shipped traced path uses the in-place default. See #47465.
+        # Bit-identical on device to the in-place default; kept opt-in (default off) as a
+        # verified-equivalent option. The shipped traced path uses the in-place default. See #47465.
         self.signal_ping_pong = False
         self.signal_buf_b = None
         # Cross-block-trace-reusable canvas RoPE (constant-shape per-layer-type buffers).
@@ -1564,9 +1439,7 @@ class DenoiseLogitsAdapter:
         denoise step is captured as a Metal trace and replayed once per step, with
         the self-cond signal carried across replays in this persistent buffer,
         updated in-place each step — exactly the KV-cache pattern that a traced
-        decode uses (and which, unlike a *whole-loop* trace with cross-step
-        feedback, does not race: a single self-cond step traces at 100%, verified in
-        ``probe_traced_denoise_loop.py`` STEPS=1). Uniform-graph: **every** step runs
+        decode uses. Uniform-graph: **every** step runs
         ``forward(embed, signal_buf)``; step 0 reads the zeroed buffer, which is
         bit-exact to the ``condition(None)`` (=``post_norm(embed)``) branch because
         ``forward`` with a zero signal has ``pre_norm(0)=0`` → gate/up/down all zero →
@@ -1706,10 +1579,10 @@ class DenoiseLogitsAdapter:
     # --- Paged-prefix Phase 1 reveal mask (constant-shape written input) ------------
     # A single persistent [1,1,C,p_max+C] additive mask shared by all 30 layers, allocated
     # BEFORE begin_trace_capture and refreshed per block OUTSIDE capture. Phase 1 reveals the
-    # committed prefix [0:prompt_len] + all canvas (all-attend, matching today's maskless path)
+    # committed prefix [0:prompt_len] + all canvas (all-attend, matching the maskless path)
     # and hides the uncommitted tail [prompt_len:p_max] with NEG. Paired with a fixed p_max
     # prefix read (MutablePrefixKVReader.set_read_span) so the traced graph is shape-invariant
-    # → capture-once/replay-many. See doc/optimize_perf/paged_prefix_denoise_design.md §1a/§5.
+    # → capture-once/replay-many.
 
     def _reveal_mask_layer_types(self) -> tuple[str, ...]:
         """Distinct layer types needing their own reveal mask, in a stable order.
@@ -1781,7 +1654,7 @@ class DenoiseLogitsAdapter:
         enforce_window: bool = False,
         sliding_span: int | None = None,
     ):
-        """Preallocate the persistent reveal mask(s) OUTSIDE any trace (session-8 rule).
+        """Preallocate the persistent reveal mask(s) OUTSIDE any trace.
 
         One buffer per distinct layer type. Without ``sliding_span`` they all share the same
         ``[1, 1, C, p_max + C]`` shape, so enforcing the window changes mask CONTENT only. With
@@ -2143,9 +2016,8 @@ def make_generation_logits_fn_builder_from_remapped_state(
     ):
         del page_table, page_tables_per_layer
         # prompt_tokens is the UNPADDED prompt, so its length is the true one; prompt_len here is the
-        # tile-aligned cache_len that prefill wrote.
-        # `prompt_tokens` used to be discarded here, so nothing ever constrained its type and
-        # callers/tests may pass a sentinel. Ask for a shape instead of assuming one.
+        # tile-aligned cache_len that prefill wrote. Callers/tests may pass a sentinel for
+        # prompt_tokens, so ask for a shape instead of assuming one.
         prompt_shape = getattr(prompt_tokens, "shape", None)
         true_prompt_len = int(prompt_shape[-1]) if prompt_shape is not None else None
         return adapter_builder(

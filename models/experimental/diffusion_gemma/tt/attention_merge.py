@@ -1,44 +1,28 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure-ttnn flash-attention partial merge for DiffusionGemma (design task T7).
+"""Pure-ttnn flash-attention partial merge for DiffusionGemma.
 
-This is the **Phase-2 companion** to the ``return_lse`` SDPA kernel extension
-described in ``doc/optimize_perf/paged_prefix_denoise_design.md`` §1a ("FULL-
-ATTENTION 5 layers — paged chunked SDPA + LSE-merge") and enumerated as task T7
-in that doc's §6 table.
-
-**DORMANT as of 2026-07-30.** The T6 producer that would supply ``lse_a``/``lse_b`` was reverted
-out of ``ttnn/cpp/`` as an out-of-folder change with no live consumer (recover from
-``2e18c599bd3``; see ``doc/optimize_perf/return_lse_kernel_plan.md``). This module is unaffected —
-it is pure ttnn, takes its LSE inputs as ordinary tensors, and ``tests/test_attention.py``
-still exercises it against a torch reference. It simply has no on-device producer to pair with
-until that extension is re-landed upstream.
+Currently unused: it awaits an on-device ``return_lse`` SDPA producer for
+``lse_a``/``lse_b``; until then it is exercised only against a torch reference.
 
 On the 5 full-attention denoise layers the canvas query attends
 ``[prefix(committed) ++ canvas]``. Rather than materialize the full C×(P+C) score
 matrix, that context is split into two independent SDPA partials — a paged causal
 read over the committed prefix (partial *a*) and the existing non-causal C×C
 canvas SDPA (partial *b*) — each already softmax-normalized over **its own** key
-group. To recombine them into the single-softmax output over the concatenation of
-both key groups we need each partial's flash log-sum-exp statistic
-``lse = m + log(l)`` (running max ``m`` + log of the running exp-sum ``l``), which
-the ``return_lse=True`` kernel extension (task T6) emits as an fp32 second output.
+group. Recombining them into the single-softmax output over the concatenation of
+both key groups needs each partial's flash log-sum-exp statistic
+``lse = m + log(l)`` (running max ``m`` + log of the running exp-sum ``l``).
 
-This module is the ``merge_attention_partials`` half of that pair: a *pure-ttnn*
-online-softmax combine (max / sub / exp / mul / add / reciprocal, no kernel).
-It is **algebraically exact** — given exact ``out_a/out_b`` and ``lse_a/lse_b`` it
+:func:`merge_attention_partials` is that combine: a *pure-ttnn* online-softmax
+merge (max / sub / exp / mul / add / reciprocal, no kernel). It is
+**algebraically exact** — given exact ``out_a/out_b`` and ``lse_a/lse_b`` it
 reconstructs ``softmax(concat(scores)) @ concat(V)`` bit-for-bit in fp32. The
 weight computation (max-shift, exp, sum, reciprocal) is done in fp32 for numeric
 stability; only the final rescale of the bf16 partial outputs runs in bf16, so
-the merged output carries bf16 rescale drift. Per the design doc, that drift is
-**gated on diffusion decision-agreement (zero argmax flips), not on bitwise
-equality** (§1a merge note + §3.3): "Algebraically exact; bf16 rescale drift →
-gate on decision-agreement, not bitwise."
-
-ttnn idioms (dtype / DRAM / deallocate) follow ``tt/diffusion_attention.py`` and
-``tt/sampling.py`` (fp32-compute-then-typecast-back, ``memory_config`` on every op,
-``.deallocate(True)`` on every intermediate).
+the merged output carries bf16 rescale drift, gated on diffusion
+decision-agreement rather than bitwise equality.
 """
 
 from __future__ import annotations
@@ -96,7 +80,7 @@ def merge_attention_partials(out_a, lse_a, out_b, lse_b):
     # --- apply the weights to the (bf16) partial outputs -----------------------
     # Cast the fp32 weights to the output dtype so each broadcast-mul has matching
     # operand dtypes; this is the only place bf16 rescale drift enters (gated on
-    # decision-agreement per the design doc, not on bitwise equality).
+    # decision-agreement, not on bitwise equality).
     wa_cast = ttnn.typecast(wa, out_dtype)
     wa.deallocate(True)
     wb_cast = ttnn.typecast(wb, out_dtype)

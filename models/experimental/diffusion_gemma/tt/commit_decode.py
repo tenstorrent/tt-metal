@@ -4,8 +4,8 @@
 """DiffusionGemma-local decode path used only for commit-append.
 
 The generation loop commits a denoised canvas token-by-token into the Gemma4 KV
-cache. That path needs a few low-L1 placement choices that are specific to the
-DiffusionGemma run-first smoke and should not live in the shared Gemma4 decode
+cache. That path needs a few low-L1 placement choices that are specific to
+DiffusionGemma and should not live in the shared Gemma4 decode
 modules. Keep those choices local here and route ``commit_canvas_tokens``
 through this file instead of ``Gemma4Model.ttnn_decode_forward``.
 """

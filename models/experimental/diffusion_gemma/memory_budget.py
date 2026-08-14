@@ -5,8 +5,8 @@
 
 The estimates in this module are scoped to per-step canvas K/V scratch tensors.
 They are not a total model working-set estimate: prompt-prefix K/V, weights,
-paged cache allocation, activations, and SDPA concatenation buffers are measured
-separately by the QB2 memory probes.
+paged cache allocation, activations, and SDPA concatenation buffers are outside
+this module's scope.
 """
 
 from __future__ import annotations

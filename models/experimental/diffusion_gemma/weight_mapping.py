@@ -15,8 +15,7 @@ gemma4 backbone (``models/demos/gemma4/``). The only differences are:
    ``layer_scalar``). The gemma4 loader expects ``model.language_model.*`` (HF) or
    ``model.layers.*`` (tests). So remapping ``model.decoder.* -> model.language_model.*``
    makes the DiffusionGemma backbone load through the unmodified gemma4 path.
-2. **Two net-new weight groups** beyond the backbone (confirmed via the checkpoint
-   ``model.safetensors.index.json`` diff vs ``gemma-4-26B-A4B-it``):
+2. **Two net-new weight groups** beyond the backbone:
      - ``model.decoder.self_conditioning.{pre_norm,gate_proj,up_proj,down_proj}.weight``
        — the self-conditioning gated MLP (this module's :class:`SelfConditioning`
        reference; ``post_norm`` is scaleless so it has no checkpoint weight).
@@ -27,10 +26,9 @@ gemma4 backbone (``models/demos/gemma4/``). The only differences are:
        ``check_encoder_layer_scalar_tie`` below re-establishes that on load: a
        checkpoint whose copies diverge would need a separate encoder scalar
        applied in prefill and commit, and silently reusing the decoder copy would
-       be a compounding per-layer error into the prompt KV. Measured on
-       ``diffusiongemma-26B-A4B-it`` 2026-07-27: max |encoder - decoder| = 0.0
-       across all 30 layers, and ``model.encoder.*`` holds nothing else on the
-       text path (its other 356 keys are vision tower / embed_vision).
+       be a compounding per-layer error into the prompt KV. ``model.encoder.*``
+       holds nothing else on the text path (its other keys are vision tower /
+       embed_vision).
 
 This module is pure key/tensor bookkeeping — no ttnn / device / gemma4 import — so
 it validates against just the checkpoint (or its index json) on any host.
