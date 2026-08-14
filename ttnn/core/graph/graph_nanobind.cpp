@@ -344,6 +344,24 @@ void py_graph_module(nb::module_& m) {
         )doc");
 
     m.def(
+        "unwind_open_functions",
+        [](const std::string& reason) { GraphTracker::instance().unwind_open_functions(std::string_view(reason)); },
+        R"doc(unwind_open_functions(reason: str = "") -> None
+
+        Close every function scope the active capture still holds open, marking each aborted.
+
+        An operation that throws from a call site with no scope guard never emits its
+        function_end, so the capture keeps recording inside a scope that is already dead.
+        Call this when a new top-level operation is about to start, where nothing can
+        legitimately still be open, to drop those scopes instead of nesting the rest of the
+        capture under them.
+
+        Args:
+            reason: Attached to each closed scope as its abort reason.
+        )doc",
+        nb::arg("reason") = "");
+
+    m.def(
         "enable_detailed_buffer_tracing",
         &GraphProcessor::enable_detailed_buffer_tracing,
         R"doc(enable_detailed_buffer_tracing() -> None

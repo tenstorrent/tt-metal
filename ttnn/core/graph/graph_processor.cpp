@@ -624,12 +624,7 @@ void GraphProcessor::track_function_end() {
     current_op_id.pop();
 }
 
-void GraphProcessor::track_function_abort(std::string_view reason) {
-    const std::lock_guard<std::mutex> lock(mutex);
-    if (!has_open_function()) {
-        log_debug(tt::LogAlways, "Ignoring function_abort with no open function_start");
-        return;
-    }
+void GraphProcessor::abort_open_function_impl(std::string_view reason) {
     // The scope is closed like any other so the trace stays balanced and later operations keep
     // their real nesting; the marker is what tells the two apart downstream. There is no output
     // to record: the operation never produced one.
@@ -639,6 +634,25 @@ void GraphProcessor::track_function_abort(std::string_view reason) {
         graph[end_id].params[kAbortReason] = std::string(reason);
     }
     current_op_id.pop();
+}
+
+void GraphProcessor::track_function_abort(std::string_view reason) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        log_debug(tt::LogAlways, "Ignoring function_abort with no open function_start");
+        return;
+    }
+    this->abort_open_function_impl(reason);
+}
+
+void GraphProcessor::unwind_open_functions(std::string_view reason) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    // Innermost first, so the scopes are closed in the order they would have been on the way out
+    // of the operation that abandoned them.
+    while (has_open_function()) {
+        log_debug(tt::LogAlways, "Unwinding abandoned op: {}", graph[current_op_id.top()].params[kName]);
+        this->abort_open_function_impl(reason);
+    }
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {

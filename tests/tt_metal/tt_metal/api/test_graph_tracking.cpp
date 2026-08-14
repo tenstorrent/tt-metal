@@ -33,6 +33,8 @@ public:
     std::atomic<int> function_ends{0};
     std::atomic<int> function_aborts{0};
     std::vector<std::string> abort_reasons;
+    std::atomic<int> unwinds{0};
+    std::vector<std::string> unwind_reasons;
 
     void track_function_start(
         std::string_view /*function_name*/, std::span<TrackedArgument> /*input_parameters*/) override {
@@ -46,6 +48,11 @@ public:
     void track_function_abort(std::string_view reason) override {
         function_aborts.fetch_add(1);
         abort_reasons.emplace_back(reason);
+    }
+
+    void unwind_open_functions(std::string_view reason) override {
+        unwinds.fetch_add(1);
+        unwind_reasons.emplace_back(reason);
     }
 };
 
@@ -322,6 +329,31 @@ TEST(ScopedTrackedFunction, DoesNotEndAProcessorThatMissedTheStart) {
     EXPECT_EQ(processor->function_starts.load(), 0);
     EXPECT_EQ(processor->function_ends.load(), 0);
     EXPECT_EQ(processor->function_aborts.load(), 0);
+}
+
+// The safety net for call sites that are not guarded: the caller that knows nothing can still be
+// open (a new top-level operation) asks every processor of its thread to drop what it holds.
+TEST(UnwindOpenFunctions, ReachesEveryProcessorWithTheReason) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    GraphTracker::instance().track_function_start("op that never ends");
+    GraphTracker::instance().unwind_open_functions("closed when 'ttnn.add' started");
+
+    EXPECT_EQ(processor->function_ends.load(), 0);
+    ASSERT_EQ(processor->unwinds.load(), 1);
+    EXPECT_EQ(processor->unwind_reasons.front(), "closed when 'ttnn.add' started");
+}
+
+// Processors are thread_local, so an unwind on one thread must leave another thread's capture
+// alone: its scopes are open for a good reason.
+TEST(UnwindOpenFunctions, LeavesAnotherThreadsProcessorAlone) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    std::thread([] { GraphTracker::instance().unwind_open_functions("from another thread"); }).join();
+
+    EXPECT_EQ(processor->unwinds.load(), 0);
 }
 
 }  // namespace tt::tt_metal::graph_tracking_test
