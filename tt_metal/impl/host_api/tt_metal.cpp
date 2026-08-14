@@ -490,10 +490,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
     detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
 
-    // Telemetry: this path writes the CB config to L1 for every device after the first on a
-    // slow-dispatch mesh (SDMeshCommandQueue only calls LaunchProgram for local_devices[0]).
-    // Without recording here those devices would report zero CB usage while actually holding a
-    // program's circular buffers. No-op when SHM tracking is disabled.
+    // Telemetry: on a slow-dispatch mesh only local_devices[0] goes through LaunchProgram, so
+    // without this every other device reports zero CB usage while holding the program's CBs.
     if (auto* concrete_device = dynamic_cast<class Device*>(device)) {
         concrete_device->record_dispatched_program_cbs(program.impl());
     }
@@ -969,11 +967,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
 
-        // Telemetry: ConfigureDeviceWithProgram has just written this program's circular
-        // buffer config into L1, so its CB footprint is now what is resident on those
-        // cores. Mirrors the fast-dispatch hook in fd_mesh_command_queue.cpp; without
-        // this, slow dispatch would report no CB usage at all. No-op when SHM tracking
-        // is disabled.
+        // Telemetry: ConfigureDeviceWithProgram has just written this program's CB config into
+        // L1. Mirrors the fast-dispatch hook in fd_mesh_command_queue.cpp.
         if (auto* concrete_device = dynamic_cast<Device*>(device)) {
             concrete_device->record_dispatched_program_cbs(program.impl());
         }

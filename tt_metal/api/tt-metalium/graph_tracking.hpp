@@ -126,13 +126,12 @@ public:
 //     calling thread; ops dispatched on other threads are not observed by
 //     that capture.
 //   * `background_processors` is *process-wide* and guarded by
-//     `background_processors_mutex`. Background processors are registered once
-//     and observe events on EVERY thread. Per-thread storage is right for
-//     capture (a capture should only see the thread that started it) but wrong
-//     for always-on observers such as SHM memory tracking: registered from the
-//     thread that first initialized a device, they would silently miss every
-//     buffer allocated on any other thread. They are also unaffected by
-//     `clear()`, which ends a capture.
+//     `background_processors_mutex`. Registered once, unaffected by `clear()`,
+//     and reached from every thread -- which an always-on observer such as SHM
+//     memory tracking needs; per-thread storage missed every buffer allocated
+//     off the thread that initialized the device.
+//     Only track_allocate/track_deallocate reach them: the CB, dataflow-buffer
+//     and scratchpad hooks notify `processors` alone.
 //   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
 //     This is the only piece of GraphTracker state that is shared across
 //     threads.

@@ -19,11 +19,9 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         return;
     }
 
-    // No rate limiting. It existed to throttle get_total_cb_allocated(), which used to walk
-    // every live program; that walk is gone and this is now an atomic load plus a scan of the
-    // 64 process slots. Throttling here was also incorrect: a dropped update is never retried,
-    // so a workload that dispatched and then went idle left a stale figure in shared memory
-    // forever -- exactly what an external monitor would display.
+    // Deliberately unthrottled: this is now an atomic load plus a scan of the 64 process
+    // slots, and a dropped update is never retried -- a workload that goes idle would leave a
+    // stale figure in shared memory forever.
     try {
         // Query actual LOCALLY-allocated CB usage (globally-allocated CBs are in L1 already)
         uint64_t cb_allocated = device->get_total_cb_allocated();
@@ -43,8 +41,8 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         // This previously store()d our own value straight into total_cb_allocated, which
         // made the device-wide figure last-writer-wins instead of a sum: with two
         // processes on one device it reported one process's CB usage, not the total.
-        // recompute_aggregates() also reaps nothing but re-derives reference_count, so
-        // the rate-limited cadence here doubles as a periodic self-correction.
+        // recompute_aggregates() also re-derives reference_count, so every publish doubles as
+        // a self-correction of the derived fields.
         recompute_aggregates();
 
         // Per-chip CB stats for this device. Use the CAS-based claim helper rather than

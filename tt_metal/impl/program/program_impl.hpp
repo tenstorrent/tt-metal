@@ -230,21 +230,15 @@ public:
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
 
-    // Bytes of L1 this program's locally-allocated circular buffers occupy, per logical core,
-    // once it is dispatched. Only the locally-allocated ones: globally-allocated CBs are backed
-    // by real L1 Buffers and are already accounted for through the buffer path.
-    //
-    // Returns nullptr when the program has no locally-allocated circular buffers.
+    // Bytes of L1 this program's locally-allocated circular buffers occupy per logical core
+    // once dispatched; nullptr if it has none. Globally-allocated CBs are excluded -- they are
+    // real L1 Buffers, already counted through the buffer path.
     //
     // Device-independent: allocate_circular_buffers assigns CB addresses once and reuses them
-    // for every device the program runs on, so the footprint is a property of the program.
-    // Computed on first use and cached, because it is read on the dispatch path for every
-    // program dispatch -- rebuilding it there cost ~80 ns per core of the program's grid.
-    // Dropped by invalidate_circular_buffer_allocation(), which every mutation that can move
-    // or resize a locally-allocated CB goes through.
-    //
-    // A fresh shared_ptr is published on each recompute rather than mutating in place, so
-    // holders can compare pointers to tell whether the footprint they applied is still current.
+    // for every device. Cached on first use because the dispatch path reads it per dispatch
+    // (~80 ns per core to rebuild), and dropped by invalidate_circular_buffer_allocation().
+    // Each recompute publishes a fresh shared_ptr, so holders can compare pointers to tell
+    // whether what they applied is still current.
     std::shared_ptr<const std::map<CoreCoord, uint64_t>> cb_bytes_per_core() const;
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
@@ -506,10 +500,9 @@ private:
     std::vector<CircularBufferAllocator> cb_allocators_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
-    // Cached result of cb_bytes_per_core(), filled on first use. Unsynchronized: dispatching a
-    // program already mutates it through update_program_dispatch_commands(ProgramImpl&), so
-    // concurrent dispatch of one program object is not supported and this cache inherits that
-    // contract rather than putting a lock on the dispatch path.
+    // Unsynchronized: dispatch already mutates the program through
+    // update_program_dispatch_commands(ProgramImpl&), so one program object cannot be
+    // dispatched from two threads and this cache inherits that contract.
     mutable std::shared_ptr<const std::map<CoreCoord, uint64_t>> cb_bytes_per_core_;
 
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
