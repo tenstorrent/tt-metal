@@ -636,6 +636,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
             this->device_id,
             dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + issue_q_wr_ptr);
+        ctx.get_cluster().dram_barrier(this->device_id);
         return;
     }
 

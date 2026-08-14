@@ -599,7 +599,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
 
     cmd_ptr = data_ptr;
     // NOT guarded by FD_BENCH_DP_TIMELINE -- this pair is the period-only baseline (§3.8).
-    fd_copy_bench::dp_mark(fd_copy_bench::kDpCmdEnd, fd_copy_bench::bench_cycle());
+    fd_copy_bench::dp_mark(fd_copy_bench::kDpCmdEnd, fd_copy_bench::bench_cycle_period());
     fd_copy_bench::dp_commit_row();
 }
 
@@ -1385,6 +1385,10 @@ re_run_command:
         case CQ_DISPATCH_CMD_WAIT:
             // DPRINT("cmd_wait\n");
             process_wait();
+            // End-of-window marker for the copy benchmark -- the harness appends a barrier-wait after every
+            // command batch, so this fires once, after the last measured row. See the matching RELAY_INLINE
+            // site in cq_prefetch.cpp for why terminate is not usable here.
+            fd_copy_bench::dp_publish_and_flag();
             break;
 
         case CQ_DISPATCH_CMD_SINK: DPRINT("cmd_sink\n"); break;
@@ -1469,7 +1473,6 @@ re_run_command:
                 relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd));
             }
             cmd_ptr += sizeof(CQDispatchCmd);
-            fd_copy_bench::dp_publish_and_flag();
             done = true;
             break;
 
@@ -1518,7 +1521,6 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT("dispatch_h terminate\n");
             cmd_ptr += sizeof(CQDispatchCmd);
-            fd_copy_bench::dp_publish_and_flag();
             done = true;
             break;
 

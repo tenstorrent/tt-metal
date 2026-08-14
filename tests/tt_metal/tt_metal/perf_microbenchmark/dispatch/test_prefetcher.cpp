@@ -3185,14 +3185,14 @@ public:
             payload_bytes,
             get_num_iterations());
         warmup_before_snapshot();
+        zero_bench_region();
         execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
         report_relay_linear_sections(payload_bytes);
     }
 
 private:
-    // The FD kernels are persistent; a Finish() pushes the terminate commands the fixture already appended and
-    // drains the cold iteration before the measured window, so the cold wait is booked before the window
-    // rather than inside it.
+    // The FD kernels are persistent; this Finish() drains the cold iteration before the measured window so the
+    // cold wait is booked before the window rather than inside it.
     void warmup_before_snapshot() { distributed::Finish(mesh_device_->mesh_command_queue()); }
 
     struct BenchCoreCoords {
@@ -3216,6 +3216,21 @@ private:
                 CoreCoord{dispatch_logical.x, dispatch_logical.y}, dispatch_core_type)};
     }
 
+    // Zero the whole bench region on both DMs before the run. The kernels never clear a row, so a
+    // waypoint that does not fire (e.g. the chunk stamps when their flag is off) would otherwise read what was
+    // in L1 beforehand rather than 0 -- which the decode relies on to tell "did not fire" from "fired".
+    // Free: the host pays it, and NoC writes into TL1 invalidate the overlay caches, so the device's
+    // cached view is coherent. Same pattern as the prefetch_q zeroing elsewhere in this file.
+    void zero_bench_region() {
+        const uint32_t base = Common::is_quasar_sim() ? fd_copy_bench::kBaseQuasar : fd_copy_bench::kBaseTt1xx;
+        const std::vector<uint32_t> zeros(fd_copy_bench::kTotalBytes / sizeof(uint32_t), 0u);
+        const BenchCoreCoords cores = bench_core_coords();
+        auto& cluster = MetalContext::instance().get_cluster();
+        cluster.write_core(zeros.data(), fd_copy_bench::kTotalBytes, {device_->id(), cores.prefetch_virt}, base);
+        cluster.write_core(zeros.data(), fd_copy_bench::kTotalBytes, {device_->id(), cores.dispatch_virt}, base);
+        cluster.l1_barrier(device_->id());
+    }
+
     // Polls one DM's done-flag until it reads kDoneMagic or the timeout elapses. The uncached alias is a
     // device-side view only -- the host's NoC read always targets the plain base.
     bool poll_bench_done(const CoreCoord& virt, uint32_t flag_off) {
@@ -3231,10 +3246,9 @@ private:
     }
 
     void report_relay_linear_sections(uint32_t payload_bytes) {
-        // Second Finish(): the FD kernels are persistent, so this proves the dispatcher processed every
-        // measured command before the done-flag poll below closes the prefetcher/dispatcher race.
-        distributed::Finish(mesh_device_->mesh_command_queue());
-
+        // No Finish() here -- terminate_fd_to_publish_bench() already drained the measured window and then
+        // killed both kernels, so a Finish() at this point would never be serviced. The done-flag poll is
+        // what closes the race with the (asynchronous) terminate.
         const BenchCoreCoords cores = bench_core_coords();
         const bool pf_done = poll_bench_done(cores.prefetch_virt, fd_copy_bench::kPfDoneFlagOff);
         const bool dp_done = poll_bench_done(cores.dispatch_virt, fd_copy_bench::kDpDoneFlagOff);
@@ -3336,25 +3350,40 @@ private:
         auto pf_row_word = [&](uint32_t idx, uint32_t word) {
             return pf[fd_copy_bench::kPfStagingOff + idx * fd_copy_bench::kPfRowWords + word];
         };
-        auto pf_chunk_word = [&](uint32_t idx, uint32_t chunk, uint32_t off) {
-            return pf_row_word(idx, fd_copy_bench::kPfChunkBase + chunk * fd_copy_bench::kPfChunkStride + off);
-        };
-
-        // The host generated the command stream, so it knows the chunk count per iteration exactly --
-        // no device-side chunk counter is needed.
+        // The host generated the command stream, so it knows the chunk count exactly. Reported only --
+        // the device no longer keeps per-chunk words; the read/publish terms arrive pre-summed.
         const uint32_t scratch_db_half_size = Common::sd_dispatch_mem_map(this->device_).scratch_db_size() / 2;
         const uint32_t num_chunks = (payload_bytes + scratch_db_half_size - 1) / scratch_db_half_size;
-        TT_FATAL(
-            num_chunks <= fd_copy_bench::kPfChunkSlots,
-            "CopyBench: payload_bytes={} needs {} chunks, exceeding kPfChunkSlots={}",
-            payload_bytes,
-            num_chunks,
-            fd_copy_bench::kPfChunkSlots);
 
         double sum_header = 0, sum_relay_cmd = 0, sum_body = 0, sum_dram_read = 0, sum_publish = 0;
         double sum_relay_internal = 0, sum_iteration_total = 0, sum_prefetch_external = 0;
+        // Read-hiding diagnostics: window = time the read had to complete in before its barrier was
+        // called; latency = issue-to-completion. See the chunk loop for why they are not period terms.
+        // Write drain: publish issues the NoC writes, the next command's entry flush drains them.
+        double sum_write_drain = 0;
+        uint32_t write_drain_sample_count = 0;
+        // Credit-wait split: acquire_pages() inside the header and publish brackets, and the in-loop flush.
+        double sum_header_acq = 0, sum_pub_acq = 0;
+        // Dispatcher timeline (FD_BENCH_DP_TIMELINE). Zero when the flag is off; the host cannot read the
+        // device's build flags, so presence is inferred from a non-zero stamp.
+        double sum_dp_loop_wait = 0, sum_dp_cmd = 0;
+        uint32_t dp_timeline_samples = 0;
+        // The NoC write inside the header handler -- fixed ~32 B on both arches, so it is the only
+        // apples-to-apples measurement of engine-programming cost alone.
+        double sum_header_write = 0;
+        double sum_read_latency = 0;
+        // FD_BENCH_PF_FETCH_WAYPOINTS (2026-08-13 re-add): fetch_q_get_cmds's CQ read barrier and uncached
+        // fetchq pointer stores. Zero when the flag is off, same inference rule as the dp_timeline sums.
+        double sum_fetch_read_wait = 0, sum_fetch_ptr_ops = 0;
+        // Per-row iteration_total, kept to test whether the prefetcher is ever starved by the host writing
+        // fetchq entries -- a spin on an empty PrefetchQ lands in prefetch_external and would inflate it on
+        // the emulator only. Host lag concentrates at the start (all 201 entries are pushed in one loop), so
+        // a leading ramp is the signature; a flat distribution rules it out.
+        std::vector<uint32_t> iter_totals;
+        iter_totals.reserve(n);
         uint32_t sum_check_fail_count = 0;
         double lockstep_max_rel_err = 0.0;
+        double sum_dp_period = 0;
 
         for (uint32_t i = 1; i < n; i++) {
             const uint32_t row = pf_tail + i;
@@ -3367,19 +3396,54 @@ private:
             const uint32_t body =
                 pf_row_word(row, fd_copy_bench::kPfLinearExit) - pf_row_word(row, fd_copy_bench::kPfLinearEnter);
 
-            uint32_t dram_read = 0;
-            uint32_t publish = 0;
-            for (uint32_t c = 0; c < num_chunks; c++) {
-                dram_read += pf_chunk_word(row, c, fd_copy_bench::kPfChunkReadEnd) -
-                             pf_chunk_word(row, c, fd_copy_bench::kPfChunkReadStart);
-                publish += pf_chunk_word(row, c, fd_copy_bench::kPfChunkPubEnd) -
-                           pf_chunk_word(row, c, fd_copy_bench::kPfChunkPubStart);
+            // Durations accumulated on device and stored once (see fd_copy_bench.hpp): summed over this
+            // command's chunks. `dram_read` is EXPOSED wait -- the only read term the period pays. A
+            // near-zero value means the read was HIDDEN, not fast; read_window says which.
+            const uint32_t dram_read = pf_row_word(row, fd_copy_bench::kPfDramReadExposed);
+            const uint32_t publish = pf_row_word(row, fd_copy_bench::kPfPublish);
+
+            // The entry flush drains the PREVIOUS command's writes, so it is subtracted from THIS row's
+            // body (it happens inside it) but charged to the previous row's producer cost below.
+            const uint32_t entry_flush = pf_row_word(row, fd_copy_bench::kPfEntryFlush);
+            const uint32_t relay_internal = body - dram_read - publish - entry_flush;
+
+            // publish issues the writes; row+1's entry flush drains them. Their sum is the producer cost
+            // (§2.1's "flush + publish"). The last windowed row's drain falls outside the window, so it is
+            // excluded from the mean rather than counted as zero.
+            if (i + 1 < n) {
+                sum_write_drain += pf_row_word(row + 1, fd_copy_bench::kPfEntryFlush);
+                write_drain_sample_count++;
             }
-            const uint32_t relay_internal = body - dram_read - publish;
 
             const uint32_t iteration_total =
                 pf_row_word(row, fd_copy_bench::kPfProcessExit) - pf_row_word(prev_row, fd_copy_bench::kPfProcessExit);
             const uint32_t prefetch_external = iteration_total - relay_cmd - header;
+
+            // acquire_pages() blocks on dispatcher page credit and is nested inside both the header and
+            // publish brackets, so it is double-invisible until split out here. pub_acq arrives already
+            // summed over this command's chunks.
+            sum_header_acq += pf_row_word(row, fd_copy_bench::kPfHeaderAcq);
+
+            // Dispatcher side. dp_loop_wait is the dispatcher BLOCKED waiting for the prefetcher to supply
+            // a command; the prefetcher's `acquire` terms are the mirror image. Compare BUSY fractions, not
+            // just whether both are non-zero: measured 93.7% prefetcher-busy vs 33.3% dispatcher-busy, i.e.
+            // producer-bound. The floor for prefetcher optimisation is the dispatcher's own busy time
+            // (cmd_work + the non-wait remainder), ~886 cyc at 64 KB against a 2664 cyc period.
+            const uint32_t dp_row = dp_tail + i;
+            const uint32_t dp_lw_start = dp_row_word(dp_row, fd_copy_bench::kDpLoopWaitStart);
+            if (dp_lw_start != 0) {
+                sum_dp_loop_wait += dp_row_word(dp_row, fd_copy_bench::kDpLoopWaitEnd) - dp_lw_start;
+                dp_timeline_samples++;
+            }
+            const uint32_t dp_cs = dp_row_word(dp_row, fd_copy_bench::kDpCmdStart);
+            if (dp_cs != 0) {
+                sum_dp_cmd += dp_row_word(dp_row, fd_copy_bench::kDpCmdEnd) - dp_cs;
+            }
+            sum_pub_acq += pf_row_word(row, fd_copy_bench::kPfPubAcqTotal);
+            sum_header_write += pf_row_word(row, fd_copy_bench::kPfHeaderWrite);
+            sum_read_latency += pf_row_word(row, fd_copy_bench::kPfReadLatency);
+            sum_fetch_read_wait += pf_row_word(row, fd_copy_bench::kPfFetchReadWait);
+            sum_fetch_ptr_ops += pf_row_word(row, fd_copy_bench::kPfFetchPtrOps);
 
             sum_header += header;
             sum_relay_cmd += relay_cmd;
@@ -3388,13 +3452,15 @@ private:
             sum_publish += publish;
             sum_relay_internal += relay_internal;
             sum_iteration_total += iteration_total;
+            iter_totals.push_back(iteration_total);
             sum_prefetch_external += prefetch_external;
 
             // Self-check 1: sum check -- both reconstructions must recover their totals exactly.
             const int64_t iter_err = static_cast<int64_t>(iteration_total) - static_cast<int64_t>(header) -
                                      static_cast<int64_t>(relay_cmd) - static_cast<int64_t>(prefetch_external);
             const int64_t body_err = static_cast<int64_t>(body) - static_cast<int64_t>(dram_read) -
-                                     static_cast<int64_t>(publish) - static_cast<int64_t>(relay_internal);
+                                     static_cast<int64_t>(publish) - static_cast<int64_t>(entry_flush) -
+                                     static_cast<int64_t>(relay_internal);
             if (iter_err != 0 || body_err != 0) {
                 ++sum_check_fail_count;
             }
@@ -3403,6 +3469,7 @@ private:
             const double dp_period_i = static_cast<double>(
                 dp_row_word(dp_tail + i, fd_copy_bench::kDpCmdEnd) -
                 dp_row_word(dp_tail + i - 1, fd_copy_bench::kDpCmdEnd));
+            sum_dp_period += dp_period_i;
             if (dp_period_i > 0.0) {
                 const double rel_err = std::fabs(static_cast<double>(iteration_total) - dp_period_i) / dp_period_i;
                 lockstep_max_rel_err = std::max(lockstep_max_rel_err, rel_err);
@@ -3413,8 +3480,8 @@ private:
         log_info(
             tt::LogTest,
             "CopyBench payload_bytes={}: iteration_total={:.1f} header={:.1f} relay_cmd={:.1f} "
-            "prefetch_external={:.1f} body={:.1f} dram_read={:.1f} publish={:.1f} relay_internal={:.1f} "
-            "(n={}, chunks={})",
+            "prefetch_external={:.1f} body={:.1f} dram_read_exposed={:.1f} publish={:.1f} "
+            "relay_internal={:.1f} (n={}, chunks={})",
             payload_bytes,
             sum_iteration_total / m,
             sum_header / m,
@@ -3427,6 +3494,111 @@ private:
             static_cast<uint32_t>(m),
             num_chunks);
 
+        if (iter_totals.size() >= 10) {
+            const size_t k = 5;
+            double head = 0, tail = 0;
+            for (size_t j = 0; j < k; j++) {
+                head += iter_totals[j];
+                tail += iter_totals[iter_totals.size() - 1 - j];
+            }
+            const auto mm = std::minmax_element(iter_totals.begin(), iter_totals.end());
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: iteration_total first{}={:.1f} last{}={:.1f} min={} max={} -- a "
+                "large first-vs-last gap means the prefetcher was starved by host fetchq writes early on",
+                payload_bytes,
+                k,
+                head / k,
+                k,
+                tail / k,
+                *mm.first,
+                *mm.second);
+        }
+
+        // prefetch_external is a closure residual, not an attribution bucket -- it absorbs everything no
+        log_info(
+            tt::LogTest,
+            "CopyBench payload_bytes={}: prefetch_external={:.1f} (closure residual -- everything outside "
+            "both handlers)",
+            payload_bytes,
+            sum_prefetch_external / m);
+
+        if (dp_timeline_samples != 0) {
+            const double dp_period = sum_dp_period / m;
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: DISPATCHER busy={:.1f}% (loop_wait={:.1f} cmd_work={:.1f} of "
+                "{:.1f} cyc period) vs PREFETCHER busy={:.1f}% (acquire={:.1f}). Producer-bound while "
+                "prefetcher-busy >> dispatcher-busy; floor for prefetcher work is ~{:.0f} cyc (dispatcher "
+                "busy time), so period has ~{:.1f}x headroom",
+                payload_bytes,
+                100.0 * (dp_period - sum_dp_loop_wait / m) / dp_period,
+                sum_dp_loop_wait / m,
+                sum_dp_cmd / m,
+                dp_period,
+                100.0 * (dp_period - (sum_header_acq + sum_pub_acq) / m) / dp_period,
+                (sum_header_acq + sum_pub_acq) / m,
+                dp_period - sum_dp_loop_wait / m,
+                dp_period / (dp_period - sum_dp_loop_wait / m));
+        }
+
+        // The credit-wait view. header_acq and pub_acq are SUBSETS of header and publish, not additional
+        // terms -- the period already contains them. Reported separately because acquire_pages() is the
+        // one cost that appears in two different buckets and so is invisible in the section table.
+        log_info(
+            tt::LogTest,
+            "CopyBench payload_bytes={}: header_acq={:.1f} (of header {:.1f}) pub_acq={:.1f} (of publish "
+            "{:.1f}) header_write={:.1f} -- acquire total {:.1f}",
+            payload_bytes,
+            sum_header_acq / m,
+            sum_header / m,
+            sum_pub_acq / m,
+            sum_publish / m,
+            sum_header_write / m,
+            (sum_header_acq + sum_pub_acq) / m);
+
+        // FD_BENCH_PF_FETCH_WAYPOINTS (2026-08-13 re-add): re-verifying the 14 cyc / 12 cyc Tensix-dispatch
+        // falsification numbers on whichever core type is currently running. Zero (and this line not
+        // printed) when the flag is off -- same inference-from-nonzero rule as the dp_timeline block above.
+        if (sum_fetch_read_wait != 0.0 || sum_fetch_ptr_ops != 0.0) {
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: fetch_read_wait={:.1f} fetch_ptr_ops={:.1f} (of "
+                "prefetch_external {:.1f}, {:.1f}% + {:.1f}%)",
+                payload_bytes,
+                sum_fetch_read_wait / m,
+                sum_fetch_ptr_ops / m,
+                sum_prefetch_external / m,
+                100.0 * (sum_fetch_read_wait / m) / (sum_prefetch_external / m),
+                100.0 * (sum_fetch_ptr_ops / m) / (sum_prefetch_external / m));
+        }
+
+        // Intrinsic read cost, for the cross-arch read comparison. dram_read_exposed is only the part the
+        // period pays, so a low value there can mean the read was hidden rather than fast. read_latency is
+        // the prime read's issue-to-completion time -- the read with no predecessor to hide behind -- and
+        // read_window is how much of it was covered by other work.
+        log_info(
+            tt::LogTest,
+            "CopyBench payload_bytes={}: read_latency={:.1f} read_exposed={:.1f} read_window={:.1f} "
+            "(prime read, issue to completion)",
+            payload_bytes,
+            sum_read_latency / m,
+            sum_dram_read / m,
+            (sum_read_latency - sum_dram_read) / m);
+
+        if (write_drain_sample_count != 0) {
+            const double w = static_cast<double>(write_drain_sample_count);
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: publish_issue={:.1f} write_drain={:.1f} producer_total={:.1f} "
+                "({} drain samples; last windowed row excluded, its drain falls outside the window)",
+                payload_bytes,
+                sum_publish / m,
+                sum_write_drain / w,
+                sum_publish / m + sum_write_drain / w,
+                write_drain_sample_count);
+        }
+
         if (sum_check_fail_count != 0) {
             log_warning(
                 tt::LogTest,
@@ -3435,17 +3607,28 @@ private:
                 sum_check_fail_count,
                 static_cast<uint32_t>(m));
         }
-        // Looser than the ~0.1% BH / ~1.5% Quasar noise floors from the validation protocol (§5) to avoid
-        // false alarms on a single outlier row; the floors themselves are checked on the aggregated means,
-        // by hand, per §5.
+        // Lockstep holds on the MEAN, not per row. The prefetcher and dispatcher are decoupled by the
+        // dispatch CB, so a single command's period can shift between them by however much the buffer
+        // absorbs; only throughput must match. Checking per-row equality flagged ordinary pipelining as a
+        // failure. Max per-row error is still reported -- it measures how much slack the CB is absorbing.
         constexpr double kLockstepTolerance = 0.02;
-        if (lockstep_max_rel_err > kLockstepTolerance) {
+        const double lockstep_mean_rel_err =
+            (sum_dp_period > 0.0) ? std::fabs(sum_iteration_total - sum_dp_period) / sum_dp_period : 0.0;
+        log_info(
+            tt::LogTest,
+            "CopyBench payload_bytes={}: lockstep mean_rel_err={:.4f} (max per-row {:.4f}, diagnostic only)",
+            payload_bytes,
+            lockstep_mean_rel_err,
+            lockstep_max_rel_err);
+        // sum_iteration_total == 0 means the prefetcher timestamps are nulled (FD_BENCH_NULL_PROBE), so there
+        // is nothing to compare against the dispatcher's still-real period.
+        if (sum_iteration_total > 0.0 && lockstep_mean_rel_err > kLockstepTolerance) {
             log_warning(
                 tt::LogTest,
-                "CopyBench payload_bytes={}: lockstep check failed -- max per-row relative error {:.4f} exceeds "
-                "{:.4f}",
+                "CopyBench payload_bytes={}: lockstep check failed -- prefetcher and dispatcher disagree on "
+                "mean period by {:.4f}, exceeding {:.4f}",
                 payload_bytes,
-                lockstep_max_rel_err,
+                lockstep_mean_rel_err,
                 kLockstepTolerance);
         }
     }
