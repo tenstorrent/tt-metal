@@ -344,6 +344,61 @@ class SFPU_FAST_APPROX(TemplateParameter):
 
 
 @dataclass
+class CUSTOM_MM_UNINIT(TemplateParameter):
+    """The custom_mm_block_uninit / compressed_custom_mm_block_uninit configuration.
+
+    Emits the three compile-time switches ``custom_mm_uninit_restore_test.cpp`` reads:
+
+    ``UNINIT_DENSE_PACKING``   the ``dense_packing`` template argument, applied to both
+                               the run-0 init (W-stride -> 32 rows) and the uninit
+                               (W-stride -> 64 rows). The two must agree: a block packed
+                               dense and torn down non-dense is not a supported call.
+    ``UNINIT_RESTORE_MOP``     the ``restore_tile_pack_mop`` template argument, i.e.
+                               whether the uninit reinstalls the Default tile-pack MOP.
+    ``UNINIT_SKIP``            negative control -- drop the uninit entirely. Not a
+                               supported configuration; it exists to prove the restores
+                               are load-bearing rather than incidentally redundant.
+    ``BLOCK_MOP_NUM_FACES``    the tile geometry the run-0 block-contiguous MOP is
+                               programmed with. The pack MOP bakes in tile geometry, so
+                               this decides whether the MOP restore is observable at all:
+                               at 4 (same geometry as the run-1 pack) restoring and not
+                               restoring are indistinguishable, while at 2 (a 16x32 tiny
+                               tile) the un-restored MOP packs the wrong face count --
+                               the hazard the uninit's comment describes.
+    """
+
+    dense_packing: bool = False
+    restore_mop: bool = False
+    skip: bool = False
+    block_mop_num_faces: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool UNINIT_DENSE_PACKING = {str(self.dense_packing).lower()};",
+                f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
+                f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
+                f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
+            ]
+        )
+
+
+@dataclass
+class PACK_NUM_TILES(TemplateParameter):
+    """Tile count for the block/per-tile pack drivers.
+
+    Emits ``constexpr std::uint32_t PACK_NUM_TILES = <n>;``. Distinct from the runtime
+    ``TILE_COUNT``: the pack loops here are compile-time bounded so the block MOP's
+    outer-loop patching and the per-tile loop stay in step.
+    """
+
+    num_tiles: int = 4
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t PACK_NUM_TILES = {self.num_tiles}u;"
+
+
+@dataclass
 class REDUCE_BLOCK_CT_DIM(TemplateParameter):
     """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
 
