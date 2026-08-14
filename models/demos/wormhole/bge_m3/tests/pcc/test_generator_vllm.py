@@ -179,7 +179,12 @@ def test_bge_m3_vllm_sparse_embedding(device, model_name, sequence_length, model
     assert lexical_score_1_0_x_1_1 == pytest.approx(lexical_score_reference[1], rel=SCORE_RTOL, abs=SCORE_ATOL)
 
 
-@pytest.mark.xfail(reason="Single-token sparse weight drifts under TT bfloat8_b precision", strict=False)
+# Previously xfailed as "Single-token sparse weight drifts under TT bfloat8_b precision".
+# It no longer drifts far enough to fail: measured 0.26171875 vs reference 0.26710861921310425,
+# i.e. 2.018% against the 3% bf8 tolerance (run 31800842353). The value is exact in bf8 and has
+# been bit-stable across runs, so this is now enforced rather than left permanently xfailed --
+# an xfailed test gates nothing, and this one would have stayed green through a 10% regression.
+# It is the tightest of the seven head scores, so expect it to be the first to move.
 @pytest.mark.parametrize("model_name, sequence_length", [(MODEL_NAME, MAX_MODEL_LEN)])
 def test_bge_m3_vllm_sparse_embedding_corner_case(device, model_name, sequence_length, model_location_generator):
     outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
