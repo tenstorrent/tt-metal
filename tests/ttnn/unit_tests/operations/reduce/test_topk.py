@@ -405,6 +405,23 @@ def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
 
 
+def test_topk_narrower_indices_tensor_raise(device, expect_error):
+    # The indices are streamed with the input's page stride, so a narrower indices tensor is read at
+    # the wrong pages and produces wrong indices rather than an error.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, 8192]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros([1, 1, 32, shape[3] // 2], dtype=torch.uint16)
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "Indices tensor has incorrect shape"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """

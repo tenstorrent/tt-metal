@@ -247,6 +247,18 @@ std::vector<Tensor> topk(
             desired_final_shape);
     }
 
+    if (indices_tensor.has_value()) {
+        // The reader streams a caller-supplied indices tensor with the input's page index, so the
+        // two have to describe the same grid. Only the dtype was checked, and a narrower indices
+        // tensor read at the input's stride returned indices from the wrong pages rather than
+        // failing.
+        TT_FATAL(
+            indices_tensor->logical_shape() == input_tensor.logical_shape(),
+            "Indices tensor has incorrect shape! Got : {}, expected: {}",
+            indices_tensor->logical_shape(),
+            input_tensor.logical_shape());
+    }
+
     // When input is a scalar, PyTorch returns the copy of the input tensor (that is the 1 top element)
     // as values. This happens when k = 1 (which makes sense), but also when k = 0 (which is unusual,
     // but for now we simply match its behavior).
