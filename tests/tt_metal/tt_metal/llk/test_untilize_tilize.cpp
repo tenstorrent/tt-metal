@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -101,6 +102,9 @@ struct TestConfig {
     // Optional override for the auto-derived compute-kernel path: swap in a
     // from-scratch re-implementation without duplicating the harness.
     std::optional<std::string> compute_kernel_override = std::nullopt;
+    // When > 0, after functional validation re-enqueue the same workload this
+    // many times (pipelined, single Finish) and report wall time per iteration.
+    std::uint32_t perf_iterations = 0;
 };
 
 // Compute golden + validate; shared between the Metal 2.0 helper and the Gen1-only
@@ -193,7 +197,9 @@ static void validate_result(
 //   - UntilizeType::PACK / DST (compute kernels: pack_untilize / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const TestConfig& test_config,
+    double* perf_us_per_iter_out = nullptr) {
     auto& cq = mesh_device->mesh_command_queue();
     auto* dev = mesh_device->get_devices()[0];
     const experimental::NodeCoord node{0, 0};
@@ -417,6 +423,40 @@ void run_single_core_tilize_program(
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
     validate_result(test_config, src0_vec, /*src1_vec=*/{}, result_vec);
+
+    // Optional wall-clock perf measurement: re-enqueue the (already validated)
+    // workload perf_iterations times, pipelined behind one Finish. Warmup runs
+    // absorb dispatch/JIT-cache cold effects so the timed loop is steady-state.
+    if (test_config.perf_iterations > 0) {
+        constexpr std::uint32_t warmup_iterations = 20;
+        for (std::uint32_t i = 0; i < warmup_iterations; ++i) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+        distributed::Finish(cq);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        for (std::uint32_t i = 0; i < test_config.perf_iterations; ++i) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+        distributed::Finish(cq);
+        const auto t1 = std::chrono::steady_clock::now();
+
+        const double us_per_iter =
+            std::chrono::duration<double, std::micro>(t1 - t0).count() / test_config.perf_iterations;
+        const std::uint32_t num_tiles_total = test_config.num_tiles_r * test_config.num_tiles_c;
+        log_info(
+            tt::LogTest,
+            "perf: kernel = {}, num_tiles_r = {}, num_tiles_c = {}, iters = {}, {:.2f} us/iter, {:.1f} ns/tile",
+            test_config.compute_kernel_override.value_or("<default>"),
+            test_config.num_tiles_r,
+            test_config.num_tiles_c,
+            test_config.perf_iterations,
+            us_per_iter,
+            1000.0 * us_per_iter / num_tiles_total);
+        if (perf_us_per_iter_out != nullptr) {
+            *perf_us_per_iter_out = us_per_iter;
+        }
+    }
 }
 
 // Gen1-only single-core helper for the `unpack_tilizeA_B` + eltwise binary add compute kernel.
@@ -1332,6 +1372,50 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstStaticState) {
                 .compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_sst.cpp"};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
+    }
+}
+
+// Perf A/B: the LLK 1.0 dst_untilize compute kernel vs the static-state-tracking
+// re-implementation, same harness / dataflow / configs. Wall time is measured
+// over pipelined re-enqueues of the validated workload (see perf_iterations).
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstPerfSSTvsBaseline) {
+    vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {2, 2}, {8, 8}, {10, 10}, {2, 40}};
+    std::uint32_t kPerfIters = 400;
+    // Device-profiler mode: shrink the workload count so the profiler buffer
+    // holds every run (TT_METAL_DEVICE_PROFILER=1), keeping run IDs parseable.
+    if (std::getenv("TT_SST_PERF_PROFILE") != nullptr) {
+        num_tiles = {{10, 10}};
+        kPerfIters = 30;
+    }
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig base_config = {
+            .dst_full_sync_en = false,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+            .golden_function = ::unit_tests::compute::gold_standard_untilize,
+            .perf_iterations = kPerfIters};
+
+        double baseline_us = 0.0;
+        double sst_us = 0.0;
+
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), base_config, &baseline_us);
+
+        auto sst_config = base_config;
+        sst_config.compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_sst.cpp";
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), sst_config, &sst_us);
+
+        log_info(
+            tt::LogTest,
+            "perf summary: num_tiles_r = {}, num_tiles_c = {}: baseline = {:.2f} us, SST = {:.2f} us, "
+            "SST/baseline = {:.3f}",
+            num_tile[0],
+            num_tile[1],
+            baseline_us,
+            sst_us,
+            sst_us / baseline_us);
     }
 }
 
