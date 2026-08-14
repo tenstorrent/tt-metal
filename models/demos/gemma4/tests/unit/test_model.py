@@ -20,8 +20,10 @@ from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
     get_pcc_threshold,
+    load_real_model_substate,
     num_layers_for_full_attention_group,
     parametrize_mesh_with_fabric,
+    skip_unless_real_weights,
 )
 
 
@@ -308,6 +310,106 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
     passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=get_pcc_threshold(request))
     logger.info(f"TP={tp} group={layer_group} ({num_layers}-layer) PCC: {pcc_msg}")
     assert passing, f"Single-layer model (group={layer_group}, layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
+
+
+# ── Real-weight Truncated Model PCC Test ────────────────────────────────
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_group", ["sliding_only"], ids=["sliding_only"])
+def test_single_layer_model_real_weights(mesh_device, layer_group, reset_seeds, request):
+    """Truncated model on the checkpoint's trained weights, full vocab.
+
+    ``test_single_layer_model`` runs on random weights *and* a 256-entry vocab,
+    so its lm_head is 1/1000th of the real one and never exercises the
+    column-parallel split or the softcap at real logit magnitudes. This runs the
+    same stack — embedding, N real layers, real final norm, real tied lm_head —
+    at the true vocab.
+
+    It stops short of ``test_full_model`` on purpose: one layer isolates a
+    weight/layout regression to the layer, where a 48- or 60-layer PCC folds it
+    into the whole backbone's accumulated error and tells you nothing about
+    where it came from.
+    """
+    skip_unless_real_weights()
+
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    num_layers = 1
+    real_vocab = TestFactory.create_hf_config().vocab_size
+
+    # The real tied lm_head is the constraint, not the layer. 31B stages
+    # [5376, 262144] as fp32 = 5.64 GB, which does not fit one chip's DRAM
+    # (measured: 360 MB free at that point). Same >4096 hidden cutoff the
+    # global-attention skips in this file and test_attention.py already use.
+    tp_check = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    if tp_check == 1 and TestFactory.create_hf_config().hidden_size > 4096:
+        pytest.skip("Real-vocab tied lm_head does not fit single-device DRAM for large models")
+    hf_text_config = _create_hf_text_config(vocab_size=real_vocab, num_layers=num_layers)
+    if getattr(hf_text_config, "enable_moe_block", False):
+        pytest.skip("MoE variants need the reduced-expert path; covered by test_moe_real_weights")
+
+    hf_model = _create_hf_model(hf_text_config)
+    real_state = load_real_model_substate(num_layers)
+    _, unexpected = hf_model.load_state_dict(real_state, strict=False)
+    assert not unexpected, f"Real weights the HF reference stack has no home for: {unexpected[:5]}"
+    # _create_hf_model ties lm_head to embed_tokens by identity; load_state_dict
+    # copies into that shared storage, so the tie survives and the real
+    # checkpoint's tied lm_head is what the reference uses.
+    hf_model.eval()
+
+    model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
+    model_args._hf_text_config = hf_text_config  # Enables internal per-layer RoPE
+    tt_state = _hf_model_state_to_tt_state(hf_model)
+
+    seq_len = 32
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+
+    tt_model = Gemma4Model(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=1,
+        num_layers=num_layers,
+    )
+
+    tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
+
+    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    with torch.no_grad():
+        hf_logits = hf_model(tokens, attention_mask=causal_mask)
+
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    tt_tokens = ttnn.from_torch(
+        tokens.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+    )
+    tt_embeds = tt_model.embed_tokens(tt_tokens)
+    tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
+    tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+
+    tt_logits = tt_model(tt_embeds, rope_mats=None, position_idx=None, page_table=None, kv_caches=None, is_decode=False)
+    tt_logits_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]) if is_mesh else ttnn.to_torch(tt_logits))
+        .squeeze(0)
+        .float()
+    )
+
+    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=get_pcc_threshold(request))
+    logger.info(f"TP={tp} real-weights ({num_layers}-layer, vocab={real_vocab}) PCC: {pcc_msg}")
+    assert passing, f"Single-layer model real-weights (layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
 
 
 # ── Full Model PCC Test ─────────────────────────────────────────────────
