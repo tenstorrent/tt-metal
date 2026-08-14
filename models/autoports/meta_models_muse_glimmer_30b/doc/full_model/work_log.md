@@ -1059,5 +1059,26 @@ message and the previous pass ran on 2026-08-13. Both arms were regenerated toge
 
 ## 20. Commits
 
-Recorded after the stage review returned `clean-pass`; see the final section of
-[README.md](README.md).
+Recorded after `$stage-review` round 18 returned **`clean-pass`**. Local only, never
+pushed, four commits on `agentic-research/hous/muse-glimmer-30b` from
+`093c65bd2c2`:
+
+| SHA | what |
+| --- | --- |
+| `cda6ec5c92ad0218` | `models/common/readiness_check`: the `P300_X2` label, the trace-region / L1-small / fabric-packet knobs, and the chat-template `BatchEncoding` unwrap. Both gaps blocked *any* model whose decode must be traced from using these runners; every existing caller is unaffected |
+| `cf016e4064d811d7` | `models/common/sampling`: `topk_split_to_power_of_2` and `candidates_per_device`, opt-in and default off. 9.7292 -> 0.6321 ms measured in one process |
+| `e09d6721c700d24f` | `tt/model.py`, `tt/generator.py`, `tests/test_full_model.py`, and the one additive `rope_cache` kwarg on `tt/multichip_decoder.py` |
+| `2d58778b9ff88d17` | `doc/full_model/**`, `doc/context_contract.json`, the AIME24 references and the autoregressive artifacts |
+
+Two things worth knowing for the next stage, both discovered while committing:
+
+* the repo's pre-commit hooks **stash and restore unstaged files**, which preserves
+  content and rewrites mtimes. That broke the ordering table's mtime proxy the moment
+  the first commit landed: implementation files carried timestamps *later* than the
+  console that measured them while being byte-identical to what ran. The record now
+  pins the **sha256** of every stage-owned implementation file and the gate verifies
+  them, which is the direct claim rather than a proxy for it;
+* the same hooks rewrote three committed artifacts (a trailing newline on the two
+  `autoregressive_meta.json` files and on `doc/context_contract.json`), so their rows
+  in the ordering table carry commit-time mtimes with the production times noted
+  beside them.

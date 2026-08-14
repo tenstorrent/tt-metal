@@ -1787,6 +1787,12 @@ guards:
   changed, and the 8-arm was measured clean — recorded as limitation 10 because it
   interacts with limitation 9 and a vLLM stage raising `max_top_k` should see it.
 
+The stage was committed after round 18 — four local commits from `093c65bd2c2`, never
+pushed, SHAs in [work log §20](work_log.md): `cda6ec5c92ad0218` (shared readiness-check
+infrastructure), `cf016e4064d811d7` (the opt-in sampling split), `e09d6721c700d24f`
+(model, generator, tests and the additive `rope_cache` kwarg) and `2d58778b9ff88d17`
+(evidence and documentation).
+
 At `clean-pass` the suite is **46 cases**, `-m slow` is 4 (a strict subset re-run of cases
 the default pass already includes, kept for its longer timeout), and
 `bench/check_reported_figures.py` resolves **153** figures against committed runs and sweeps
