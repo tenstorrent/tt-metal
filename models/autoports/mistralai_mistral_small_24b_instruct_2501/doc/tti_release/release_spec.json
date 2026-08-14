@@ -51,19 +51,7 @@
       "MESH_DEVICE": "P300x2",
       "ARCH_NAME": "blackhole",
       "TT_MISTRAL_TEXT_VER": "mistral_small_24b_autoport"
-    },
-    "known_issues": [
-      {
-        "workflow_type": "EVALS",
-        "task_name": "meta_ifeval",
-        "reason": "P300X2 v9 completed 109/109 IFEval samples without request, transport, or server errors and scored 75.6635 versus the unchanged 78.755 acceptance floor; task-scoped methodology/quality waiver pending reference alignment."
-      },
-      {
-        "workflow_type": "EVALS",
-        "task_name": "meta_gpqa_cot",
-        "reason": "P300X2 v9 completed 90/90 GPQA samples through 13 preemptions without request, transport, page-allocation, or server errors and scored 38.8889 flexible-extract versus the unchanged 40.3 acceptance floor (two answers short); task-scoped quality waiver pending reference alignment."
-      }
-    ]
+    }
   },
   "tt_metal_commit": "1529e332a1c37937a682ba04b77e7dc3418f2589",
   "vllm_commit": "6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e",

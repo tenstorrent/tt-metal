@@ -3,17 +3,14 @@
         "model_name": "mistralai/Mistral-Small-24B-Instruct-2501",
         "device": "P300X2",
         "generated_at": "2026-08-14T17:51:45+00:00",
-        "report_id": "mistralai__Mistral-Small-24B-Instruct-2501_2026-08-14T175145+0000",
-        "workflow": "benchmarks",
+        "report_id": "autoport_mistral_small_24b_p300x2_v9_benchmark_repaired",
+        "workflow": "benchmarks-supplemental",
+        "scope": "Regraded preserved 8-request benchmark evidence only; not a rerun or aggregate release verdict.",
+        "source_evidence": "benchmark_raw_v9_fixed.json",
+        "model_status": "FUNCTIONAL",
         "server_mode": "API",
-        "run_command": "python run_workflows.py --model Mistral-Small-24B-Instruct-2501 --workflow benchmarks --device p300x2 --service-port 8000 --server-url http://127.0.0.1 --tools vllm --runtime-model-spec-json /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v9/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_15-56-55_id_autoport_mistral-small-24b-instruct-2501_p300x2_7efNyisP.json --output-dir /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v9_benchmark_fixed",
-        "runtime_model_spec_json": "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v9/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_15-56-55_id_autoport_mistral-small-24b-instruct-2501_p300x2_7efNyisP.json",
-        "model_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2",
-        "model_repo": "mistralai/Mistral-Small-24B-Instruct-2501",
-        "inference_engine": "vLLM",
-        "tt_metal_commit": "1529e332a1c37937a682ba04b77e7dc3418f2589",
-        "vllm_commit": "6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e",
-        "model_impl": "mistral-small-24b-2501-autoport"
+        "tt_metal_commit_at_v9": "1529e332a1c37937a682ba04b77e7dc3418f2589",
+        "vllm_commit_at_v9": "6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e"
     },
     "sections": [
         {
@@ -31,8 +28,7 @@
                 "tps_decode_throughput": 34.502,
                 "request_throughput": 0.2695,
                 "error_request_count": null,
-                "status": "na",
-                "target_check": 1,
+                "target_check": 2,
                 "target_checks": {
                     "functional": {
                         "ttft": 1400.0,
@@ -65,11 +61,11 @@
         "categories": [
             {
                 "name": "Benchmarks",
-                "status": "NA",
+                "status": "PASS",
                 "total": 1,
-                "passed": 0,
+                "passed": 1,
                 "failed": 0,
-                "na": 1,
+                "na": 0,
                 "skipped": 0,
                 "blockers": {},
                 "waived": {}
@@ -98,5 +94,5 @@
             }
         ]
     },
-    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \ud83d\udfe8 `NA` (0/1 passed, 1 NA)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \u2705 `PASS` (1/1 passed)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
 }

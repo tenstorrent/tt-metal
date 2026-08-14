@@ -1,0 +1,20 @@
+Command:
+TT_MISTRAL_TEXT_VER=mistral_small_24b_autoport PYTHONPATH="$PWD/vllm/plugins/vllm-tt-plugin/src:$PWD/vllm:$PWD" python_env/bin/python -m pytest models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_vllm_adapter.py -q
+
+Result:
+18 passed, 3 warnings in 5.01s
+
+Covered contracts include async stale token/position handling, reset refresh,
+changed/unchanged page-table ownership, fresh-prefill reset, pooled-page alias
+rejection, exact vLLM-owned cache delegation, 32K context capabilities,
+nonblocking token read, canonical split-sampler greedy encoding, slot remap,
+and prefill-boundary trace release.
+
+Command:
+PYTHONPATH="$PWD/vllm/plugins/vllm-tt-plugin/src:$PWD/vllm:$PWD" python_env/bin/python -m pytest vllm/plugins/vllm-tt-plugin/tests/test_device_sampling_limits.py -q
+
+Result:
+19 passed, 16 warnings in 4.88s
+
+This covers the plugin's device-sampling capability and host-only routing
+limits adjacent to the opt-in live route audit.
