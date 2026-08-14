@@ -739,11 +739,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — Q+K rotated in one call (O4f) | 269.5 | 14.909 | 0.9903 |
 | run 2 — decode-native Q/K/V layout (O4g) | 261.9 | 13.975 | 0.9903 |
 | run 2 — head creation fed the projection's shard (O4h) | 254.5 | 13.277 | 0.9903 |
-| run 2 — DRAM-sharded LM head weight (O4i) | — | **13.228** | 0.9904 |
+| run 2 — DRAM-sharded LM head weight (O4i) | — | 13.228 | 0.9904 |
+| run 2 — untilize vocab blocks before joining (O4j) | — | **13.139** | 0.9904 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**13.228 against 15.907 — the tool is 16.8% AHEAD of 74 human experiments**, autonomously, with
+**13.139 against 15.907 — the tool is 17.4% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1154,10 +1155,18 @@ pass:
 | **O4** `ttnn.argmax` | a TILE row | took the **single-core** path (dispatch keys off input LAYOUT) and read the row padded to 32 | 51.3% of device time |
 | **O4g** RoPE / rotation | a TILE row | processed **160 tiles where 4 had data** — 31 of every 32 rows were padding | part of −6.3% |
 | **O4h** `nlp_create_qkv_heads_decode` | batch 1 | **batch-parallel** op collapsed to ONE core, which then pulled 192 tiles from DRAM alone | 33 µs for a 12-tile op |
+| **O4j** LM-head vocab-block join | a TILE row | concatenated 4 blocks of **2 MB where 64 KB was real** — again 31 of 32 rows | 0.080 ms/token, over half of O4i's win |
 
 The unifying rule: **at batch 1, seq 1, a "parallel" op may be running on one core, and a "small"
 tensor may be 32× its logical size.** Neither is visible in the source — both are properties of what
 the op does with the shape it is handed.
+
+**O4j is the clearest illustration**, because the fix costs nothing at all. Only row 0 of those
+blocks is real — the decode activation is one token padded to the tile — so untilizing each block
+*before* the join turns it from 2 MB into 64 KB and the join moves **256 KB instead of 8 MB**. And
+it is not even an added step: `_greedy_token` already has to untilize to reach the multi-core argmax
+path (O4), so this only moves existing work in front of the join instead of behind it. **The O4 fix
+is what made O4j free** — the wins compound.
 
 **Recommended action on the hand-port:** a systematic decode-path audit against this rule. For every
 op in the decode step, ask (a) does its parallel path key off layout or batch, and does decode
