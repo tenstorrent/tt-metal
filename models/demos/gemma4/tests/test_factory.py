@@ -435,6 +435,22 @@ def _is_device_discovery_failure(exc):
     return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
 
 
+def _fabric_router_config():
+    """Fabric router tuning applied alongside the fabric config.
+
+    The CCL pages these models move are 2048 B, and the default 4352 B packet does not
+    divide them -- the runtime says so at every op launch ("Fabric packet size 4352 B is
+    suboptimal for transporting 2048 B pages. Configure 8192 B packet"). 8192 is exactly
+    four pages. Measured on a 4x8 Blackhole Galaxy over the 60-layer prefill body:
+    252.2 ms at the 4352 default, 249.0 / 248.6 ms at 8192 across two runs, 250.7 ms at
+    12288 and 274.5 ms at 15232 (the Blackhole maximum; 16384 is rejected outright). The
+    knob has a peak rather than a trend, so larger is not better.
+    """
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = 8192
+    return config
+
+
 def _fabric_config_for_shape(shape):
     """Fabric config for a mesh shape.
 
@@ -529,7 +545,11 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         params = [
             pytest.param(
                 s,
-                {"fabric_config": _fabric_config_for_shape(s), **extra},
+                {
+                    "fabric_config": _fabric_config_for_shape(s),
+                    "fabric_router_config": _fabric_router_config(),
+                    **extra,
+                },
                 id=f"{s[0]}x{s[1]}",
             )
             for s in mesh_shapes
