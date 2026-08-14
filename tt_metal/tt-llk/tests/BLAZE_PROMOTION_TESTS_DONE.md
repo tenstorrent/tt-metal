@@ -51,7 +51,12 @@ canonical targets they rewire onto are already fully covered.
 
 ---
 
-## 1. Cleanup PRs #52747 / #52745 — checked, verified, no tt-llk work needed
+## 1. Cleanup PRs #52747 / #52745 — checked and verified
+
+Neither PR adds anything under an `experimental/` path, so neither *required* a new
+test, and both canonical targets were verified green. #52745 later gained one anyway —
+not for the promotion itself but to pin the cross-op hazard that motivated it (section
+5).
 
 ### #52747 — Retire the demo `deepseek_moe_gate` fork onto canonical `generalized_moe_gate`
 
@@ -87,18 +92,21 @@ Adds nothing under `experimental/`. The canonical
 `test_sfpu_sampling.py` + `sources/sfpu_sampling_test.cpp` already cover **every entry point**, including the
 two things this PR's call-site changes touch:
 
-- `sampling_recip_init<legacy_compat>` — called at `sfpu_sampling_test.cpp:148`, swept both ways via
-  `legacy_compat=[True, False]` (test_sfpu_sampling.py:212).
-- `calculate_sampling_binary_first_column<SamplingBinaryOp::{add,sub,mul}>` — the collapsed dispatch,
-  driven at `sfpu_sampling_test.cpp:122-126`.
+- `sampling_recip_init<legacy_compat>` — called in the driver's math thread, swept both ways
+  via `legacy_compat=[True, False]`.
+- `calculate_sampling_binary_first_column<SamplingBinaryOp::{add,sub,mul}>` — the collapsed
+  dispatch, driven from the driver's `run_sampling_op()`.
 
-**Verdict: no new test.** Run `test_sfpu_sampling.py` unchanged.
+  (Line numbers deliberately omitted: both files were edited when the hazard test landed,
+  and stale citations are worse than none.)
 
-**The polluter test is now done** — see section 5 below, and Finding 4 for what it
-turned up about why the hazard was invisible.
+**Verdict for the promotion itself: no new test needed.** `test_sfpu_sampling.py` passes
+unchanged (51 passed, 93 skipped) and that is the regression gate for the rewiring.
 
+**A test was added on top**, for a different reason: the sweep proved the init *works* but
+never that it is *required*, which is the hazard #52745 exists to fix. See section 5, and
+Finding 4 for why that hazard was invisible to the existing tolerances.
 
----
 
 ---
 
@@ -167,8 +175,6 @@ callers gain a Dst-offset bounds check — run this case with `ENABLE_LLK_ASSERT
 an out-of-range offset in a negative variant if the harness supports expected-assert tests.
 
 Plus: run `test_topk_xl.py` unchanged on the branch. It is the direct regression check for the header edit.
-
----
 
 ---
 
@@ -246,27 +252,9 @@ The `(pollute=false, skip_init=true)` cell is deliberately not swept: with neith
 polluter nor an init, `Prgm0` holds whatever the invariant LLK SFPU init left, which is not
 a defined value and so not assertable either way.
 
-### Finding 4 — why this hazard was invisible, and what it actually costs
-
-The pollution does **not** produce garbage. `Prgm0` becomes ~8.3e-8 instead of `2.0f`, so
-`t = x * y - Prgm0` comes out *positive* (`x * y` is ~1 since `y ≈ 1/x`), the
-`v_if(t < 0)` refinement inside `sfpu_reciprocal_iter` never fires, and the raw
-`approx_recip` result survives unrefined. Max relative error vs golden, measured:
-
-| output / `dest_acc` | `recip_init` called | `recip_init` skipped |
-|---|---|---|
-| Float16_b / No | 0.0 | 6.2e-03 |
-| Float32 / Yes | 1.1e-07 | 5.0e-03 |
-| Float16_b / Yes | 2.3e-03 | 5.0e-03 |
-
-So the cost is about **1e-3 relative** — real, but comfortably inside the suite's 2%
-`RECIP_REL_TOL`, which is why no existing variant could have caught it. The test therefore
-asserts on a hazard-specific **1e-3** threshold rather than the suite tolerance.
-
-The third row is excluded from the strict check: there the packer's own fp32->bf16
-conversion already costs 2.3e-3, only 2.2x from the unrefined error, so a strict assertion
-would be measuring the packer rather than the hazard. Worth knowing if anyone tightens
-`RECIP_REL_TOL` later — bf16 output with an fp32 DEST cannot distinguish the two.
+The test asserts on a hazard-specific **1e-3** threshold rather than the suite's 2%
+reciprocal tolerance — **Finding 4** in section 6 explains why, and what that threshold
+still cannot distinguish.
 
 ---
 
@@ -330,6 +318,28 @@ guarantee is translation-unit coexistence, not simultaneous liveness. Anyone fus
 two families must re-init between them. The landed test therefore calls only the shared
 helper, with the constraint documented in the driver.
 
+
+### Finding 4 — why this hazard was invisible, and what it actually costs
+
+The pollution does **not** produce garbage. `Prgm0` becomes ~8.3e-8 instead of `2.0f`, so
+`t = x * y - Prgm0` comes out *positive* (`x * y` is ~1 since `y ≈ 1/x`), the
+`v_if(t < 0)` refinement inside `sfpu_reciprocal_iter` never fires, and the raw
+`approx_recip` result survives unrefined. Max relative error vs golden, measured:
+
+| output / `dest_acc` | `recip_init` called | `recip_init` skipped |
+|---|---|---|
+| Float16_b / No | 0.0 | 6.2e-03 |
+| Float32 / Yes | 1.1e-07 | 5.0e-03 |
+| Float16_b / Yes | 2.3e-03 | 5.0e-03 |
+
+So the cost is about **1e-3 relative** — real, but comfortably inside the suite's 2%
+`RECIP_REL_TOL`, which is why no existing variant could have caught it. The test therefore
+asserts on a hazard-specific **1e-3** threshold rather than the suite tolerance.
+
+The third row is excluded from the strict check: there the packer's own fp32->bf16
+conversion already costs 2.3e-3, only 2.2x from the unrefined error, so a strict assertion
+would be measuring the packer rather than the hazard. Worth knowing if anyone tightens
+`RECIP_REL_TOL` later — bf16 output with an fp32 DEST cannot distinguish the two.
 
 ---
 

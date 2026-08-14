@@ -1,7 +1,8 @@
 # tt-llk blaze promotions — OPEN work
 
 > **What this is.** The remaining tt-llk test work for the blaze->tt-metal `experimental/`
-> promotions (#52709, #52713, #52727). **5 open items remain.** Completed work has been moved out to
+> promotions (#52709, #52713, #52727). **5 items remain: 4 not started, 1 attempted and
+> reverted.** Completed work has been moved out to
 > **`BLAZE_PROMOTION_TESTS_DONE.md`** — check there before starting anything, since three
 > of the plans below were already corrected by what those tests measured on silicon.
 >
