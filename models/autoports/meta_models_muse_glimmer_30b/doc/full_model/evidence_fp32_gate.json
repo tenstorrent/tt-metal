@@ -1,0 +1,183 @@
+{
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "stages": [
+    "prefill",
+    "teacher",
+    "misses"
+  ],
+  "max_seq_len": 131072,
+  "cache_slots": 1,
+  "layers": "all",
+  "build_kwargs": {},
+  "build_seconds": 157.3,
+  "prefill_check_by_reference": {
+    "readiness_aime24_chat.refpt": {
+      "per_entry": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "output": "entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)\nAGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)\n"
+    },
+    "readiness_aime24_chat_fp32.refpt": {
+      "per_entry": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "output": "entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)\nAGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)\n"
+    }
+  },
+  "prefill_check": {
+    "per_entry": [
+      {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 99,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "output": "entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)\nAGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)\n"
+  },
+  "teacher_forcing_by_reference": {
+    "readiness_aime24_chat.refpt": {
+      "per_entry": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100,
+          "elapsed_s": 2.8307392290153075,
+          "e2e_t/s/u": 35.32646136210353,
+          "ttft_ms": 161.96058399509639,
+          "decode_tokens": 99.0,
+          "decode_elapsed_s": 2.668766642018454,
+          "decode_t/s/u": 37.09578741029371
+        }
+      ],
+      "output": "entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=161.96ms  decode=37.10 t/s/u  e2e=35.33 t/s/u\nAGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=161.96ms  decode=37.10 t/s/u  e2e=35.33 t/s/u\n",
+      "counters": {
+        "trace_replays": 99,
+        "token_refreshes": 101,
+        "position_refreshes": 3,
+        "page_table_refreshes": 1,
+        "synchronizations": 2,
+        "readbacks": 100,
+        "device_position_advances": 2
+      }
+    },
+    "readiness_aime24_chat_fp32.refpt": {
+      "per_entry": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100,
+          "elapsed_s": 2.6683630609768443,
+          "e2e_t/s/u": 37.47615962101935,
+          "ttft_ms": 62.56984599167481,
+          "decode_tokens": 99.0,
+          "decode_elapsed_s": 2.6057809210033156,
+          "decode_t/s/u": 37.992449481087455
+        }
+      ],
+      "output": "entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=62.57ms  decode=37.99 t/s/u  e2e=37.48 t/s/u\nAGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=62.57ms  decode=37.99 t/s/u  e2e=37.48 t/s/u\n",
+      "counters": {
+        "trace_replays": 99,
+        "token_refreshes": 101,
+        "position_refreshes": 3,
+        "page_table_refreshes": 1,
+        "synchronizations": 2,
+        "readbacks": 100,
+        "device_position_advances": 2
+      }
+    }
+  },
+  "teacher_forcing": {
+    "per_entry": [
+      {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 99,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 2.8307392290153075,
+        "e2e_t/s/u": 35.32646136210353,
+        "ttft_ms": 161.96058399509639,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 2.668766642018454,
+        "decode_t/s/u": 37.09578741029371
+      }
+    ],
+    "output": "entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=161.96ms  decode=37.10 t/s/u  e2e=35.33 t/s/u\nAGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=161.96ms  decode=37.10 t/s/u  e2e=35.33 t/s/u\n",
+    "counters": {
+      "trace_replays": 99,
+      "token_refreshes": 101,
+      "position_refreshes": 3,
+      "page_table_refreshes": 1,
+      "synchronizations": 2,
+      "readbacks": 100,
+      "device_position_advances": 2
+    }
+  },
+  "prefill_misses": {
+    "gen_len": 100,
+    "prompt_len": 204,
+    "non_top1_positions": 1,
+    "outside_top_k_positions": 0,
+    "k": 100,
+    "rows": [
+      {
+        "gen_index": 64,
+        "absolute_position": 268,
+        "tt_token": 220,
+        "hf_rank_of_tt_token": 1,
+        "hf_top1": 341,
+        "tt_top5": [
+          220,
+          341,
+          1226,
+          584,
+          319
+        ],
+        "tt_top5_values": [
+          16.375,
+          14.375,
+          1.3203,
+          -0.0659,
+          -0.3008
+        ],
+        "tt_top1_minus_top2": 2.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+CMP {'id': 'p0', 'tt_tokens': 128, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0703, 'hf_trigram_loop': 0.1172, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 44, 'exact_match': False}
+CMP {'id': 'p1', 'tt_tokens': 128, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0703, 'hf_trigram_loop': 0.0469, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 15, 'exact_match': False}
+CMP {'id': 'p2', 'tt_tokens': 128, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0469, 'hf_trigram_loop': 0.0469, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 40, 'exact_match': False}
+CMP {'id': 'p3', 'tt_tokens': 128, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.1172, 'hf_trigram_loop': 0.0703, 'tt_non_ascii': 0.0018, 'hf_non_ascii': 0.0017, 'first_divergence_from_hf': 28, 'exact_match': False}
+CMP {'id': 'p4', 'tt_tokens': 128, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0938, 'hf_trigram_loop': 0.0938, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 22, 'exact_match': False}
+CMP {'id': 'p5', 'tt_tokens': 128, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0703, 'hf_trigram_loop': 0.0469, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 20, 'exact_match': False}
+CMP_OK prompts=6 worst_tt_adjacent_dup=0.0 (critical threshold 0.10)

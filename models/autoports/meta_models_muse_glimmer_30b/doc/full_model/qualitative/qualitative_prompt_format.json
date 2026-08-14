@@ -1,0 +1,15 @@
+{
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "hf_revision": "f84ecc3a0ea984a4c04542a84269e3d065350a6e",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "prompt_mode_reason": "the tokenizer declares a non-empty chat_template, so the checkpoint is chat/instruct and the suite is rendered with apply_chat_template",
+  "rendering_method": "tokenizer.apply_chat_template(add_generation_prompt=True)",
+  "prompt_source": "models/common/readiness_check/vllm_prompts.txt",
+  "generation": {
+    "greedy": true,
+    "max_new_tokens": 128
+  },
+  "chat_template_note": "the rendered system message embeds the current date, so the exact prompt text is date-dependent; the token ids recorded in qualitative_prompts.json are what both arms ran"
+}

@@ -1,0 +1,92 @@
+2026-08-13 12:26:20.261 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 12:26:21.594 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 12:26:21.594 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 12:26:21.594 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 12:26:21.594 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 12:26:21.606 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 12:26:21.606 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 12:26:21.684 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 12:26:21.684 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 12:26:21.684 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 12:26:21.684 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 12:26:21.685 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 12:26:21.838 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 12:26:21.965 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 12:26:21.965 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 12:26:21.965 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 12:26:21.965 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 12:26:21.965 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 12:26:22.005 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.006 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.007 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.007 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.008 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.008 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.009 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.009 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:26:22.010 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 12:26:22.037 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 12:26:22.038 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 12:26:22.038 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 12:26:22.039 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 12:26:22.039 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 12:26:22.039 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 12:26:36.871 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:768 - MuseGlimmerModel: built 1/1 layers
+2026-08-13 12:26:36.974 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:962 - MuseGlimmerModel built in 13.1s
+--- rows=128
+2026-08-13 12:26:37.118 | critical |          Always | TT_FATAL: Dimension input should be in between -3 and 2, but has 3 (assert.hpp:104)
+GARM native4d_shipped rows=128 FAILED RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.cpp:288: gather_dim >= -rank && gather_dim <= rank
+2026-08-13 12:26:37.123 | critical |          Always | TT_FATAL: Invalid gather dim 3 for 3D input tensor (assert.hpp:104)
+GARM native4d_composite rows=128 FAILED RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp:140: dim >= -input_rank && dim < input_rank
+GARM {"arm": "shipped_shared_sems", "diverged_on_run": 5, "attempts": 25, "reproducible": false, "local_lookup_diverged": false, "gathered_max_abs_diff": 0.35546875, "per_device_shard_max_abs_diff": [0.0, 0.0, 0.35546875, 0.0]}
+--- rows=1024
+2026-08-13 12:26:37.151 | critical |          Always | TT_FATAL: Dimension input should be in between -3 and 2, but has 3 (assert.hpp:104)
+GARM native4d_shipped rows=1024 FAILED RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.cpp:288: gather_dim >= -rank && gather_dim <= rank
+2026-08-13 12:26:37.156 | critical |          Always | TT_FATAL: Invalid gather dim 3 for 3D input tensor (assert.hpp:104)
+GARM native4d_composite rows=1024 FAILED RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp:140: dim >= -input_rank && dim < input_rank
+GARM {"arm": "shipped_shared_sems", "diverged_on_run": 1, "attempts": 25, "reproducible": false, "local_lookup_diverged": false, "gathered_max_abs_diff": 0.578857421875, "per_device_shard_max_abs_diff": [0.326171875, 0.39453125, 0.578857421875, 0.0]}
+--- rows=4096
+2026-08-13 12:26:37.217 | critical |          Always | TT_FATAL: Dimension input should be in between -3 and 2, but has 3 (assert.hpp:104)
+GARM native4d_shipped rows=4096 FAILED RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.cpp:288: gather_dim >= -rank && gather_dim <= rank
+2026-08-13 12:26:37.246 | critical |          Always | TT_FATAL: Invalid gather dim 3 for 3D input tensor (assert.hpp:104)
+GARM native4d_composite rows=4096 FAILED RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp:140: dim >= -input_rank && dim < input_rank
+GARM {"arm": "shipped_shared_sems", "diverged_on_run": 1, "attempts": 25, "reproducible": false, "local_lookup_diverged": false, "gathered_max_abs_diff": 2.42822265625, "per_device_shard_max_abs_diff": [1.59912109375, 2.42822265625, 1.8017578125, 0.3837890625]}
+GATHER wrote /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/full_model/embedding_gather_native4d.json
+GATHER_OK
+nanobind: leaked 3 instances!
+ - leaked instance 0x72dd88dbdf88 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72dd34df34c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x72dd88dbe168 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 39 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 336 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function "unpad"
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "cpu"
+ - leaked function "create_sub_device_manager"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 12:26:38.298 | info     |    BuildKernels | JIT cache stats: 112/112 hits (100.0%) [112 cached, 40 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 12:26:38.298 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 12:26:38.311 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 12:26:38.311 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 12:26:38.870 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 12:26:38.870 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 12:26:38.870 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

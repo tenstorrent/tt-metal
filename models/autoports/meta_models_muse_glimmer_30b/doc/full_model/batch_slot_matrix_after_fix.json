@@ -1,0 +1,57 @@
+[
+  {
+    "comparison": "slot0 vs slot0 again (dirty cache)",
+    "max_abs_diff": 0.0,
+    "bit_identical": true,
+    "argmax_a": 143809,
+    "argmax_b": 143809,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 vs slot1 (each after reset)",
+    "max_abs_diff": 0.0,
+    "bit_identical": true,
+    "argmax_a": 143809,
+    "argmax_b": 143809,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 then slot1, one reset (the failing test)",
+    "max_abs_diff": 0.0,
+    "bit_identical": true,
+    "argmax_a": 143809,
+    "argmax_b": 143809,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot1 then slot0, one reset",
+    "max_abs_diff": 0.0,
+    "bit_identical": true,
+    "argmax_a": 143809,
+    "argmax_b": 143809,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0-first vs slot0-second (same slot, both dirty)",
+    "max_abs_diff": 0.0,
+    "bit_identical": true,
+    "argmax_a": 143809,
+    "argmax_b": 143809,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  }
+]

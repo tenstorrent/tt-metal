@@ -1,0 +1,112 @@
+[
+  {
+    "label": "topk split to 2x32768 (shipped)",
+    "kwargs": {
+      "max_top_k": "32",
+      "topk_split_to_power_of_2": "True"
+    },
+    "force_argmax": false,
+    "sampling_trace_captured": true,
+    "model_trace_ms": 1.5536,
+    "sampling_trace_ms": 0.6321,
+    "token_out_ms": 2.1696,
+    "first_tokens": [
+      119437,
+      87569,
+      17829,
+      87569
+    ]
+  },
+  {
+    "label": "no split: single-core topk over 50688",
+    "kwargs": {
+      "max_top_k": "32",
+      "topk_split_to_power_of_2": "False"
+    },
+    "force_argmax": false,
+    "sampling_trace_captured": true,
+    "model_trace_ms": 1.5534,
+    "sampling_trace_ms": 9.7292,
+    "token_out_ms": 11.2875,
+    "first_tokens": [
+      119437,
+      87569,
+      17829,
+      87569
+    ]
+  },
+  {
+    "label": "rejected: top_k=32, pad_to_pow2, no split",
+    "kwargs": {
+      "max_top_k": "32",
+      "pad_logits_to_power_of_2": "True",
+      "topk_split_to_power_of_2": "False"
+    },
+    "force_argmax": false,
+    "sampling_trace_captured": true,
+    "model_trace_ms": 1.5532,
+    "sampling_trace_ms": 13.0086,
+    "token_out_ms": 14.5727,
+    "first_tokens": [
+      119437,
+      87569,
+      17829,
+      87569
+    ]
+  },
+  {
+    "label": "top_k=32, no pad",
+    "kwargs": {
+      "max_top_k": "32",
+      "pad_logits_to_power_of_2": "False",
+      "topk_split_to_power_of_2": "False"
+    },
+    "force_argmax": false,
+    "sampling_trace_captured": true,
+    "model_trace_ms": 1.5533,
+    "sampling_trace_ms": 9.7292,
+    "token_out_ms": 11.2978,
+    "first_tokens": [
+      119437,
+      87569,
+      17829,
+      87569
+    ]
+  },
+  {
+    "label": "top_k=8, pad_to_pow2",
+    "kwargs": {
+      "max_top_k": "8",
+      "pad_logits_to_power_of_2": "True"
+    },
+    "force_argmax": false,
+    "sampling_trace_captured": true,
+    "model_trace_ms": 1.5538,
+    "sampling_trace_ms": 0.7943,
+    "token_out_ms": 2.331,
+    "first_tokens": [
+      119437,
+      87569,
+      17829,
+      87569
+    ]
+  },
+  {
+    "label": "top_k=8, no pad",
+    "kwargs": {
+      "max_top_k": "8",
+      "pad_logits_to_power_of_2": "False"
+    },
+    "force_argmax": false,
+    "sampling_trace_captured": true,
+    "model_trace_ms": 1.5533,
+    "sampling_trace_ms": 0.7945,
+    "token_out_ms": 2.3227,
+    "first_tokens": [
+      119437,
+      87569,
+      17829,
+      87569
+    ]
+  }
+]

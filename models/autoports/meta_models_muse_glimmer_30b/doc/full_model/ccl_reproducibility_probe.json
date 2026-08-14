@@ -1,0 +1,138 @@
+[
+  {
+    "rows": 32,
+    "impl": "async",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 32,
+    "impl": "composite",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 64,
+    "impl": "async",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 64,
+    "impl": "composite",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 128,
+    "impl": "async",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 128,
+    "impl": "composite",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 1024,
+    "impl": "async",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "rows": 1024,
+    "impl": "composite",
+    "repeats": 25,
+    "reproducible": true,
+    "first_divergent_run": null,
+    "correct_every_run": true,
+    "first_incorrect_run": null,
+    "max_abs_diff_vs_first_run": 0.0,
+    "max_abs_error_vs_expected": 0.0,
+    "per_device_shard_max_abs_diff": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+]

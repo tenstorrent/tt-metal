@@ -1,0 +1,42 @@
+[
+  {
+    "width": 64,
+    "calls": 1,
+    "total_width": 64,
+    "ms": 0.0173,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": false,
+    "multicore_eligible": false
+  },
+  {
+    "width": 128,
+    "calls": 1,
+    "total_width": 128,
+    "ms": 0.0288,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": false,
+    "multicore_eligible": false
+  },
+  {
+    "width": 256,
+    "calls": 1,
+    "total_width": 256,
+    "ms": 0.0532,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": false,
+    "multicore_eligible": false
+  },
+  {
+    "width": 32768,
+    "calls": 2,
+    "total_width": 65536,
+    "ms": 0.2862,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": true,
+    "multicore_eligible": true
+  }
+]

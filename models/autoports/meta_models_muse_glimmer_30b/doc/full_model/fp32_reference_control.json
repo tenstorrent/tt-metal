@@ -1,0 +1,911 @@
+{
+  "bf16_reference": "readiness_aime24_chat.refpt",
+  "fp32_reference": "readiness_aime24_chat_fp32.refpt",
+  "k": 100,
+  "gen_len": 100,
+  "top1_disagreements": 0,
+  "fp32_top1_outside_bf16_topk": 0,
+  "mean_topk_jaccard": 0.9635327061880032,
+  "rows": [
+    {
+      "gen_index": 0,
+      "fp32_top1": 328,
+      "bf16_top1": 328,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 1,
+      "fp32_top1": 19669,
+      "bf16_top1": 19669,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 2,
+      "fp32_top1": 200023,
+      "bf16_top1": 200023,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9230769230769231
+    },
+    {
+      "gen_index": 3,
+      "fp32_top1": 26047,
+      "bf16_top1": 26047,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 4,
+      "fp32_top1": 17256,
+      "bf16_top1": 17256,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 5,
+      "fp32_top1": 352,
+      "bf16_top1": 352,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 6,
+      "fp32_top1": 3780,
+      "bf16_top1": 3780,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 7,
+      "fp32_top1": 11629,
+      "bf16_top1": 11629,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 8,
+      "fp32_top1": 393,
+      "bf16_top1": 393,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 9,
+      "fp32_top1": 262,
+      "bf16_top1": 262,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 10,
+      "fp32_top1": 220,
+      "bf16_top1": 220,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 11,
+      "fp32_top1": 37,
+      "bf16_top1": 37,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 12,
+      "fp32_top1": 160671,
+      "bf16_top1": 160671,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 13,
+      "fp32_top1": 13637,
+      "bf16_top1": 13637,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9047619047619048
+    },
+    {
+      "gen_index": 14,
+      "fp32_top1": 43678,
+      "bf16_top1": 43678,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 15,
+      "fp32_top1": 9076,
+      "bf16_top1": 9076,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 16,
+      "fp32_top1": 341,
+      "bf16_top1": 341,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 17,
+      "fp32_top1": 35056,
+      "bf16_top1": 35056,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 18,
+      "fp32_top1": 552,
+      "bf16_top1": 552,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 19,
+      "fp32_top1": 262,
+      "bf16_top1": 262,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 20,
+      "fp32_top1": 19467,
+      "bf16_top1": 19467,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9047619047619048
+    },
+    {
+      "gen_index": 21,
+      "fp32_top1": 18302,
+      "bf16_top1": 18302,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 22,
+      "fp32_top1": 69277,
+      "bf16_top1": 69277,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 23,
+      "fp32_top1": 26,
+      "bf16_top1": 26,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9047619047619048
+    },
+    {
+      "gen_index": 24,
+      "fp32_top1": 4802,
+      "bf16_top1": 4802,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 25,
+      "fp32_top1": 2377,
+      "bf16_top1": 2377,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9230769230769231
+    },
+    {
+      "gen_index": 26,
+      "fp32_top1": 44710,
+      "bf16_top1": 44710,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 27,
+      "fp32_top1": 552,
+      "bf16_top1": 552,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 28,
+      "fp32_top1": 5674,
+      "bf16_top1": 5674,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9230769230769231
+    },
+    {
+      "gen_index": 29,
+      "fp32_top1": 5126,
+      "bf16_top1": 5126,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9047619047619048
+    },
+    {
+      "gen_index": 30,
+      "fp32_top1": 268,
+      "bf16_top1": 268,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 31,
+      "fp32_top1": 4116,
+      "bf16_top1": 4116,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 32,
+      "fp32_top1": 5580,
+      "bf16_top1": 5580,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 33,
+      "fp32_top1": 24,
+      "bf16_top1": 24,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 34,
+      "fp32_top1": 9076,
+      "bf16_top1": 9076,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 35,
+      "fp32_top1": 7790,
+      "bf16_top1": 7790,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 36,
+      "fp32_top1": 1924,
+      "bf16_top1": 1924,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 37,
+      "fp32_top1": 220,
+      "bf16_top1": 220,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 38,
+      "fp32_top1": 32,
+      "bf16_top1": 32,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 39,
+      "fp32_top1": 5551,
+      "bf16_top1": 5551,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 40,
+      "fp32_top1": 24,
+      "bf16_top1": 24,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 41,
+      "fp32_top1": 4414,
+      "bf16_top1": 4414,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 42,
+      "fp32_top1": 260,
+      "bf16_top1": 260,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 43,
+      "fp32_top1": 6231,
+      "bf16_top1": 6231,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 44,
+      "fp32_top1": 16696,
+      "bf16_top1": 16696,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 45,
+      "fp32_top1": 310,
+      "bf16_top1": 310,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 46,
+      "fp32_top1": 19467,
+      "bf16_top1": 19467,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 47,
+      "fp32_top1": 18302,
+      "bf16_top1": 18302,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 48,
+      "fp32_top1": 26,
+      "bf16_top1": 26,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 49,
+      "fp32_top1": 4802,
+      "bf16_top1": 4802,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 50,
+      "fp32_top1": 2377,
+      "bf16_top1": 2377,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 51,
+      "fp32_top1": 44710,
+      "bf16_top1": 44710,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9047619047619048
+    },
+    {
+      "gen_index": 52,
+      "fp32_top1": 268,
+      "bf16_top1": 268,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 53,
+      "fp32_top1": 23,
+      "bf16_top1": 23,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 54,
+      "fp32_top1": 30,
+      "bf16_top1": 30,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 55,
+      "fp32_top1": 4116,
+      "bf16_top1": 4116,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 56,
+      "fp32_top1": 5580,
+      "bf16_top1": 5580,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 57,
+      "fp32_top1": 24,
+      "bf16_top1": 24,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 58,
+      "fp32_top1": 9076,
+      "bf16_top1": 9076,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 59,
+      "fp32_top1": 7790,
+      "bf16_top1": 7790,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 60,
+      "fp32_top1": 1924,
+      "bf16_top1": 1924,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 61,
+      "fp32_top1": 220,
+      "bf16_top1": 220,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 62,
+      "fp32_top1": 30,
+      "bf16_top1": 30,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 63,
+      "fp32_top1": 5551,
+      "bf16_top1": 5551,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 64,
+      "fp32_top1": 341,
+      "bf16_top1": 341,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 65,
+      "fp32_top1": 220,
+      "bf16_top1": 220,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 66,
+      "fp32_top1": 1226,
+      "bf16_top1": 1226,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.4925373134328358
+    },
+    {
+      "gen_index": 67,
+      "fp32_top1": 6231,
+      "bf16_top1": 6231,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 68,
+      "fp32_top1": 24,
+      "bf16_top1": 24,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 69,
+      "fp32_top1": 4414,
+      "bf16_top1": 4414,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 70,
+      "fp32_top1": 260,
+      "bf16_top1": 260,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 71,
+      "fp32_top1": 6231,
+      "bf16_top1": 6231,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 72,
+      "fp32_top1": 16696,
+      "bf16_top1": 16696,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 73,
+      "fp32_top1": 310,
+      "bf16_top1": 310,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 74,
+      "fp32_top1": 19467,
+      "bf16_top1": 19467,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 75,
+      "fp32_top1": 18302,
+      "bf16_top1": 18302,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 76,
+      "fp32_top1": 26,
+      "bf16_top1": 26,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 77,
+      "fp32_top1": 13914,
+      "bf16_top1": 13914,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 78,
+      "fp32_top1": 352,
+      "bf16_top1": 352,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 79,
+      "fp32_top1": 3780,
+      "bf16_top1": 3780,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9230769230769231
+    },
+    {
+      "gen_index": 80,
+      "fp32_top1": 44710,
+      "bf16_top1": 44710,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 81,
+      "fp32_top1": 552,
+      "bf16_top1": 552,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 82,
+      "fp32_top1": 268,
+      "bf16_top1": 268,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 83,
+      "fp32_top1": 23,
+      "bf16_top1": 23,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 84,
+      "fp32_top1": 29,
+      "bf16_top1": 29,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 85,
+      "fp32_top1": 27,
+      "bf16_top1": 27,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.941747572815534
+    },
+    {
+      "gen_index": 86,
+      "fp32_top1": 30,
+      "bf16_top1": 30,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 87,
+      "fp32_top1": 4116,
+      "bf16_top1": 4116,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 88,
+      "fp32_top1": 5580,
+      "bf16_top1": 5580,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 89,
+      "fp32_top1": 26,
+      "bf16_top1": 26,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 90,
+      "fp32_top1": 4737,
+      "bf16_top1": 4737,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 91,
+      "fp32_top1": 1416,
+      "bf16_top1": 1416,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 92,
+      "fp32_top1": 323,
+      "bf16_top1": 323,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 93,
+      "fp32_top1": 6231,
+      "bf16_top1": 6231,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 94,
+      "fp32_top1": 9076,
+      "bf16_top1": 9076,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 95,
+      "fp32_top1": 7790,
+      "bf16_top1": 7790,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 96,
+      "fp32_top1": 1924,
+      "bf16_top1": 1924,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 1.0
+    },
+    {
+      "gen_index": 97,
+      "fp32_top1": 24,
+      "bf16_top1": 24,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    },
+    {
+      "gen_index": 98,
+      "fp32_top1": 4414,
+      "bf16_top1": 4414,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9607843137254902
+    },
+    {
+      "gen_index": 99,
+      "fp32_top1": 260,
+      "bf16_top1": 260,
+      "top1_agrees": true,
+      "rank_of_bf16_top1_in_fp32": 0,
+      "rank_of_fp32_top1_in_bf16": 0,
+      "jaccard_top100": 0.9801980198019802
+    }
+  ]
+}

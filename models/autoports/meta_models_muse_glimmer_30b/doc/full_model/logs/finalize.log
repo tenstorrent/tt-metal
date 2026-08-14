@@ -1,0 +1,55 @@
++ cd /home/ttuser/dev/muse-glimmer/tt-metal
++ D=models/autoports/meta_models_muse_glimmer_30b/doc/full_model
++ B=models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench
++ T=models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ sleep 20
++ grep -q REMEASURE3_DONE models/autoports/meta_models_muse_glimmer_30b/doc/full_model/logs/remeasure3.log
++ python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/tt_reset.py
++ tail -2
+RESET post /dev/tenstorrent/3 result=0
+RESET_DONE failures=0
++ timeout 1800 python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/terminal_probe.py
++ echo 'TERMPROBE rc=0'
+TERMPROBE rc=0
++ python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/tt_reset.py
++ tail -2
+RESET post /dev/tenstorrent/3 result=0
+RESET_DONE failures=0
++ timeout 4000 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py -p no:randomly --timeout=1800 --junitxml=models/autoports/meta_models_muse_glimmer_30b/doc/full_model/test_results.xml
++ echo 'PYTEST rc=1'
+PYTEST rc=1
++ python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/tt_reset.py
++ tail -2
+RESET post /dev/tenstorrent/3 result=0
+RESET_DONE failures=0
++ sleep 20
++ timeout 4000 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py -m slow -p no:randomly --timeout=3600 --junitxml=models/autoports/meta_models_muse_glimmer_30b/doc/full_model/test_results_slow.xml
++ echo 'PYTEST_SLOW rc=0'
+PYTEST_SLOW rc=0
++ python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/tt_reset.py
++ tail -2
+RESET post /dev/tenstorrent/3 result=0
+RESET_DONE failures=0
++ sleep 20
++ timeout 4000 bash models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/run_tracy.sh
++ echo 'TRACY rc=0'
+TRACY rc=0
++ python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/tt_reset.py
++ tail -2
+RESET post /dev/tenstorrent/3 result=0
+RESET_DONE failures=0
++ echo FINALIZE_DONE
+FINALIZE_DONE

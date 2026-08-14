@@ -1,0 +1,185 @@
+{
+  "length": 128,
+  "arms": [
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 3,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.33544921875,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.33544921875,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "cloned_shipped",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "cloned_composite",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.73291015625,
+      "per_device_shard_max_abs_diff": [
+        0.73291015625,
+        0.36767578125,
+        0.578857421875,
+        0.0
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.44921875,
+      "per_device_shard_max_abs_diff": [
+        2.44921875,
+        2.30126953125,
+        1.192626953125,
+        0.4150390625
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "cloned_shipped",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "cloned_composite",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.42822265625,
+      "per_device_shard_max_abs_diff": [
+        2.053619384765625,
+        2.42822265625,
+        0.422821044921875,
+        2.053619384765625
+      ],
+      "rows": 4096
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.26513671875,
+      "per_device_shard_max_abs_diff": [
+        0.41290283203125,
+        2.26513671875,
+        1.0760498046875,
+        0.50244140625
+      ],
+      "rows": 4096
+    },
+    {
+      "arm": "cloned_shipped",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.3232421875,
+      "per_device_shard_max_abs_diff": [
+        1.512451171875,
+        2.3232421875,
+        1.0146484375,
+        0.392578125
+      ],
+      "rows": 4096
+    },
+    {
+      "arm": "cloned_composite",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.705322265625,
+      "per_device_shard_max_abs_diff": [
+        1.7919921875,
+        2.705322265625,
+        1.49493408203125,
+        0.390625
+      ],
+      "rows": 4096
+    }
+  ]
+}

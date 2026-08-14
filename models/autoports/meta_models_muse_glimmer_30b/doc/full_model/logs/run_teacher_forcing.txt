@@ -1,0 +1,2 @@
+entry[0]             top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=161.96ms  decode=37.10 t/s/u  e2e=35.33 t/s/u
+AGGREGATE            top1=0.990 (99/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=161.96ms  decode=37.10 t/s/u  e2e=35.33 t/s/u

@@ -1,0 +1,70 @@
+{
+  "length": 128,
+  "arms": [
+    {
+      "arm": "none",
+      "all_bit_identical": false,
+      "max_abs_diffs": [
+        0.0,
+        4.560546875
+      ],
+      "argmaxes": [
+        65256,
+        65256,
+        65256
+      ]
+    },
+    {
+      "arm": "after_embed",
+      "all_bit_identical": true,
+      "max_abs_diffs": [
+        0.0,
+        0.0
+      ],
+      "argmaxes": [
+        65256,
+        65256,
+        65256
+      ]
+    },
+    {
+      "arm": "after_layer",
+      "all_bit_identical": true,
+      "max_abs_diffs": [
+        0.0,
+        0.0
+      ],
+      "argmaxes": [
+        65256,
+        65256,
+        65256
+      ]
+    },
+    {
+      "arm": "before_head",
+      "all_bit_identical": true,
+      "max_abs_diffs": [
+        0.0,
+        0.0
+      ],
+      "argmaxes": [
+        65256,
+        65256,
+        65256
+      ]
+    },
+    {
+      "arm": "all",
+      "all_bit_identical": false,
+      "max_abs_diffs": [
+        0.0,
+        3.48828125
+      ],
+      "argmaxes": [
+        65256,
+        65256,
+        65256
+      ]
+    }
+  ]
+}

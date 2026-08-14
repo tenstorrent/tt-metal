@@ -1,0 +1,103 @@
+2026-08-13 12:12:15.563 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 12:12:16.905 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 12:12:16.905 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 12:12:16.905 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 12:12:16.905 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 12:12:16.917 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 12:12:16.917 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 12:12:16.994 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 12:12:16.994 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 12:12:16.994 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 12:12:16.994 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 12:12:16.996 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 12:12:17.221 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 12:12:17.348 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 12:12:17.348 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 12:12:17.348 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 12:12:17.348 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 12:12:17.348 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 12:12:17.388 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.389 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.390 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.390 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.391 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.391 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.392 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.392 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 12:12:17.393 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 12:12:17.420 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 12:12:17.421 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 12:12:17.422 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 12:12:17.422 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 12:12:17.422 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 12:12:17.422 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 12:12:32.068 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:768 - MuseGlimmerModel: built 1/1 layers
+2026-08-13 12:12:32.172 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:962 - MuseGlimmerModel built in 12.9s
+GARM {"arm": "shipped_shared_sems", "diverged_on_run": 3, "attempts": 25, "reproducible": false, "local_lookup_diverged": false, "gathered_max_abs_diff": 0.573974609375, "per_device_shard_max_abs_diff": [0.0, 0.0, 0.573974609375, 0.0]}
+GARM {"arm": "fresh_sems_per_call", "diverged_on_run": 1, "attempts": 25, "reproducible": false, "local_lookup_diverged": false, "gathered_max_abs_diff": 0.310546875, "per_device_shard_max_abs_diff": [0.0, 0.0, 0.310546875, 0.0]}
+2026-08-13 12:12:32.332 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.342 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.344 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.345 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.347 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.349 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.350 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.352 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.353 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.355 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.356 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.358 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.359 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.361 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.362 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.363 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.365 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.367 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.368 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.370 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.371 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.373 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.374 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.376 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.377 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-13 12:12:32.378 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+GARM {"arm": "composite_all_gather", "diverged_on_run": null, "attempts": 25, "reproducible": true, "local_lookup_diverged": false, "gathered_max_abs_diff": 0.0, "per_device_shard_max_abs_diff": [0.0, 0.0, 0.0, 0.0]}
+GATHER wrote /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/full_model/embedding_gather_probe.json
+GATHER_OK
+nanobind: leaked 3 instances!
+ - leaked instance 0x78835d4b54e8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x78835d4b56c8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x78830959c5b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 39 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 336 functions!
+ - leaked function "buffer_aligned_page_size"
+ - leaked function ""
+ - leaked function "device"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_max_worker_l1_unreserved_size"
+ - leaked function "from_json"
+ - leaked function "__init__"
+ - leaked function "reset_sub_device_stall_group"
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 12:12:33.220 | info     |    BuildKernels | JIT cache stats: 90/90 hits (100.0%) [90 cached, 34 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 12:12:33.220 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 12:12:33.234 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 12:12:33.234 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 12:12:33.834 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 12:12:33.834 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 12:12:33.834 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

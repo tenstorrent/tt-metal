@@ -1,0 +1,65 @@
+{
+  "length": 128,
+  "arms": [
+    {
+      "arm": "staged_input_shared_sems",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "staged_input_composite",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.32421875,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.32421875
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+[
+  {
+    "width": 50688,
+    "calls": 1,
+    "total_width": 50688,
+    "ms": 9.4859,
+    "power_of_two": false,
+    "under_uint16": true,
+    "at_least_min_width": true,
+    "multicore_eligible": false
+  },
+  {
+    "width": 65536,
+    "calls": 1,
+    "total_width": 65536,
+    "ms": 12.7409,
+    "power_of_two": true,
+    "under_uint16": false,
+    "at_least_min_width": true,
+    "multicore_eligible": false
+  },
+  {
+    "width": 32768,
+    "calls": 1,
+    "total_width": 32768,
+    "ms": 0.1436,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": true,
+    "multicore_eligible": true
+  },
+  {
+    "width": 16384,
+    "calls": 1,
+    "total_width": 16384,
+    "ms": 0.1216,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": true,
+    "multicore_eligible": true
+  },
+  {
+    "width": 8192,
+    "calls": 1,
+    "total_width": 8192,
+    "ms": 0.1074,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": true,
+    "multicore_eligible": true
+  },
+  {
+    "width": 4096,
+    "calls": 1,
+    "total_width": 4096,
+    "ms": 0.7714,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": false,
+    "multicore_eligible": false
+  },
+  {
+    "width": 32768,
+    "calls": 2,
+    "total_width": 65536,
+    "ms": 0.2863,
+    "power_of_two": true,
+    "under_uint16": true,
+    "at_least_min_width": true,
+    "multicore_eligible": true
+  }
+]

@@ -1,0 +1,10 @@
+readiness_cli: registered MuseGlimmerForConditionalGeneration for AutoModelForCausalLM
+readiness_cli: HF reference dtype=bfloat16 snapshot=/home/ttuser/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B/snapshots/f84ecc3a0ea984a4c04542a84269e3d065350a6e
+readiness_cli: running models.common.readiness_check.generate --hf-model meta-models/Muse-Glimmer-30B --prompt-source aime24 --chat-template --gen-len 100 --top-k 100 --output models/autoports/meta_models_muse_glimmer_30b/readiness_aime24_chat.refpt
+<frozen runpy>:128: RuntimeWarning: 'models.common.readiness_check.generate' found in sys.modules after import of package 'models.common.readiness_check', but prior to execution of 'models.common.readiness_check.generate'; this may result in unpredictable behaviour
+Loading model meta-models/Muse-Glimmer-30B on cpu...
+Loading weights:   0%|          | 0/1436 [00:00<?, ?it/s]Loading weights: 100%|██████████| 1436/1436 [00:00<00:00, 29335.80it/s]
+[transformers] Both `max_new_tokens` (=100) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+Using aime24 prompt with 204 tokens after chat-template tokenization
+Generated 100 continuation tokens
+Reference saved to: models/autoports/meta_models_muse_glimmer_30b/readiness_aime24_chat.refpt

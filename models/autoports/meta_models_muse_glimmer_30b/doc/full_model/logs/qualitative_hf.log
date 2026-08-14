@@ -1,0 +1,20 @@
+Loading weights:   0%|          | 0/1436 [00:00<?, ?it/s]Loading weights: 100%|██████████| 1436/1436 [00:00<00:00, 25416.70it/s]
+[transformers] Both `max_new_tokens` (=128) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+QUAL hf p0 128 tokens in 212.3s
+QUAL hf p0 :: ' to=self<|message|>Write a haiku about machine learning.\n\nHaiku is 5-7-5 syllables.\n\nWrite a haiku about machine learning.\n\nProbably simple.\n\nWe need 5-7-5.\n\nLet\'s count.\n\n"Silent weights adjust" = Silent(2) weights(1) adjust(2) =5? Silent=2, weights=1 =>3, adjust=2 =>5. Good.\n\n"patterns bloom in hi'
+[transformers] Both `max_new_tokens` (=128) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+QUAL hf p1 128 tokens in 208.7s
+QUAL hf p1 :: ' to=self<|message|>Explain the difference between supervised and unsupervised learning in simple terms.\n\nWe need simple terms. Probably give analogy. Maybe examples. Should be clear.\n\nPossibly bullet points. Simple terms.\n\nNo constraints. Just explain.\n\nMaybe add examples: supervised = teacher with '
+[transformers] Both `max_new_tokens` (=128) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+QUAL hf p2 128 tokens in 206.7s
+QUAL hf p2 :: ' to=self<|message|>Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\n\nComplete this story. Probably continue. No constraints. Should be nice. Probably complete story.\n\nWe can write a story. Probably in a few paragraphs. Could be whimsica'
+[transformers] Both `max_new_tokens` (=128) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+QUAL hf p3 128 tokens in 199.6s
+QUAL hf p3 :: ' to=self<|message|>What are the three laws of thermodynamics?\n\nWhat are the three laws of thermodynamics?\n\nWe need answer. Three laws. Some say zeroth, first, second, third. The question says three laws. Might be first, second, third. Or include zeroth? Traditionally three laws: first, second, third'
+[transformers] Both `max_new_tokens` (=128) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+QUAL hf p4 128 tokens in 214.6s
+QUAL hf p4 :: ' to=self<|message|>Translate the following to French: "Hello, how are you today?"\n\nTranslate to French.\n\n"Hello, how are you today?" -> "Bonjour, comment allez-vous aujourd\'hui ?" or "Salut, comment vas-tu aujourd\'hui ?"\n\nProbably formal: Bonjour, comment allez-vous aujourd\'hui ?\n\nCould be informal:'
+[transformers] Both `max_new_tokens` (=128) and `max_length`(=131072) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+QUAL hf p5 128 tokens in 187.7s
+QUAL hf p5 :: ' to=self<|message|>Write a Python function to calculate the Fibonacci sequence.\n\nWe need to write a Python function to calculate Fibonacci sequence. Probably simple. Provide code. Maybe multiple variants: iterative, recursive with memoization. Provide example usage.\n\nProbably just simple function.\n\n'
+QUAL_OK arm=hf mode=chat prompts=6

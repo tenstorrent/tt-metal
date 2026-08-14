@@ -1,0 +1,6 @@
+measured: tt free-running completion [models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/autoregressive_meta.json] {'source': 'words', 'num_tokens': 96, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0625}
+measured: hf/tt token agreement (informational) [models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/autoregressive_meta.json] {'matching_tokens': 15, 'compared_tokens': 128}
+measured: tt free-running completion [models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_raw/autoregressive_meta.json] {'source': 'words', 'num_tokens': 96, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0312}
+measured: hf/tt token agreement (informational) [models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_raw/autoregressive_meta.json] {'matching_tokens': 20, 'compared_tokens': 128}
+
+No degenerate output detected.

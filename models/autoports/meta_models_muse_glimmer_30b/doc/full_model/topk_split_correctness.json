@@ -1,0 +1,98 @@
+{
+  "single_call_indices": [
+    13147,
+    55461,
+    10807,
+    9722,
+    29744,
+    42657,
+    43906,
+    15067
+  ],
+  "single_call_matches_torch": false,
+  "pieces": 2,
+  "piece0_indices": [
+    13147,
+    9722,
+    15067,
+    10807,
+    29744,
+    3019,
+    21740,
+    11767
+  ],
+  "piece1_indices": [
+    55461,
+    42657,
+    43906,
+    56902,
+    61770,
+    65045,
+    34512,
+    40527
+  ],
+  "piece1_indices_are_global": true,
+  "concat_width": 64,
+  "concat_indices_dtype": "DataType.UINT16",
+  "two_stage_indices": [
+    0,
+    32,
+    2,
+    1,
+    4,
+    34,
+    33,
+    3
+  ],
+  "two_stage_values": [
+    3.3281,
+    3.3281,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125
+  ],
+  "single_call_values": [
+    3.3281,
+    3.3281,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125
+  ],
+  "torch_indices": [
+    55461,
+    13147,
+    9722,
+    15067,
+    43906,
+    42657,
+    10807,
+    29744
+  ],
+  "torch_values": [
+    3.3281,
+    3.3281,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125,
+    3.3125
+  ],
+  "two_stage_matches_single": false,
+  "two_stage_matches_torch": false,
+  "shipped_candidate_count": 64,
+  "shipped_contains_global_topk": true,
+  "shipped_missing_from_topk": [],
+  "shipped_value_index_mismatches": [],
+  "shipped_value_index_consistent": true,
+  "distinct_values_in_torch_topk": 10,
+  "torch_topk_has_ties": true,
+  "values_agree_single_vs_two_stage": true,
+  "values_agree_single_vs_torch": true
+}

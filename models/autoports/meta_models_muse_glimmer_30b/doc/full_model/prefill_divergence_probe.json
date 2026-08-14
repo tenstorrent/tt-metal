@@ -1,0 +1,41 @@
+{
+  "length": 128,
+  "comparisons": [
+    {
+      "pair": "run0 vs run1",
+      "stage": "embedding",
+      "max_abs_diff": 6.125,
+      "bit_identical": false
+    },
+    {
+      "pair": "run0 vs run1",
+      "stage": "layer0(sliding)",
+      "max_abs_diff": 5.90625,
+      "bit_identical": false
+    },
+    {
+      "pair": "run0 vs run1",
+      "stage": "layer1(full)",
+      "max_abs_diff": 5.40625,
+      "bit_identical": false
+    },
+    {
+      "pair": "run0 vs run1",
+      "stage": "last_tile_row",
+      "max_abs_diff": 5.40625,
+      "bit_identical": false
+    },
+    {
+      "pair": "run0 vs run1",
+      "stage": "final_norm",
+      "max_abs_diff": 13.8125,
+      "bit_identical": false
+    },
+    {
+      "pair": "run0 vs run1",
+      "stage": "logits",
+      "max_abs_diff": 4.49609375,
+      "bit_identical": false
+    }
+  ]
+}

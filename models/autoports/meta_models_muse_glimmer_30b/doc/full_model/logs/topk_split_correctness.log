@@ -1,0 +1,95 @@
+2026-08-13 16:51:24.433 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 16:51:24.643 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 16:51:24.643 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 16:51:24.643 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 16:51:24.643 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 16:51:57.447 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 16:51:57.447 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 16:51:57.524 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 16:51:57.524 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 16:51:57.524 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 16:51:57.524 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 16:51:57.526 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 16:51:57.712 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 16:51:57.844 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 16:51:57.844 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 16:51:57.844 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 16:51:57.844 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 16:51:57.844 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 16:51:57.884 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.885 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.885 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.886 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.886 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.887 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.887 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.888 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 16:51:57.888 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 16:51:57.914 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 16:51:57.921 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 16:51:57.922 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 16:51:57.923 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 16:51:57.923 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 16:51:57.923 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+SPLIT single_call_indices=[13147, 55461, 10807, 9722, 29744, 42657, 43906, 15067]
+SPLIT single_call_matches_torch=False
+SPLIT pieces=2
+SPLIT piece0_indices=[13147, 9722, 15067, 10807, 29744, 3019, 21740, 11767]
+SPLIT piece1_indices=[55461, 42657, 43906, 56902, 61770, 65045, 34512, 40527]
+SPLIT piece1_indices_are_global=True
+SPLIT concat_width=64
+SPLIT concat_indices_dtype=DataType.UINT16
+SPLIT two_stage_indices=[0, 32, 2, 1, 4, 34, 33, 3]
+SPLIT two_stage_values=[3.3281, 3.3281, 3.3125, 3.3125, 3.3125, 3.3125, 3.3125, 3.3125]
+SPLIT single_call_values=[3.3281, 3.3281, 3.3125, 3.3125, 3.3125, 3.3125, 3.3125, 3.3125]
+SPLIT torch_indices=[55461, 13147, 9722, 15067, 43906, 42657, 10807, 29744]
+SPLIT torch_values=[3.3281, 3.3281, 3.3125, 3.3125, 3.3125, 3.3125, 3.3125, 3.3125]
+SPLIT two_stage_matches_single=False
+SPLIT two_stage_matches_torch=False
+SPLIT shipped_candidate_count=64
+SPLIT shipped_contains_global_topk=True
+SPLIT shipped_missing_from_topk=[]
+SPLIT shipped_value_index_mismatches=[]
+SPLIT shipped_value_index_consistent=True
+SPLIT distinct_values_in_torch_topk=10
+SPLIT torch_topk_has_ties=True
+SPLIT values_agree_single_vs_two_stage=True
+SPLIT values_agree_single_vs_torch=True
+SPLIT_OK
+nanobind: leaked 3 instances!
+ - leaked instance 0x79f2cd4737f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x79f3213b93a8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x79f3213b91c8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 45 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 372 functions!
+ - leaked function "__iter__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "volume"
+ - leaked function "get_max_worker_l1_unreserved_size"
+ - leaked function "__init__"
+ - leaked function "create_output_tensors"
+ - leaked function "__repr__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 16:51:59.126 | info     |    BuildKernels | JIT cache stats: 79/79 hits (100.0%) [79 cached, 22 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 16:51:59.126 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 16:51:59.138 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 16:51:59.138 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 16:51:59.736 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 16:51:59.736 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 16:51:59.736 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

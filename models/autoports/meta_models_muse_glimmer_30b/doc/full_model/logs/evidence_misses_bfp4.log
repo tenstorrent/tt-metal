@@ -1,0 +1,125 @@
+2026-08-13 11:01:20.555 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 11:01:24.812 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 11:01:24.812 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 11:01:24.812 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 11:01:24.813 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 11:01:51.270 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 11:01:51.271 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 11:01:51.419 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 11:01:51.419 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 11:01:51.419 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 11:01:51.419 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 11:01:51.422 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 11:01:51.623 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 11:01:51.877 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 11:01:51.877 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 11:01:51.877 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 11:01:51.878 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 11:01:51.878 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 11:01:51.947 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.949 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.950 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.954 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.956 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.957 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.959 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 11:01:51.960 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 11:01:52.005 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 11:01:52.007 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 11:01:52.008 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 11:01:52.009 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 11:01:52.009 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 11:01:52.009 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 11:02:27.336 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 8/52 layers
+2026-08-13 11:02:50.554 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 16/52 layers
+2026-08-13 11:03:13.535 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 24/52 layers
+2026-08-13 11:03:36.416 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 32/52 layers
+2026-08-13 11:03:59.246 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 40/52 layers
+2026-08-13 11:04:22.280 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 48/52 layers
+2026-08-13 11:04:33.816 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:752 - MuseGlimmerModel: built 52/52 layers
+2026-08-13 11:04:34.207 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:916 - MuseGlimmerModel built in 160.0s
+EV built in 161.6s
+EV ===== stage capacity =====
+EV capacity hf_model=meta-models/Muse-Glimmer-30B
+EV capacity supported_context=131072
+EV capacity cache_slots=1
+EV capacity decode_rows=32
+EV capacity max_num_blocks=2048
+EV capacity page_block_size=64
+EV capacity blocks_per_seq=2048
+EV capacity prefill_chunk_size=8192
+EV capacity vocab_size=202048
+EV capacity padded_vocab_size=202752
+EV capacity num_layers=52
+EV capacity layer_kinds=['sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full', 'sliding', 'sliding', 'sliding', 'full']
+EV capacity force_argmax=False
+EV capacity sampling_implementation=models.common.sampling.SamplingGenerator
+EV capacity lm_head_dtype=DataType.BFLOAT4_B
+EV capacity lm_head_matmul=dram_sharded
+EV capacity lm_head_cores=52
+EV capacity lm_head_in0_block_w=2
+EV capacity counters={'trace_replays': 0, 'token_refreshes': 0, 'position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'readbacks': 0, 'device_position_advances': 0}
+EV capacity carried_forward_decoder_contract={'activation_dtype': 'DataType.BFLOAT16', 'kv_cache_dtype': 'DataType.BFLOAT8_B', 'weight_dtype_wqkv': 'DataType.BFLOAT8_B', 'weight_dtype_o_proj': 'DataType.BFLOAT8_B', 'weight_dtype_mlp_gate': 'DataType.BFLOAT4_B', 'weight_dtype_mlp_down': 'DataType.BFLOAT4_B', 'prefill_ccl_impl': 'async', 'decode_ccl_impl': 'wrapper', 'prefill_ccl_mode': 'all_reduce', 'decode_ccl_mode': 'rs_ag', 'prefill_ccl_dtype': 'DataType.BFLOAT8_B', 'decode_ccl_dtype': 'None', 'prefill_ccl_rs_workers': 4, 'decode_ccl_rs_workers': 1, 'ccl_ag_barrier': True, 'ccl_persistent_buffers_rejected_and_off': True, 'prefill_fractured_norm': True, 'prefill_fractured_norm_min_rows': 256, 'sharded_decode_io': True, 'boundary_cores': 16, 'decode_matmul_o_proj': [16, 2], 'max_cores_per_head_batch': 32}
+EV capacity per_device_layer_weight_bytes=4327784448
+EV capacity per_device_kv_cache_bytes=1853882368
+EV capacity per_device_rope_table_bytes=134217728
+EV capacity per_device_terminal_weight_bytes=863073536
+EV capacity per_device_total_bytes=7178958080
+EV capacity per_device_dram_capacity_bytes=33778699264
+EV capacity per_device_kv_cache_bytes_per_block=905216.0
+EV capacity per_device_free_after_long_lived_bytes=26599741184
+EV capacity full_context_sequences_that_fit=15
+EV ===== stage capacity done in 0.0s =====
+EV ===== stage misses =====
+EV misses non_top1=10/100 outside_top100=2
+EV misses {'gen_index': 10, 'absolute_position': 214, 'tt_token': 523, 'hf_rank_of_tt_token': 1, 'hf_top1': 220, 'tt_top5': [523, 220, 2599, 2161, 1043], 'tt_top5_values': [14.375, 13.125, 1.9453, 1.5547, -0.373], 'tt_top1_minus_top2': 1.25}
+EV misses {'gen_index': 28, 'absolute_position': 232, 'tt_token': 262, 'hf_rank_of_tt_token': 1, 'hf_top1': 5674, 'tt_top5': [262, 5674, 2599, 1043, 200007], 'tt_top5_values': [16.25, 8.625, 4.0, 3.1875, -0.21], 'tt_top1_minus_top2': 7.625}
+EV misses {'gen_index': 30, 'absolute_position': 234, 'tt_token': 323, 'hf_rank_of_tt_token': 1, 'hf_top1': 268, 'tt_top5': [323, 268, 289, 69046, 2025], 'tt_top5_values': [17.0, 14.625, 6.1875, 5.6875, 5.5938], 'tt_top1_minus_top2': 2.375}
+EV misses {'gen_index': 31, 'absolute_position': 235, 'tt_token': 23920, 'hf_rank_of_tt_token': 1, 'hf_top1': 4116, 'tt_top5': [23920, 4116, 323, 1043, 2599], 'tt_top5_values': [11.9375, 10.5, 0.9727, 0.3145, -0.4512], 'tt_top1_minus_top2': 1.4375}
+EV misses {'gen_index': 32, 'absolute_position': 236, 'tt_token': 666, 'hf_rank_of_tt_token': 3, 'hf_top1': 5580, 'tt_top5': [666, 5580, 67208, 63675, 737], 'tt_top5_values': [13.8125, 13.4375, 7.8438, 7.375, 1.7891], 'tt_top1_minus_top2': 0.375}
+EV misses {'gen_index': 34, 'absolute_position': 238, 'tt_token': 290, 'hf_rank_of_tt_token': 1, 'hf_top1': 9076, 'tt_top5': [290, 9076, 2599, 24497, 1232], 'tt_top5_values': [17.25, 14.625, 4.5625, 4.4062, 4.2812], 'tt_top1_minus_top2': 2.625}
+EV misses {'gen_index': 40, 'absolute_position': 244, 'tt_token': 341, 'hf_rank_of_tt_token': -1, 'hf_top1': 24, 'tt_top5': [341, 1663, 220, 2599, 77786], 'tt_top5_values': [12.375, 11.0, 10.9375, 10.75, 10.375], 'tt_top1_minus_top2': 1.375}
+EV misses {'gen_index': 52, 'absolute_position': 256, 'tt_token': 552, 'hf_rank_of_tt_token': 1, 'hf_top1': 268, 'tt_top5': [552, 268, 2599, 5126, 1043], 'tt_top5_values': [15.9375, 13.8125, 8.0, 7.9375, 7.5312], 'tt_top1_minus_top2': 2.125}
+EV misses {'gen_index': 90, 'absolute_position': 294, 'tt_token': 26, 'hf_rank_of_tt_token': -1, 'hf_top1': 4737, 'tt_top5': [26, 43, 1043, 4737, 6231], 'tt_top5_values': [15.75, 15.625, 15.125, 14.125, 13.625], 'tt_top1_minus_top2': 0.125}
+EV misses {'gen_index': 94, 'absolute_position': 298, 'tt_token': 290, 'hf_rank_of_tt_token': 1, 'hf_top1': 9076, 'tt_top5': [290, 9076, 1043, 43, 2377], 'tt_top5_values': [17.375, 17.0, 10.375, 10.0625, 9.75], 'tt_top1_minus_top2': 0.375}
+EV ===== stage misses done in 0.3s =====
+EV_OK
+EV summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/full_model/evidence_misses_bfp4.json
+nanobind: leaked 3 instances!
+ - leaked instance 0x762b7d9dcb88 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x762bd16f9268 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x762bd16f9088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 39 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 336 functions!
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "num_cores"
+ - leaked function ""
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__hash__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 11:04:35.604 | info     |    BuildKernels | JIT cache stats: 249/249 hits (100.0%) [249 cached, 98 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 11:04:35.604 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 11:04:35.621 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 11:04:35.621 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 11:04:36.185 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 11:04:36.185 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 11:04:36.185 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

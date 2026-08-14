@@ -1,0 +1,167 @@
+[
+  {
+    "comparison": "slot0 vs slot0 again (dirty cache)",
+    "max_abs_diff": 2.29296875,
+    "bit_identical": false,
+    "argmax_a": 90899,
+    "argmax_b": 90899,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 vs slot1 (each after reset)",
+    "max_abs_diff": 2.7578125,
+    "bit_identical": false,
+    "argmax_a": 90899,
+    "argmax_b": 118324,
+    "argmax_moved": true,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 then slot1, one reset (the failing test)",
+    "max_abs_diff": 1.2734375,
+    "bit_identical": false,
+    "argmax_a": 90899,
+    "argmax_b": 90899,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot1 then slot0, one reset",
+    "max_abs_diff": 1.328125,
+    "bit_identical": false,
+    "argmax_a": 90899,
+    "argmax_b": 90899,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0-first vs slot0-second (same slot, both dirty)",
+    "max_abs_diff": 1.359375,
+    "bit_identical": false,
+    "argmax_a": 90899,
+    "argmax_b": 90899,
+    "argmax_moved": false,
+    "length": 200,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 vs slot0 again (dirty cache)",
+    "max_abs_diff": 1.44921875,
+    "bit_identical": false,
+    "argmax_a": 39470,
+    "argmax_b": 39470,
+    "argmax_moved": false,
+    "length": 224,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 vs slot1 (each after reset)",
+    "max_abs_diff": 1.359375,
+    "bit_identical": false,
+    "argmax_a": 67616,
+    "argmax_b": 39470,
+    "argmax_moved": true,
+    "length": 224,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 then slot1, one reset (the failing test)",
+    "max_abs_diff": 1.671875,
+    "bit_identical": false,
+    "argmax_a": 162211,
+    "argmax_b": 39470,
+    "argmax_moved": true,
+    "length": 224,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot1 then slot0, one reset",
+    "max_abs_diff": 1.33203125,
+    "bit_identical": false,
+    "argmax_a": 39470,
+    "argmax_b": 39470,
+    "argmax_moved": false,
+    "length": 224,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0-first vs slot0-second (same slot, both dirty)",
+    "max_abs_diff": 2.0,
+    "bit_identical": false,
+    "argmax_a": 162211,
+    "argmax_b": 39470,
+    "argmax_moved": true,
+    "length": 224,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 vs slot0 again (dirty cache)",
+    "max_abs_diff": 3.296875,
+    "bit_identical": false,
+    "argmax_a": 58227,
+    "argmax_b": 58227,
+    "argmax_moved": false,
+    "length": 256,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 vs slot1 (each after reset)",
+    "max_abs_diff": 3.96875,
+    "bit_identical": false,
+    "argmax_a": 131811,
+    "argmax_b": 58227,
+    "argmax_moved": true,
+    "length": 256,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0 then slot1, one reset (the failing test)",
+    "max_abs_diff": 2.3828125,
+    "bit_identical": false,
+    "argmax_a": 58227,
+    "argmax_b": 58227,
+    "argmax_moved": false,
+    "length": 256,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot1 then slot0, one reset",
+    "max_abs_diff": 3.421875,
+    "bit_identical": false,
+    "argmax_a": 58227,
+    "argmax_b": 58227,
+    "argmax_moved": false,
+    "length": 256,
+    "layers": "0,3",
+    "batch": 4
+  },
+  {
+    "comparison": "slot0-first vs slot0-second (same slot, both dirty)",
+    "max_abs_diff": 1.76953125,
+    "bit_identical": false,
+    "argmax_a": 58227,
+    "argmax_b": 58227,
+    "argmax_moved": false,
+    "length": 256,
+    "layers": "0,3",
+    "batch": 4
+  }
+]

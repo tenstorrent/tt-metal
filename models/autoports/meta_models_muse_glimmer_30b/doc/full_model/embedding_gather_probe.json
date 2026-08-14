@@ -1,0 +1,47 @@
+{
+  "length": 128,
+  "arms": [
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 3,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.573974609375,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.573974609375,
+        0.0
+      ]
+    },
+    {
+      "arm": "fresh_sems_per_call",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.310546875,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.310546875,
+        0.0
+      ]
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

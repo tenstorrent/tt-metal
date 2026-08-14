@@ -1,0 +1,185 @@
+{
+  "length": 128,
+  "arms": [
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 32
+    },
+    {
+      "arm": "fresh_sems_per_call",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 32
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 32
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.33544921875,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.33544921875,
+        0.0
+      ],
+      "rows": 64
+    },
+    {
+      "arm": "fresh_sems_per_call",
+      "diverged_on_run": 3,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.318359375,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.318359375,
+        0.0
+      ],
+      "rows": 64
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 64
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.573974609375,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.573974609375,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "fresh_sems_per_call",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.35546875,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.35546875,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": null,
+      "attempts": 25,
+      "reproducible": true,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.0,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 1.42919921875,
+      "per_device_shard_max_abs_diff": [
+        0.55517578125,
+        0.4617919921875,
+        0.33984375,
+        1.42919921875
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "fresh_sems_per_call",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.6162109375,
+      "per_device_shard_max_abs_diff": [
+        0.33984375,
+        0.6162109375,
+        0.341796875,
+        0.3447265625
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "composite_all_gather",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.3291015625,
+      "per_device_shard_max_abs_diff": [
+        0.37109375,
+        2.3291015625,
+        0.8466796875,
+        0.375
+      ],
+      "rows": 1024
+    }
+  ]
+}

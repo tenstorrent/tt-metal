@@ -1,0 +1,34 @@
+{
+  "artifact": "readiness_aime24_chat.refpt",
+  "sha256": "da2149ad352233eb46c8fa6defa3e551cb923596989fec2a4af2e9f51eab29db",
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "hf_revision": "f84ecc3a0ea984a4c04542a84269e3d065350a6e",
+  "hf_revision_note": "resolved by shard presence, not refs/main: refs/main points at a metadata-only revision with no safetensors shards",
+  "hf_reference_dtype": "bfloat16",
+  "hf_reference_device": "cpu",
+  "hf_auto_class": "MuseGlimmerForConditionalGeneration (registered into AutoModelForCausalLM by doc/full_model/bench/readiness_cli.py)",
+  "tokenizer": "AutoTokenizer from the same revision",
+  "prompt_source": "aime24",
+  "aime24_prompts_file": "models/demos/deepseek_v3/demo/aime_under_8k_prompts.json",
+  "aime24_prompt_index": 0,
+  "chat_template": true,
+  "chat_template_file": "chat_template.jinja @ f84ecc3a",
+  "chat_template_note": "the rendered system message embeds the current date (\"Current date: 2026-08-13\"), so re-rendering on another day gives a different prompt; the reference stores its own prompt_tokens so the TT run is unaffected",
+  "gen_len": 100,
+  "top_k": 100,
+  "num_entries": 1,
+  "prompt_len_tokens": 204,
+  "generated_tokens": 100,
+  "topk_shape": [
+    100,
+    100
+  ],
+  "token_ids_meta": {
+    "bos_id": 200000,
+    "eos_id": 200001,
+    "pad_id": 200018
+  },
+  "generated_fresh_at_utc": "2026-08-13T14:01Z",
+  "command": "python models/autoports/meta_models_muse_glimmer_30b/doc/full_model/bench/readiness_cli.py models.common.readiness_check.generate --hf-model meta-models/Muse-Glimmer-30B --prompt-source aime24 --chat-template --gen-len 100 --top-k 100 --output models/autoports/meta_models_muse_glimmer_30b/readiness_aime24_chat.refpt",
+  "log": "doc/full_model/logs/generate_reference.log"
+}

@@ -1,0 +1,21 @@
+ to=self<|message|>Explain the difference between supervised and unsupervised learning in simple terms.
+
+Explain difference between supervised and unsupervised learning in simple terms.
+
+We need simple terms. Probably give analogy. Maybe examples. Should be concise but clear.
+
+Possibly use bullet points. Simple terms.
+
+No constraints. Provide explanation.
+
+Maybe add examples: supervised = teacher gives answers, like email spam classification, house price prediction. Unsupervised = no labels, find patterns, clustering customers, recommendation.
+
+Could also mention semi-supervised? No.
+
+Simple terms.
+
+Probably use analogy: supervised = learning with answer key, unsupervised = exploring without map.
+
+Provide simple terms.
+
+Maybe ask follow

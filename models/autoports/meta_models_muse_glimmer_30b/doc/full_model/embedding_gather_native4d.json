@@ -1,0 +1,80 @@
+{
+  "length": 128,
+  "arms": [
+    {
+      "arm": "native4d_shipped",
+      "rows": 128,
+      "error": "TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.cpp:288: gather_dim >= -rank && gather_dim <= rank - 1\ninfo:\nDimension input should be in between -3 and 2, but has 3\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xade9aa) [0x72dd868de9aa]\n --- /home/ttuser/d"
+    },
+    {
+      "arm": "native4d_composite",
+      "rows": 128,
+      "error": "TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp:140: dim >= -input_rank && dim < input_rank\ninfo:\nInvalid gather dim 3 for 3D input tensor\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x983808) [0x72dd86783808]\n --- ttnn::all_gather(ttnn::Tensor const&, int, std::optional<unsigned int>, std::optional<"
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 5,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.35546875,
+      "per_device_shard_max_abs_diff": [
+        0.0,
+        0.0,
+        0.35546875,
+        0.0
+      ],
+      "rows": 128
+    },
+    {
+      "arm": "native4d_shipped",
+      "rows": 1024,
+      "error": "TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.cpp:288: gather_dim >= -rank && gather_dim <= rank - 1\ninfo:\nDimension input should be in between -3 and 2, but has 3\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xade9aa) [0x72dd868de9aa]\n --- /home/ttuser/d"
+    },
+    {
+      "arm": "native4d_composite",
+      "rows": 1024,
+      "error": "TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp:140: dim >= -input_rank && dim < input_rank\ninfo:\nInvalid gather dim 3 for 3D input tensor\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x983808) [0x72dd86783808]\n --- ttnn::all_gather(ttnn::Tensor const&, int, std::optional<unsigned int>, std::optional<"
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 0.578857421875,
+      "per_device_shard_max_abs_diff": [
+        0.326171875,
+        0.39453125,
+        0.578857421875,
+        0.0
+      ],
+      "rows": 1024
+    },
+    {
+      "arm": "native4d_shipped",
+      "rows": 4096,
+      "error": "TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.cpp:288: gather_dim >= -rank && gather_dim <= rank - 1\ninfo:\nDimension input should be in between -3 and 2, but has 3\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xade9aa) [0x72dd868de9aa]\n --- /home/ttuser/d"
+    },
+    {
+      "arm": "native4d_composite",
+      "rows": 4096,
+      "error": "TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp:140: dim >= -input_rank && dim < input_rank\ninfo:\nInvalid gather dim 3 for 3D input tensor\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x983808) [0x72dd86783808]\n --- ttnn::all_gather(ttnn::Tensor const&, int, std::optional<unsigned int>, std::optional<"
+    },
+    {
+      "arm": "shipped_shared_sems",
+      "diverged_on_run": 1,
+      "attempts": 25,
+      "reproducible": false,
+      "local_lookup_diverged": false,
+      "gathered_max_abs_diff": 2.42822265625,
+      "per_device_shard_max_abs_diff": [
+        1.59912109375,
+        2.42822265625,
+        1.8017578125,
+        0.3837890625
+      ],
+      "rows": 4096
+    }
+  ]
+}
