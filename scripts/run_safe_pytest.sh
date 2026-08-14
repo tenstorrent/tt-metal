@@ -72,6 +72,26 @@
 set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# TT_EVAL_BUILD_GATE_MARKER: eval/run_eval.py creates this run-scoped marker
+# while the clone's build and Python environment are being prepared in the
+# background.  Keep all paths relative to this checkout so the script remains
+# portable and no machine-specific eval path enters the worktree diff.
+if [[ -f "${REPO_DIR}/.eval_build_gate" ]]; then
+    while [[ ! -f "${REPO_DIR}/.build_complete" ]]; do
+        if [[ -f "${REPO_DIR}/.infra_failed" ]]; then
+            echo "NOTE: Background build failed. Proceeding (agent may rebuild)." >&2
+            break
+        fi
+        sleep 5
+    done
+    while [[ ! -f "${REPO_DIR}/.venv_complete" ]]; do
+        if [[ -f "${REPO_DIR}/.infra_failed" ]]; then
+            echo "NOTE: Background venv failed. Proceeding (agent may recreate)." >&2
+            break
+        fi
+        sleep 5
+    done
+fi
 DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
