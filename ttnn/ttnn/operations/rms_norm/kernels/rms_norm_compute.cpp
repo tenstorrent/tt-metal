@@ -136,9 +136,13 @@ void kernel_main() {
     }
 
     // Resident constants: waited once, never popped.
-    if constexpr (HAS_GAMMA) {
-        cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
-    }
+    //
+    // gamma is deliberately NOT waited here.  It is the only DRAM tensor on the
+    // sharded path, so a boot-time wait puts a full DRAM round trip in front of
+    // Sum(x^2) and the cross-core combine on every core — for an operand the
+    // kernel does not touch until `apply_gamma_block`.  The wait therefore lives
+    // at the apply site (the reader defers its barrier to match); on every block
+    // after the first the CB is already full, so it costs a few cycles.
     const bool do_mask = (MASK_ENABLED != 0) && (mask_local_col != NO_MASK_COL);
     if (do_mask) {
         cb_wait_front(cb_w_mask, 1);
@@ -324,6 +328,9 @@ void kernel_main() {
 
         // ---- apply_gamma_block: gamma is a 1D [W] operand -> Row broadcast ----
         if constexpr (HAS_GAMMA) {
+            // The deferred gamma wait (see the boot comment).  Never popped, so
+            // only the first block can actually block here.
+            cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
             if constexpr (IS_ROW_MAJOR) {
                 ckl::eltwise_chain(
                     block_shape,

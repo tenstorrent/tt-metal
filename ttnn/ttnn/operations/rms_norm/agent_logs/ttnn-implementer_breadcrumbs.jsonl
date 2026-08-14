@@ -27,3 +27,4 @@
 {"event":"test_run","status":"pass","test":"rms_norm unit guard set (acceptance+sharded+precision_baseline+debug)","result":"198 passed","note":"after DM_CHUNK_TILES 8->32 and the IN_CB_DEPTH/BLOCK_ROWS L1 ladder","ts":"2026-08-14T04:41:02+00:00"}
 {"event":"test_run","status":"pass","test":"golden slice -k perf/pad_poison/resilience","result":"69 passed","note":"final Refinement 4 config","ts":"2026-08-14T04:54:54+00:00"}
 {"event":"test_run","status":"pass","test":"final guard set at shipped config","result":"208 passed","files":["test_rms_norm.py","test_rms_norm_sharded.py","test_rms_norm_double_buffer.py","test_rms_norm_precision_baseline.py","test_rms_norm_debug.py"],"ts":"2026-08-14T04:56:10+00:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf_sharded.py","mode":"--profile","note":"lever A (gamma overlap): 4655/5535/6634/7229/75727 -> 3819/4513/5690/5716/74417 ns","ts":"2026-08-14T05:54:54+00:00"}

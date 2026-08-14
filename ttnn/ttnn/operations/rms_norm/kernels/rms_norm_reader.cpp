@@ -191,9 +191,83 @@ void kernel_main() {
     }
 
     // =====================================================================
-    // load_gamma_once — this core's hidden slice, resident for the kernel
+    // Boot-time zeroing of regions the per-block reads NEVER touch, and (on the
+    // resident-shard path) the publish of x.
+    //
+    // This runs BEFORE the gamma load: on the TILE+sharded path the publish is
+    // pure bookkeeping (the shard is already in L1), so doing it first lets
+    // compute start Sum(x^2) while gamma is still in flight from DRAM.
+    //
+    // cb_input_tiles' capacity is a whole number of blocks, so every block reuses
+    // the SAME physical pages and the tail columns of a ragged hidden slice are
+    // written once, at boot, and stay zero for the kernel's life.  Same for the
+    // W-tail gap inside each ROW_MAJOR staging stick.
     // =====================================================================
+    if constexpr (IS_ROW_MAJOR) {
+        // One DM transfer, once: covers both the W-tail gap inside every staging
+        // stick and any stick slot a ragged tile-row never writes.
+        noc.async_write_zeros(cb_rm_stage_in_obj, RM_STAGE_IN_PAGES * IN_TILE_BYTES);
+        noc.write_zeros_l1_barrier();
+    } else if constexpr (IS_SHARDED) {
+        // TILE + sharded: cb_input_tiles IS the caller's resident shard, so
+        // `load_block` moves nothing.  What DOES have to happen once is neutralizing
+        // the shard's own padding: tiles past the tensor's hidden extent, and rows
+        // past its row extent, are allocated-but-never-written L1 that Sum(x^2)
+        // would otherwise fold into a real row's denominator.
+        constexpr uint32_t SHARD_ROWS = IN_WAIT_TILES / SLICE_HIDDEN_TILES;
+        bool zeroed_any = false;
+        for (uint32_t r = 0; r < SHARD_ROWS; ++r) {
+            const uint32_t row_base = r * SLICE_HIDDEN_TILES;
+            if (r >= core_row_tiles) {
+                noc.async_write_zeros(
+                    cb_input_obj, SLICE_HIDDEN_TILES * IN_TILE_BYTES, {.offset_bytes = row_base * IN_TILE_BYTES});
+                zeroed_any = true;
+            } else if (valid_tiles < SLICE_HIDDEN_TILES) {
+                noc.async_write_zeros(
+                    cb_input_obj,
+                    (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES,
+                    {.offset_bytes = (row_base + valid_tiles) * IN_TILE_BYTES});
+                zeroed_any = true;
+            }
+        }
+        if (zeroed_any) {
+            noc.write_zeros_l1_barrier();
+        }
+        // Publish the whole resident shard once.  Keeping cb_input_tiles exactly
+        // FULL at every block boundary is what preserves get_write_ptr() ==
+        // get_read_ptr(), which the two in-place rewrites of x depend on; the
+        // block loop below re-publishes one block after each of compute's pops.
+        cb_reserve_back(cb_input_tiles, IN_WAIT_TILES);
+        cb_push_back(cb_input_tiles, IN_WAIT_TILES);
+    } else if (valid_tiles < SLICE_HIDDEN_TILES) {
+        // Every tile-row slot of the WHOLE capacity, not just the first block:
+        // with IN_CB_DEPTH > 1 the reader alternates between buffers and the tail
+        // columns of both must be zero before Sum(x^2) ever folds them in.
+        constexpr uint32_t IN_CAPACITY_ROWS = IN_CAPACITY_TILES / SLICE_HIDDEN_TILES;
+        const uint32_t pad_bytes = (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES;
+        for (uint32_t r = 0; r < IN_CAPACITY_ROWS; ++r) {
+            noc.async_write_zeros(
+                cb_input_obj, pad_bytes, {.offset_bytes = (r * SLICE_HIDDEN_TILES + valid_tiles) * IN_TILE_BYTES});
+        }
+        noc.write_zeros_l1_barrier();
+    }
+
+    // =====================================================================
+    // load_gamma_once — this core's hidden slice, resident for the kernel.
+    //
+    // ORDER MATTERS, and it is a measured perf property, not a style choice.
+    // gamma is the ONLY DRAM tensor on the sharded path (x and out are resident
+    // L1), so its read is a bare ~1 us DRAM round trip.  Issued here, *after* the
+    // input publish below and with its barrier deferred into the block loop, that
+    // latency overlaps with Sum(x^2) and the whole cross-core combine — compute
+    // does not touch gamma until `apply_gamma_block`.  Issued before the publish
+    // (the Phase 0 order) it serialized in front of everything: no core could
+    // start Sum(x^2) until gamma had landed.  Measured on the pinned WIDTH-shard
+    // decode geometries: gamma cost 1.2-2.0 us of a 4.7-7.2 us wall.
+    // =====================================================================
+    bool gamma_pending = false;
     if constexpr (HAS_GAMMA) {
+        gamma_pending = true;
         const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
         cb_reserve_back(cb_gamma_tiles, SLICE_HIDDEN_TILES);
         const uint32_t gamma_l1 = get_write_ptr(cb_gamma_tiles);
@@ -297,65 +371,6 @@ void kernel_main() {
                     n1 * GAMMA_ELEM_BYTES);
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma_tiles, SLICE_HIDDEN_TILES);
-    }
-
-    // =====================================================================
-    // Boot-time zeroing of regions the per-block reads NEVER touch.
-    //
-    // cb_input_tiles capacity == BLOCK_TILES exactly, so every block reuses the
-    // SAME physical pages and the tail columns of a ragged hidden slice are
-    // written once, at boot, and stay zero for the kernel's life.  Same for the
-    // W-tail gap inside each ROW_MAJOR staging stick.
-    // =====================================================================
-    if constexpr (IS_ROW_MAJOR) {
-        // One DM transfer, once: covers both the W-tail gap inside every staging
-        // stick and any stick slot a ragged tile-row never writes.
-        noc.async_write_zeros(cb_rm_stage_in_obj, RM_STAGE_IN_PAGES * IN_TILE_BYTES);
-        noc.write_zeros_l1_barrier();
-    } else if constexpr (IS_SHARDED) {
-        // TILE + sharded: cb_input_tiles IS the caller's resident shard, so
-        // `load_block` moves nothing.  What DOES have to happen once is neutralizing
-        // the shard's own padding: tiles past the tensor's hidden extent, and rows
-        // past its row extent, are allocated-but-never-written L1 that Sum(x^2)
-        // would otherwise fold into a real row's denominator.
-        constexpr uint32_t SHARD_ROWS = IN_WAIT_TILES / SLICE_HIDDEN_TILES;
-        bool zeroed_any = false;
-        for (uint32_t r = 0; r < SHARD_ROWS; ++r) {
-            const uint32_t row_base = r * SLICE_HIDDEN_TILES;
-            if (r >= core_row_tiles) {
-                noc.async_write_zeros(
-                    cb_input_obj, SLICE_HIDDEN_TILES * IN_TILE_BYTES, {.offset_bytes = row_base * IN_TILE_BYTES});
-                zeroed_any = true;
-            } else if (valid_tiles < SLICE_HIDDEN_TILES) {
-                noc.async_write_zeros(
-                    cb_input_obj,
-                    (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES,
-                    {.offset_bytes = (row_base + valid_tiles) * IN_TILE_BYTES});
-                zeroed_any = true;
-            }
-        }
-        if (zeroed_any) {
-            noc.write_zeros_l1_barrier();
-        }
-        // Publish the whole resident shard once.  Keeping cb_input_tiles exactly
-        // FULL at every block boundary is what preserves get_write_ptr() ==
-        // get_read_ptr(), which the two in-place rewrites of x depend on; the
-        // block loop below re-publishes one block after each of compute's pops.
-        cb_reserve_back(cb_input_tiles, IN_WAIT_TILES);
-        cb_push_back(cb_input_tiles, IN_WAIT_TILES);
-    } else if (valid_tiles < SLICE_HIDDEN_TILES) {
-        // Every tile-row slot of the WHOLE capacity, not just the first block:
-        // with IN_CB_DEPTH > 1 the reader alternates between buffers and the tail
-        // columns of both must be zero before Sum(x^2) ever folds them in.
-        constexpr uint32_t IN_CAPACITY_ROWS = IN_CAPACITY_TILES / SLICE_HIDDEN_TILES;
-        const uint32_t pad_bytes = (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES;
-        for (uint32_t r = 0; r < IN_CAPACITY_ROWS; ++r) {
-            noc.async_write_zeros(
-                cb_input_obj, pad_bytes, {.offset_bytes = (r * SLICE_HIDDEN_TILES + valid_tiles) * IN_TILE_BYTES});
-        }
-        noc.write_zeros_l1_barrier();
     }
 
     // ---- combine_block wire: both faces are constructed once, outside the
@@ -453,6 +468,17 @@ void kernel_main() {
             cb_push_back(cb_input_tiles, BLOCK_TILES);
         }
 
+        // gamma's barrier, deferred from the issue site above to HERE: its DRAM
+        // round trip has now overlapped with the input publish (sharded) or with
+        // block 0's own x read (interleaved — the same barrier flushes both), and
+        // compute does not touch cb_gamma_tiles until `apply_gamma_block`.  One
+        // block pays it; every later block finds the CB already full.
+        if (gamma_pending) {
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma_tiles, SLICE_HIDDEN_TILES);
+            gamma_pending = false;
+        }
+
         // =================================================================
         // combine_block — reader half (only when the hidden axis is split)
         // =================================================================
@@ -478,5 +504,13 @@ void kernel_main() {
                 cb_push_back(cb_rms_recip, BLOCK_ROWS);
             }
         }
+    }
+
+    // A core with no rows runs zero blocks, so nothing above retired the gamma
+    // read.  Retire it here rather than leaving a NoC read outstanding at kernel
+    // exit (the push is harmless: no compute kernel on such a core waits on it).
+    if (gamma_pending) {
+        noc_async_read_barrier();
+        cb_push_back(cb_gamma_tiles, SLICE_HIDDEN_TILES);
     }
 }
