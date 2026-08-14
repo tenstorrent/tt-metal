@@ -11,7 +11,8 @@ to make that possible, and what is verified versus still open.
 | --- | --- | --- |
 | [31801765378](https://github.com/tenstorrent/tt-shield/actions/runs/31801765378) | `spec_tests` | build succeeded; tests failed, no applicable suites |
 | [31807380436](https://github.com/tenstorrent/tt-shield/actions/runs/31807380436) | `benchmarks` | image reused; **server came up in the container**, failed on the missing chat template |
-| [31824560569](https://github.com/tenstorrent/tt-shield/actions/runs/31824560569) | `benchmarks` | rebuild carrying the chat-template fix |
+| [31824560569](https://github.com/tenstorrent/tt-shield/actions/runs/31824560569) | `benchmarks` | chat template resolved; died on the 5s metal op watchdog |
+| [31832502684](https://github.com/tenstorrent/tt-shield/actions/runs/31832502684) | `benchmarks` | rebuild with `DISABLE_METAL_OP_TIMEOUT=1` |
 
 ### Run 31807380436 proved the container path end to end
 
@@ -52,6 +53,26 @@ repo-relative and anchored to `TT_METAL_HOME` by
 `run_vllm_api_server.resolve_repo_relative_vllm_args`, because the checkout sits
 at a different absolute path in the container than in a local tree and spec
 values are not variable-expanded.
+
+### The default hang watchdog aborts a cold-cache run
+
+Run 31824560569 resolved the chat template
+(`Resolved vLLM --chat-template to /home/container_app_user/tt-metal/...`), served
+requests, and then EngineCore died in `multichip_decoder` at
+`ttnn.linear(activated, self.down_prefill)`:
+
+```text
+TT_THROW: TIMEOUT: device timeout in fetch queue wait, potential hang detected
+tt_metal/impl/dispatch/system_memory_manager.cpp:702
+```
+
+`run_vllm_api_server.set_metal_timeout_env_vars` sets
+`TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0`. The same log shows `JIT cache stats:
+0/636 hits` and `init engine ... took 73.48 seconds` against 3.80 s warm locally,
+so a first-compile prefill matmul simply outran the 5 s limit. The spec now sets
+`DISABLE_METAL_OP_TIMEOUT=1`. That removes a known false positive; it does not
+prove no hang exists, and a genuine one would now present as a stall instead of a
+5 s abort.
 
 ### Changing TTI code or specs requires a rebuild
 

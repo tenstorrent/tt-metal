@@ -198,6 +198,26 @@ read happens either way; only the torch->TTNN conversion and host tiling are
 skipped. The flag was added to `run_prefill_check`, `run_teacher_forcing`, and
 `run_autoregressive` in commit `840b8301c40`.
 
+**A cold JIT cache can trip a hang watchdog, not just skew timings.**
+tt-inference-server sets `TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0` by default so
+tt-triage fires on a real hang. In a fresh container that watchdog aborted this
+model inside `multichip_decoder`'s
+`ttnn.linear(activated, self.down_prefill)` with
+
+```text
+TT_THROW: TIMEOUT: device timeout in fetch queue wait, potential hang detected
+tt_metal/impl/dispatch/system_memory_manager.cpp:702
+```
+
+while the JIT cache was at `0/636 hits` and engine init had taken 73.48 s against
+3.80 s warm. A first-compile prefill matmul at this context legitimately exceeds
+5 s, so the abort was the watchdog rather than a wedged device; the same commit
+and benchmark shape run repeatedly on this hardware locally without a hang.
+Disable it with `DISABLE_METAL_OP_TIMEOUT=1` (or `run.py
+--disable-metal-timeout`) when a run is expected to compile from cold. Note that
+disabling a detector cannot prove no hang exists — it converts a 5 s abort into a
+stall, which is the more diagnosable failure.
+
 **Two different precision regimes are reachable by default.**
 `run_prefill_check`/`run_teacher_forcing` go through `build_generator`, which
 consults only `GEMMA4_31B_PRECISION_CONFIG` — unset means the **BF16 LM-head
