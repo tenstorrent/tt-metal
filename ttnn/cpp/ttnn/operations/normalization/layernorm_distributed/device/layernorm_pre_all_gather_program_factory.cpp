@@ -120,7 +120,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const bool fp32_dest_acc_en = operation_attributes.compute_kernel_config.fp32_dest_acc_en;
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // The intermediates only need Float32 when the input itself is Float32: the accurate SFPU
+    // path below is gated on exactly that, so on every other path the compute kernel reads these
+    // buffers through SrcA/SrcB and never reads the extra width back. Keying the format off
+    // fp32_dest_acc_en alone therefore doubled the x^2 / fused / scaler footprint for no numerical
+    // gain, and pushed the static allocation past the per-core L1 budget from hidden == 4096
+    // upwards (#53094). This is independent of fp32_dest_acc_en itself, which still reaches the
+    // kernel as enable_32_bit_dest and keeps the reduce accumulating in fp32.
+    const bool fp32_intermediates = (in_data_format == tt::DataFormat::Float32) && fp32_dest_acc_en;
+    tt::DataFormat cb_data_format = fp32_intermediates ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat scaler_cb_data_format = cb_data_format;
     // Float32 + fp32_dest_acc_en + !fast_and_approximate_mode -> SFPU Accurate; else FPU.
     // Quasar has no SFPU Accurate reduce; fall back to FPU.
@@ -423,7 +431,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const bool fp32_dest_acc_en = operation_attributes.compute_kernel_config.fp32_dest_acc_en;
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // The intermediates only need Float32 when the input itself is Float32: the accurate SFPU
+    // path below is gated on exactly that, so on every other path the compute kernel reads these
+    // buffers through SrcA/SrcB and never reads the extra width back. Keying the format off
+    // fp32_dest_acc_en alone therefore doubled the x^2 / fused / scaler footprint for no numerical
+    // gain, and pushed the static allocation past the per-core L1 budget from hidden == 4096
+    // upwards (#53094). This is independent of fp32_dest_acc_en itself, which still reaches the
+    // kernel as enable_32_bit_dest and keeps the reduce accumulating in fp32.
+    const bool fp32_intermediates = (in_data_format == tt::DataFormat::Float32) && fp32_dest_acc_en;
+    tt::DataFormat cb_data_format = fp32_intermediates ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat scaler_cb_data_format = cb_data_format;
     // Float32 + fp32_dest_acc_en + !fast_and_approximate_mode -> SFPU Accurate; else FPU.
     // Quasar has no SFPU Accurate reduce; fall back to FPU.
