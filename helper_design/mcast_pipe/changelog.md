@@ -6,6 +6,48 @@ feedback round lands.
 
 ---
 
+## Round 27 — reconciliation and documentation handoff (2026-08-14)
+
+- Reconciled all 91 census paths against the current source tree: 17 migrated,
+  4 pending, and 70 deferred kernels; no missing, renamed, or clobbered paths.
+- Expanded the host-binding inventory to include the four block-sharded Matmul
+  legacy/descriptor routes and the block-sharded Conv2D activation route. The
+  ledger now records 14 migrated-at-v10 and 10 pending bindings.
+- Intake only: the current host build passed, `McastHostFixture.*` passed 32/32,
+  and the complete helper device/wire suite passed 80/80 under `--dev`. No
+  per-operation apply validation or v11 ledger write-back was claimed.
+- Consolidated the live handoff around README, ledger, test map, and changelog;
+  moved completed plans and superseded reports under `archive/`.
+
+## Round 26 — width-sharded Conv streaming overlap (2026-08-12 to 2026-08-14)
+
+- `8ae4604379e` overlaps tall width-sharded Conv multicast with upstream CB
+  production instead of waiting for the entire source block.
+- `9686814ea22` gates that streaming path on measured wins, retaining the simpler
+  path where overlap does not justify its cost.
+- The helper API remains v11. The migrated width-sharded kernel is flagged
+  `needs_recheck` until its mapped operation inventory is written back.
+
+## Round 25 — block-sharded Conv streaming integration (2026-08-11)
+
+- `f3361f57596` adds `SenderPipe::send_from_cb` and migrates the production
+  block-sharded Conv2D activation multicast while preserving per-burst CB
+  readiness and producer/NoC overlap.
+- `ccd7b597e92` leaves CB data-type resolution at the call site. This avoids
+  embedding operation-specific CB interpretation in the helper.
+- The API remains v11. Kernel and host binding are source-integrated but remain
+  pending until the mapped Conv validation and performance gate complete.
+
+## Round 24 — Matmul host topology and naming follow-up (2026-08-08)
+
+- `5396be87ecc` names the Matmul weights and bias multicast pipe consistently in
+  both migrated in1 kernels; no protocol behavior changes.
+- `233f43c7d44` moves block-sharded Matmul's independent ordered sender topology
+  into the host helper and removes duplicated factory geometry. Host and source
+  audit coverage were extended.
+- The API remains v11. The current ledger deliberately leaves the affected
+  Matmul units pending or `needs_recheck` until apply validation writes them back.
+
 ## Round 23 — independent rotating senders and Matmul remediation (2026-08-07)
 
 - **Trigger (API-009/Matmul review):** block-sharded Matmul can have shard senders outside its
@@ -285,7 +327,8 @@ feedback round lands.
   initialization, independent data/signal loopback, and sender-side loopback
   destination completion.
 - **Tracking:** `migration/ledger.json`, `ledger.md`, `test_map.json`,
-  `report.md`, `reconcile_2026-07-29.md`, and per-kernel migration logs.
+  the archived rollout report, `archive/reconciliation/reconcile_2026-07-29.md`,
+  and per-kernel migration logs.
 
 ---
 

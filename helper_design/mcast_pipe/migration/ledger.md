@@ -1,131 +1,89 @@
-# mcast_pipe migration ledger — API v10, LayerNorm verified 2026-08-06
+# `mcast_pipe` migration ledger — reconciled 2026-08-14
 
-Source of truth: `ledger.json`. Test inventories are in `test_map.json`;
-failure isolation and JIT evidence are in the per-kernel migration logs.
-Reconcile history is in `reconcile_<date>.md` (latest: `reconcile_2026-08-03-conv-width.md`).
+Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
+`log/`; the latest static audit is `reconcile_2026-08-14.md`.
 
-Current baseline: `origin/llk_helper_library` @ `4a1d6a97ca9`; the reconciled production rollout
-now runs through width-sharded Conv code commit `fe866a1d0c4`. The pre-rebase branch is preserved at
-`backup/mcast-migration-prerebase-20260803`; every commit hash recorded in this
-ledger was remapped from that line to its post-rebase equivalent on 2026-08-03.
+- Branch: `sjovic/mcast-migration` at `9686814ea22` during reconciliation.
+- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`.
+- Ledger API: v10.
+- Materialized helper API: v11.
 
-The v8 July ledger is historical input, not the current result. Every one of
-its 19 production migrations was re-audited against the current v10 helper.
-Remediation also added the previously raw Conv 1D sender and both GroupNorm v2
-senders; the subsequent sort and width-sharded Conv re-entries produce the
-24-row production set. On 2026-08-06, six previously blocked rows moved to
-pending for three approved units. TopK and pre-allgather LayerNorm are now
-complete, leaving 17 migrated, 2 pending, and 5 still concretely blocked.
+The version mismatch is intentional at this checkpoint. `reconcile-dm-helper` aligned census and
+ledger classifications but does not perform the Tier-0 device validation or API-version write-back
+owned by `apply-dm-helper`.
 
-## Host-helper re-entry state
+## Current paper state
 
-The paired `mcast_host` helper and `McastArgs` decoder are materialized and
-their 2026-08-06 tests are green: `McastHostFixture.*` passed 28/28 and the
-complete device/wire helper suite passed 77/77. Fourteen required bindings
-across eight units are fully current at API v10:
+| State | Kernels | Host bindings |
+|---|---:|---:|
+| migrated at ledger API v10 | 17 | 14 |
+| pending | 4 | 10 |
+| deferred | 70 | 0 |
+| quarantined | 0 | 0 |
 
-| Unit | Required bindings | Status | Kernel rows | Validation |
-|---|---:|---|---:|---|
-| `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-HEIGHT`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
-| `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-BLOCK`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
-| `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v10 — **re-verified 2026-08-05** | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected |
-| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v10 | 4 | mapped production geometry is zero-edge; synthetic splitter geometry 3/3; legacy perf +0.248%; Welford perf -0.485%; inventories 108/2 each; fixed/default 19/6 |
-| `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | handshaked row-start + no-handshake sub-stage Pipes; long 7/7; Ht=2 2/2; helper 77/77; perf +1.195124% |
-| `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v10 | 1 hybrid | exact fresh-cache JIT at PCC 0.9999992598; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 73/73 |
-| `topk-multicore-final-readiness` | 1 | fully end-to-end migrated @ v10 | 2 | exact fresh-cache JIT for both faces; `TOPK-MULTICORE`: 14 passed / 12 expected BFLOAT8_B pad xfails; helper 77/77 |
-| `layernorm-sharded-pre-allgather` | 1 | fully end-to-end migrated @ v10 | 2 | builder split `4ef7e9a57a6`; exact fresh-cache JIT for sender and receiver variants; pre 126, post 136, sharded 208; helper 77/77 |
+All 91 kernel paths exist and the census and ledger path sets match exactly. No migrated kernel was
+removed, renamed, or clobbered. Three migrated kernels were edited after the last ledger write-back
+and carry `needs_recheck`.
 
-Five bindings across the remaining approved unit are pending:
+## Migrated units awaiting API-v11 re-entry
 
-| Unit | Required bindings | Kernel rows | Gate-A state |
+| Unit | Kernels | Bindings | Existing evidence |
 |---|---:|---:|---|
-| `matmul-in0-mcast-interleaved` | 5 | 2 | API-007 materialization required; sparse binding device-verified from an empty cache with exact sender/receiver JIT artifacts |
+| `conv2d-weights-single-sender-rect` | 2 | 1 | Conv height inventory, DRAM routes, host/helper tests |
+| `conv2d-weights-fixed-line` | 2 | 1 | Conv block inventory, PerRow/PerColumn, DRAM routes |
+| `matmul-in1-mcast-padding-host` | 2 | 4 | `MM-IN1-ALL` 302 passed / 188 expected skips |
+| `groupnorm-sharded-v2-mcast-host` | 4 | 4 | legacy/Welford inventories and matched performance |
+| `sort-single-row-control` | 2 | 1 | exact JIT, long 7/7, deadlock 2/2, matched performance |
+| `conv2d-activation-width-sharded` | 1 | 1 | exact JIT, features 48/16, DRAM route |
+| `topk-multicore-final-readiness` | 2 | 1 | exact JIT, 14 passed / 12 expected xfails |
+| `layernorm-sharded-pre-allgather` | 2 | 1 | pre 126, post 136, sharded 208 |
 
-The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
-order and risk gates are in `tiers.md`. Until a unit's required bindings are
-migrated at API v10, its kernel rows are kernel-current but not fully
-end-to-end current. The completed Conv2d units use code commits
-`991b5b6b6386a90726d15007002fe1f5a77d8487` and
-`51dfb1f1ed61045ed10dc679269960b6d2ccac9e`; matmul in1 uses
-`aeeb28ff007807c71b1f60842cca85e5c41efa7f`; GroupNorm v2 uses
-`bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0`; sort uses
-`7337302b5649b7cd169764cd95c0b0343e88950d`; width-sharded Conv uses
-`fe866a1d0c4c32b78aae8a76e875c0da109f51c8`; TopK uses `b5c99d43fd5`;
-pre-allgather LayerNorm uses production migration commit `4acd98259b6` after
-prerequisite `4ef7e9a57a6`.
+These rows remain stamped v10 until the API-v11 apply gate is green.
 
-## `needs_recheck` — CLOSED 2026-08-03 (0 open)
+## Open `needs_recheck`
 
-The 6 rows raised by `reconcile_2026-08-03.md` were cleared by an
-`apply-dm-helper --mode=halt` verify-only pass at tree state `eb05b3929a3`.
-**No rewrite was performed.** Details in `log/matmul-in1-mcast-padding-host.md`.
+| Kernel | Reason |
+|---|---|
+| `reader_bmm_tile_layout_in1_sender_writer_padding.cpp` | Matmul remediation and multicast naming cleanup changed the migrated source |
+| `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | Multicast naming cleanup changed the migrated source |
+| `activation_reader_width_sharded.cpp` | Streaming-overlap optimization and measured-win gate changed the migrated source |
 
-| Rows | Why they were flagged | Outcome |
+`apply-dm-helper` must run their mapped verify-only coverage and clear the flags when green. API-v11
+Tier-0 coverage may satisfy both obligations when it exercises the same complete inventories.
+
+## Source-integrated pending work
+
+| Area | Kernel/binding rows | Remaining work |
 |---|---|---|
-| kernels `reader_bmm_tile_layout_in1_sender_writer_padding.cpp`, `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp`; host bindings `matmul-in1-mcast:reuse-{1d,2d}:{legacy,descriptor}` | The matmul mcast 1d/2d factories were churned upstream (`54d8dfb7bef`→`4a1d6a97ca9`, +203/−13 and +93/−4) touching `mm_in1_sender_writer_args`, then reworked again by `c946da17d29` + `eb05b3929a3`, which postdate the last ledger update (`62f82dd4a64`). | **PASS.** Static pre-check: kernels byte-identical to the pre-rebase verified state; `McastArgs` wire intact on both factories (sender CT idx 10–14, next = 15 = `KtNt`; sender RT idx 2–5; receiver CT idx 4–8; receiver RT idx 0–3; `MCAST_ARGS` at `2d:618`/`1d:1512`). Device: exact `--dev` 2D node PASSED with both kernels JIT-built at the current state; `MM-IN1-ALL` 302 passed / 188 expected skips / 490 selected — **exact baseline match**; `McastHostFixture` 19/19; `test_mcast_pipe.py` 68/68. Flag cleared, `last_verified` = 2026-08-03, `verified_at_commit` = `eb05b3929a3`. |
+| Matmul in0 interleaved | sender and receiver; five host bindings | API-v11 validation, exact fresh-JIT evidence, complete mapped inventories, performance evidence, ledger write-back |
+| Matmul in0 block-sharded | hybrid reader; four legacy/descriptor 1D/2D bindings | Validate rotating sender topology and the exact block-sharded routes, then write back atomically |
+| Conv2D block activation | streaming activation reader; one host binding | Validate helper streaming semantics, complete Conv coverage, and performance; write back the unit |
 
-Each row's `commit` still points at its migration commit (`aeeb28ff007`) — that field's role is the
-revert/bisect anchor; "last verified at" is `verified_at_commit`.
+The Matmul API-007 and block-sharded topology blockers are resolved in source. The Conv R4 blocker is
+also resolved in source by `SenderPipe::send_from_cb`. Pending status is retained because reconciliation
+does not substitute source inspection for build/device evidence.
 
-## Current migrations under API v10 (17)
+## Deferred backlog
 
-| Area | Role | Kernel | Validation |
-|---|---|---|---|
-| matmul | sender/hybrid | `reader_bmm_tile_layout_in1_sender_writer_padding.cpp` | fully end-to-end @ v10, **re-verified 2026-08-03 at `eb05b3929a3`**; `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected; exact `--dev` 2D node with fresh JIT evidence |
-| matmul | receiver | `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | fully end-to-end @ v10, **re-verified 2026-08-03 at `eb05b3929a3`**; `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected; exact `--dev` 2D node with fresh JIT evidence |
-| Conv | sender | `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
-| Conv | receiver | `reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
-| Conv | sender | `writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
-| Conv | receiver | `writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
-| normalization | receiver | `reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; legacy inventory: 108 passed, 2 expected skips; exact JIT evidence |
-| normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
-| normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; Welford inventory: 108 passed, 2 expected skips; exact JIT evidence |
-| normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
-| sort | sender | `coordinator_single_row_multi_core.cpp` | fully end-to-end @ v10; handshaked row-start + no-handshake sub-stage Counter `send_signal`; exact fresh-cache JIT; long 7/7; Ht=2 2/2 |
-| sort | receiver | `reader_single_row_multi_core.cpp` | fully end-to-end @ v10; row-start readiness is Pipe-owned; separate no-handshake sub-stage `receive_signal`; long 7/7; Ht=2 2/2 |
-| Conv | hybrid | `activation_reader_width_sharded.cpp` | fully end-to-end @ v10; rotating INCLUDE-source loopback; exact fresh-cache PCC 0.999956503; features 48/16 expected skips; DRAM-config 1/1; helper 72/72 |
-| TopK | sender | `reader_final_topk.cpp` | fully end-to-end @ v10; no-handshake Counter readiness signal; exact fresh-cache JIT; `TOPK-MULTICORE` 14/12 expected xfails; helper 77/77 |
-| TopK | receiver | `writer_local_topk.cpp` | fully end-to-end @ v10; helper-owned readiness receive; value/index unicast and arrival counter preserved; exact fresh-cache JIT; `TOPK-MULTICORE` 14/12 expected xfails |
-| normalization | sender | `reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp` | fully end-to-end @ v10; whole-grid `Mcast2D` and per-line `Mcast1D` handshaked Flag signal; exact fresh-cache JIT; pre 126, post 136, sharded 208 |
-| normalization | receiver/hybrid | `reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp` | fully end-to-end @ v10; receiver face plus two-stage line-coordinator sender face; exact fresh-cache JIT; host geometry 28/28; helper 77/77 |
+Seventy entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+The major classes are:
 
-The original ten kernel files remain byte-identical to the pre-rebase verified state and retain
-`mcast_pipe.hpp` + `McastArgs`. The two sort faces were added atomically in `7337302b564`; the
-width-sharded Conv hybrid followed atomically in `fe866a1d0c4`, the two TopK
-faces followed in `b5c99d43fd5`, and the pre-allgather LayerNorm faces follow
-in the current atomic commit after prerequisite `4ef7e9a57a6`.
+- genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;
+- coverage gaps or binary-only routes;
+- helper-neutral or non-multicast entries retained for atomic-unit context;
+- experimental/CCL/Quasar entries intentionally deferred as groups.
 
-The paired `writer_single_row_multi_core.cpp` is deliberately not in this table: it has no Pipe
-face. It remains a deferred/helper-neutral ledger row after coupled runtime-ABI cleanup.
+Before changing the helper for any deferred kernel, state the required behavior independently of its
+current implementation and verify that the existing helper cannot express it through a different
+factory, ABI, channel split, or data flow.
 
-## Historical deferred or rolled-back state before the 2026-08-06 re-entry
+## Next action
 
-This table records the prior state. The TopK and pre-allgather LayerNorm pairs
-are now migrated; the two interleaved Matmul in0 rows remain pending as
-described above. The other rows remain deferred. No row is a partial migration.
+Run `apply-dm-helper` from the reconciled state:
 
-| Area | Kernel(s) | Blocker |
-|---|---|---|
-| matmul | `reader_bmm_tile_layout_in0_sender_padding.cpp`, `reader_bmm_tile_layout_in0_receiver.cpp` | typed/custom `VALID` / `IGNORE_BATCH` control values |
-| matmul | `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp` | independent data/signal loopback modes and sender-side ready participation |
-| normalization | post-allgather LayerNorm sender/receiver | explicit INCLUDE-source loopback when the sender is outside the receiver rectangle, plus host fan-out that may differ from rectangle area; pair restored together |
-| normalization | plain sharded LayerNorm sender/receiver | acknowledged signal-only plus one-gate/multi-block mixed-mode streaming |
-
-## Fleet totals
-
-The census now contains 91 entries (92 before the 2026-08-03 reconcile; the
-deepseek_prefill `reader_dispatch.cpp` row was deleted after the kernel was
-removed upstream by `af00262e51d`):
-
-- 17 current production migrations at API v10, **0 carrying `needs_recheck`**;
-- all 14 required host bindings current across 8 atomic units, **0 carrying
-  `needs_recheck`**;
-- 5 production candidates deferred with `v9-port-blocked` and a concrete
-  design-gap flag;
-- 67 other deferred candidates, including the helper-neutral sort writer;
-- 2 kernel rows pending and 0 quarantined.
-
-The dated v8 reconcile reports and per-kernel logs are retained as historical
-evidence. `reconcile_2026-08-03-conv-width.md`, this ledger, and `ledger.json` are
-authoritative for the current branch; `reconcile_2026-07-29.md` and earlier are
-historical.
+1. validate and stamp the v10 fleet at API v11;
+2. clear the three `needs_recheck` flags through mapped verify-only coverage;
+3. validate and write back the two interleaved Matmul kernels and five bindings;
+4. validate and write back the block-sharded Matmul kernel and four bindings;
+5. validate and write back the block-sharded Conv activation kernel and binding;
+6. update logs and the live report after each atomic unit completes.

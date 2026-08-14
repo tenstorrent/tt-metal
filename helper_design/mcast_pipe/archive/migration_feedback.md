@@ -1,4 +1,4 @@
-# `mcast_pipe` migration feedback
+# Archived: `mcast_pipe` migration feedback
 
 This is the review log for issues found in individual `mcast_pipe` migrations.
 It is separate from `api_feedback.md`: API feedback concerns the helper contract,

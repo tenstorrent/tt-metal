@@ -1,4 +1,4 @@
-# Reconcile report — mcast_pipe — 2026-08-03
+# Archived: Reconcile report — mcast_pipe — 2026-08-03
 
 Static reconcile of the rollout's paper state (`census.txt` + `migration/ledger.json`) against the
 tree after the branch was rebased. No device work, no build, no migration, **no API version bump**

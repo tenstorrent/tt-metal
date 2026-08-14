@@ -1,4 +1,4 @@
-# Prioritized `mcast_pipe` Feedback and Validation Plan
+# Archived: Prioritized `mcast_pipe` Feedback and Validation Plan
 
 Date: 2026-08-04
 

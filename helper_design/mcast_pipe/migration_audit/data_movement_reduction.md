@@ -1,4 +1,4 @@
-DERIVED FROM: current data_movement/sort + reduction kernels, mcast_pipe API v9, hazards_catalog.md, and reconcile_2026-08-03.md
+DERIVED FROM: current data_movement/sort + reduction kernels, mcast_pipe API v9, hazards_catalog.md, and archive/reconciliation/reconcile_2026-08-03.md
 
 # Migration audit — data_movement + reduction
 

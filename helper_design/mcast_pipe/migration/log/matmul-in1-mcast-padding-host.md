@@ -11,7 +11,7 @@
 
 ## Verify-only re-run — 2026-08-03 (`apply-dm-helper --mode=halt`)
 
-`reconcile_2026-08-03.md` flagged all six rows of this unit `needs_recheck`: the two factories were
+`../../archive/reconciliation/reconcile_2026-08-03.md` flagged all six rows of this unit `needs_recheck`: the two factories were
 churned upstream (`54d8dfb7bef`→`4a1d6a97ca9`, +203/−13 and +93/−4, touching
 `mm_in1_sender_writer_args`), then reworked again by `c946da17d29` + `eb05b3929a3`, which postdate the
 ledger's last update `62f82dd4a64`. **No rewrite was performed** — this was a verify-only pass.

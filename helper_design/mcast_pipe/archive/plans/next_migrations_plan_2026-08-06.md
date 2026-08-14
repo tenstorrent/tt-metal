@@ -1,4 +1,4 @@
-# Next Mcast Host and Kernel Helper Migrations
+# Archived: Next Mcast Host and Kernel Helper Migrations
 
 Date: 2026-08-06 (revised after an `apply-dm-helper` conformance review)
 

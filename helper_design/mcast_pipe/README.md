@@ -1,78 +1,80 @@
-# `mcast_pipe` effort status
+# `mcast_pipe` helper rollout
 
-**Start here in a new session.** This page states the current rollout state,
-the active review queue, and where to look next. Do not read the historical
-design and migration artifacts unless a task below links to them.
+Start here. This directory records the design and repository-wide rollout of the
+kernel `mcast_pipe` helper and its paired host helper. The rollout is paused; do
+not start migration or change ledger status unless the user explicitly resumes it.
 
-- Last reviewed: 2026-08-05
-- Branch: `sjovic/mcast-migration`
+- Reviewed: 2026-08-14
+- Branch/head at reconciliation: `sjovic/mcast-migration` / `9686814ea22`
 - Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`
-- Current helper API: v10
+- Materialized helper API: v11
+- Ledger write-back API: v10
 
-## Where the effort is now
+## Four files that matter first
 
-The v10 rollout is reconciled through the final release gate at the current
-branch HEAD. The machine-readable ledger records:
+Read these in order:
 
-- 13 migrated kernel rows;
-- 12 migrated host bindings;
-- 78 deferred kernel rows;
-- no pending or `needs_recheck` rows.
+1. **This README** — current state and the next logical action.
+2. **[`migration/ledger.json`](migration/ledger.json)** — machine source of truth
+   for every kernel and required host binding.
+3. **[`migration/test_map.json`](migration/test_map.json)** — dispatch conditions
+   and the tests that prove each route.
+4. **[`changelog.md`](changelog.md)** — why the API and production integrations
+   changed. Current code and `MCAST_PIPE_API_VERSION` win over old prose.
 
-The completed migrations have correctness, fresh-JIT, and matched performance
-evidence. All seven gates in `mcast_feedback_plan_2026-08-04.md` are green.
+## Current state
 
-## Remaining review work
+The 2026-08-14 reconciliation found 91 existing census paths with an exact
+census/ledger match:
 
-API-002 compile-time sender/receiver-face enforcement remains intentionally
-open and was explicitly deferred from this rollout. RT compaction is not part
-of that feedback. API-001, API-003 through API-006, and MIG-001 through MIG-004
-are implemented. Future API-002 work should be picked up as a separate focused
-safety change rather than extending this completed gate sequence.
+| State | Kernels | Host bindings |
+|---|---:|---:|
+| migrated, recorded at v10 | 17 | 14 |
+| pending | 4 | 10 |
+| deferred | 70 | 0 |
+| quarantined | 0 | 0 |
 
-## Active review queue
+The migrated fleet is paper-stale because the helper is v11; this does not mean
+the current source is known broken. The current host build, 32 host-helper tests,
+and all 80 helper device/wire tests passed on 2026-08-14. Those intake checks do
+not replace the mapped per-operation validation required for ledger write-back.
 
-- [`api_feedback.md`](api_feedback.md) — open helper-contract decisions
-  plus implemented contracts that future migrations must preserve.
-- [`migration_feedback.md`](migration_feedback.md) — concrete robustness issues
-  and migration-specific validation gaps.
+Four pending kernels are already integrated in source: Matmul in0 sender,
+receiver, and block-sharded hybrid, plus block-sharded Conv2D activation. Their
+ten required factory bindings are now represented explicitly in the ledger and
+test map. Three migrated kernels also carry `needs_recheck`; see
+[`migration/ledger.md`](migration/ledger.md).
 
-These two files are the active review queue. When an item is resolved, update
-its status there and record an implemented API change in `changelog.md`.
+## Next logical action — only when migration resumes
 
-## Authoritative workflow state
+Re-enter the apply workflow from the reconciled v11 state. First verify/stamp the
+v10 fleet and clear the three `needs_recheck` flags, then validate the pending
+Matmul and Conv units under their mapped inventories. No apply run is currently
+approved and no run mode has been selected.
 
-- [`migration/ledger.json`](migration/ledger.json) — machine source of truth for
-  per-kernel and host-binding migration status.
-- [`census.txt`](census.txt) — production multicast/handshake inventory used by
-  reconcile.
-- [`primitive_contracts.md`](primitive_contracts.md) — authoritative primitive
-  recognition family used by recall sweeps.
-- [`migration/test_map.json`](migration/test_map.json) — durable test inventory
-  and dispatch mapping.
-- [`migration/ledger.md`](migration/ledger.md) — human-readable ledger view.
-- [`migration/report.md`](migration/report.md) — latest completed rollout run
-  summary. It does not supersede the active feedback queue above.
+Current human views:
 
-## Consult only when needed
+- [`migration/ledger.md`](migration/ledger.md) — concise ledger explanation.
+- [`migration/tiers.md`](migration/tiers.md) — prepared future work order.
+- [`migration/report.md`](migration/report.md) — latest reconciliation and intake
+  result, not a completed v11 rollout report.
+- [`migration/reconcile_2026-08-14.md`](migration/reconcile_2026-08-14.md) — exact
+  reconciliation evidence.
 
-These are retained because the helper workflows consume them or because they
-preserve evidence behind existing decisions. They are not session entry points.
+## Supporting evidence
 
-- `intent.md` — original scope; still used to classify recall-sweep exclusions.
-- `hazards_catalog.md` — synchronization hazards consumed by migration review.
-- `api_feasibility.md` — accumulated feasibility decisions and census-backed
-  API analysis.
-- `style_bakeoff.md` — historical on-device measurements and correctness
-  decisions used as the migration baseline.
-- `proposed_helpers.md` — superseded as an API description, but still the
-  persisted Step-F artifact expected by the tune/apply workflow.
-- `migration_audit/` and `kernel_annotations/` — classification evidence used by
-  reconcile; not current-status prose.
-- `migration/log/` — per-unit validation and JIT evidence.
-- `migration/reconcile_*.md` — dated audit trail; the ledger points to relevant
-  reports.
-- `migration/tiers.md` — the latest generated rollout worklist and historical
-  tier outcomes.
-- `changelog.md` — API evolution history; use the implementation and API version
-  as the current contract.
+- [`api_feedback.md`](api_feedback.md) — helper-contract review queue.
+- [`migration_guardrails.md`](migration_guardrails.md) — durable rules distilled
+  from completed migration feedback.
+- `census.txt` and `primitive_contracts.md` — recognition inventory used by
+  reconciliation.
+- `migration_audit/`, `kernel_annotations/`, and `migration/log/` — detailed
+  classification, implementation, validation, and JIT evidence.
+- `intent.md`, `hazards_catalog.md`, `api_feasibility.md`, `style_bakeoff.md`, and
+  `proposed_helpers.md` — design inputs and historical rationale; consult when a
+  current task points to them.
+- [`archive/`](archive/) — completed plans and superseded reports retained for
+  provenance, not as instructions for the next agent.
+
+Generated dashboards are intentionally not kept. They duplicated a partial,
+stale view of the ledger; derive status directly from `ledger.json` instead.

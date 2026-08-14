@@ -1,4 +1,4 @@
-# Reconcile report — mcast_pipe API v9 — updated 2026-07-30
+# Archived: Reconcile report — mcast_pipe API v9 — updated 2026-07-30
 
 ## Why this reconcile exists
 

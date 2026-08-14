@@ -1,4 +1,4 @@
-# Reconcile report — mcast_pipe @ v8 — 2026-06-27
+# Archived: Reconcile report — mcast_pipe @ v8 — 2026-06-27
 
 `reconcile-dm-helper helper_design/mcast_pipe/` after a rebase of `sjovic/mcast-helpers-june26` onto a
 fresh `llk_helper_library` (`df38b5abc67`). STATIC audit; no device, no migration, no build. Helper API

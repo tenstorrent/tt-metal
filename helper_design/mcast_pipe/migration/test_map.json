@@ -1,9 +1,9 @@
 {
-  "_comment": "Current production-kernel v10 port map. Inventory definitions below are the durable meaning of each inventory label. Execution results and JIT evidence are maintained in the per-kernel migration logs and report.md.",
-  "helper_version": 10,
+  "_comment": "Coverage and dispatch map for the current production tree. Inventory definitions are durable; status-like fields in entries preserve historical coverage context and are not rollout state. Use ledger.json for current status. Execution results and JIT evidence are maintained in per-unit logs and report.md.",
+  "helper_version": 11,
   "baseline": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
   "machine": "single-chip Blackhole p100a",
-  "updated": "2026-08-06",
+  "updated": "2026-08-14",
   "mapping_rules": [
     "Run one compile-focused parameter before the complete mapped inventory.",
     "A passing operation test counts as kernel coverage only when JIT evidence identifies the named kernel path.",
@@ -240,6 +240,51 @@
       "migration_unit": "matmul-in0-mcast-interleaved",
       "inventory": ["MM-SPARSE-IN0"],
       "coverage": "device-verified from an empty isolated cache; sender hash 14177997899853619887 and receiver hash 18131090411884538285"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy mcast_in0 path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "high; source integration has matched correctness and performance evidence, but apply write-back remains pending"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor mcast_in0 path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "high; source integration has matched correctness and performance evidence, but apply write-back remains pending"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "high; source integration has matched correctness and performance evidence, but apply write-back remains pending"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "high; source integration has matched correctness and performance evidence, but apply write-back remains pending"
+    },
+    {
+      "id": "activation-mcast:conv2d-block-sharded:rotating-lines",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "block-sharded non-depthwise Conv2D activation multicast with rotating input-shard senders",
+      "migration_unit": "conv2d-activation-block-sharded",
+      "inventory": ["CONV-BLOCK"],
+      "coverage": "mapped from the existing Conv block inventory; exact post-integration JIT and full apply validation remain pending"
     }
   ],
   "inventory_definitions": {

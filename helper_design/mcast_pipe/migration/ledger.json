@@ -446,7 +446,7 @@
       "validation_set": ["MM-IN0-INTERLEAVED"],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "api-007-prerequisite"]
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:descriptor",
@@ -463,7 +463,7 @@
       "validation_set": ["MM-IN0-INTERLEAVED"],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "api-007-prerequisite"]
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
     },
     {
       "id": "matmul-in0-mcast:reuse-2d:legacy",
@@ -480,7 +480,7 @@
       "validation_set": ["MM-IN0-INTERLEAVED"],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "api-007-prerequisite"]
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
     },
     {
       "id": "matmul-in0-mcast:reuse-2d:descriptor",
@@ -497,7 +497,7 @@
       "validation_set": ["MM-IN0-INTERLEAVED"],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "api-007-prerequisite"]
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
     },
     {
       "id": "matmul-in0-mcast:sparse-1d:legacy",
@@ -517,7 +517,87 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "api-007-prerequisite", "fresh-jit-verified"]
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending", "fresh-jit-verified"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy mcast_in0 path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-07",
+      "flags": ["source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor mcast_in0 path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-07",
+      "flags": ["source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-07",
+      "flags": ["source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-07",
+      "flags": ["source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "activation-mcast:conv2d-block-sharded:rotating-lines",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "block-sharded non-depthwise Conv2D activation multicast with rotating input-shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "migration_unit": "conv2d-activation-block-sharded",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["CONV-BLOCK"],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": ["source-integrated", "apply-verification-pending"]
     }
   ],
   "entries": [
@@ -534,9 +614,10 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "Pending API-007 materialization: preserve the shared data-ready semaphore's VALID/IGNORE_BATCH typed control values.",
+      "census_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
       "flags": [
-        "typed-control-values"
+        "source-integrated",
+        "apply-verification-pending"
       ]
     },
     {
@@ -552,9 +633,10 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "Pending API-007 materialization: preserve the shared data-ready semaphore's VALID/IGNORE_BATCH typed control values.",
+      "census_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
       "flags": [
-        "typed-control-values"
+        "source-integrated",
+        "apply-verification-pending"
       ]
     },
     {
@@ -583,7 +665,9 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
       "census_note": "V10 current after self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
-      "flags": [],
+      "flags": [
+        "needs_recheck"
+      ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
@@ -613,7 +697,9 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
       "census_note": "V10 current after self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
-      "flags": [],
+      "flags": [
+        "needs_recheck"
+      ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
@@ -641,7 +727,7 @@
       "op_family": "matmul",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -649,12 +735,10 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: extract path needs data EXCLUDE_SRC, ready signal INCLUDE_SRC, and sender-side ready participation; target-baseline implementation preserved.",
+      "census_note": "Source integrated with API-v11 independent rotating senders and restored receiver geometry; apply verification and ledger write-back remain pending.",
       "flags": [
-        "design-gap",
-        "v9-port-blocked",
-        "independent-loopback-modes",
-        "exact-baseline-restored"
+        "source-integrated",
+        "apply-verification-pending"
       ]
     },
     {
@@ -886,7 +970,8 @@
         "atomic-unit:conv2d-activation-width-sharded",
         "fully-end-to-end",
         "rotating-sender",
-        "loopback-completion-verified"
+        "loopback-completion-verified",
+        "needs_recheck"
       ],
       "migration_unit": "conv2d-activation-width-sharded",
       "note": "API-v9 Mcast2D/McastArgs port removes the raw multicast, semaphore, and X/Y lookup wire. consumer_ack_count=max(input_num_cores,output_num_cores)-1 remains distinct from the full-rectangle fan-out."
@@ -896,7 +981,7 @@
       "op_family": "conv",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
+      "status": "pending",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -904,10 +989,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-06-20",
-      "census_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE | DEFER-DESIGN-GAP (R4): mcast_block_chunked is a producer-overlapped STREAMING chunked send (wait_front per growing tile count interleaved with per-burst mcast). v7 send() handles only fully-ready blocks (auto-chunks a ready region); cannot express the per-burst wait_front streaming. R4 explicitly deferred this round (proposed_helpers.md). Out of scope.",
+      "census_note": "Source integrated with API-v11 streaming send_from_cb and helper-owned rotating line topology; apply verification, host-binding mapping, and ledger write-back remain pending.",
       "flags": [
-        "tier:2b",
-        "design-gap"
+        "source-integrated",
+        "apply-verification-pending",
+        "host-binding-map-pending"
       ]
     },
     {
@@ -2264,13 +2350,13 @@
       "added_by_reconcile": "2026-06-27"
     }
   ],
-  "reconciled": "2026-08-03",
+  "reconciled": "2026-08-14",
   "current_api_version": 10,
   "baseline_ref": "origin/llk_helper_library @ 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
   "reconcile_history": [
     {
       "date": "2026-08-03",
-      "report": "migration/reconcile_2026-08-03.md",
+      "report": "archive/reconciliation/reconcile_2026-08-03.md",
       "base_from": "54d8dfb7bef (llk_helper_library, divergent line)",
       "base_to": "4a1d6a97ca9 (llk_helper_library)",
       "prerebase_branch": "backup/mcast-migration-prerebase-20260803",
@@ -2305,7 +2391,7 @@
     },
     {
       "date": "2026-08-03",
-      "report": "migration/reconcile_2026-08-03-sort.md",
+      "report": "archive/reconciliation/reconcile_2026-08-03-sort.md",
       "base_from": "74a3e672551 (last reconciled rollout state)",
       "base_to": "7337302b564 (sort migration)",
       "api_version": "9 (unchanged)",
@@ -2326,7 +2412,7 @@
     },
     {
       "date": "2026-08-03",
-      "report": "migration/reconcile_2026-08-03-conv-width.md",
+      "report": "archive/reconciliation/reconcile_2026-08-03-conv-width.md",
       "base_from": "e712d3ab4bb (approved Tier-6 plan)",
       "base_to": "fe866a1d0c4 (width-sharded Conv migration)",
       "api_version": "9 (unchanged)",
@@ -2344,6 +2430,45 @@
       "recall_sweep": "All 91 ledger kernel paths exist and exactly match census.txt. All 13 migrated rows retain mcast_pipe.hpp and McastArgs. Diff recall from e712d3ab4bb through fe866a1d0c4 introduced no raw multicast primitive callsite; it removed the expected raw activation multicast block and added Mcast2D/McastArgs helper use. The Conv directory recognition sweep found no uncensused production invocation; conv_reader_common.hpp remains declaration-only.",
       "needs_recheck": [],
       "validation": "Host build passed; exact fresh-cache --dev width-sharded node passed at PCC 0.999956503 with activation_reader_width_sharded JIT evidence; test_conv_features WIDTH_SHARDED 48 passed / 16 expected skips; test_conv_dram_config WIDTH_SHARDED 1 passed at PCC 0.998234911 with JIT evidence; helper suite 72/72."
+    },
+    {
+      "date": "2026-08-14",
+      "report": "migration/reconcile_2026-08-14.md",
+      "base_from": "fae7eb9ed6f (last census/ledger write-back)",
+      "base_to": "9686814ea22 (current branch HEAD)",
+      "api_version": "ledger 10; helper header 11; Tier-0 apply follow-up required",
+      "buckets": {
+        "unchanged": 88,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 3
+      },
+      "retagged_pending": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "needs_recheck": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp"
+      ],
+      "source_integrated_pending": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "host_bindings_source_integrated_pending": [
+        "matmul-in0-mcast:reuse-1d:legacy",
+        "matmul-in0-mcast:reuse-1d:descriptor",
+        "matmul-in0-mcast:reuse-2d:legacy",
+        "matmul-in0-mcast:reuse-2d:descriptor",
+        "matmul-in0-mcast:sparse-1d:legacy"
+      ],
+      "recall_sweep": "All 91 ledger kernel paths exist and exactly match census.txt. The primitive recognition-family path set changed by zero additions since fae7eb9ed6f; one raw-pattern hit disappeared because the block-sharded Matmul kernel now uses mcast_pipe. No source file was added or renamed. The four source-integrated pending kernels were already census entries.",
+      "follow_up": "When the user resumes migration, run apply-dm-helper: Tier-0 validate/stamp the v10 fleet at API v11; verify-only the three needs_recheck kernels; then verify and write back the four source-integrated pending kernels and their ten mapped required host bindings."
     }
   ]
 }

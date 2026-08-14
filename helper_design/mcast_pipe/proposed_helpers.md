@@ -222,9 +222,10 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
 - gn / welford senders — `McastDestSet` multi-rect (R1).
 - ln sharded (C3) — `Staging::Counter` + phase-granular calls (R3); two-phase streaming.
 - gn interleaved (C4) — double-flag-per-exchange (two `send_signal`/`receive` per iter).
-- conv 2d-act / width-sharded — INCLUDE_SRC loopback (F3, handled). **Their streaming chunked
-  send (R4) is DEFERRED** — these kernels migrate the loopback/handshake but keep their
-  `mcast_block_chunked` (producer-overlapped per-burst broadcast) on raw API this round.
+- conv activation multicast — INCLUDE_SRC loopback (F3, handled). Width-sharded Conv is migrated.
+  API v11 now exposes `SenderPipe::send_from_cb`, which preserves the block-sharded reader's
+  producer-overlapped per-burst broadcast. That reader and its host binding are integrated in source
+  and remain pending only for apply validation and ledger write-back.
 - sdpa read_k — `can_link=false` path (unlinked + barrier-between); deepseek_prefill — `Staging::Counter`.
 - move — **legacy raw API → port to `Noc`/`Semaphore` first**, then migrate.
 - sort-single-row — **migrated at API v9 (`7337302b564`)**: coordinator + reader are the
@@ -232,22 +233,16 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
   helper-neutral companion in the same atomic host/kernel unit.
 
 **Defer / out of scope (NOT this round — human-review items):**
-- **Rotating-sender / role-flip (R6):** matmul `..._in0_sender_receiver_padding_block_sharded`,
-  group_attn — same core sends block b and receives block b′. Migrates with a **two-Pipe** refactor
-  (one `SenderPipe`, one `ReceiverPipe` sharing the `data_ready` cell, `receive(sx,sy)` per rotating
-  coord). ~~Confirmed hard by the bake-off (same-core sender+receiver hangs).~~ **Round 9 update
-  (feedback-4.txt):** the hang was the **Round-6 ctor-once-VALID bug**, NOT infeasibility — with M12b
-  (Flag path re-asserts source VALID per send) the two-Pipe model works. block_sharded is currently
-  quarantined; M12b lifts it (apply-dm-helper Tier-0). Still the biggest refactor-cost item (loopback +
-  degenerate + lockstep pop); group_attn adds an F1 barrier-after-flag disagreement.
+- **Rotating-sender / role-flip (R6):** the production block-sharded Matmul reader is integrated in
+  source using independent ordered sender and receiver geometry on the existing v11 wire. It remains
+  pending for atomic apply validation and write-back. Group attention is still a separate deferred
+  protocol because it adds an F1 barrier-after-flag disagreement.
 - Ring/unicast (matmul in0_ring, sdpa ring legs, sort cross-core) — not rectangle-mcast.
 - Fabric / cross-chip CCL legs — intent exclusion.
 - Preprogram-state perf optimization (deepseek mcast.hpp) — no mcast set-state in object API; future.
-- **Streaming chunked send (R4)** — broadcasting a not-yet-complete block by interleaving
-  `wait_front` with per-burst mcasts (conv `mcast_block_chunked`), to overlap producer with NoC.
-  **Deferred this round** (user decision). The Pipe handles only fully-ready blocks (object API
-  auto-chunks a ready block > burst transparently). Source polymorphism (CB / raw-L1 / self-CB) is
-  retained — it's free, since `send`/`send_signal` take plain L1 addresses.
+- **Streaming chunked send (R4) — resolved in source:** `SenderPipe::send_from_cb` interleaves
+  `wait_front` with per-burst multicast while preserving loopback and degenerate behavior. The
+  block-sharded Conv2D activation unit uses it; only apply validation and ledger write-back remain.
 
 ## Hand-off
 Sign-off on this file **is Gate 1 of `build-helper`**. The bake-off kernels at

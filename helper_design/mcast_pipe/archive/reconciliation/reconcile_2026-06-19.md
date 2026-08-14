@@ -1,4 +1,4 @@
-# Reconcile report — mcast_pipe @ v4 — 2026-06-19
+# Archived: Reconcile report — mcast_pipe @ v4 — 2026-06-19
 
 `reconcile-dm-helper helper_design/mcast_pipe/` (no `--base`). STATIC audit; no device, no migration.
 Re-aligns `census.txt` + `migration/ledger.json` with the post-rebase tree. Helper API unchanged

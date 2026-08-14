@@ -1,4 +1,4 @@
-# mcast_pipe reconcile — width-sharded Conv migration, 2026-08-03
+# Archived: mcast_pipe reconcile — width-sharded Conv migration, 2026-08-03
 
 ## Scope
 

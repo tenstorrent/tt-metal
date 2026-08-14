@@ -7,7 +7,8 @@ API revisions in `changelog.md`; use `api_feasibility.md` when a resolution
 depends on census or production-kernel evidence.
 
 Record issues in individual ports, including brittle CT/RT offset handling, in
-`migration_feedback.md`.
+The completed migration-specific review log is archived at
+`archive/migration_feedback.md`; its durable rules are in `migration_guardrails.md`.
 
 ## Status values
 

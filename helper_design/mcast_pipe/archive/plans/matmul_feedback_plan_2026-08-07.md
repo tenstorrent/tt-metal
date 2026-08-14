@@ -1,4 +1,4 @@
-# Matmul migration feedback remediation plan — 2026-08-07
+# Archived: Matmul migration feedback remediation plan — 2026-08-07
 
 Working branch: `sjovic/mcast-migration` at `97dde16f5e1` when this plan was
 written.
