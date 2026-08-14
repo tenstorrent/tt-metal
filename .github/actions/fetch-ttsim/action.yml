@@ -1,6 +1,6 @@
 name: Fetch TTSim
 description: |
-  Download every simulator binary of the pinned tenstorrent/ttsim release and upload
+  Download every simulator binary required by this workflowof the pinned tenstorrent/ttsim release and upload
   them as one artifact for the sim jobs in the same workflow to consume via
   .github/actions/setup-ttsim.
 
