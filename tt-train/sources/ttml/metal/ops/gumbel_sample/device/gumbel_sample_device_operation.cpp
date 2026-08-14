@@ -13,6 +13,25 @@
 
 namespace ttml::metal::ops::gumbel_sample::device {
 
+namespace {
+
+// The shape this op WILL write, derived from the logits alone. Single-sourced because the writer
+// derives its output page indices from the logits geometry (its logical_tokens / Ht compile-time
+// args), never from the output tensor -- so validation and the output spec drifting apart would not
+// be caught anywhere downstream.
+tt::tt_metal::Shape expected_output_shape(const operation_attributes_t& args, const ttnn::Tensor& logits) {
+    // Matches ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1] -- or [B, 1, 1, 1] when a
+    // position per batch entry was given, since then only one row per entry is sampled.
+    auto shape = logits.logical_shape();
+    shape[-1] = 1U;
+    if (!args.positions.empty()) {
+        shape[-2] = 1U;
+    }
+    return shape;
+}
+
+}  // namespace
+
 void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
@@ -177,6 +196,31 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             out.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "GumbelSample: preallocated output must be ROW_MAJOR, got '{}'",
             enchantum::to_string(out.layout()));
+        // The writer addresses output pages from the LOGITS geometry -- page_base is built from the
+        // logical_tokens / Ht compile-time args, and in position mode the page IS the batch entry --
+        // so it emits exactly the page count implied by the logits no matter what it was handed. An
+        // undersized output therefore takes NOC writes past the end of its buffer (page addressing
+        // is plain arithmetic, with no bounds check), and an oversized or differently-shaped one is
+        // returned with only part of it written. Neither is detectable downstream, because
+        // compute_output_specs adopts this tensor's spec verbatim.
+        //
+        // Requiring an exact match also keeps the program cache sound: the output shape is not
+        // hashed, but pinning it to a function of the logits shape and positions-presence -- both of
+        // which ARE hashed -- means it cannot vary independently of the key.
+        const auto expected_shape = expected_output_shape(args, logits);
+        TT_FATAL(
+            out.logical_shape() == expected_shape,
+            "GumbelSample: preallocated output shape must be {}, got {}",
+            expected_shape,
+            out.logical_shape());
+        // Interleaved for the same reason the other tensors are: the writer walks a linear page
+        // space, and only the buffer TYPE (DRAM vs L1) is in the program hash, not the memory
+        // layout -- so a sharded output would collide with an interleaved one of the same type and
+        // reuse an accessor compiled for the other.
+        TT_FATAL(
+            out.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "GumbelSample: preallocated output must be INTERLEAVED, got '{}'",
+            enchantum::to_string(out.memory_config().memory_layout()));
     }
 }
 
@@ -186,15 +230,8 @@ GumbelSampleDeviceOperation::spec_return_value_t GumbelSampleDeviceOperation::co
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    // Match ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1], UINT32, ROW_MAJOR -- or
-    // [B, 1, 1, 1] when a position per batch entry was given, since then only one row is sampled.
-    auto output_shape = tensor_args.logits.logical_shape();
-    output_shape[-1] = 1U;
-    if (!args.positions.empty()) {
-        output_shape[-2] = 1U;
-    }
     return tt::tt_metal::TensorSpec(
-        ttnn::Shape(output_shape),
+        ttnn::Shape(expected_output_shape(args, tensor_args.logits)),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),

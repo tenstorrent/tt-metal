@@ -406,8 +406,10 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
                     seed = int(np.random.randint(low=1, high=int(1e7)))
                     sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
-                    # Clone so the column is independent of the deallocated sampled.
-                    last_token_column = ttnn.clone(ttnn.slice(sampled.get_value(), [0, 0, 0, 0], [B_local, 1, 1, 1]))
+                    # `sampled` is already [B_local, 1, 1, 1] -- decode feeds a single token and
+                    # this input is not tile-padded, so there is no row to select. Clone anyway: the
+                    # column outlives `sampled`, which is deallocated below.
+                    last_token_column = ttnn.clone(sampled.get_value())
                     generated_columns.append(last_token_column)
                     chunk_columns.append(last_token_column)
                     # Do NOT deallocate ``last_input``: after step 0 it wraps the
