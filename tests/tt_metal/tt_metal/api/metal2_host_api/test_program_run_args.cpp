@@ -1798,6 +1798,40 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_TensorSpecMismatchFails) {
             "TensorArgument for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
 
+// Locks the gate's polarity: the three tests above prove UpdateTensorArgs validates by default, so
+// this one proves skip_validation=true is what turns it off — and still performs the address patch.
+TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_SkipValidationBypassesSpecCheck) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    SetProgramRunArgs(program, params);
+
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, tensor_layout);
+    MeshTensor wrong_tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
+
+    Table<TensorParamName, TensorArgument> tensor_args{
+        {TensorParamName{"input_tensor"}, TensorArgument{wrong_tensor}},
+    };
+    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args, /*skip_validation=*/true));
+    EXPECT_EQ(
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(wrong_tensor.address()))
+        << "skip_validation should bypass only the checks, not the address patch";
+}
+
 TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
