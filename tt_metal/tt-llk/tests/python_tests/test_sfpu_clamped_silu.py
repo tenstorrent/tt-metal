@@ -63,15 +63,15 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     so the driver has one uniform shape.
     """
 
-    op: str = GATE
-    scalar0: float = 1.0
-    scalar1: float = 1.0
+    clamped_silu_op: str = GATE
+    clamped_silu_scalar0: float = 1.0
+    clamped_silu_scalar1: float = 1.0
 
     def convert_to_cpp(self) -> str:
         return (
-            f"#define CLAMPED_SILU_OP_{self.op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
+            f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.clamped_silu_scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.clamped_silu_scalar1)}u;"
         )
 
 
@@ -157,7 +157,11 @@ def _run(formats, dest_acc, op, scalars, input_range):
         "sources/sfpu_clamped_silu_test.cpp",
         formats,
         templates=[
-            CLAMPED_SILU_PARAMS(op=op, scalar0=scalar0, scalar1=scalar1),
+            CLAMPED_SILU_PARAMS(
+                clamped_silu_op=op,
+                clamped_silu_scalar0=scalar0,
+                clamped_silu_scalar1=scalar1,
+            ),
         ],
         runtimes=[
             TILE_COUNT(1),

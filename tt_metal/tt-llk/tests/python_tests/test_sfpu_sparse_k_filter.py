@@ -38,21 +38,21 @@ FORMATS = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
 @dataclass
 class SPARSE_K_CONFIG(TemplateParameter):
-    iterations: int = 32
-    bank_mask: int = 0x3F
-    my_bank: int = 0
-    global_bank_shift: int = 14
-    within_bank_mask: int = 0x3FFF
-    out_shift: int = 0
+    sparse_k_iterations: int = 32
+    sparse_k_bank_mask: int = 0x3F
+    sparse_k_my_bank: int = 0
+    sparse_k_global_bank_shift: int = 14
+    sparse_k_within_bank_mask: int = 0x3FFF
+    sparse_k_out_shift: int = 0
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int SPARSE_K_ITERATIONS = {self.iterations};\n"
-            f"constexpr std::uint32_t SPARSE_K_BANK_MASK = {self.bank_mask}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_MY_BANK = {self.my_bank}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_GLOBAL_BANK_SHIFT = {self.global_bank_shift}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_WITHIN_BANK_MASK = {self.within_bank_mask}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_OUT_SHIFT = {self.out_shift}u;"
+            f"constexpr int SPARSE_K_ITERATIONS = {self.sparse_k_iterations};\n"
+            f"constexpr std::uint32_t SPARSE_K_BANK_MASK = {self.sparse_k_bank_mask}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_MY_BANK = {self.sparse_k_my_bank}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_GLOBAL_BANK_SHIFT = {self.sparse_k_global_bank_shift}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_WITHIN_BANK_MASK = {self.sparse_k_within_bank_mask}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_OUT_SHIFT = {self.sparse_k_out_shift}u;"
         )
 
 
@@ -135,12 +135,12 @@ def _run(layout, my_bank, out_shift, iterations):
         FORMATS,
         templates=[
             SPARSE_K_CONFIG(
-                iterations=iterations,
-                bank_mask=bank_mask,
-                my_bank=my_bank,
-                global_bank_shift=shift,
-                within_bank_mask=within_mask,
-                out_shift=out_shift,
+                sparse_k_iterations=iterations,
+                sparse_k_bank_mask=bank_mask,
+                sparse_k_my_bank=my_bank,
+                sparse_k_global_bank_shift=shift,
+                sparse_k_within_bank_mask=within_mask,
+                sparse_k_out_shift=out_shift,
             ),
         ],
         runtimes=[
