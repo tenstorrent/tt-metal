@@ -41,6 +41,9 @@ add_subdirectory(paged_cache)
 # metalium-developers-external-experience
 add_subdirectory(isin)
 
+# metalium-developers-ds-prefill
+add_subdirectory(attn_residual)
+
 # cglagovichTT, jonathansuTT (named individuals, not a team)
 add_subdirectory(minimal_matmul)
 add_subdirectory(rgb_to_yuv)
@@ -93,6 +96,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
+        TTNN::Ops::Experimental::AttnResidual
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::RgbToYuv
         TTNN::Ops::Experimental::PaddedSlice
@@ -143,6 +147,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::AttnResidual>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>

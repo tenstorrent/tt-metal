@@ -339,6 +339,8 @@ ttnn/cpp/ttnn/kernel_lib/**/CMakeLists.txt @tenstorrent/metalium-developers-conv
 ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/attn_residual/ @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/attn_residual/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass @jonathansuTT
