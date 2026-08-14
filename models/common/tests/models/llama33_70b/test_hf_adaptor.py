@@ -3,6 +3,7 @@
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
