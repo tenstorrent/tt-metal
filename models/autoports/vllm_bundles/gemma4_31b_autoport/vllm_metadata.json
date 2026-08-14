@@ -1,0 +1,4 @@
+{
+  "arch": "Gemma4ForConditionalGeneration",
+  "main_class": "models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM"
+}
