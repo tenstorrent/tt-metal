@@ -620,6 +620,7 @@ def run_model(
         gate_weights=gate_weights,
         routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
+        latent_weights=latent_weights,
         x=x,
     )
     if ref_out is not None and tt_output is not None:

@@ -67,11 +67,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
 
-    # Opts out of run_reference_moe, which packs a DeepSeek-shaped state dict with strict=True and
-    # cannot drive KimiSparseMoeBlock's w1/w3/w2 naming or its three extra latent tensors. The
-    # equivalent host-side comparison lives in
-    # tests/torch/test_moe_reference_comparison.py::test_kimi_k3_latent_moe_reference_pcc.
-    supports_reference_moe_crosscheck = False
+    # Device vs upstream KimiSparseMoeBlock, measured 0.995692 on 2x4. Tighter than
+    # test_kimi_k3_moe's final_output_pcc (0.965) even though both compare the same device tensor:
+    # the two references agree to 1.7e-5, so this side has no reference-side slack to absorb.
+    moe_pcc_threshold = 0.99
 
     @property
     def config_builder(self) -> Callable:
