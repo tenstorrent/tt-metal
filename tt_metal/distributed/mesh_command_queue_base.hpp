@@ -141,10 +141,10 @@ public:
         bool blocking) override;
 
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;
-    virtual void enqueue_read_shards(
+    void enqueue_read_shards(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        bool blocking);
+        bool blocking) override;
     void enqueue_read(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         DistributedHostBuffer& host_buffer,

@@ -13,8 +13,6 @@
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <chrono>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -201,14 +199,12 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
         // Warmup
         auto* shard = buffer->get_device_buffer(device_coord);
         std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
+        cq.enqueue_read_shards({distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
 
         // Timed
         auto start = chrono::high_resolution_clock::now();
         for (uint32_t i = 0; i < num_iterations; i++) {
-            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
+            cq.enqueue_read_shards({distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
         }
         auto end = chrono::high_resolution_clock::now();
 

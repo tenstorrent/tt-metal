@@ -28,7 +28,6 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -66,8 +65,8 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             auto* shard = buf->get_device_buffer(coord);
             readback_vecs.push_back(std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t)));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
-                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+            mesh_device_->mesh_command_queue(1).enqueue_read_shards(
+                {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
         }
 
         for (auto& vec : readback_vecs) {
@@ -195,11 +194,10 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                     auto* shard =
                         output_bufs[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(device_coord);
                     std::vector<bfloat16> dst_vec(shard->page_size() * shard->num_pages() / sizeof(bfloat16));
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
-                        .enqueue_read_shards(
-                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
-                            output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                            true);
+                    mesh_device_->mesh_command_queue(1).enqueue_read_shards(
+                        {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                        true);
                     if (device_coord[0] <= (num_rows_in_workload - 1)) {
                         for (auto val : dst_vec) {
                             EXPECT_EQ(static_cast<float>(val), (2 * iter + 5));
@@ -247,8 +245,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
         for (const auto& coord : devices_0) {
             auto* shard = buf->get_device_buffer(coord);
             readback_vecs.push_back(std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t)));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(0))
-                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+            mesh_device_->mesh_command_queue(0).enqueue_read_shards(
+                {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
         }
 
         mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
@@ -258,8 +256,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
         for (const auto& coord : devices_1) {
             auto* shard = buf->get_device_buffer(coord);
             readback_vecs.push_back(std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t)));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(0))
-                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+            mesh_device_->mesh_command_queue(0).enqueue_read_shards(
+                {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
         }
         for (auto& vec : readback_vecs) {
             EXPECT_EQ(vec, src_vec);
@@ -322,8 +320,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         write_events.push_back(write_cq.enqueue_record_event_to_host());
         // Wait for write to complete before reading
         read_cq.enqueue_wait_for_event(write_events.back());
-        tt::tt_metal::distributed::as_mesh_command_queue_base(read_cq).enqueue_read_shards(
-            read_shards[i], buffer, false);
+        read_cq.enqueue_read_shards(read_shards[i], buffer, false);
         read_events.push_back(read_cq.enqueue_record_event_to_host());
     }
 

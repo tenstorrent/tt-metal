@@ -59,8 +59,6 @@
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 
 using std::vector;
@@ -944,7 +942,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
                     dst_data.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(dst_data)>::value_type));
-                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                    cq.enqueue_read_shards(
                         {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(dst_data.data())},
                         buffer,
                         true);
@@ -957,7 +955,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
                     dst_data.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(dst_data)>::value_type));
-                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                    cq.enqueue_read_shards(
                         {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(dst_data.data())},
                         dram_buffer,
                         true);
@@ -982,7 +980,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
                 dst_data.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(dst_data)>::value_type));
-                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                cq.enqueue_read_shards(
                     {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(dst_data.data())},
                     buffer,
                     true);

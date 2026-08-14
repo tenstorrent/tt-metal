@@ -51,8 +51,6 @@
 #include "impl/tensor/mesh_tensor_impl.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -1273,16 +1271,14 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
                 .host_data(reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset)
                 .region(buffer_region);
         mesh_device_->mesh_command_queue().enqueue_write_shards(shared_mesh_buffer, {write_shard_data_transfer}, true);
-        distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
-    distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(full_readback_data.data())},
-            shared_mesh_buffer,
-            true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards(
+        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(full_readback_data.data())},
+        shared_mesh_buffer,
+        true);
     EXPECT_EQ(tensor_data, full_readback_data);
 }
 

@@ -46,8 +46,6 @@
 #include <tt-metalium/distributed.hpp>
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 
 constexpr uint32_t k_local_l1_size = 3200;
@@ -165,8 +163,8 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     // Test blocking read buffer doesn't stall
     auto* shard = buffer_1->get_device_buffer(zero_coord);
     std::vector<uint32_t> output_1(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-        .enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(output_1.data())}, buffer_1, true);
+    device->mesh_command_queue().enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(output_1.data())}, buffer_1, true);
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {

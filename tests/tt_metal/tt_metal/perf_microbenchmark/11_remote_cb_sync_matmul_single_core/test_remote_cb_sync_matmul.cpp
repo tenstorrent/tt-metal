@@ -55,8 +55,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using std::vector;
 using namespace tt;
 using std::chrono::microseconds;
@@ -472,12 +470,11 @@ bool validation_bfp8_b(
     std::vector<float> result_untilized;
     auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
     std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-        .enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
-                result.data())},
-            out_buffer,
-            true);
+    device->mesh_command_queue().enqueue_read_shards(
+        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+            result.data())},
+        out_buffer,
+        true);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     result_untilized = untilize_swizzled(result_bfp8, mt * 32, nt * 32);
 
@@ -528,12 +525,11 @@ bool validation_fp16(
 
     auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
     std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-        .enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
-                result.data())},
-            out_buffer,
-            true);
+    device->mesh_command_queue().enqueue_read_shards(
+        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+            result.data())},
+        out_buffer,
+        true);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);

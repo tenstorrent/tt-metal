@@ -25,8 +25,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_fabric::test {
 
 // Import needed types from test and bench namespaces
@@ -359,8 +357,7 @@ Notes:
 
     // Read back (single shard) and verify
     std::vector<uint32_t> rx(n_words, 0u);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mcq).enqueue_read_shards(
-        {Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
+    mcq.enqueue_read_shards({Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
     verify_payload_words(rx, tx);
 }
 

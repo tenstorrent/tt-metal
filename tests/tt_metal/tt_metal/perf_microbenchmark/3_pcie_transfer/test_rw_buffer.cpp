@@ -30,8 +30,6 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -169,12 +167,11 @@ int main(int argc, char** argv) {
                     result_vec.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                    distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-                        .enqueue_read_shards(
-                            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}
-                                 .host_data(result_vec.data())},
-                            buffer,
-                            true);
+                    device->mesh_command_queue().enqueue_read_shards(
+                        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}
+                             .host_data(result_vec.data())},
+                        buffer,
+                        true);
                 };
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();

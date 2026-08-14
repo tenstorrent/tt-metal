@@ -31,8 +31,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -260,7 +258,7 @@ void run_single_core_copy_block_matmul_partials(
 
     auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
     std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
 
     EXPECT_EQ(src_vec.size(), result_vec.size());

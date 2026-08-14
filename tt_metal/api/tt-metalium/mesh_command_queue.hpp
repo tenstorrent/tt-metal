@@ -87,6 +87,10 @@ public:
 
     virtual void enqueue_read_mesh_buffer(
         void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) = 0;
+    virtual void enqueue_read_shards(
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        bool blocking) = 0;
     // TODO: does "enqueue" make sense anymore? Return the object by value instead.
     virtual void enqueue_read(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,

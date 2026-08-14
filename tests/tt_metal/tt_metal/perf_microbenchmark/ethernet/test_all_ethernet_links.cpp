@@ -38,8 +38,6 @@
 
 #include <enchantum/enchantum.hpp>
 #include <llrt/tt_cluster.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
@@ -454,12 +452,11 @@ void validation(
         // We need to get the device and coordinate for reading
         auto* device =
             find_device_with_id(device_helper.devices, validate_receiver ? link.receiver.chip : link.sender.chip);
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-            .enqueue_read_shards(
-                {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
-                    result_vec.data())},
-                buffer_to_validate,
-                /*blocking=*/true);
+        device->mesh_command_queue().enqueue_read_shards(
+            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                result_vec.data())},
+            buffer_to_validate,
+            /*blocking=*/true);
     } else {
         auto core_to_read = validate_receiver ? tt_cxy_pair(link.receiver.chip, receiver_virtual)
                                               : tt_cxy_pair(link.sender.chip, sender_virtual);

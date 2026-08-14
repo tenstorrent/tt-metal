@@ -31,8 +31,6 @@
 #include "test_common.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -74,7 +72,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(
 
         auto* shard = sticks_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
         std::vector<uint32_t> dst_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        cq.enqueue_read_shards(
             {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
             sticks_buffer,
             true);
@@ -213,7 +211,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
 
         auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
         std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        cq.enqueue_read_shards(
             {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
             dst_dram_buffer,
             true);
@@ -361,7 +359,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
 
         auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
         std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        cq.enqueue_read_shards(
             {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
             dst_dram_buffer,
             true);
@@ -502,7 +500,7 @@ bool test_interleaved_l1_datacopy(
 
     auto* shard = dst->get_device_buffer(distributed::MeshCoordinate(0, 0));
     std::vector<uint32_t> readback_buffer(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_buffer.data())},
         dst,
         true);

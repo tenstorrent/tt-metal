@@ -37,8 +37,6 @@
 #include "tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -204,8 +202,7 @@ uint32_t run_once_sfpu(
 
     auto* shard = s.output_dram->get_device_buffer(s.zero);
     std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-        {distributed::ShardDataTransfer{s.zero}.host_data(result.data())}, s.output_dram, true);
+    cq.enqueue_read_shards({distributed::ShardDataTransfer{s.zero}.host_data(result.data())}, s.output_dram, true);
 
     uint32_t h = 0u;
     for (uint32_t w : result) {

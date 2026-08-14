@@ -27,7 +27,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/arch.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
@@ -82,9 +81,8 @@ bool RunCrossCqReadWriteWithWaitForEvent(
             cq_read.get().enqueue_wait_for_event(event);
             auto* shard = buffers[i]->get_device_buffer(zero_coord);
             std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-            distributed::as_mesh_command_queue_base(cq_read.get())
-                .enqueue_read_shards(
-                    {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[i], true);
+            cq_read.get().enqueue_read_shards(
+                {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[i], true);
             pass &= (srcs[i] == result);
         }
     }
@@ -127,9 +125,8 @@ bool RunBurstWritesThenSingleCrossCqEvent(
     for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
         auto* shard = buffers[buf_idx]->get_device_buffer(zero_coord);
         std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq_read.get())
-            .enqueue_read_shards(
-                {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
+        cq_read.get().enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
         pass &= (srcs[buf_idx] == result);
     }
 
@@ -164,8 +161,8 @@ bool RunDeviceOnlyEventChainWithPerIterationValidation(
 
         auto* shard = buffer->get_device_buffer(zero_coord);
         std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq_read.get())
-            .enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffer, true);
+        cq_read.get().enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffer, true);
         bool iter_pass = (src == result);
         if (!iter_pass) {
             log_warning(
@@ -218,9 +215,8 @@ bool RunHeavyBurstWritesThenDeviceOnlyEvent(
     for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
         auto* shard = buffers[buf_idx]->get_device_buffer(zero_coord);
         std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        distributed::as_mesh_command_queue_base(cq_read.get())
-            .enqueue_read_shards(
-                {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
+        cq_read.get().enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
         bool buf_pass = (srcs[buf_idx] == result);
         if (!buf_pass) {
             log_warning(tt::LogTest, "Heavy burst buffer {} mismatch after device-only event", buf_idx);
@@ -437,9 +433,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 cqs[i].get().enqueue_wait_for_event(event);
                 auto* shard = buffers[i]->get_device_buffer(zero_coord_);
                 std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-                distributed::as_mesh_command_queue_base(cqs[i].get())
-                    .enqueue_read_shards(
-                        {distributed::ShardDataTransfer{zero_coord_}.host_data(result.data())}, buffers[i], true);
+                cqs[i].get().enqueue_read_shards(
+                    {distributed::ShardDataTransfer{zero_coord_}.host_data(result.data())}, buffers[i], true);
                 // Blocking.
                 bool local_pass = (srcs[i] == result);
                 log_debug(
@@ -620,11 +615,10 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     auto* shard = buffers.back()->get_device_buffer(zero_coord_);
                     read_results.back() =
                         std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-                    distributed::as_mesh_command_queue_base(cq_read.get())
-                        .enqueue_read_shards(
-                            {distributed::ShardDataTransfer{zero_coord_}.host_data(read_results.back().data())},
-                            buffers.back(),
-                            false);
+                    cq_read.get().enqueue_read_shards(
+                        {distributed::ShardDataTransfer{zero_coord_}.host_data(read_results.back().data())},
+                        buffers.back(),
+                        false);
                     log_debug(
                         tt::LogTest,
                         "cq_idx: {} Issued Read for j: {} to cq_id: {} got data: {}",

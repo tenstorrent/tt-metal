@@ -22,8 +22,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 #include <umd/device/types/arch.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 
 using namespace tt::test_utils;
@@ -182,7 +180,7 @@ StochasticRoundingResult run_stochastic_rounding(
 
     auto* shard = output_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
     std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dest_buffer_data.data())},
         output_dram_buffer,
         true);

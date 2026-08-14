@@ -32,7 +32,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 using std::vector;
@@ -197,11 +196,11 @@ bool reader_cb_writer(
     distributed::EnqueueMeshWorkload(cq, workload, false);
     auto* input_shard = input_buffer->get_device_buffer(zero_coord);
     std::vector<uint32_t> reread_input_packed(input_shard->page_size() * input_shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(reread_input_packed.data())}, input_buffer, false);
     auto* output_shard = output_buffer->get_device_buffer(zero_coord);
     std::vector<uint32_t> output_packed(output_shard->page_size() * output_shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(output_packed.data())}, output_buffer, false);
     pass &= (output_packed == input_packed);
 
@@ -319,7 +318,7 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
     distributed::EnqueueMeshWorkload(cq, workload, false);
     auto* shard_read = output_buffer->get_device_buffer(zero_coord);
     std::vector<uint32_t> dest_buffer_data(shard_read->page_size() * shard_read->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_buffer, false);
     pass &= input_packed == dest_buffer_data;
 

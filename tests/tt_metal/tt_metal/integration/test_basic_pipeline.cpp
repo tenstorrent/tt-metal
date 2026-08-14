@@ -39,7 +39,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 namespace tt::tt_metal {
 
 using std::map;
@@ -255,7 +254,7 @@ void create_and_run_row_pipeline(
     log_info(LogTest, "Reading results from device...");
     auto* shard = dst_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
     std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
         dst_buffer,
         true);

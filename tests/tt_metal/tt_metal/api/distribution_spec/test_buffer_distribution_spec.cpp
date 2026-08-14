@@ -14,8 +14,6 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
@@ -391,12 +389,11 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     if (cq_read) {
         log_info(tt::LogTest, "Reading with: FDMeshCommandQueue ReadShard");
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards(
-                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}
-                     .host_data(dst.data())},
-                mesh_buffer,
-                /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}.host_data(
+                dst.data())},
+            mesh_buffer,
+            /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");

@@ -25,8 +25,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -124,7 +122,7 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                cq.enqueue_read_shards(
                     {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
                     buffer,
                     true);

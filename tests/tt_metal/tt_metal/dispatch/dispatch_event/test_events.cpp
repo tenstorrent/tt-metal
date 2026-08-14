@@ -24,8 +24,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 
 using std::vector;
@@ -81,7 +79,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
                     {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
                     true);
             } else if (data_movement_mode == DataMovementMode::READ) {
-                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                cq.enqueue_read_shards(
                     {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
                     buffers.back(),
                     true);

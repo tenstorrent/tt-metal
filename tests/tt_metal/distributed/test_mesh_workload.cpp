@@ -55,8 +55,6 @@
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal::distributed::test {
 namespace {
 
@@ -595,11 +593,10 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
             for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                 auto* shard = output_bufs[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(device_coord);
                 std::vector<bfloat16> dst_vec(shard->page_size() * shard->num_pages() / sizeof(bfloat16));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards(
-                        {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
-                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                        true);
+                mesh_device_->mesh_command_queue().enqueue_read_shards(
+                    {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                    output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                    true);
                 if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
                     for (auto val : dst_vec) {
                         EXPECT_EQ(static_cast<float>(val), 5);
@@ -709,11 +706,10 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                     auto* shard =
                         output_buffers[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(device_coord);
                     std::vector<bfloat16> dst_vec(shard->page_size() * shard->num_pages() / sizeof(bfloat16));
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                        .enqueue_read_shards(
-                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
-                            output_buffers[(col_idx * worker_grid_size.y) + row_idx],
-                            true);
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(
+                        {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                        output_buffers[(col_idx * worker_grid_size.y) + row_idx],
+                        true);
                     for (int i = 0; i < dst_vec.size(); i++) {
                         float ref_val = std::pow(2, (iter % 2) + 1);
                         if (i >= 512) {

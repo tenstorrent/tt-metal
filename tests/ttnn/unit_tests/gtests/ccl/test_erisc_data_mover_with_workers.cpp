@@ -51,8 +51,6 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "common/tt_backend_api_types.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
@@ -648,11 +646,10 @@ bool RunWriteBWTest(
         std::vector<uint32_t> readback_data_vec(all_zeros.size());  // init to 0 data for easier debug
         std::fill(readback_data_vec.begin(), readback_data_vec.end(), 0);
 
-        tt::tt_metal::distributed::as_mesh_command_queue_base(output_buffer->device()->mesh_command_queue())
-            .enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_data_vec.data())},
-                output_buffer,
-                true);
+        output_buffer->device()->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_data_vec.data())},
+            output_buffer,
+            true);
         log_info(tt::LogTest, "Checking outputs");
         if (readback_data_vec.size() != inputs.size()) {
             log_error(tt::LogTest, "Output size mismatch: expected {} got {}", inputs.size(), readback_data_vec.size());

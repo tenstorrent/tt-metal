@@ -46,8 +46,6 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
@@ -506,12 +504,11 @@ bool validation(
         log_info(LogTest, "ReadShard API may take a long time if the input size is large");
         auto* shard = input_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
         std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-            .enqueue_read_shards(
-                {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
-                    result_vec.data())},
-                input_buffer,
-                true);
+        device->mesh_command_queue().enqueue_read_shards(
+            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                result_vec.data())},
+            input_buffer,
+            true);
         log_info(LogTest, "ReadShard API done");
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {

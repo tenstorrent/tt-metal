@@ -24,8 +24,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -119,12 +117,11 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
-                    .enqueue_read_shards(
-                        {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
-                             .host_data(result_vec.data())},
-                        buffer,
-                        true);
+                device->mesh_command_queue(0).enqueue_read_shards(
+                    {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                         .host_data(result_vec.data())},
+                    buffer,
+                    true);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }

@@ -50,7 +50,6 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -227,11 +226,10 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
                     auto* shard = output_bufs[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(
                         MeshCoordinate(logical_y, logical_x));
                     std::vector<bfloat16> dst_vec(shard->page_size() * shard->num_pages() / sizeof(bfloat16));
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                        .enqueue_read_shards(
-                            {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
-                            output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                            true);
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(
+                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
+                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                        true);
                     auto expected_value = expected_values[logical_x + (logical_y * mesh_device_->num_cols())];
                     for (auto val : dst_vec) {
                         EXPECT_EQ(static_cast<float>(val), expected_value);
@@ -496,16 +494,16 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         for (const auto& device_coord : left_col) {
             auto* shard = output_buf->get_device_buffer(device_coord);
             std::vector<uint32_t> dst_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards({ShardDataTransfer{device_coord}.host_data(dst_vec.data())}, output_buf, true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{device_coord}.host_data(dst_vec.data())}, output_buf, true);
             EXPECT_EQ(dst_vec, src_vec);
         }
 
         for (const auto& device_coord : right_col) {
             auto* shard = output_buf->get_device_buffer(device_coord);
             std::vector<uint32_t> dst_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards({ShardDataTransfer{device_coord}.host_data(dst_vec.data())}, output_buf, true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{device_coord}.host_data(dst_vec.data())}, output_buf, true);
             for (int j = 0; j < dst_vec.size(); j++) {
                 EXPECT_EQ(dst_vec[j], src_vec[j] + 3);
             }

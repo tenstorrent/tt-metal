@@ -40,8 +40,6 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -629,7 +627,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     auto* shard = out_dram->get_device_buffer(zero_coord);
     std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, out_dram, false);
 
     auto device_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
@@ -988,12 +986,9 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     std::vector<uint32_t> out2_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
     std::vector<uint32_t> out1_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
     std::vector<uint32_t> out0_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-        {distributed::ShardDataTransfer{zero_coord}.host_data(out0_data.data())}, out0_dram, false);
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-        {distributed::ShardDataTransfer{zero_coord}.host_data(out1_data.data())}, out1_dram, false);
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-        {distributed::ShardDataTransfer{zero_coord}.host_data(out2_data.data())}, out2_dram, false);
+    cq.enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(out0_data.data())}, out0_dram, false);
+    cq.enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(out1_data.data())}, out1_dram, false);
+    cq.enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(out2_data.data())}, out2_dram, false);
 
     bool pass = true;
 

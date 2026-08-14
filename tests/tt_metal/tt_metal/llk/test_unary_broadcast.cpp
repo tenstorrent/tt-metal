@@ -48,8 +48,6 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -557,7 +555,7 @@ void run_single_core_unary_broadcast(
 
     auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
     std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+    cq.enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, dst_dram_buffer, true);
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }

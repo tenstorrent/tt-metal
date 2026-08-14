@@ -38,6 +38,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -54,7 +55,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -439,9 +439,8 @@ TEST_P(DeviceLocalMeshBufferShardingTest, ShardingTest) {
         for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
             auto* shard_read = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
             std::vector<uint32_t> dst_vec(shard_read->page_size() * shard_read->num_pages() / sizeof(uint32_t));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards(
-                    {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())}, buf, true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())}, buf, true);
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
@@ -570,11 +569,8 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
                     }
                     auto* shard_read = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                     std::vector<uint32_t> dst_vec(shard_read->page_size() * shard_read->num_pages() / sizeof(uint32_t));
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                        .enqueue_read_shards(
-                            {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
-                            buf,
-                            true);
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(
+                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())}, buf, true);
                     EXPECT_EQ(dst_vec, src_vec);
                 }
             }
@@ -735,8 +731,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
             }
 
             mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards(output_shards, mesh_buffer, true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
 
             for (auto& dst : dst_vec) {
                 EXPECT_EQ(dst.second, src_vec);
@@ -797,8 +792,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
                     }
 
                     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                        .enqueue_read_shards(output_shards, mesh_buffer, true);
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
 
                     for (auto& dst : dst_vec) {
                         EXPECT_EQ(dst.second, src_vec);
@@ -861,8 +855,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
                              .host_data(static_cast<void*>(dst_ptr_aligned))
                              .region(BufferRegion(0, bytes_per_device));
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_shared);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
@@ -1077,8 +1070,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     auto read_transfer = distributed::ShardDataTransfer{coord}
                              .host_data(static_cast<void*>(dst_ptr_unaligned))
                              .region(BufferRegion(0, bytes_per_device));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
     std::vector<uint8_t> dst_aligned(dst_ptr_unaligned, dst_ptr_unaligned + bytes_per_device);
 
@@ -1136,8 +1128,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         auto read_transfer = distributed::ShardDataTransfer{coord}
                                  .host_data(static_cast<void*>(dst.data()))
                                  .region(BufferRegion(0, bytes_per_device));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
         EXPECT_EQ(*src, dst);
         // Pinned memory should have been used, so locking may block.
         EXPECT_TRUE(pinned_shared->lock_may_block());
@@ -1193,8 +1184,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
     auto read_transfer = distributed::ShardDataTransfer{coord}
                              .host_data(static_cast<void*>(dst.data()))
                              .region(BufferRegion(0, bytes_per_device));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
     EXPECT_EQ(*src, dst);
 }
 
@@ -1251,8 +1241,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         auto read_transfer = distributed::ShardDataTransfer{coord}
                                  .host_data(static_cast<void*>(dst.data()))
                                  .region(BufferRegion(0, bytes_per_device));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
         EXPECT_EQ(*src, dst);
         // Pinned memory should have been used, so locking may block.
         EXPECT_TRUE(pinned_shared->lock_may_block());
@@ -1353,8 +1342,7 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
     auto read_transfer = distributed::ShardDataTransfer{remote_coord}
                              .host_data(static_cast<void*>(dst.data()))
                              .region(BufferRegion(0, bytes_per_device));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
     traffic_cq.finish();
 
     const uint8_t* src_shifted = source_storage.at(remote_source_index.value())->data() + aligned_byte_shift;
@@ -1429,8 +1417,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
             auto read_transfer = distributed::ShardDataTransfer{coord}
                                      .host_data(static_cast<void*>(dst.data()))
                                      .region(BufferRegion(0, bytes_per_device));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
             EXPECT_EQ(src_vector, dst);
             if (aligned_byte_shift % 16 == 0) {
                 // Pinned memory should have been used, so locking may block.
@@ -1500,8 +1487,8 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
             auto* shard = output_buffer->get_device_buffer(test_coord);
             output.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards({ShardDataTransfer{test_coord}.host_data(output.data())}, output_buffer, true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{test_coord}.host_data(output.data())}, output_buffer, true);
         };
         ASSERT_EQ(output.size(), input.size());
         for (uint16_t value : output) {
@@ -1617,8 +1604,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
             auto* shard = buf->get_device_buffer(coord);
             dst_vec.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst_vec.data())}, buf, true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{coord}.host_data(dst_vec.data())}, buf, true);
         };
         ASSERT_EQ(dst_vec.size(), src_vector.size());
         EXPECT_EQ(dst_vec, src_vector);
@@ -1700,8 +1687,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     {
         auto* shard = buf->get_device_buffer(coord);
         dst.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, buf, true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(dst.data())}, buf, true);
     };
     ASSERT_EQ(dst.size(), expected.size());
     EXPECT_EQ(dst, expected);
@@ -1748,8 +1735,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
         auto* shard = buf->get_device_buffer(coord);
         dst_vec.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst_vec.data())}, buf, true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(dst_vec.data())}, buf, true);
     };
     Buffer& shard = *buf->get_device_buffer(coord);
     auto expected =
@@ -1797,15 +1784,15 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
         auto* shard = buf_explicit->get_device_buffer(coord);
         out_a.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out_a)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({ShardDataTransfer{coord}.host_data(out_a.data())}, buf_explicit, true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(out_a.data())}, buf_explicit, true);
     };
     {
         auto* shard = buf_default->get_device_buffer(coord);
         out_b.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out_b)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards({ShardDataTransfer{coord}.host_data(out_b.data())}, buf_default, true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(out_b.data())}, buf_default, true);
     };
     EXPECT_EQ(out_a, out_b);
     EXPECT_EQ(out_a, src_vec);

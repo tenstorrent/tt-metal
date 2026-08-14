@@ -37,7 +37,6 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -157,11 +156,10 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 auto* shard = output_buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 std::vector<uint32_t> dst_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
-                ::tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards(
-                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
-                        output_buf,
-                        true);
+                mesh_device_->mesh_command_queue().enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
+                    output_buf,
+                    true);
                 EXPECT_EQ(dst_vec, src_vec);
             }
         }
