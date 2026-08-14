@@ -98,7 +98,7 @@ void kernel_main() {
 #endif
 
     const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
-    const auto rstd_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
+    const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_H * TILE_W);
 
     const auto mean_l1_write_ptr = dfb_mean.get_write_ptr();
     const auto rstd_l1_write_ptr = dfb_rstd.get_write_ptr();
