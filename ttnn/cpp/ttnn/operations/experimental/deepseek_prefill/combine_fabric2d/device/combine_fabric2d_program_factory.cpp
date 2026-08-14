@@ -55,26 +55,8 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // itself rather than asking the fabric to, so a packet only ever travels one hop; anything bound further
 // lands in the next chip's forwarding buffer and is re-sent from there.
 //
-// The buffer is quartered by (routing plane, send direction), the pair that uniquely identifies the
-// upstream producer from the downstream chip's point of view. Each quarter holds fwd_chunks_per_quarter
-// chunks of fwd_pages_per_chunk pages, and a chunk's last used page is a sentinel marking its end, so a
-// chunk need not be filled to capacity.
-//
-// Chunks per quarter: a chunk arriving at C in one direction is one (source, destination) pair whose path
-// passes through C and continues. Summing over upstream distance k >= 1 the movements from that source
-// whose distance exceeds k gives sum_{k=1..H-1} (H-k) = H(H-1)/2 for H = extent/2. That is the worse of the
-// two directions — the one not carrying the diametrically-opposite chip needs only (H-1)(H-2)/2 — and both
-// quarters are sized alike.
-uint32_t fwd_chunks_per_quarter(uint32_t extent) {
-    const uint32_t half = extent / 2;
-    return half * (half - 1) / 2;
-}
-
-// Quarters = (routing plane, direction) pairs = num_links * 2.
-uint32_t fwd_total_chunks(uint32_t extent, uint32_t num_links) {
-    return fwd_chunks_per_quarter(extent) * num_links * 2;
-}
-
+// One region per stream, each holding relay_chunks_per_stream chunks of fwd_pages_per_chunk pages. A chunk's
+// last used page is a sentinel marking its end, so a chunk need not be filled to capacity.
 // Tokens whose routing metadata the reader prefetches in one batch. Each pad is 64 B (a DRAM read needs a
 // 64-byte-aligned L1 destination on Blackhole), so this costs CMBF2D_META_PREFETCH * 64 B of L1. Big enough
 // that one DRAM latency is amortised over many tokens, small enough to bound L1 regardless of how long a
@@ -150,16 +132,6 @@ L1Layout compute_l1_layout(
     return l;
 }
 
-struct DramAddresses {
-    uint32_t in = 0;
-    uint32_t out = 0;
-    uint32_t fwd = 0;
-    uint32_t meta = 0;
-    uint32_t counts = 0;
-    uint32_t region = 0;
-    uint32_t expert_offsets = 0;
-};
-
 struct DramBuffers {
     tt::tt_metal::Buffer* in = nullptr;
     tt::tt_metal::Buffer* out = nullptr;
@@ -227,7 +199,7 @@ std::vector<uint32_t> pack_reader_args(
     const std::vector<Assignment>& work,
     const L1Layout& l1,
     const KernelPlan& plan,
-    const DramAddresses& dram) {
+    const DramBuffers& dram) {
     cmbf2d::ReaderCtArgPacker a;
     a[cmbf2d::ReaderCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
     a[cmbf2d::ReaderCtArg::TokenSizeBytes] = plan.token_size_bytes;
@@ -236,9 +208,9 @@ std::vector<uint32_t> pack_reader_args(
     a[cmbf2d::ReaderCtArg::RingAddr] = l1.ring;
     a[cmbf2d::ReaderCtArg::FilledAddr] = plan.ring_filled_addr;
     a[cmbf2d::ReaderCtArg::FreedAddr] = plan.ring_freed_addr;
-    a[cmbf2d::ReaderCtArg::DramInBaseAddr] = dram.in;
-    a[cmbf2d::ReaderCtArg::DramOutBaseAddr] = dram.out;
-    a[cmbf2d::ReaderCtArg::DramFwdBaseAddr] = dram.fwd;
+    a[cmbf2d::ReaderCtArg::DramInBaseAddr] = static_cast<uint32_t>(dram.in->address());
+    a[cmbf2d::ReaderCtArg::DramOutBaseAddr] = static_cast<uint32_t>(dram.out->address());
+    a[cmbf2d::ReaderCtArg::DramFwdBaseAddr] = static_cast<uint32_t>(dram.fwd->address());
     a[cmbf2d::ReaderCtArg::FwdChunksPerQuarter] = relay_chunks_per_stream(plan.ring_extent);
     a[cmbf2d::ReaderCtArg::FwdPagesPerChunk] = plan.pages_per_chunk;
     // Doubles as this stream's share of the same-chip run, which it copies after the fabric work.
@@ -247,10 +219,10 @@ std::vector<uint32_t> pack_reader_args(
     a[cmbf2d::ReaderCtArg::FwdSemAddr] = plan.fwd_arrived_addr;
     a[cmbf2d::ReaderCtArg::NbrChipId] = static_cast<uint32_t>(self.downstream_node.chip_id);
     a[cmbf2d::ReaderCtArg::ScheduleLen] = static_cast<uint32_t>(work.size());
-    a[cmbf2d::ReaderCtArg::DramMetaBaseAddr] = dram.meta;
-    a[cmbf2d::ReaderCtArg::DramCountsBaseAddr] = dram.counts;
-    a[cmbf2d::ReaderCtArg::DramRegionBaseAddr] = dram.region;
-    a[cmbf2d::ReaderCtArg::DramExpertOffsetsBaseAddr] = dram.expert_offsets;
+    a[cmbf2d::ReaderCtArg::DramMetaBaseAddr] = static_cast<uint32_t>(dram.meta->address());
+    a[cmbf2d::ReaderCtArg::DramCountsBaseAddr] = static_cast<uint32_t>(dram.counts->address());
+    a[cmbf2d::ReaderCtArg::DramRegionBaseAddr] = static_cast<uint32_t>(dram.region->address());
+    a[cmbf2d::ReaderCtArg::DramExpertOffsetsBaseAddr] = static_cast<uint32_t>(dram.expert_offsets->address());
     a[cmbf2d::ReaderCtArg::NumRoutedExperts] = plan.num_routed_experts;
     a[cmbf2d::ReaderCtArg::ExpertsPerChip] = args.experts_per_chip;
     a[cmbf2d::ReaderCtArg::MyExpertBase] = plan.my_expert_base;
@@ -286,14 +258,217 @@ std::vector<uint32_t> pack_reader_args(
     return ct;
 }
 
+// Facts about this call, established while checking it.
+struct OpShape {
+    uint32_t ring_extent = 0;
+    uint32_t token_size_bytes = 0;
+    uint32_t num_routed_experts = 0;
+    uint32_t num_dispatch_groups = 0;
+};
+
+OpShape validate_and_derive(
+    const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args, const ttnn::Tensor& output) {
+    const auto mesh_shape = args.device->shape();
+    TT_FATAL(
+        args.axis < mesh_shape.dims(),
+        "combine_fabric2d: axis {} out of range for mesh shape {}",
+        args.axis,
+        mesh_shape);
+
+    OpShape shape;
+    shape.ring_extent = mesh_shape[static_cast<int32_t>(args.axis)];
+    TT_FATAL(
+        shape.ring_extent > 1,
+        "combine_fabric2d: mesh axis {} has extent {}; need at least 2 chips to send anywhere",
+        args.axis,
+        shape.ring_extent);
+    TT_FATAL(
+        shape.ring_extent % 2 == 0,
+        "combine_fabric2d: axis {} extent {} must be even — the all-destinations pattern relies on a "
+        "diametrically-opposite chip at ring offset extent/2",
+        args.axis,
+        shape.ring_extent);
+
+    auto* in_buf = tensor_args.dispatched_buffer.buffer();
+    auto* out_buf = output.buffer();
+    auto* meta_buf = tensor_args.dispatched_metadata.buffer();
+    TT_FATAL(in_buf != nullptr, "combine_fabric2d: dispatched_buffer has no device buffer");
+    TT_FATAL(out_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
+    TT_FATAL(meta_buf != nullptr, "combine_fabric2d: dispatched_metadata has no device buffer");
+    TT_FATAL(
+        tensor_args.expert_token_counts.buffer() != nullptr,
+        "combine_fabric2d: expert_token_counts has no device buffer");
+    TT_FATAL(
+        tensor_args.expert_region_offsets.buffer() != nullptr,
+        "combine_fabric2d: expert_region_offsets has no device buffer");
+    TT_FATAL(tensor_args.expert_offsets.buffer() != nullptr, "combine_fabric2d: expert_offsets has no device buffer");
+
+    // A token is one page of the dispatched buffer — the op does not take a token size, it reads it off the
+    // tensor the caller staged, exactly as the production op does.
+    shape.token_size_bytes = static_cast<uint32_t>(in_buf->aligned_page_size());
+    TT_FATAL(
+        shape.token_size_bytes % sizeof(uint32_t) == 0,
+        "combine_fabric2d: token page {} B must be a multiple of 4",
+        shape.token_size_bytes);
+    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric must accept is
+    // token + tail, not just token.
+    TT_FATAL(
+        shape.token_size_bytes + cmbf2d::SLOT_TAIL_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
+        "max_payload_size in the device's fabric_router_config.",
+        shape.token_size_bytes,
+        cmbf2d::SLOT_TAIL_BYTES,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    TT_FATAL(
+        out_buf->aligned_page_size() == shape.token_size_bytes,
+        "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
+        "between the two",
+        out_buf->aligned_page_size(),
+        shape.token_size_bytes);
+    // The output holds one page per (token, top-k slot). Checked against the real buffer because only it
+    // knows the per-device page count.
+    TT_FATAL(
+        out_buf->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
+        "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
+        out_buf->num_pages(),
+        args.seq_len_per_chip * args.num_experts_per_tok);
+    TT_FATAL(
+        meta_buf->num_pages() == in_buf->num_pages(),
+        "combine_fabric2d: metadata has {} pages but the dispatched buffer has {}; they index the same flat "
+        "buffer",
+        meta_buf->num_pages(),
+        in_buf->num_pages());
+
+    shape.num_routed_experts = static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
+    shape.num_dispatch_groups = shape.num_routed_experts / (args.experts_per_chip * args.dispatch_group_size);
+    TT_FATAL(shape.num_dispatch_groups >= 1, "combine_fabric2d: derived num_dispatch_groups is 0");
+    return shape;
+}
+
+// The reader/producer ring handshake is two monotonic single-writer counters, plus one counter the upstream
+// chip's producer bumps as it fills this stream's forwarding region.
+//
+// GlobalSemaphores rather than the op's own L1 region for one reason: the framework ZEROES them before
+// launch. Raw L1 keeps whatever the previous program left there, and a stale `freed` underflows the reader's
+// free-slot arithmetic — a silent buffer overwrite, not a clean failure.
+struct RingSemaphores {
+    tt::tt_metal::GlobalSemaphore filled;
+    tt::tt_metal::GlobalSemaphore freed;
+    tt::tt_metal::GlobalSemaphore fwd_arrived;
+
+    uint32_t lowest_address() const {
+        return static_cast<uint32_t>(std::min({filled.address(), freed.address(), fwd_arrived.address()}));
+    }
+};
+
+RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh) {
+    // Allocated on the full worker grid so the addresses are uniform across the mesh. One fwd_arrived
+    // semaphore serves every stream: each stream is drained by a different worker core, so the per-core copy
+    // at this uniform L1 offset already separates them, and the producer simply targets the right core.
+    const auto grid = mesh->compute_with_storage_grid_size();
+    const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    RingSemaphores sems{
+        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1),
+        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1),
+        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1)};
+    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    return sems;
+}
+
+struct ForwardingBuffer {
+    std::shared_ptr<ttnn::Tensor> owner;
+    tt::tt_metal::Buffer* buffer = nullptr;
+    uint32_t pages_per_chunk = 0;
+};
+
+// Never initialised and never read back: pure staging for tokens passing through a chip. One page per token,
+// and the page is token + tail so a single fabric write lands both. Fused into ONE page rather than split
+// across payload and metadata regions precisely because nothing outside the op reads it — so the
+// "one page = one token" property the caller's regions must keep does not apply here, and it saves a DRAM
+// read and a DRAM write per forwarded token.
+//
+// Parked on WorkloadDescriptor::buffers wrapped in a shared_ptr<Tensor>: holding only a
+// shared_ptr<MeshBuffer> would let DeviceStorage::deallocate free the memory when the local Tensor dies
+// (workload_descriptor.hpp:19-36). Being a mesh tensor, its device-local address is uniform across the mesh
+// by construction, which is what lets a producer address the NEXT chip's buffer.
+ForwardingBuffer allocate_forwarding_buffer(
+    ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const OpShape& shape) {
+    ForwardingBuffer fwd;
+    fwd.pages_per_chunk = fwd_pages_per_chunk(
+        args.seq_len_per_chip,
+        args.num_experts_per_tok,
+        shape.num_dispatch_groups,
+        args.dispatch_group_size,
+        args.num_links);
+    const uint32_t page_bytes = shape.token_size_bytes + cmbf2d::SLOT_TAIL_BYTES;
+    TT_FATAL(
+        page_bytes % sizeof(uint32_t) == 0,
+        "combine_fabric2d: forwarding page {} B must be a multiple of 4",
+        page_bytes);
+    const uint32_t pages = relay_chunks_per_mesh(shape.ring_extent, args.num_links) * fwd.pages_per_chunk;
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+    // Throws if it does not fit DRAM, which IS the "verify it fits" check.
+    fwd.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
+    fwd.buffer = fwd.owner->buffer();
+    TT_FATAL(fwd.buffer != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
+    TT_FATAL(
+        fwd.buffer->aligned_page_size() == page_bytes,
+        "combine_fabric2d: forwarding page size is {} B after alignment but the op addresses it as {} B. "
+        "The token page + {} must be a multiple of the DRAM alignment.",
+        fwd.buffer->aligned_page_size(),
+        page_bytes,
+        cmbf2d::SLOT_TAIL_BYTES);
+    return fwd;
+}
+
+KernelPlan make_kernel_plan(
+    const CombineFabric2dParams& args,
+    const ttnn::MeshCoordinate& coord,
+    const OpShape& shape,
+    const RingSemaphores& sems,
+    uint32_t pages_per_chunk) {
+    KernelPlan plan;
+    plan.my_row = coord[static_cast<int32_t>(args.axis)];
+    plan.num_routed_experts = shape.num_routed_experts;
+    plan.token_size_bytes = shape.token_size_bytes;
+    plan.pages_per_chunk = pages_per_chunk;
+    plan.ring_extent = shape.ring_extent;
+    plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
+    plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
+    plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+    // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
+    // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
+    // derivation as the production reader's compile-time `offset`.
+    const uint32_t experts_per_group = args.experts_per_chip * args.dispatch_group_size;
+    const uint32_t my_group = args.device->shape().dims() > 1
+                                  ? coord[static_cast<int32_t>(args.axis == 0 ? 1 : 0)] % shape.num_dispatch_groups
+                                  : 0u;
+    plan.my_expert_base = my_group * experts_per_group + plan.my_row * args.experts_per_chip;
+    return plan;
+}
+
+// The reader's L1 copy of the control tensors: the expert_offsets slice (one row per origin chip) plus the
+// counts and region offsets. A few kB, read once at startup and indexed from L1 thereafter. Plus the
+// metadata prefetch pads at the front, 64-byte aligned each: a DRAM read needs a 64-byte-aligned L1
+// destination on Blackhole, which no offset inside a ring slot's tail can give (the tail starts at
+// token_size, and its free half is only 32-byte aligned).
+uint32_t control_region_bytes(const CombineFabric2dParams& args, const OpShape& shape) {
+    return CMBF2D_META_PREFETCH * CMBF2D_META_PAD_STRIDE +
+           static_cast<uint32_t>(sizeof(uint32_t)) * shape.num_routed_experts * (args.dispatch_group_size + 2);
+}
+
 tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const CombineFabric2dParams& args,
     const ttnn::MeshCoordinate& coord,
     const MeshPlacement& placement,
     const L1Layout& l1,
     const KernelPlan& chip_plan,
-    const DramAddresses& dram,
-    const DramBuffers& bufs) {
+    const DramBuffers& dram) {
     tt::tt_metal::ProgramDescriptor desc;
     const auto work_by_stream =
         generate_assignments(ring_chip_ids(args.device, coord, args.axis), chip_plan.my_row, args.num_links);
@@ -326,7 +501,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.compile_time_args = pack_reader_args(args, self, work, l1, plan, dram);
-        for (auto* buf : {bufs.in, bufs.out, bufs.fwd, bufs.meta, bufs.counts, bufs.region, bufs.expert_offsets}) {
+        for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
         }
         rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
@@ -359,218 +534,46 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     ttnn::Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     auto* mesh_device = operation_attributes.device;
-    const auto mesh_shape = mesh_device->shape();
-    const uint32_t axis = operation_attributes.axis;
-    TT_FATAL(axis < mesh_shape.dims(), "combine_fabric2d: axis {} out of range for mesh shape {}", axis, mesh_shape);
-    TT_FATAL(
-        mesh_shape[axis] > 1,
-        "combine_fabric2d: mesh axis {} has extent {}; need at least 2 chips to send anywhere",
-        axis,
-        mesh_shape[axis]);
+    const auto shape = validate_and_derive(operation_attributes, tensor_args, tensor_return_value);
 
-    const uint32_t extent = mesh_shape[static_cast<int32_t>(axis)];
-    TT_FATAL(
-        extent % 2 == 0,
-        "combine_fabric2d: axis {} extent {} must be even — the all-destinations pattern relies on a "
-        "diametrically-opposite chip at ring offset extent/2",
-        axis,
-        extent);
-
-    // A token is one page of the dispatched buffer — the op does not take a token size, it reads it off the
-    // tensor the caller staged, exactly as the production op does.
-    auto* dram_in_buf = tensor_args.dispatched_buffer.buffer();
-    TT_FATAL(dram_in_buf != nullptr, "combine_fabric2d: dispatched_buffer has no device buffer");
-    const uint32_t token_size_bytes = static_cast<uint32_t>(dram_in_buf->aligned_page_size());
-    TT_FATAL(
-        token_size_bytes % sizeof(uint32_t) == 0,
-        "combine_fabric2d: token page {} B must be a multiple of 4",
-        token_size_bytes);
-
-    const uint32_t fabric_max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric
-    // must accept is token + tail, not just token.
-    TT_FATAL(
-        token_size_bytes + cmbf2d::SLOT_TAIL_BYTES <= fabric_max_payload,
-        "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
-        "max_payload_size in the device's fabric_router_config.",
-        token_size_bytes,
-        cmbf2d::SLOT_TAIL_BYTES,
-        fabric_max_payload);
-
-    const auto grid = mesh_device->compute_with_storage_grid_size();
-    // The reader/producer ring handshake is two monotonic single-writer counters. They live in
-    // GlobalSemaphores rather than in the op's own L1 region for one reason: the framework ZEROES them
-    // before launch. Raw L1 keeps whatever the previous program left there, and a stale `freed` underflows
-    // the reader's free-slot arithmetic — which is a silent buffer overwrite, not a clean failure.
-    // Allocated on the full worker grid so the addresses are uniform across the mesh.
-    const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
-    auto ring_filled_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
-    auto ring_freed_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
-    // Forwarding arrivals: bumped by the UPSTREAM chip's producer, polled by this chip's reader on the same
-    // (plane, direction). ONE semaphore suffices for all four quarters — each quarter is drained by a
-    // different worker core, so the per-core copy at this uniform L1 offset already separates them, and the
-    // producer simply targets the right core.
-    auto fwd_arrived_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
-    const uint32_t ring_filled_addr = static_cast<uint32_t>(ring_filled_sem.address());
-    const uint32_t ring_freed_addr = static_cast<uint32_t>(ring_freed_sem.address());
-    const uint32_t fwd_arrived_addr = static_cast<uint32_t>(fwd_arrived_sem.address());
-    // The reader's L1 copy of the control tensors: the expert_offsets slice (one row per origin chip) plus
-    // the counts and region offsets. A few kB, read once at startup and indexed from L1 thereafter.
-    // Plus the metadata prefetch pads at the front, 64-byte aligned each: a DRAM read needs a 64-byte-aligned
-    // L1 destination on Blackhole, which no offset inside a ring slot's tail can give (the tail starts at
-    // token_size, and its free half is only 32-byte aligned).
-    const uint32_t control_num_routed_experts =
-        static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
-    const uint32_t control_bytes = CMBF2D_META_PREFETCH * CMBF2D_META_PAD_STRIDE +
-                                   static_cast<uint32_t>(sizeof(uint32_t)) * control_num_routed_experts *
-                                       (operation_attributes.dispatch_group_size + 2);
+    const auto sems = allocate_ring_semaphores(mesh_device);
     const auto l1 = compute_l1_layout(
         mesh_device,
         CMBF2D_NUM_L1_SLOTS,
-        token_size_bytes,
-        control_bytes,
-        std::min(std::min(ring_filled_addr, ring_freed_addr), fwd_arrived_addr));
-
-    // Physical chip id -> mesh coordinate, to turn a cable's far chip into a placement lookup.
-    std::map<uint32_t, ttnn::MeshCoordinate> chip_to_coord;
-    for (const auto& c : ttnn::MeshCoordinateRange(mesh_shape)) {
-        chip_to_coord.emplace(static_cast<uint32_t>(mesh_device->get_device(c)->id()), c);
-    }
-
-    const auto placement = decide_placement(mesh_device, axis, operation_attributes.num_links);
+        shape.token_size_bytes,
+        control_region_bytes(operation_attributes, shape),
+        sems.lowest_address());
+    const auto placement = decide_placement(mesh_device, operation_attributes.axis, operation_attributes.num_links);
+    const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, shape);
 
     // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a producer can
     // address the same buffer on any chip by page index. That is what lets a token carry a final destination
     // address computed on the chip it started from.
-    auto* dram_out_buf = tensor_return_value.buffer();
-    auto* dram_meta_buf = tensor_args.dispatched_metadata.buffer();
-    auto* dram_counts_buf = tensor_args.expert_token_counts.buffer();
-    auto* dram_region_buf = tensor_args.expert_region_offsets.buffer();
-    auto* dram_expert_offsets_buf = tensor_args.expert_offsets.buffer();
-    TT_FATAL(dram_out_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
-    TT_FATAL(dram_meta_buf != nullptr, "combine_fabric2d: dispatched_metadata has no device buffer");
-    TT_FATAL(dram_counts_buf != nullptr, "combine_fabric2d: expert_token_counts has no device buffer");
-    TT_FATAL(dram_region_buf != nullptr, "combine_fabric2d: expert_region_offsets has no device buffer");
-    TT_FATAL(dram_expert_offsets_buf != nullptr, "combine_fabric2d: expert_offsets has no device buffer");
-    TT_FATAL(
-        dram_out_buf->aligned_page_size() == token_size_bytes,
-        "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
-        "between the two",
-        dram_out_buf->aligned_page_size(),
-        token_size_bytes);
-    // The output holds one page per (token, top-k slot). Checked against the real buffer because only it
-    // knows the per-device page count.
-    const uint32_t out_pages = static_cast<uint32_t>(dram_out_buf->num_pages());
-    const uint32_t want_out_pages = operation_attributes.seq_len_per_chip * operation_attributes.num_experts_per_tok;
-    TT_FATAL(
-        out_pages >= want_out_pages,
-        "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
-        out_pages,
-        want_out_pages);
-    TT_FATAL(
-        dram_meta_buf->num_pages() == dram_in_buf->num_pages(),
-        "combine_fabric2d: metadata has {} pages but the dispatched buffer has {}; they index the same flat "
-        "buffer",
-        dram_meta_buf->num_pages(),
-        dram_in_buf->num_pages());
-
-    const uint32_t num_routed_experts = static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
-    const uint32_t num_dispatch_groups =
-        num_routed_experts / (operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size);
-    TT_FATAL(num_dispatch_groups >= 1, "combine_fabric2d: derived num_dispatch_groups is 0");
+    const DramBuffers dram{
+        tensor_args.dispatched_buffer.buffer(),
+        tensor_return_value.buffer(),
+        fwd.buffer,
+        tensor_args.dispatched_metadata.buffer(),
+        tensor_args.expert_token_counts.buffer(),
+        tensor_args.expert_region_offsets.buffer(),
+        tensor_args.expert_offsets.buffer()};
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.semaphores.push_back(ring_filled_sem);
-    workload_descriptor.semaphores.push_back(ring_freed_sem);
-    workload_descriptor.semaphores.push_back(fwd_arrived_sem);
-
-    // ---- Op-internal forwarding buffer. Never initialised and never read back: it is pure staging for
-    // tokens passing through a chip on their way somewhere else. One page per token, and the page
-    // is token + tail so a single fabric write lands both. Fused into ONE page rather than split across a
-    // payload and a metadata region precisely because nothing outside the op reads it — so the "one page =
-    // one token" property that the caller's regions must keep does not apply here, and we save a DRAM
-    // read and a DRAM write per forwarded token.
-    //
-    // Allocated with create_device_tensor (no host data, no upload) and parked on
-    // WorkloadDescriptor::buffers wrapped in a shared_ptr<Tensor>: holding only a shared_ptr<MeshBuffer>
-    // would let DeviceStorage::deallocate free the memory when the local Tensor dies at the end of this
-    // function (workload_descriptor.hpp:19-36). Being a mesh tensor, its device-local address is uniform
-    // across the mesh by construction, which is what lets a producer address the NEXT chip's buffer.
-    const uint32_t fwd_page_bytes = token_size_bytes + cmbf2d::SLOT_TAIL_BYTES;
-    TT_FATAL(
-        fwd_page_bytes % sizeof(uint32_t) == 0,
-        "combine_fabric2d: forwarding page {} B must be a multiple of 4",
-        fwd_page_bytes);
-    const uint32_t fwd_chunks = fwd_total_chunks(extent, operation_attributes.num_links);
-    const uint32_t pages_per_chunk = fwd_pages_per_chunk(
-        operation_attributes.seq_len_per_chip,
-        operation_attributes.num_experts_per_tok,
-        num_dispatch_groups,
-        operation_attributes.dispatch_group_size,
-        operation_attributes.num_links);
-    const uint32_t fwd_pages = fwd_chunks * pages_per_chunk;
-    const tt::tt_metal::TensorSpec fwd_spec(
-        ttnn::Shape({fwd_pages, fwd_page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    // Throws if it does not fit DRAM, which IS the "verify it fits" check this stage asks for.
-    auto fwd_owner = std::make_shared<ttnn::Tensor>(create_device_tensor(fwd_spec, mesh_device));
-    auto* dram_fwd_buf = fwd_owner->buffer();
-    TT_FATAL(dram_fwd_buf != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
-    TT_FATAL(
-        dram_fwd_buf->aligned_page_size() == fwd_page_bytes,
-        "combine_fabric2d: forwarding page size is {} B after alignment but the op addresses it as {} B. "
-        "The token page + {} must be a multiple of the DRAM alignment.",
-        dram_fwd_buf->aligned_page_size(),
-        fwd_page_bytes,
-        cmbf2d::SLOT_TAIL_BYTES);
-    workload_descriptor.buffers.push_back({fwd_owner, dram_fwd_buf});
-
-    const DramAddresses dram{
-        static_cast<uint32_t>(dram_in_buf->address()),
-        static_cast<uint32_t>(dram_out_buf->address()),
-        static_cast<uint32_t>(dram_fwd_buf->address()),
-        static_cast<uint32_t>(dram_meta_buf->address()),
-        static_cast<uint32_t>(dram_counts_buf->address()),
-        static_cast<uint32_t>(dram_region_buf->address()),
-        static_cast<uint32_t>(dram_expert_offsets_buf->address())};
-    const DramBuffers bufs{
-        dram_in_buf,
-        dram_out_buf,
-        dram_fwd_buf,
-        dram_meta_buf,
-        dram_counts_buf,
-        dram_region_buf,
-        dram_expert_offsets_buf};
+    workload_descriptor.semaphores.push_back(sems.filled);
+    workload_descriptor.semaphores.push_back(sems.freed);
+    workload_descriptor.semaphores.push_back(sems.fwd_arrived);
+    workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
 
     for (const auto& coord : tensor_coords.coords()) {
-        // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's
-        // position on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other
-        // coordinate. Same derivation as the production reader's compile-time `offset`.
-        KernelPlan plan;
-        plan.my_row = coord[static_cast<int32_t>(axis)];
-        plan.num_routed_experts = num_routed_experts;
-        plan.token_size_bytes = token_size_bytes;
-        plan.pages_per_chunk = pages_per_chunk;
-        plan.ring_extent = extent;
-        plan.ring_filled_addr = ring_filled_addr;
-        plan.ring_freed_addr = ring_freed_addr;
-        plan.fwd_arrived_addr = fwd_arrived_addr;
-        const uint32_t experts_per_group =
-            operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size;
-        const uint32_t my_group =
-            mesh_shape.dims() > 1 ? coord[static_cast<int32_t>(axis == 0 ? 1 : 0)] % num_dispatch_groups : 0u;
-        plan.my_expert_base = my_group * experts_per_group + plan.my_row * operation_attributes.experts_per_chip;
-
         workload_descriptor.programs.push_back(
             {ttnn::MeshCoordinateRange(coord),
-             build_program_for_coord(operation_attributes, coord, placement, l1, plan, dram, bufs)});
+             build_program_for_coord(
+                 operation_attributes,
+                 coord,
+                 placement,
+                 l1,
+                 make_kernel_plan(operation_attributes, coord, shape, sems, fwd.pages_per_chunk),
+                 dram)});
     }
     return workload_descriptor;
 }
