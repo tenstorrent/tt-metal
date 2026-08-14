@@ -784,9 +784,25 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # A/B, ~4 sigma), [1,1,32,8192] 8,589 -> 8,146, fp32 26,911 -> 26,447.
         grid_x = grid.x if (plan.use_multicore and LEVERS["multicore"]) else 1
         one_block_per_core = num_blocks_total <= num_cores_available
+        # The two cases that CANNOT take the trade, each carved out on a MEASURED
+        # regression rather than a suspicion. Both share one mechanism: halving the
+        # lit cores only pays when the wall is the DRAM interface (the same
+        # aggregate bandwidth arrives through half the cores, so the freed
+        # pipelining is profit). Where the wall is PER-CORE work instead, halving
+        # the cores just halves the parallelism.
+        #   * R_RETILE — the reader's payload is a local L1 face permutation, not a
+        #     DRAM read. Measured [1,1,1024,1024] 1->32: 68,125 -> 111,618 ns (0.61x).
+        #   * a sub-128 B output page — the write is transaction-RATE bound per
+        #     core, so fewer cores means fewer issuing RISCs, not more overlap.
+        #     Measured tile_h=1 on [1,1,2048,2048]: 249,507 -> 267,661 ns (0.93x).
+        #     tile_h=8 (512 B) is FLAT and therefore stays IN: 95,610 -> 94,765.
+        # Written as an exception around what cannot, not as an allow-list around
+        # what was benchmarked, so it shrinks as understanding grows.
+        core_halving_meaningless = retile or out_tile_bytes < 128
         halve_cores = bool(
             LEVERS["overlap_cores"]
             and one_block_per_core
+            and not core_halving_meaningless
             and num_blocks_total >= 2 * grid_x
             and num_blocks_total % (2 * grid_x) == 0  # an EXACT, balanced halving
         )
