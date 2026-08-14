@@ -26,6 +26,13 @@ on:
         required: true
         type: string
         description: "JSON array of exabox multihost legs (fromJson into strategy.matrix.test-group). Pass [] to skip."
+      ld-library-path-multihost:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Directory for LD_LIBRARY_PATH. Empty (default) uses
+          /home/user/tt-metal/build/lib.
 
 # Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
 # `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
@@ -44,7 +51,7 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      LD_LIBRARY_PATH: ${{ inputs.ld-library-path-multihost != '' && inputs.ld-library-path-multihost || '/home/user/tt-metal/build/lib' }}
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache

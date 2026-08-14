@@ -38,6 +38,13 @@ on:
         type: string
         default: ""
         description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided). Security: Only GitHub gist/raw URLs allowed, validated before download."
+      ld-library-path-multihost:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Directory for LD_LIBRARY_PATH on exabox multihost legs only. Empty
+          (default) uses /home/user/tt-metal/build/lib.
     outputs:
       matrix:
         description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
@@ -152,3 +159,4 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only }}
       tier: ${{ inputs.tier }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix }}
+      ld-library-path-multihost: ${{ inputs.ld-library-path-multihost }}

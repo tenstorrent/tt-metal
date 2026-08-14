@@ -33,6 +33,14 @@ on:
         type: string
         default: ""
         description: "Optional pre-filtered JSON array of test legs. When set, skip YAML load/filters and only split into single-host vs multihost."
+      ld-library-path-multihost:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Directory for LD_LIBRARY_PATH on exabox multihost legs only. Empty
+          (default) uses /home/user/tt-metal/build/lib. Single-host is always
+          /work/build/lib.
     outputs:
       matrix:
         description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
@@ -280,3 +288,4 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      ld-library-path-multihost: ${{ inputs.ld-library-path-multihost }}

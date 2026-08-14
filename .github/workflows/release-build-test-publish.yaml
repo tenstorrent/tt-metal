@@ -32,6 +32,13 @@ on:
         required: false
         default: ""
         type: string
+      ld-library-path-multihost:
+        description: >-
+          Directory for LD_LIBRARY_PATH on exabox multihost models e2e legs.
+          Empty (default) uses /home/user/tt-metal/build/lib.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -49,6 +56,7 @@ jobs:
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
+      python-version: ${{ steps.parse.outputs.python-version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -103,7 +111,7 @@ jobs:
           fi
 
   release-demo-tests:
-    needs: [check-harbor, build-artifact, determine-test-skus]
+    needs: [check-harbor, build-artifact, determine-test-skus, parse-platform]
     if: ${{ inputs.tag-version != '' }}
     # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
     # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
@@ -121,6 +129,8 @@ jobs:
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      # Manylinux wheel native libs live in the installed package, not the Ubuntu tarball.
+      ld-library-path-multihost: ${{ inputs.ld-library-path-multihost != '' && inputs.ld-library-path-multihost || format('/opt/venv/lib/python{0}/site-packages/ttnn/build/lib', needs.parse-platform.outputs.python-version) }}
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
