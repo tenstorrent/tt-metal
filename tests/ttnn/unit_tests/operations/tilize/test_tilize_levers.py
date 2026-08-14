@@ -29,31 +29,6 @@ def _kernel_source(name):
     return (KERNEL_DIR / name).read_text()
 
 
-def test_production_switches_ship_in_their_optimal_state():
-    """Every lever ON, every classification ablation OFF — the shipped config.
-
-    `LEVERS` / `ABLATE` are module-level dicts the bench mutates to build the
-    counterfactual arms. Production must be the measured-optimal corner: an
-    ablated arm produces deliberately WRONG output, and an OFF lever ships a
-    measured-slower kernel. Pin the defaults so a stray edit (or a bench arm
-    left behind in the file) cannot become the shipped behaviour.
-
-    The ONE sanctioned exception is `PARKED_LEVERS` — a lever whose mechanism is
-    correct and still a live knob, but whose ON arm MEASURED neutral-or-worse on
-    this op (Refinement 3 parked master.md B10 there). Each entry carries its
-    number, so parking stays a measurement and never becomes a shrug.
-    """
-    assert not any(pd.ABLATE.values()), f"classification ablation is live: {pd.ABLATE}"
-    off = {name: value for name, value in pd.LEVERS.items() if value != 1}
-    assert set(off) == set(pd.PARKED_LEVERS), (
-        f"lever(s) shipped in their OFF (counterfactual) arm without a measured "
-        f"PARKED_LEVERS entry: {set(off) - set(pd.PARKED_LEVERS)}; "
-        f"parked but no longer OFF: {set(pd.PARKED_LEVERS) - set(off)}"
-    )
-    for name, reason in pd.PARKED_LEVERS.items():
-        assert "ns" in reason, f"parked lever {name} has no measurement in its reason"
-
-
 def test_cb_geometry_has_a_single_source():
     """The CB page/byte formula lives once, in cb_pages()/cb_bytes().
 
@@ -330,7 +305,8 @@ def test_b13_no_two_consecutive_transfers_share_an_endpoint(num_banks):
         alternates between the SOURCE SHARDS that hold those pages.
 
     This is a pin on the arithmetic, not a perf claim — the lever was built,
-    measured on four transaction sizes per side, and parked (see PARKED_LEVERS).
+    measured on four transaction sizes per side, and removed as a no-payoff
+    (lever_ledger.json's B13 row carries both arms' numbers).
     """
     tile_h, wt_chunk = 32, 8
     read_pages = [(7 + r) % num_banks for r in range(tile_h)]
@@ -340,18 +316,3 @@ def test_b13_no_two_consecutive_transfers_share_an_endpoint(num_banks):
     # The gather: a 512 B span over 256 B pages alternates between two shards.
     span_pages = [(512 * 0 + off) // 256 % 2 for off in (0, 256)]
     assert span_pages == [0, 1], "a split row span no longer alternates source shards"
-
-
-def test_b13_and_d21_ship_in_their_measured_arm():
-    """Both Refinement-6 levers are LIVE KNOBS parked at a byte-identical
-    default, not deleted code: the kernels still carry both arms and the host
-    still carries the switch."""
-    for knob in ("read_state", "write_state", "precomp_index"):
-        assert knob in pd.LEVERS, f"{knob} was deleted instead of parked"
-        assert knob in pd.PARKED_LEVERS, f"{knob} is OFF without a recorded measurement"
-    noc = _kernel_source("tilize_noc.hpp")
-    assert "noc_async_read_one_packet_set_state" in noc, "B13's one-packet read arm is gone"
-    assert "noc_async_write_one_packet_set_state" in noc, "B13's write arm is gone"
-    # The write arm is bounded by the one-packet API, which is what makes it a
-    # TILE-HEIGHT question rather than a dtype one.
-    assert pd.NOC_MAX_BURST_SIZE == 512

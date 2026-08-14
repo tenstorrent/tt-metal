@@ -18,9 +18,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-// PERMANENT per-stage instrumentation (never remove — free when the profiler is
-// off; see the header's durability contract).
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 
@@ -101,21 +98,18 @@ void kernel_main() {
 
     constexpr uint32_t wt_chunk = get_compile_time_arg_val(0);
     constexpr uint32_t needs_cast = get_compile_time_arg_val(1);
-    // Classification ablation (op_design.md §9.1): keep the per-block CB
-    // handshake the helper would do, drop the tilize math. Always 0 in production.
-    constexpr uint32_t ablate_compute = get_compile_time_arg_val(2);
     // Perf 2 (R_RETILE only): the reader landed the face permutation DIRECTLY in
     // the output tile layout. With no cast it produced cb_output_tiles itself and
     // this kernel has nothing to do at all; with a cast it produced an
     // output-SHAPED tile in the INPUT dtype in cb_input_sticks and this kernel
     // owns the conversion ALONE — a datacopy, not a tilize.
-    constexpr uint32_t retile_direct = get_compile_time_arg_val(3);
+    constexpr uint32_t retile_direct = get_compile_time_arg_val(2);
     // Perf 2 SPLIT READER: both DM RISCs read, each into its own input CB, so this
     // kernel consumes them ALTERNATELY (block i comes from CB A when i is even).
     // The writer kernel is not launched on that path, so this kernel also takes
     // over draining the aliased OUTPUT CB — that CB is the resident shard, and it
     // must keep exactly one consumer.
-    constexpr uint32_t split_reader = get_compile_time_arg_val(4);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(3);
     constexpr uint32_t cb_input_sticks_b = 3;
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
@@ -138,7 +132,6 @@ void kernel_main() {
         //
         // No raw LLK here: the library helper's documented InitOnly / Neither /
         // UninitOnly lifecycle expresses back-to-back single-block calls natively.
-        MaybeDeviceZoneScope("compute_tilize");
         constexpr auto k_reconfig = needs_cast ? ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
                                                : ReconfigureRegisterDatatypeMode::NoReconfigure;
         compute_kernel_lib::tilize<
@@ -189,48 +182,15 @@ void kernel_main() {
     if constexpr (retile_direct) {
         if constexpr (!needs_cast) {
             // The reader IS the op on this path — it is cb_output_tiles' producer
-            // and the writer its consumer, so this kernel must not touch either
-            // CB (an ablation arm included: there is no payload here to stub).
+            // and the writer its consumer, so this kernel must not touch either CB.
             return;
         }
-        MaybeDeviceZoneScope("compute_tilize");
-        if constexpr (ablate_compute) {
-            // Classification ablation: keep the CB handshake the datacopy would
-            // do, drop the conversion. Always 0 in production.
-            for (uint32_t b = 0; b < num_blocks; ++b) {
-                cb_wait_front(cb_input_sticks, wt_chunk);
-                cb_reserve_back(cb_output_tiles, wt_chunk);
-                cb_push_back(cb_output_tiles, wt_chunk);
-                cb_pop_front(cb_input_sticks, wt_chunk);
-            }
-        } else {
-            compute_kernel_lib::copy_tiles<
-                compute_kernel_lib::CopyInputPolicy::WaitAndPop,
-                compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_input_sticks, cb_output_tiles, num_blocks * wt_chunk);
-        }
+        compute_kernel_lib::copy_tiles<
+            compute_kernel_lib::CopyInputPolicy::WaitAndPop,
+            compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(
+            cb_input_sticks, cb_output_tiles, num_blocks * wt_chunk);
         return;
     }
-
-    if constexpr (ablate_compute) {
-        MaybeDeviceZoneScope("compute_tilize");
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            cb_wait_front(cb_input_sticks, wt_chunk);
-            cb_reserve_back(cb_output_tiles, wt_chunk);
-            cb_push_back(cb_output_tiles, wt_chunk);
-            cb_pop_front(cb_input_sticks, wt_chunk);
-        }
-        return;
-    }
-
-    // ONE zone for the whole helper call. The tilize helper owns its own CB
-    // handshake (wait_front / reserve_back per block, tilize_helpers.inl:250),
-    // so this number is the compute thread's OCCUPANCY — payload plus every
-    // starve on the reader and every back-pressure from the writer — and it is
-    // recorded three times, once per TRISC (unpack / math / pack). Only the
-    // cumulative ablation below it separates payload from wait; see
-    // .claude/references/device-zone-scope-attribution.md §2.
-    MaybeDeviceZoneScope("compute_tilize");
 
     // The library's own fast/regular decision, re-evaluated here so the DEST
     // window can be applied to exactly the branch that lacks one. Public

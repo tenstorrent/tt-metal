@@ -93,7 +93,7 @@ def _placements(descriptor):
     instead), and the destination is P_LOCAL_SHARD by that path's own predicate.
     """
     reader, second, compute = descriptor.kernels[0], descriptor.kernels[1], descriptor.kernels[2]
-    split = compute.compile_time_args[4]
+    split = compute.compile_time_args[3]
     out_placement = pd.P_LOCAL_SHARD if split else second.compile_time_args[0]
     return reader.compile_time_args[1], out_placement
 
@@ -380,7 +380,7 @@ def test_single_core_sharded_is_refused(device, expect_error):
 
 # Reader compile-time slots (see tilize_program_descriptor's reader_ct_args).
 _CT_REGIME = 0
-_CT_SRC_ROW_PAGES = 14
+_CT_SRC_ROW_PAGES = 13
 
 _BLOCK_2x2 = _legacy(_crs(((0, 0), (1, 1))), (64, 64), _ROW, _BLOCK)
 _WIDTH_4 = _legacy(_crs(((0, 0), (3, 0))), (64, 128), _ROW, _WIDTH)
@@ -460,7 +460,7 @@ def test_reshard_placement_and_source_page_geometry(device, shape, in_cfg, out_c
     # that takes the split reader (the two DM RISCs each publish their own half;
     # one CB with two issuers is not expressible, since cb_push_back moves a
     # single shared write pointer).
-    split = descriptor.kernels[2].compile_time_args[4]
+    split = descriptor.kernels[2].compile_time_args[3]
     assert len(descriptor.cbs) == (3 if split else 2) and len(descriptor.semaphores) == 0
 
 
@@ -639,37 +639,24 @@ def test_coalesced_gather_keeps_the_destination_resident(device):
     wt_chunk = descriptor.kernels[2].compile_time_args[0]
     assert wt_chunk == 64 // 32
 
-    # OFF arm: the pre-Perf-2 choice stays reachable, and the gate fires again.
-    pd.LEVERS["gather_coalesce"] = 0
-    try:
-        off_arm = _descriptor(device, shape, in_cfg, out_cfg)
-    finally:
-        pd.LEVERS["gather_coalesce"] = 1
-    assert _placements(off_arm) == (pd.P_ACCESSOR, pd.P_ACCESSOR)
-
 
 def test_coalesced_gather_keeps_identity(device):
-    """Both arms are correct — the coalesced gather is a perf choice, not a
-    contract change."""
+    """The coalesced gather is a perf choice, not a contract change: the values
+    that come back are still the identity."""
     shape, in_cfg, out_cfg = _COALESCED_CASE
     for cfg in (in_cfg, out_cfg):
         if cfg.is_sharded():
             _skip_if_grid_too_small(device, _shard_grid(cfg))
     torch_input = torch.randn(shape).to(torch.bfloat16)
-    for arm in (1, 0):
-        pd.LEVERS["gather_coalesce"] = arm
-        try:
-            tt_input = ttnn.from_torch(
-                torch_input,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=in_cfg,
-            )
-            got = ttnn.to_torch(tilize(tt_input, out_cfg))
-        finally:
-            pd.LEVERS["gather_coalesce"] = 1
-        assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32)), f"arm={arm}"
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_cfg,
+    )
+    got = ttnn.to_torch(tilize(tt_input, out_cfg))
+    assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32))
 
 
 @pytest.mark.parametrize("shape, in_cfg, out_cfg", _GATED_CASES)
@@ -679,9 +666,6 @@ def test_narrow_read_gate_prefers_the_grid_split(device, shape, in_cfg, out_cfg)
     the NoC write it saves — measured 1.67x / 1.75x / 3.25x in favour of the
     generic full-grid split — so the gate takes the accessor on both sides and
     lets `derive_blocking()` pick a coarse WT_CHUNK again.
-
-    `xfer_gate=0` is the OFF arm (the pre-Refinement-2 choice), pinned here so the
-    counterfactual the bench measures stays reachable.
     """
     for cfg in (in_cfg, out_cfg):
         if cfg.is_sharded():
@@ -690,17 +674,11 @@ def test_narrow_read_gate_prefers_the_grid_split(device, shape, in_cfg, out_cfg)
     assert _placements(descriptor) == (pd.P_ACCESSOR, pd.P_ACCESSOR)
     assert descriptor.kernels[0].core_ranges.num_cores() > out_cfg.shard_spec.grid.num_cores()
 
-    pd.LEVERS["xfer_gate"] = 0
-    try:
-        off_arm = _descriptor(device, shape, in_cfg, out_cfg)
-    finally:
-        pd.LEVERS["xfer_gate"] = 1
-    assert _placements(off_arm) == (pd.P_ACCESSOR, pd.P_LOCAL_SHARD)
-
 
 @pytest.mark.parametrize("shape, in_cfg, out_cfg", _GATED_CASES)
 def test_narrow_read_gate_keeps_identity(device, shape, in_cfg, out_cfg):
-    """Both arms of the gate are correct — it is a perf choice, not a contract."""
+    """The gate is a perf choice, not a contract: the values are still the
+    identity on the plan it selects."""
     for cfg in (in_cfg, out_cfg):
         if cfg.is_sharded():
             _skip_if_grid_too_small(device, _shard_grid(cfg))
@@ -708,10 +686,5 @@ def test_narrow_read_gate_keeps_identity(device, shape, in_cfg, out_cfg):
     tt_input = ttnn.from_torch(
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
     )
-    for gate in (1, 0):
-        pd.LEVERS["xfer_gate"] = gate
-        try:
-            got = ttnn.to_torch(tilize(tt_input, out_cfg))
-        finally:
-            pd.LEVERS["xfer_gate"] = 1
-        assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32)), f"xfer_gate={gate}"
+    got = ttnn.to_torch(tilize(tt_input, out_cfg))
+    assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32))

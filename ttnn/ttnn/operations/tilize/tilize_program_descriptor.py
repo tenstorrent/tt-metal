@@ -38,10 +38,6 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 DEFAULT_TILE_WIDTH = 32  # a tile is always 32 wide
 NUM_CIRCULAR_BUFFERS = 32
 NOC_ALIGN_BYTES = 32  # transfer granularity a split gather has to keep
-# noc_parameters.h: the largest single-packet NoC transfer. The one-packet
-# stateful WRITE API (master.md B13) is defined only up to this size, which is
-# what bounds that lever to small output tile pages.
-NOC_MAX_BURST_SIZE = 512
 
 # Dtypes whose DATUM is one byte. Not the same question as `element_size() == 1`:
 # bfloat8_b also reports one byte per element but is a block-float format with a
@@ -149,185 +145,6 @@ P_LOCAL_SHARD = 1
 #           what lets an aliased output CB take `WT_CHUNK < shard_wt`).
 W_BLOCKS = 0
 W_REGION = 1
-
-# --- lever counterfactual switches ------------------------------------------
-# Each applied perf lever gets an OFF arm here so its payoff can be MEASURED
-# (see _bench_tilize.py `levers=dict(...)` arms and lever_ledger.json). Production
-# never touches these — every entry is the ON (optimal) value.
-#   w_split      0 -> pure height split, no W chunking (grid collapses on a
-#                     short/wide shape). op_design.md §1.3 candidate 2.
-#   row_wise     0 -> split_work_to_cores column-wise (master.md A1's trap).
-#   block_write  0 -> writer barriers per TILE PAGE instead of per block
-#                     (master.md B7 off).
-#   page_write    0 -> each tile page written as two half-page transactions
-#                     (master.md B5 off: sub-page scatter).
-#   noc_split     0 -> reader and writer configs SWAPPED (reader on BRISC/NOC1,
-#                     writer on NCRISC/NOC0) (master.md B9 off).
-#   regime_select 0 -> always take the R_PAD reader, even on an aligned input
-#                     (master.md D20 off: no compile-time specialization).
-#   fp32_dest     0 -> do not enable fp32 DEST / lossless unpack on fp32->fp32
-#                     (master.md F25: the knob this op gates on the dtype pair).
-#   multicore     0 -> force the single-core grid regardless of use_multicore
-#                     (master.md A0 off arm; the caller kwarg stays authoritative
-#                     when this is 1).
-#   double_buffer 0 -> force CB_DEPTH 1 regardless of use_double_buffer
-#                     (master.md C16 off arm).
-#   xfer_gate     0 -> alias the destination shard even when the read transfer it
-#                      pins is below MIN_STREAM_READ_BYTES (the pre-Refinement-2
-#                      behaviour: prefer local placement unconditionally).
-#   pipeline      0 -> Phase-0 blocking: chunk W only as far as the grid-fill
-#                      floor, so a grid-filling shape lands ONE block per core
-#                      and read/compute/write cannot overlap (Refinement 3;
-#                      this is what made master.md C16 read as a no-payoff).
-#   write_trid    0 -> one plain write barrier per block (no double-issue), i.e.
-#                      the write NoC drains between blocks (master.md B8, WRITE
-#                      side — the reader lever's twin; the split-DM ablation put
-#                      the write half on the critical path).
-#   read_ahead    0 -> the R_ALIGNED reader barriers each block's reads before
-#                      issuing the next (no read in flight across the block
-#                      boundary). 1 (shipped) keeps ONE group outstanding over
-#                      rotating transaction ids, against ONE group of CB slack
-#                      (Perf 2; subsumes master.md B8's read half).
-#   read_coalesce 0 -> one NoC transfer per source stick. 1 (shipped) merges a
-#                      whole block's sticks into ONE transfer wherever they are
-#                      provably contiguous (an L1-sharded source whose page is a
-#                      whole tensor row) — Perf 2.
-#   read_vc       0 -> every reader issues on the default read VC
-#                      (master.md B10 off arm).
-#   pack_fast     0 -> bfp8_pack_precise=True, i.e. the PRECISE block-float packer
-#                      (rounds instead of truncating, one extra pack pass) on a
-#                      bfloat8_b output (master.md F24 off arm). 1 (shipped) is
-#                      the CHEAP default: the fast packer already clears the
-#                      bf8b PCC gate from both bf16 and fp32 inputs.
-#   out_fill      0 -> skip the writer's OUTPUT-format pad stamp, leaving the
-#                      reader's input-format fill as the only fill (the
-#                      pre-Refinement-4 behaviour: exact everywhere EXCEPT a
-#                      widening cast whose fill the input format cannot hold,
-#                      which is precisely what Phase 0 put in EXCLUSIONS).
-#   read_state    1 -> issue accessor reads through the set_state/with_state
-#                      pair, caching the NoC endpoint (master.md B13, READ side).
-#                      Ships PARKED at 0 — see PARKED_LEVERS.
-#   write_state   1 -> issue each output tile page through the one-packet
-#                      set_state/with_state pair (master.md B13, WRITE side).
-#                      Only expressible when a page fits ONE packet, which is a
-#                      TILE-HEIGHT question. Ships PARKED at 0.
-#   precomp_index 1 -> take this core's (tile-row, W chunk) origin from the host
-#                      and step it, instead of a div/mod per block
-#                      (master.md D21). Ships PARKED at 0.
-#   zero_copy     0 -> never alias a CB on a resident L1 shard: take the
-#                     TensorAccessor path on both sides and the generic block
-#                     split over the whole grid, i.e. re-read/re-write the local
-#                     shard over the NoC (master.md C14 + A2 off arm; this is
-#                     precisely the "tolerated, not implemented" sharded path).
-LEVERS = {
-    "w_split": 1,
-    "row_wise": 1,
-    "block_write": 1,
-    "page_write": 1,
-    "noc_split": 1,
-    "regime_select": 1,
-    "fp32_dest": 1,
-    "multicore": 1,
-    "double_buffer": 1,
-    "zero_copy": 1,
-    "xfer_gate": 1,
-    "pipeline": 1,
-    "write_trid": 1,
-    # Perf 2. `read_trid` (B8's read half) is GONE — the unified issue-ahead loop
-    # below subsumes it, and measured strictly better everywhere B8 was enabled.
-    "read_ahead": 1,
-    "read_coalesce": 1,
-    # Perf 2: move a whole block of the cross-core L1 gather in ONE transfer when
-    # the block width is one source shard row. 0 = the per-row gather.
-    "gather_coalesce": 1,
-    # Perf 2: on a destination-LOCAL plan the writer issues no NoC traffic, so
-    # BRISC is idle. 1 = both DM RISCs read, each owning every other block into
-    # its own input CB. 0 = the single reader.
-    "split_reader": 1,
-    # master.md B10 ships PARKED at its byte-identical default (every reader on
-    # the default request VC). Measured over 5-sample medians on Wormhole B0 it
-    # is neutral on the grid-filling square (86,136 vs 85,720 ns) and a 2.6% LOSS
-    # on the wide/short shape (13,478 with vs 13,131 without): spreading requests
-    # over 4 VCs does not help an op whose readers are already spread over 64
-    # cores and whose source pages round-robin over every DRAM bank. Kept as a
-    # live knob (turning it to 1 is the ON arm the bench measures) rather than
-    # deleted — the mechanism is correct, it just has nothing to break up here.
-    "read_vc": 0,
-    "read_one_packet": 1,
-    "out_fill": 1,
-    # Perf 1 (master.md A0, re-measured on the NT_H == 1 topology): on a shape that
-    # lands exactly one block per core, light HALF the cores so each gets two
-    # blocks and read/write can overlap. WT_CHUNK is untouched. 0 = the full grid.
-    "overlap_cores": 1,
-    "pack_fast": 1,
-    # master.md B13 (Refinement 6), both halves. Ship PARKED at their
-    # byte-identical default — see PARKED_LEVERS for the measurements.
-    "read_state": 0,
-    "write_state": 0,
-    # master.md D21 (Refinement 6). Ships PARKED at 0 — see PARKED_LEVERS.
-    "precomp_index": 0,
-}
-
-# Levers deliberately SHIPPED in their 0 arm, with the measurement that put them
-# there. A lever lands here (rather than being deleted) when the mechanism is
-# correct and still a live knob, but its ON arm measured neutral-or-worse on this
-# op's shapes — the ledger's `measured-no-payoff` disposition. Anything OFF that
-# is NOT listed here is a bench arm that leaked into production
-# (test_production_switches_ship_in_their_optimal_state pins exactly that).
-PARKED_LEVERS = {
-    "read_vc": "master.md B10: neutral on (a) 86,136 vs 85,720 ns, -2.6% on (b) "
-    "13,478 vs 13,131 ns (5-sample medians). 64 readers over 12 round-robin DRAM "
-    "banks have no first-come-first-serve route to break up.",
-    # master.md B13, READ side. Null on every real-work regime (a 87,537 vs
-    # 86,187 ns, b 13,651 vs 13,578, c 171,404 vs 174,206) and a consistent LOSS
-    # on the smallest one — 3,292 vs 2,935 ns, +12.2%, medians of 3 with
-    # non-overlapping samples — plus +5.0% on the cross-core gather (19,374 vs
-    # 18,453 ns). The premise does not hold on this op: state pays only while
-    # consecutive transfers SHARE a NoC endpoint, and every path here advances
-    # it (an interleaved tile-row is TILE_H consecutive pages, i.e. distinct
-    # banks; the gather's row span alternates source shards). With no reuse the
-    # pair costs one extra command-buffer poll per transfer, which is exactly
-    # what the low-work regimes show.
-    "read_state": "master.md B13 READ: null on (a)/(b)/(c) (87,537 vs 86,187 ns; "
-    "13,651 vs 13,578; 171,404 vs 174,206) and +12.2% on the smallest regime "
-    "(3,292 vs 2,935 ns, medians of 3), +5.0% on the gather (19,374 vs 18,453 ns). "
-    "No two consecutive transfers on this op share a NoC endpoint, so the state is "
-    "reprogrammed every transfer and only the extra poll survives.",
-    # master.md B13, WRITE side. Only expressible at an output page <= 512 B, and
-    # a MONOTONE loss as the transaction shrinks — the signature of a fixed
-    # per-transfer cost with nothing to amortize it against.
-    "write_state": "master.md B13 WRITE: +3.0% at a 512 B page (94,497 vs 91,703 ns), "
-    "+2.8% at 256 B (104,718 vs 101,907), +4.2% at 64 B (234,007 vs 224,669); B0 "
-    "smallest-regime 1,916 vs 1,827 ns. Interleaved destination pages rotate banks, "
-    "so the endpoint state is never reused.",
-    # master.md D21. Inside the +-3% noise band on every regime, in both
-    # directions — a core owns ~4 blocks, so the div/mod this removes is four
-    # instructions against a DM-bound wall.
-    "precomp_index": "master.md D21: (a) 88,463 vs 86,724 ns, (b) 13,359 vs 13,544, "
-    "(c) 170,072 vs 170,404, (d) 2,850 vs 2,899 — all inside the +-3% band, both "
-    "signs. A core owns ~4 blocks, so this removes 4 divisions from a DM-bound wall.",
-}
-
-# --- B10: how many read-request VCs the readers spread over ------------------
-# Unicast VCs are 0-3 (dataflow_api.h read/write `vc` parameter). Core i issues
-# its read requests on `i % NUM_READ_VCS`, so cores sharing a NoC route do not
-# all queue behind one another on the single default VC.
-NUM_READ_VCS = 4
-
-# --- classification ablation (perf-only; op_design.md §9.1) ------------------
-# Stub a stage's PAYLOAD while keeping every CB reserve/push/wait/pop, barrier
-# and loop trip count, so the duration diff attributes time to that stage.
-# Production is always {0, 0}; the bench flips these. Output is wrong by design
-# when either is set — never assert PCC on an ablated run.
-ABLATE = {
-    "compute": 0,  # 1 -> compute does the CB handshake but no tilize_block
-    "dm": 0,  # 1 -> reader/writer issue no NoC transfers
-    # The two DM halves separately (Refinement 3): reader and writer are one
-    # pipeline, so attributing the wall to a half is what says whether a
-    # reader-side lever even has a writer twin worth building.
-    "dm_read": 0,  # 1 -> reader issues no NoC reads (writer untouched)
-    "dm_write": 0,  # 1 -> writer issues no NoC writes (reader untouched)
-}
 
 
 def _prod(values):
@@ -443,8 +260,9 @@ def derive_blocking(
     * ``NT_H >= NUM_CORES * PIPELINE_BLOCKS_PER_CORE`` implies ``n_chunks == 1``,
       i.e. the wide-shape machinery is inert on tall shapes (byte-identical to a
       pure height split, which already gives every core several blocks).
-    * ``pipeline`` is the Refinement-3 knob (lever ``pipeline``); False reproduces
-      the Phase-0 "one block per core is enough" rule exactly.
+    * ``pipeline`` is the Refinement-3 blocking rule; False reproduces the Phase-0
+      "one block per core is enough" rule exactly (kept as a parameter so the
+      blocking pins in test_tilize_levers.py can compare the two rules).
     """
     # Bytes both CBs hold per tile-column of chunk width — read from cb_bytes()
     # via wt_cap() so the ceiling can never drift from the CB sizing below (it
@@ -646,7 +464,7 @@ def needs_output_format_fill(value, in_dtype, out_dtype):
 
     True exactly when that round-trip loses the value, which is what makes the
     writer's output-format stamp worth its L1 stores. THE single source for the
-    decision (host gate + `out_fill` compile-time arg + the ledger's off-arm).
+    decision (host gate + `out_fill` compile-time arg).
     """
     if value is None or in_dtype == out_dtype:
         return False
@@ -692,11 +510,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.read_padded, elem_in)
 
     # ========== 2. KNOBS + WORK DISTRIBUTION ==============================
-    cb_depth = 2 if (plan.use_double_buffer and LEVERS["double_buffer"]) else 1
+    cb_depth = 2 if plan.use_double_buffer else 1
 
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    if plan.use_multicore and LEVERS["multicore"]:
+    if plan.use_multicore:
         full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     else:
         full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
@@ -705,8 +523,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # ---- 2a. placement regime, per side (op_design.md §5.2) ---------------
     # A resident L1 shard IS the per-core block: it pins the cores, the per-core
     # tile-row range and the W extent. Single-core is refused for a sharded call by
-    # validate() (a shard is inherently multi-core) and the A0 off-arm forces one
-    # core, so both fall back to the accessor path.
+    # validate() (a shard is inherently multi-core), so a single-core call falls
+    # back to the accessor path.
     #
     # Eligibility is PER SIDE, because the one thing padding rules out is aliasing
     # the INPUT: the fill is materialized into the input CB, and that CB is the
@@ -714,7 +532,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # the fill — compute packs whole (already padded) tiles — so a padded call
     # still packs straight into a resident destination shard instead of writing it
     # over the NoC.
-    shard_eligible = plan.use_multicore and bool(LEVERS["multicore"]) and bool(LEVERS["zero_copy"])
+    shard_eligible = plan.use_multicore
     # A RETILE source is disqualified from aliasing for a structural reason, not a
     # heuristic one: the input CB holds ROW-MAJOR sticks (the tilize helper's
     # contract) and a tiled shard is not that. Its bytes must be permuted, so there
@@ -767,14 +585,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         if (input_tensor.memory_config().is_sharded() and input_tensor.memory_config().shard_spec is not None)
         else 0
     )
-    wants_read_ahead = bool(
-        LEVERS["read_ahead"]
-        and src_in_dram
-        and not retile
-        and not plan.has_pad_region
-        and src_row_pages == 1
-        and LEVERS["regime_select"]
-    )
+    wants_read_ahead = bool(src_in_dram and not retile and not plan.has_pad_region and src_row_pages == 1)
     in_extra = IN_CB_EXTRA_DEPTH if wants_read_ahead else 0
 
     # Derived here (ahead of the blocking) because the split reader below needs
@@ -785,7 +596,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # The stamp addresses whole faces: 16 rows on a full tile, tile_h rows on a
         # tiny one (Refinement 5). Every legal tile height satisfies one or the other.
         and (tile_h % FACE_HEIGHT == 0 or FACE_HEIGHT % tile_h == 0)
-        and bool(LEVERS["out_fill"])
         and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
     )
 
@@ -813,8 +623,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # NoC each.
     SPLIT_NONE, SPLIT_DUAL_NOC, SPLIT_SHARED_NOC0 = 0, 1, 2
     wants_split = bool(
-        LEVERS["split_reader"]
-        and out_placement == P_LOCAL_SHARD  # destination-local: BRISC has no write duty
+        out_placement == P_LOCAL_SHARD  # destination-local: BRISC has no write duty
         and in_placement == P_ACCESSOR  # ... and there IS a read to split
         and not out_fill  # the writer must still stamp the pad region
         and not retile  # untested; the retile reader is L1-permute bound
@@ -859,8 +668,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             # egress. Preferring this width costs nothing elsewhere: it only
             # applies where the source is a narrower-than-a-row shard.
             if (
-                LEVERS["gather_coalesce"]
-                and src_page_tiles
+                src_page_tiles
                 and src_shard_rows
                 and src_shard_rows % tile_h == 0
                 and shard["shard_wt"] % src_page_tiles == 0
@@ -873,7 +681,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # the reader's per-row transfer to the shard's own width, and below the
         # measured knee the generic full-grid split beats packing in place. Only
         # the read side can trip it — the writer always moves whole tile pages.
-        if in_placement == P_ACCESSOR and LEVERS["xfer_gate"]:
+        if in_placement == P_ACCESSOR:
             # What ONE source transfer moves. A retile reads whole source TILE
             # pages (that is what makes it addressable at all), so its transfer is
             # the page — the per-STICK size the gate was measured on describes the
@@ -883,13 +691,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             # reader to a small PER-ROW transfer. Once the block is ONE contiguous
             # transfer that premise is gone — the gated W x4 -> H x8 plan is
             # 20,828 ns with the gate firing and 13,512 with the block kept local.
-            if (
-                LEVERS["gather_coalesce"]
-                and src_page_tiles
-                and src_shard_rows
-                and src_shard_rows % tile_h == 0
-                and wt_chunk == src_page_tiles
-            ):
+            if src_page_tiles and src_shard_rows and src_shard_rows % tile_h == 0 and wt_chunk == src_page_tiles:
                 read_bytes = tile_h * src_page_bytes
             if read_bytes < MIN_STREAM_READ_BYTES:
                 in_placement, out_placement, shard, work_mode = P_ACCESSOR, P_ACCESSOR, None, W_BLOCKS
@@ -908,22 +710,17 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     if shard is None:
         work_mode = W_BLOCKS
-        if LEVERS["w_split"]:
-            wt_chunk, n_chunks, num_blocks_total = derive_blocking(
-                nt_h,
-                wt,
-                in_tile_bytes,
-                out_tile_bytes,
-                num_cores_available,
-                cb_depth,
-                tile_h,
-                pipeline=bool(LEVERS["pipeline"]),
-                stage_bytes=stage_per_chunk_tile,
-                in_extra=in_extra,
-            )
-        else:
-            # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).
-            wt_chunk, n_chunks, num_blocks_total = wt, 1, nt_h
+        wt_chunk, n_chunks, num_blocks_total = derive_blocking(
+            nt_h,
+            wt,
+            in_tile_bytes,
+            out_tile_bytes,
+            num_cores_available,
+            cb_depth,
+            tile_h,
+            stage_bytes=stage_per_chunk_tile,
+            in_extra=in_extra,
+        )
 
         # never OOM: fall back to depth-1 rather than exceed the L1 budget
         # (same cb_bytes() source as derive_blocking's ceiling and the CBs below)
@@ -957,7 +754,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         #   * an unbalanced cap (48 cores, 1-or-2 blocks/core) -> 0.949x
         # Measured ON: [1,1,32,16384] bf16 13,578 -> 13,066 ns (15-round in-session
         # A/B, ~4 sigma), [1,1,32,8192] 8,589 -> 8,146, fp32 26,911 -> 26,447.
-        grid_x = grid.x if (plan.use_multicore and LEVERS["multicore"]) else 1
+        grid_x = grid.x if plan.use_multicore else 1
         one_block_per_core = num_blocks_total <= num_cores_available
         # The two cases that CANNOT take the trade, each carved out on a MEASURED
         # regression rather than a suspicion. Both share one mechanism: halving the
@@ -975,8 +772,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # what was benchmarked, so it shrinks as understanding grows.
         core_halving_meaningless = retile or out_tile_bytes < 128
         halve_cores = bool(
-            LEVERS["overlap_cores"]
-            and one_block_per_core
+            one_block_per_core
             and not core_halving_meaningless
             and num_blocks_total >= 2 * grid_x
             and num_blocks_total % (2 * grid_x) == 0  # an EXACT, balanced halving
@@ -997,10 +793,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             blocks_per_core_1,
             blocks_per_core_2,
         ) = ttnn.split_work_to_cores(
-            split_grid, num_blocks_total, bool(LEVERS["row_wise"])
+            split_grid, num_blocks_total, True
         )  # row_wise=True (master.md A1)
 
-        cores = ttnn.corerange_to_cores(all_cores, num_cores, bool(LEVERS["row_wise"]))
+        cores = ttnn.corerange_to_cores(all_cores, num_cores, True)
     else:
         # Cores are the cores that HOLD the shards, in shard order (master.md A2:
         # launch only where the data is). Each owns its own shard's tile region.
@@ -1047,7 +843,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     nth_per_img = _div_up(target[-2], tile_h)
     pad_word = _pack_pad_word(plan.pad_value, input_tensor.dtype)
 
-    # -- Refinement 4: the OUTPUT-format pad stamp (lever `out_fill`) ---------
+    # -- Refinement 4: the OUTPUT-format pad stamp (`out_fill`) --------------
     # The reader's input-format fill is arithmetically exact for every path except
     # a WIDENING cast with a fill the input format cannot hold. There the writer
     # re-stamps the pad region of each finished tile with a second word packed in
@@ -1250,7 +1046,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # 1 — not "small tiles". Everything else, tested or not, takes the new path.
         retile_direct = tile_h > 1
     else:
-        regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
+        regime = R_PAD if (plan.has_pad_region or paged_src) else R_ALIGNED
         retile_run_bytes, retile_direct = 0, False
 
     # Inside the direct path, WHERE the run's bytes come from. Both forms produce
@@ -1271,17 +1067,15 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         and out_placement != P_LOCAL_SHARD
     )
 
-    # -- Refinement-3 read levers (interleaved aligned path only) ------------
-    # All three need the custom reader loop; with all three off the reader
-    # compiles to the library-helper call verbatim (the Phase-0 hot path).
-    # They apply only where that loop lives: the aligned W_BLOCKS accessor read.
+    # -- Refinement 3, master.md B6: the one-packet read issue ---------------
+    # Needs the custom reader loop, so it applies only where that loop lives: the
+    # aligned W_BLOCKS accessor read.
     aligned_accessor_read = regime == R_ALIGNED and work_mode == W_BLOCKS and in_placement == P_ACCESSOR
     # B8's WRITE twin needs the output CB EXACTLY two blocks deep, so the writer's
     # two slot addresses are fixed and it can hold one block in flight while the
     # next is issued. cb_pages() is the single source for that geometry.
     trid_ok = cb_pages(cb_depth, wt_chunk) == 2 * NT_BLK * wt_chunk and NT_BLK == 1
-    read_one_packet = int(aligned_accessor_read and LEVERS["read_one_packet"])
-    read_vc_enable = int(aligned_accessor_read and LEVERS["read_vc"])
+    read_one_packet = int(aligned_accessor_read)
 
     # -- Perf 2: ONE R_ALIGNED reader loop (issue-ahead + stick coalescing) ---
     # `read_trid` (master.md B8's read half) is GONE, subsumed here: it was gated
@@ -1292,20 +1086,18 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # is not a knob.
     #
     # This predicate deliberately drops the `work_mode == W_BLOCKS` clause the
-    # three Refinement-3 levers above keep: the unified loop covers W_REGION too,
-    # which is where the crossover's 90%-of-wall read lives. B6/B10/B13 were
-    # priced on W_BLOCKS only, so their gate stays narrow rather than being
-    # widened by association.
+    # Refinement-3 read lever above keeps: the unified loop covers W_REGION too,
+    # which is where the crossover's 90%-of-wall read lives. B6 was priced on
+    # W_BLOCKS only, so its gate stays narrow rather than being widened by
+    # association.
     # Perf 2: the whole-block gather transfer is expressible exactly when the
     # block width IS one source shard row (so both ends are contiguous).
     gather_coalesce = int(
         src_row_pages > 1
         and in_placement == P_ACCESSOR
-        and LEVERS["gather_coalesce"]
         and src_shard_rows
         and src_shard_rows % tile_h == 0
         and wt_chunk * tile_w * elem_in == src_page_bytes
-        and not (ABLATE["dm"] or ABLATE["dm_read"])
     )
     aligned_read = regime == R_ALIGNED and in_placement == P_ACCESSOR
     # ISSUE-AHEAD. The source must be DRAM: on a source in ANOTHER core's L1 the
@@ -1338,7 +1130,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         tile_h
         if (
             aligned_read
-            and LEVERS["read_coalesce"]
             and not src_in_dram
             and src_shard_rows
             and src_row_pages == 1
@@ -1348,53 +1139,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         )
         else 1
     )
-    # A coalesced transfer is tile_h times a row and blows past NOC_MAX_BURST_SIZE,
-    # so B6's one-packet form is mutually exclusive with it by construction.
+    # A coalesced transfer is tile_h times a row and blows past the one-packet
+    # NoC burst size, so B6's one-packet form is mutually exclusive with it by
+    # construction.
     if read_coalesce > 1:
         read_one_packet = 0
     # B8's WRITE twin. Same two-slot CB precondition, and every write must be a
-    # whole page (the page_write OFF arm splits them, and an ablated arm issues
-    # none), so those two arms fall back to the plain barrier-per-block loop.
-    write_trid = int(
-        out_placement == P_ACCESSOR
-        and trid_ok
-        and LEVERS["write_trid"]
-        and LEVERS["page_write"]
-        and not (ABLATE["dm"] or ABLATE["dm_write"])
-    )
-
-    # -- Refinement 6: master.md B13 (stateful transfers), both halves --------
-    # READ side. The stateful API carries no request-VC parameter, so it is
-    # mutually exclusive with B10 (`read_vc`, which ships parked). It applies
-    # wherever this kernel issues its OWN reads — the custom aligned loop, the
-    # R_PAD / gather loop and the retile staging — but never on the library-reader
-    # branch, whose contract owns its issue path.
-    read_state = int(
-        in_placement == P_ACCESSOR
-        and LEVERS["read_state"]
-        and not LEVERS["read_vc"]
-        and not (ABLATE["dm"] or ABLATE["dm_read"])
-        and (regime != R_ALIGNED or aligned_accessor_read)
-    )
-    # WRITE side. There is no ANY-LENGTH stateful write in the dataflow API —
-    # only the one-packet form — so the lever is expressible exactly while an
-    # output TILE page fits one packet. That is a tile-GEOMETRY bound (a 32-row
-    # bf16 page is 2048 B; an 8-row one is 512 B), which is why it has to be
-    # priced across tile height rather than argued from the default geometry.
-    write_state = int(
-        out_placement == P_ACCESSOR
-        and LEVERS["write_state"]
-        and LEVERS["page_write"]
-        and not write_trid
-        and not (ABLATE["dm"] or ABLATE["dm_write"])
-        and out_tile_bytes <= NOC_MAX_BURST_SIZE
-    )
-    # -- Refinement 6: master.md D21 (host-precomputed per-core indexing) -----
-    # Only the W_BLOCKS index is decomposed here (a W_REGION core already gets
-    # its region origin from the host); `blocks_per_core` is small, so this is a
-    # handful of divisions per core — which is exactly what the counterfactual
-    # has to price rather than assume.
-    precomp_index = int(work_mode == W_BLOCKS and LEVERS["precomp_index"])
+    # whole page.
+    write_trid = int(out_placement == P_ACCESSOR and trid_ok)
 
     # A real value-preserving conversion between element formats. Derived here
     # (not at the compute kernel) because the retile-direct reader needs it too:
@@ -1416,7 +1168,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         n_img_in,
         w_in_bytes,
         elem_in,
-        ABLATE["dm"] or ABLATE["dm_read"],
         src_page_bytes,
         src_row_pages,
         read_one_packet,
@@ -1424,7 +1175,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # factor. Together they replace B8's read-side `read_trid`.
         read_ahead,
         read_coalesce,
-        read_vc_enable,
         # The reader's input-format fill is DEAD WORK when the writer re-stamps
         # every pad position (Refinement 4): identical regions, and the writer's
         # word is the exact one. Measured on the worst-case padded widening shape:
@@ -1434,9 +1184,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # count the source page id `tile_row * wt + tile_col` needs.
         in_tile_h,
         wt,
-        # Refinement 6 (master.md B13 / D21); both 0 ships the Refinement-5 kernel.
-        read_state,
-        precomp_index,
         # Perf 2 (R_RETILE only): land the face permutation directly in the output
         # tile (`retile_direct`), sourcing each run straight from DRAM rather than
         # from a staged page (`retile_direct_dram`), and — when a cast is also
@@ -1477,9 +1224,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         wt,
         n_chunks,
         out_tile_bytes,
-        LEVERS["block_write"],
-        ABLATE["dm"] or ABLATE["dm_write"],
-        LEVERS["page_write"],
         write_trid,
         out_fill,
         # Only queried on the stamp path: `element_size()` is undefined for a
@@ -1490,9 +1234,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         in_shape[-1],  # valid columns inside the padded target
         nth_per_img,
         n_img_in,
-        # Refinement 6 (master.md B13 / D21); both 0 ships the Refinement-5 kernel.
-        write_state,
-        precomp_index,
         # Perf 1: 1 => CB_PAD_SCRATCH exists and whole-pad tiles are produced from
         # it instead of being stamped element-by-element. Derived once, above.
         pad_scratch,
@@ -1505,7 +1246,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # Perf 2: on the split path compute alternates between the two input CBs and
     # takes over the OUTPUT CB's drain (the writer kernel is not launched, so the
     # aliased CB would otherwise have no consumer).
-    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"], int(retile_direct), split_reader]
+    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, int(retile_direct), split_reader]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -1531,9 +1272,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             else:
                 blocks_this_core = 0
             tile_row0, tile_col0 = 0, 0
-        # D21: the host's decomposition of this core's first W_BLOCKS block.
-        # Both kernels take the SAME two values, so the index has one source.
-        block_row0, block_wc0 = start_block % nt_h, start_block // nt_h
         reader_rt_args[core.x][core.y] = [
             src_addr,
             start_block,
@@ -1541,10 +1279,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             pad_word,
             tile_row0,
             tile_col0 * tile_w * elem_in,  # the region's byte offset within a stick
-            shard_index % NUM_READ_VCS,  # B10: this core's read-request VC
             tile_col0,  # W_REGION origin in TILE columns (R_RETILE pages are tiles)
-            block_row0,
-            block_wc0,
         ]
         writer_rt_args[core.x][core.y] = [
             dst_addr,
@@ -1553,8 +1288,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             tile_row0,
             tile_col0,
             pad_word_out,  # the fill in the OUTPUT element format (0 when unused)
-            block_row0,
-            block_wc0,
         ]
         compute_rt_args[core.x][core.y] = [blocks_this_core]
         if work_mode == W_BLOCKS:
@@ -1565,7 +1298,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
-        config=ttnn.ReaderConfigDescriptor() if LEVERS["noc_split"] else ttnn.WriterConfigDescriptor(),
+        config=ttnn.ReaderConfigDescriptor(),
     )
     if split_reader:
         # Perf 2: BRISC is the SECOND READER. It gets the reader source, the reader
@@ -1614,16 +1347,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             core_ranges=all_cores,
             compile_time_args=writer_ct_args,
             runtime_args=writer_rt_args,
-            config=ttnn.WriterConfigDescriptor() if LEVERS["noc_split"] else ttnn.ReaderConfigDescriptor(),
+            config=ttnn.WriterConfigDescriptor(),
         )
 
     # fp32 -> fp32 must be BIT-EXACT: keep Dest in fp32 and stop the unpacker
     # downgrading fp32 to tf32 on its way to Dest. Only legal when the fast
     # tilize path is off (it is: fp32 OUTPUT disables it), which is exactly the
     # fp32-in/fp32-out case.
-    lossless_fp32 = (
-        input_tensor.dtype == ttnn.float32 and output_tensor.dtype == ttnn.float32 and bool(LEVERS["fp32_dest"])
-    )
+    lossless_fp32 = input_tensor.dtype == ttnn.float32 and output_tensor.dtype == ttnn.float32
     # 8-bit datums (Refinement 4) need fp32 DEST as well — for a different reason.
     # The tilize LLK's 8-bit path (ckernel_defs.h IS_8BIT_FORMAT) is only validated
     # with DEST accumulation on (tt-llk `test_unpack_tilize_int8` runs
@@ -1635,12 +1366,13 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     eight_bit = input_tensor.dtype in EIGHT_BIT_DTYPES or output_tensor.dtype in EIGHT_BIT_DTYPES
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.fp32_dest_acc_en = lossless_fp32 or eight_bit
-    # master.md F24: the expensive setting of the block-float packer is NOT the
-    # default here — the FAST (truncating) packer already clears the bf8b accuracy
-    # gate from both bf16 and fp32 inputs on this op (measured PCC 0.99997 /
-    # 1.00000 against the pad oracle), and tilize does no arithmetic that could
-    # accumulate the truncation. Only the counterfactual arm turns it on.
-    compute_config.bfp8_pack_precise = output_tensor.dtype in BLOCK_FLOAT_DTYPES and not LEVERS["pack_fast"]
+    # master.md F24: the FAST (truncating) block-float packer, never the precise
+    # one. The fast packer already clears the bf8b accuracy gate from both bf16 and
+    # fp32 inputs on this op (measured PCC 0.99997 / 1.00000 against the pad
+    # oracle) and tilize does no arithmetic that could accumulate the truncation,
+    # while the precise arm measured inside the noise band both ways (65,253 vs
+    # 64,981 ns on the square; 2,930 vs 3,008 on the smallest regime).
+    compute_config.bfp8_pack_precise = False
     if lossless_fp32:
         unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
         unpack_modes[CB_INPUT_STICKS] = ttnn.UnpackToDestMode.UnpackToDestFp32

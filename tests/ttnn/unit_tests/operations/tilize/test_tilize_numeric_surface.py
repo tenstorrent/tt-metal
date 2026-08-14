@@ -300,4 +300,4 @@ def test_out_fill_is_off_on_the_unpadded_hot_path(device):
     )
     plan = validate(tt_input, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)
     descriptor = pd.create_program_descriptor(tt_input, out, plan)
-    assert descriptor.kernels[1].compile_time_args[11] == 0
+    assert descriptor.kernels[1].compile_time_args[8] == 0  # writer CT arg `out_fill`

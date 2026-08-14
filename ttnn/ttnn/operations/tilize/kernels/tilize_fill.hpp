@@ -104,8 +104,9 @@ FORCE_INLINE void fill_l1_with_val(uint32_t start_addr, uint32_t n_bytes, uint32
 //   * the rows below the data inside a partly-valid face -> one run
 //   * only a W tail on a valid row costs a per-row run
 //
-// Measured (test_bench_lever_out_fill, worst-case geometry: half the output tiles
-// are whole pad tiles): the face-first form is FLAT against a row-at-a-time one.
+// Measured (_bench_tilize.py's test_bench_widening_pad, whose geometry is the
+// worst case: half the output tiles are whole pad tiles) the face-first form is
+// FLAT against a row-at-a-time one.
 // The cost is the raw STORE COUNT, not the loop overhead — an rv32 volatile L1
 // word store is ~10 cycles, and the pad region here is 2 M fp32 elements. Fewer,
 // bigger runs is still the right shape (strictly fewer instructions, and it is
