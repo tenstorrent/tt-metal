@@ -28,6 +28,7 @@ The v9 release command used workflow `release`, tool `vllm`, device `p300x2`, ex
 - IFEval used the CI-nightly 0.2 subset: 109/109 samples completed operationally, score 75.6635%, below the configured 78.755% threshold.
 - GPQA used the CI-nightly 0.2 subset: 90/90 samples completed through 13 preemptions, score 38.8889%, below the configured 40.3% threshold. There were no request, transport, page, slot, retry, EngineCore, or fatal errors in that run.
 - These are CI-subset scores compared with the workflow's configured thresholds; they are not unrestricted full-dataset accuracy claims.
+- Measured v9 durations were approximately 18m34s for the 0.2 IFEval subset, 73m05s for the 0.2 GPQA subset, and 19m53s for spec tests. A simple five-times projection for unrestricted evals plus the measured spec run is about 7h58m before setup/report overhead. That exceeded the three-hour release watchdog/reservation window, so `ci-nightly` was used; the projection is scheduling guidance, not performance evidence.
 - Spec/API conformance passed its two report blocks and all 22 parametrized vLLM chat-completion cases.
 
 The original benchmark task failed before requests because the benchmark environment's cached Transformers 5 Mistral tokenizer lacked `is_fast`. After the compatibility fix, the exact acceptance-target point completed 8/8 requests with zero failures: mean TTFT 1272.74 ms, mean TPOT 19.19 ms, and decode throughput 34.50 tokens/s. The corrected grader selects the strictest configured measurable tier, so a spec with only functional targets is explicitly PASS rather than NA.
@@ -41,24 +42,30 @@ The original benchmark task failed before requests because the benchmark environ
 
 ## Trace warning classification
 
-`server_release_v9.log` contains one allocator warning at startup: device buffers were allocated while a trace was active. The source invariant in `tt_metal/impl/allocator/allocator.cpp` says such allocations are safe only when their lifetime ends before the trace executes. The warning occurred during engine profile/KV-cache/warmup initialization, after which the server completed eval, benchmark, and spec traffic without corruption symptoms. It is classified as a non-blocking observed warning for this run, not as proof that this allocation pattern is generally safe; the preserved log supports future trace-lifetime investigation.
+`server_release_v9.log` contains one allocator warning at startup: device buffers were allocated while a trace was active. AutoDebug identified the first post-capture KV-cache reset as the unsupported ordering: its first `ttnn.fill` program compilation occurred after model and sampling traces had been retained. Commit `993aabf2f73b911062c3bb59412af0b5fdb3e456` compiles the in-place reset in the eager pre-capture phase and retains the post-capture reset as a program-cache hit. On the exact committed server, `server_tracefix_smoke.log` contains zero active-trace allocator warnings; health, models, deterministic chat, and a one-request non-page-aligned benchmark all returned HTTP 200. This closes the allocator-warning defect without claiming that the old allocation order was safe.
+
+The Mistral regex warning remains during the separate APIServer processor/chat-template warmup probe. It does not describe the registered live request tokenizer: `tokenizer_regex_ab.json` compares exact preserved IFEval and GPQA prompt messages, and all six live-plugin token sequences exactly match HF `fix_mistral_regex=true` while all six differ from `false`. The warning is noisy, but the live-tokenizer-bug hypothesis is refuted and does not justify rerunning the quality evaluations.
 
 ## Fixes and verification
 
 - Production fixes retained: request-slot release; draining pending async decode token/position feedback before preemption repack; one lookahead KV token for async scheduling; cached Mistral tokenizer `is_fast` compatibility without tokenizer/template substitution; and GPQA few-shot/parser plus flexible-score-key corrections.
 - Remediation removes the invalid IFEval/GPQA masks and fixes functional-only benchmark grading, with a regression test.
+- Trace remediation precompiles the in-place KV-cache reset before trace capture. A focused event-order regression records reset -> capture -> reset; the complete autoport full-model test file passed 9 tests with 4 hardware-gated skips, and the nested plugin tokenizer suite passed all 6 tests.
 - Focused host tests cover scheduler/preemption, tokenizer adaptation, GPQA/config, report acceptance, target grading, and model-spec parsing. Exact remediation output is recorded in `remediation_tests.log`.
+- AutoFix final status remains `release-workflow-fail` / `readiness-fail`: the two mandatory quality gates remain below threshold, no waiver is valid, and the warning investigations found no surviving mechanism that predicts a score increase. A repeated full IFEval/GPQA run was therefore not presented as a fix or used to mask the failure.
 
 ## Cleanup
 
 - Server/client processes and the `autoport-vllm-mistral-tti` tmux session were stopped; the TTI `.env` was removed.
-- `tt-smi -ls --local`, reset, and a final `tt-smi -ls --local` completed successfully; all four Blackhole p300c UMD chips were visible and resettable afterward.
+- The exact-server AutoFix smoke was stopped with no residual API-server or EngineCore process. `tt-smi -ls --local`, reset, and a final `tt-smi -ls --local` completed successfully; all four Blackhole p300c UMD chips were visible and resettable afterward, and a fresh `MeshShape(1, 4)` opened and closed successfully.
 
 ## Artifact inventory
 
 - Native outcome: `native_release_report.md`, `native_release_report.json`, `runtime_model_spec_v9_immutable.json`.
+- Pre-v9 ordering evidence: `pre_v9_benchmark_8of8.log` and its byte-exact TTI-written `pre_v9_benchmark_8of8_runtime_spec.json`. This was the benchmark portion of an earlier release attempt, not the later v9 workflow: it records 8/8 requests, zero failures, and predates v9.
 - Supplemental benchmark: `benchmark_report.md`, `benchmark_report.json`, `benchmark_raw_v9_fixed.json`, `benchmark_smoke_v9_fixed.json`.
 - Aggregate eval evidence: `ifeval_v9_results.json`, `gpqa_v9_results.json`, `eval_v9_aggregate_metadata.json`.
+- AutoFix evidence: `tokenizer_regex_ab.json`, `server_tracefix_smoke.log`, `chat_tracefix_smoke.json`, `benchmark_tracefix_smoke.log`, and `benchmark_tracefix_smoke.json`.
 - Prompt/qualitative evidence: `gpqa_prompt_format_v2.json`, `gpqa_v5_enginecore_failure_metadata.json`, `vllm_qualitative_prompt_format.json`, `vllm_qualitative_verdict.md`, `vllm_non_aligned_prompt_check.json`, `vllm_adapter_unit_tests.log`.
 - Configuration and logs: `release_spec.json`, `client_release_v9.log`, `server_release_v9.log`, `remediation_tests.log`.
 - Excluded: raw eval sample JSONL, caches, weights, tensor dumps, profiler bulk, `.env`, and secrets.

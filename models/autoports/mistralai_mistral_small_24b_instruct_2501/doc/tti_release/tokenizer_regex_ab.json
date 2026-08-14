@@ -1,0 +1,73 @@
+{
+  "status": "refuted_live_tokenizer_bug",
+  "snapshot": "mistralai/Mistral-Small-24B-Instruct-2501@9527884be6e5616bdd54de542f9ae13384489724",
+  "method": "Apply the checkpoint chat template to exact messages preserved in v9 eval sample rows; compare token IDs from the registered live plugin tokenizer with AutoTokenizer fix_mistral_regex=true and false.",
+  "classes": {
+    "fixed": "LlamaTokenizer",
+    "unfixed": "LlamaTokenizer",
+    "live_plugin": "CachedLlamaTokenizer"
+  },
+  "cases": [
+    {
+      "task": "ifeval",
+      "row_index": 0,
+      "doc_id": 0,
+      "token_counts": {"fixed": 256, "unfixed": 271, "live_plugin": 256},
+      "token_id_sha256_prefix": {"fixed": "29042ffad3f2ba90", "unfixed": "d1fc480bece99cfd", "live_plugin": "29042ffad3f2ba90"},
+      "live_equals_fixed": true,
+      "unfixed_equals_fixed": false,
+      "first_unfixed_difference": 3
+    },
+    {
+      "task": "ifeval",
+      "row_index": 54,
+      "doc_id": 54,
+      "token_counts": {"fixed": 257, "unfixed": 275, "live_plugin": 257},
+      "token_id_sha256_prefix": {"fixed": "c97e3e7cdecf5ab9", "unfixed": "79caae107cf37694", "live_plugin": "c97e3e7cdecf5ab9"},
+      "live_equals_fixed": true,
+      "unfixed_equals_fixed": false,
+      "first_unfixed_difference": 3
+    },
+    {
+      "task": "ifeval",
+      "row_index": 108,
+      "doc_id": 108,
+      "token_counts": {"fixed": 314, "unfixed": 351, "live_plugin": 314},
+      "token_id_sha256_prefix": {"fixed": "f57543aae3a2ac47", "unfixed": "07cc779bd47d4c12", "live_plugin": "f57543aae3a2ac47"},
+      "live_equals_fixed": true,
+      "unfixed_equals_fixed": false,
+      "first_unfixed_difference": 3
+    },
+    {
+      "task": "gpqa",
+      "row_index": 0,
+      "doc_id": 0,
+      "token_counts": {"fixed": 1285, "unfixed": 1351, "live_plugin": 1285},
+      "token_id_sha256_prefix": {"fixed": "ff1f1fe9f26cbcbe", "unfixed": "945942ef53befeb2", "live_plugin": "ff1f1fe9f26cbcbe"},
+      "live_equals_fixed": true,
+      "unfixed_equals_fixed": false,
+      "first_unfixed_difference": 3
+    },
+    {
+      "task": "gpqa",
+      "row_index": 92,
+      "doc_id": 0,
+      "token_counts": {"fixed": 1285, "unfixed": 1351, "live_plugin": 1285},
+      "token_id_sha256_prefix": {"fixed": "ff1f1fe9f26cbcbe", "unfixed": "945942ef53befeb2", "live_plugin": "ff1f1fe9f26cbcbe"},
+      "live_equals_fixed": true,
+      "unfixed_equals_fixed": false,
+      "first_unfixed_difference": 3
+    },
+    {
+      "task": "gpqa",
+      "row_index": 183,
+      "doc_id": 89,
+      "token_counts": {"fixed": 1169, "unfixed": 1152, "live_plugin": 1169},
+      "token_id_sha256_prefix": {"fixed": "c78da5b14f29242c", "unfixed": "86fe9487959ede12", "live_plugin": "c78da5b14f29242c"},
+      "live_equals_fixed": true,
+      "unfixed_equals_fixed": false,
+      "first_unfixed_difference": 3
+    }
+  ],
+  "interpretation": "The fix flag materially changes every sampled eval prompt, but the registered live plugin tokenizer exactly matches the corrected tokenizer in all six controls. The v9 API warning is therefore not evidence that request tokenization used the incorrect regex."
+}

@@ -1,0 +1,442 @@
+2026-08-14 01:07:31,458 - run.py:1019 - INFO: TT-Inference version: 0.19.0
+2026-08-14 01:07:31,458 - run.py:1020 - INFO: TT-Inference SHA: 84fbb6651e06
+2026-08-14 01:07:31,458 - run.py:1021 - INFO: 
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      None
+  device:                     p300x2
+  impl:                       None
+  engine:                     None
+  workflow:                   release
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              None
+  vllm_dir:                   None
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      True
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         ci-nightly
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-14 01:07:31,458 - run.py:1027 - INFO: Runtime model spec saved to: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_01-07-31_id_autoport_mistral-small-24b-instruct-2501_p300x2_DLBB2BPs.json
+2026-08-14 01:07:31,458 - validate_setup.py:341 - INFO: Starting local setup validation
+2026-08-14 01:07:31,458 - validate_setup.py:377 - INFO: ✅ validating local setup completed
+2026-08-14 01:07:31,458 - run.py:1141 - INFO: Model Mistral-Small-24B-Instruct-2501 (model_type=LLM) routes through the workflow engine.
+2026-08-14 01:07:31,458 - runner.py:31 - INFO: → command=release
+2026-08-14 01:07:31,459 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python --index-strategy unsafe-best-match -r /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/requirements/workflow-run-script.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_workflow_run_script
+Checked 19 packages in 3ms
+2026-08-14 01:07:31,467 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/python --index-strategy unsafe-best-match -r /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/requirements/evals-common.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_evals_common
+Resolved 103 packages in 914ms
+Checked 103 packages in 0.49ms
+2026-08-14 01:07:32,389 - workflow_venvs.py:132 - INFO: sub-dir already exists for llm_vllm: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_llm_vllm/artifacts
+2026-08-14 01:07:32,389 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python --index-strategy unsafe-best-match --override /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/requirements/llm-vllm-overrides.txt -r /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/requirements/llm-vllm.txt
+Using Python 3.11.15 environment at: .workflow_venvs/.venv_llm_vllm
+Checked 7 packages in 6ms
+2026-08-14 01:07:32,401 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/run_workflows.py --model Mistral-Small-24B-Instruct-2501 --workflow release --device p300x2 --service-port 8000 --runtime-model-spec-json /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_01-07-31_id_autoport_mistral-small-24b-instruct-2501_p300x2_DLBB2BPs.json --output-dir /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release --server-url http://127.0.0.1
+2026-08-14 01:07:32,611 [INFO] workflow_module.runner: → command=workflow
+2026-08-14 01:07:32,611 [INFO] workflow.release: === Workflow start: release | model=Mistral-Small-24B-Instruct-2501 device=P300X2 port=8000 output=/home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release ===
+2026-08-14 01:07:32,611 [INFO] workflow.release: --- release: evals ---
+2026-08-14 01:07:32,622 [INFO] workflow.evals: → task=llm_eval
+2026-08-14 01:07:32,624 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-08-14 01:07:32,625 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=meta_ifeval
+2026-08-14 01:07:32,625 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks ifeval --model local-chat-completions --model_args model=mistralai/Mistral-Small-24B-Instruct-2501,base_url=http://127.0.0.1:8000/v1/chat/completions,tokenizer_backend=none,max_length=32768,num_concurrent=8 --gen_kwargs stream=False,seed=42 --output_path /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release/eval_id_autoport_mistral-small-24b-instruct-2501_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 0.2
+2026-08-14 01:07:32,746 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:32 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-14 01:07:32,746 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:32 INFO     [config.evaluate_config:301] Using default fewshot_as_multiturn=True.
+2026-08-14 01:07:34,353 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:34 INFO     [_cli.run:376] Selected Tasks: ['ifeval']
+2026-08-14 01:07:34,892 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:34 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-14 01:07:34,892 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:34 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-14 01:07:34,892 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:34 INFO     [evaluator:235] Initializing local-chat-completions model, with arguments: {'model': 'mistralai/Mistral-Small-24B-Instruct-2501', 'base_url': 'http://127.0.0.1:8000/v1/chat/completions', 'tokenizer_backend': 'none', 'max_length': 32768, 'num_concurrent': 8, 'trust_remote_code': True}
+2026-08-14 01:07:34,896 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:34 INFO     [models.api_models:284] Using max length 32768 - 1
+2026-08-14 01:07:34,896 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:34 INFO     [models.api_models:305] Using tokenizer None
+2026-08-14 01:07:35,270 [INFO] test_module.llm_tests.llm_eval_tests: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-14 01:07:35,758 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [tasks:700] Selected tasks:
+2026-08-14 01:07:35,758 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [tasks:691] Task: ifeval (ifeval/ifeval.yaml)
+2026-08-14 01:07:35,758 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [evaluator:313] ifeval: Using gen_kwargs: {'until': [], 'do_sample': False, 'temperature': 0.0, 'max_gen_toks': 1280, 'stream': False, 'seed': 42}
+2026-08-14 01:07:35,758 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [evaluator:328] num_fewshot has been set to 0 for ifeval in its config. Manual configuration will be ignored.
+2026-08-14 01:07:35,758 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 WARNING  [evaluator:489] Chat template formatting change affects loglikelihood and multiple-choice tasks. See docs/chat-template-readme.md for details.
+2026-08-14 01:07:35,758 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [api.task:310] Building contexts for ifeval on rank 0...
+2026-08-14 01:07:35,761 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-14 01:07:35,762 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/109 [00:00<?, ?it/s]
+2026-08-14 01:07:35,762 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 109/109 [00:00<00:00, 78783.24it/s]
+2026-08-14 01:07:35,762 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [evaluator:583] Running generate_until requests
+2026-08-14 01:07:35,763 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:07:35 INFO     [models.api_models:955] Tokenized requests are disabled. Context + generation length is not checked.
+2026-08-14 01:07:35,763 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-14 01:08:01,137 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/109 [00:00<?, ?it/s]
+2026-08-14 01:08:23,388 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   1%|          | 1/109 [00:25<45:40, 25.37s/it]
+2026-08-14 01:08:39,937 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   2%|▏         | 2/109 [00:47<41:58, 23.54s/it]
+2026-08-14 01:08:54,341 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|▎         | 3/109 [01:04<35:56, 20.35s/it]
+2026-08-14 01:09:09,172 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   4%|▎         | 4/109 [01:18<31:29, 18.00s/it]
+2026-08-14 01:09:38,740 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   5%|▍         | 5/109 [01:33<29:13, 16.86s/it]
+2026-08-14 01:09:54,965 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   6%|▌         | 6/109 [02:02<36:21, 21.18s/it]
+2026-08-14 01:10:07,182 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   6%|▋         | 7/109 [02:19<33:15, 19.56s/it]
+2026-08-14 01:10:20,136 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 8/109 [02:31<28:59, 17.22s/it]
+2026-08-14 01:10:33,334 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   8%|▊         | 9/109 [02:44<26:28, 15.89s/it]
+2026-08-14 01:10:45,685 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▉         | 10/109 [02:57<24:50, 15.06s/it]
+2026-08-14 01:10:57,720 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|█         | 11/109 [03:09<23:14, 14.23s/it]
+2026-08-14 01:11:09,191 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 12/109 [03:21<21:55, 13.56s/it]
+2026-08-14 01:11:22,923 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  12%|█▏        | 13/109 [03:33<20:41, 12.93s/it]
+2026-08-14 01:11:41,087 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  13%|█▎        | 14/109 [03:47<20:51, 13.17s/it]
+2026-08-14 01:12:07,128 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  14%|█▍        | 15/109 [04:05<22:59, 14.68s/it]
+2026-08-14 01:12:21,049 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▍        | 16/109 [04:31<28:03, 18.10s/it]
+2026-08-14 01:12:31,989 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  16%|█▌        | 17/109 [04:45<25:49, 16.84s/it]
+2026-08-14 01:12:46,373 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 18/109 [04:56<22:51, 15.07s/it]
+2026-08-14 01:12:58,113 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 19/109 [05:10<22:17, 14.86s/it]
+2026-08-14 01:13:14,777 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 20/109 [05:22<20:39, 13.92s/it]
+2026-08-14 01:13:14,886 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  19%|█▉        | 21/109 [05:39<21:37, 14.75s/it]
+2026-08-14 01:13:39,156 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  20%|██        | 22/109 [05:39<15:00, 10.35s/it]
+2026-08-14 01:13:55,333 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██        | 23/109 [06:03<20:49, 14.53s/it]
+2026-08-14 01:14:06,512 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  22%|██▏       | 24/109 [06:19<21:17, 15.02s/it]
+2026-08-14 01:14:22,647 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  24%|██▍       | 26/109 [06:30<14:45, 10.67s/it]
+2026-08-14 01:14:35,555 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▍       | 27/109 [06:46<16:26, 12.02s/it]
+2026-08-14 01:14:49,662 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▌       | 28/109 [06:59<16:32, 12.26s/it]
+2026-08-14 01:15:05,505 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  27%|██▋       | 29/109 [07:13<17:00, 12.76s/it]
+2026-08-14 01:15:17,227 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 30/109 [07:29<17:56, 13.62s/it]
+2026-08-14 01:15:41,093 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 31/109 [07:41<17:00, 13.08s/it]
+2026-08-14 01:15:54,656 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▉       | 32/109 [08:05<20:47, 16.21s/it]
+2026-08-14 01:16:05,937 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  30%|███       | 33/109 [08:18<19:32, 15.43s/it]
+2026-08-14 01:16:39,117 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  31%|███       | 34/109 [08:30<17:45, 14.21s/it]
+2026-08-14 01:16:56,057 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  32%|███▏      | 35/109 [09:03<24:27, 19.83s/it]
+2026-08-14 01:17:10,458 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 36/109 [09:20<23:04, 18.97s/it]
+2026-08-14 01:17:25,876 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  34%|███▍      | 37/109 [09:34<21:07, 17.61s/it]
+2026-08-14 01:17:40,837 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▍      | 38/109 [09:50<20:03, 16.95s/it]
+2026-08-14 01:17:58,855 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 39/109 [10:05<19:05, 16.36s/it]
+2026-08-14 01:18:13,336 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  37%|███▋      | 40/109 [10:23<19:22, 16.85s/it]
+2026-08-14 01:18:40,239 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 41/109 [10:37<18:17, 16.14s/it]
+2026-08-14 01:19:05,641 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▊      | 42/109 [11:04<21:37, 19.37s/it]
+2026-08-14 01:19:19,423 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▉      | 43/109 [11:29<23:17, 21.18s/it]
+2026-08-14 01:19:31,345 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|████      | 44/109 [11:43<20:32, 18.96s/it]
+2026-08-14 01:19:47,930 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  41%|████▏     | 45/109 [11:55<17:58, 16.85s/it]
+2026-08-14 01:20:00,326 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  42%|████▏     | 46/109 [12:12<17:36, 16.77s/it]
+2026-08-14 01:20:15,322 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 47/109 [12:24<15:58, 15.46s/it]
+2026-08-14 01:20:32,990 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  44%|████▍     | 48/109 [12:39<15:34, 15.32s/it]
+2026-08-14 01:20:50,339 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  45%|████▍     | 49/109 [12:57<16:01, 16.02s/it]
+2026-08-14 01:21:04,504 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▌     | 50/109 [13:14<16:08, 16.42s/it]
+2026-08-14 01:21:19,392 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  47%|████▋     | 51/109 [13:28<15:13, 15.74s/it]
+2026-08-14 01:21:35,669 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  49%|████▊     | 53/109 [13:43<11:07, 11.91s/it]
+2026-08-14 01:21:55,176 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|████▉     | 54/109 [13:59<11:54, 13.00s/it]
+2026-08-14 01:22:07,773 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|█████     | 55/109 [14:19<13:13, 14.70s/it]
+2026-08-14 01:22:37,230 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  51%|█████▏    | 56/109 [14:32<12:28, 14.13s/it]
+2026-08-14 01:23:02,812 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  52%|█████▏    | 57/109 [15:01<15:57, 18.42s/it]
+2026-08-14 01:23:15,515 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 58/109 [15:27<17:23, 20.46s/it]
+2026-08-14 01:23:39,129 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▍    | 59/109 [15:39<15:10, 18.21s/it]
+2026-08-14 01:23:58,961 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  55%|█████▌    | 60/109 [16:03<16:09, 19.80s/it]
+2026-08-14 01:24:19,029 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  56%|█████▌    | 61/109 [16:23<15:50, 19.81s/it]
+2026-08-14 01:24:30,099 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 62/109 [16:43<15:34, 19.88s/it]
+2026-08-14 01:24:40,969 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  58%|█████▊    | 63/109 [16:54<13:14, 17.26s/it]
+2026-08-14 01:24:56,705 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▊    | 64/109 [17:05<11:31, 15.36s/it]
+2026-08-14 01:25:13,899 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  60%|█████▉    | 65/109 [17:20<11:20, 15.47s/it]
+2026-08-14 01:25:34,133 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████    | 66/109 [17:38<11:27, 15.98s/it]
+2026-08-14 01:25:47,235 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████▏   | 67/109 [17:58<12:04, 17.26s/it]
+2026-08-14 01:26:02,726 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 68/109 [18:11<10:56, 16.01s/it]
+2026-08-14 01:26:17,612 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  63%|██████▎   | 69/109 [18:26<10:34, 15.86s/it]
+2026-08-14 01:26:31,300 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▍   | 70/109 [18:41<10:07, 15.57s/it]
+2026-08-14 01:26:48,135 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▌   | 71/109 [18:55<09:30, 15.00s/it]
+2026-08-14 01:27:09,236 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  66%|██████▌   | 72/109 [19:12<09:35, 15.55s/it]
+2026-08-14 01:27:34,119 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 73/109 [19:33<10:19, 17.22s/it]
+2026-08-14 01:27:48,656 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 74/109 [19:58<11:23, 19.52s/it]
+2026-08-14 01:28:02,338 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  69%|██████▉   | 75/109 [20:12<10:12, 18.02s/it]
+2026-08-14 01:28:15,583 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  70%|██████▉   | 76/109 [20:26<09:11, 16.72s/it]
+2026-08-14 01:28:26,975 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████   | 77/109 [20:39<08:21, 15.68s/it]
+2026-08-14 01:28:41,103 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 78/109 [20:51<07:26, 14.39s/it]
+2026-08-14 01:28:56,987 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 79/109 [21:05<07:09, 14.31s/it]
+2026-08-14 01:29:12,085 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  73%|███████▎  | 80/109 [21:21<07:08, 14.78s/it]
+2026-08-14 01:29:26,192 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▍  | 81/109 [21:36<06:56, 14.88s/it]
+2026-08-14 01:29:40,729 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  75%|███████▌  | 82/109 [21:50<06:35, 14.65s/it]
+2026-08-14 01:30:06,116 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  76%|███████▌  | 83/109 [22:04<06:19, 14.61s/it]
+2026-08-14 01:30:17,412 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 84/109 [22:30<07:26, 17.85s/it]
+2026-08-14 01:30:30,723 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  78%|███████▊  | 85/109 [22:41<06:21, 15.88s/it]
+2026-08-14 01:30:48,676 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▉  | 86/109 [22:54<05:47, 15.11s/it]
+2026-08-14 01:31:04,066 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  80%|███████▉  | 87/109 [23:12<05:51, 15.96s/it]
+2026-08-14 01:31:18,370 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  81%|████████  | 88/109 [23:28<05:31, 15.79s/it]
+2026-08-14 01:31:35,984 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 89/109 [23:42<05:06, 15.34s/it]
+2026-08-14 01:31:56,990 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 90/109 [24:00<05:04, 16.03s/it]
+2026-08-14 01:32:08,293 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 91/109 [24:21<05:15, 17.52s/it]
+2026-08-14 01:32:20,239 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  84%|████████▍ | 92/109 [24:32<04:26, 15.65s/it]
+2026-08-14 01:32:40,037 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  85%|████████▌ | 93/109 [24:44<03:52, 14.54s/it]
+2026-08-14 01:32:54,631 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▌ | 94/109 [25:04<04:01, 16.12s/it]
+2026-08-14 01:33:11,467 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  87%|████████▋ | 95/109 [25:18<03:39, 15.66s/it]
+2026-08-14 01:33:28,954 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  88%|████████▊ | 96/109 [25:35<03:28, 16.01s/it]
+2026-08-14 01:33:43,890 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 97/109 [25:53<03:17, 16.46s/it]
+2026-08-14 01:34:07,410 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  90%|████████▉ | 98/109 [26:08<02:55, 16.00s/it]
+2026-08-14 01:34:25,590 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████ | 99/109 [26:31<03:02, 18.26s/it]
+2026-08-14 01:34:47,320 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  92%|█████████▏| 100/109 [26:49<02:44, 18.23s/it]
+2026-08-14 01:35:13,589 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 101/109 [27:11<02:34, 19.28s/it]
+2026-08-14 01:35:23,180 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▎| 102/109 [27:37<02:29, 21.38s/it]
+2026-08-14 01:35:26,384 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▍| 103/109 [27:47<01:47, 17.84s/it]
+2026-08-14 01:35:30,377 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▌| 104/109 [27:50<01:07, 13.45s/it]
+2026-08-14 01:35:33,089 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▋| 105/109 [27:54<00:42, 10.61s/it]
+2026-08-14 01:35:37,761 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  97%|█████████▋| 106/109 [27:57<00:24,  8.24s/it]
+2026-08-14 01:35:43,473 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  98%|█████████▊| 107/109 [28:01<00:14,  7.17s/it]
+2026-08-14 01:36:05,295 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  99%|█████████▉| 108/109 [28:07<00:06,  6.73s/it]
+2026-08-14 01:36:05,295 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 109/109 [28:29<00:00, 11.26s/it]
+2026-08-14 01:36:05,295 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 109/109 [28:29<00:00, 15.68s/it]
+2026-08-14 01:36:05,899 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:05 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-14 01:36:05,900 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:05 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release/eval_id_autoport_mistral-small-24b-instruct-2501_p300x2/mistralai__Mistral-Small-24B-Instruct-2501/*.jsonl
+2026-08-14 01:36:06,535 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=meta_gpqa_cot
+2026-08-14 01:36:06,535 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks gpqa_main_cot_n_shot --model local-chat-completions --model_args model=mistralai/Mistral-Small-24B-Instruct-2501,base_url=http://127.0.0.1:8000/v1/chat/completions,tokenizer_backend=none,max_length=32768,num_concurrent=8 --gen_kwargs max_gen_toks=2048,do_sample=false,stream=false,seed=42 --output_path /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release/eval_id_autoport_mistral-small-24b-instruct-2501_p300x2 --seed 42 --num_fewshot 5 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 0.2
+2026-08-14 01:36:06,656 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:06 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-14 01:36:06,656 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:06 INFO     [config.evaluate_config:301] Using default fewshot_as_multiturn=True.
+2026-08-14 01:36:08,312 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:08 INFO     [_cli.run:376] Selected Tasks: ['gpqa_main_cot_n_shot']
+2026-08-14 01:36:08,835 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:08 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-14 01:36:08,835 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:08 WARNING  [evaluator:222] generation_kwargs: {'max_gen_toks': 2048, 'do_sample': False, 'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-14 01:36:08,835 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:08 INFO     [evaluator:235] Initializing local-chat-completions model, with arguments: {'model': 'mistralai/Mistral-Small-24B-Instruct-2501', 'base_url': 'http://127.0.0.1:8000/v1/chat/completions', 'tokenizer_backend': 'none', 'max_length': 32768, 'num_concurrent': 8, 'trust_remote_code': True}
+2026-08-14 01:36:08,839 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:08 INFO     [models.api_models:284] Using max length 32768 - 1
+2026-08-14 01:36:08,839 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-14:01:36:08 INFO     [models.api_models:305] Using tokenizer None
+2026-08-14 01:36:08,890 [INFO] test_module.llm_tests.llm_eval_tests: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: Traceback (most recent call last):
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval", line 10, in <module>
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: sys.exit(cli_evaluate())
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/__main__.py", line 10, in cli_evaluate
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: parser.execute(args)
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/_cli/harness.py", line 60, in execute
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: args.func(args)
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/_cli/run.py", line 379, in _execute
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: results = simple_evaluate(
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/utils.py", line 491, in _wrapper
+2026-08-14 01:36:08,966 [INFO] test_module.llm_tests.llm_eval_tests: return fn(*args, **kwargs)
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/evaluator.py", line 291, in simple_evaluate
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: task_dict = get_task_dict(
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 646, in get_task_dict
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: task_name_from_string_dict = task_manager.load_task_or_group(
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 428, in load_task_or_group
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: collections.ChainMap(
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 430, in <lambda>
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: lambda task: self._load_individual_task_or_group(task),
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 328, in _load_individual_task_or_group
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: return _load_task(task_config, task=name_or_config)
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 288, in _load_task
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: task_object = ConfigurableTask(config=config)
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/api/task.py", line 747, in __init__
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: self.download(self.config.dataset_kwargs)
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/api/task.py", line 863, in download
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: self.dataset = datasets.load_dataset(
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 2132, in load_dataset
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: builder_instance = load_dataset_builder(
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1853, in load_dataset_builder
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: dataset_module = dataset_module_factory(
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1717, in dataset_module_factory
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: raise e1 from None
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1701, in dataset_module_factory
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: raise DatasetNotFoundError(message) from e
+2026-08-14 01:36:08,967 [INFO] test_module.llm_tests.llm_eval_tests: datasets.exceptions.DatasetNotFoundError: Dataset 'Idavidrein/gpqa' is a gated dataset on the Hub. You must be authenticated to access it.
+2026-08-14 01:36:09,270 [ERROR] test_module.llm_tests.llm_eval_tests: ⛔ subprocess.Popen command failed with return code: 1
+command: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks gpqa_main_cot_n_shot --model local-chat-completions --model_args model=mistralai/Mistral-Small-24B-Instruct-2501,base_url=http://127.0.0.1:8000/v1/chat/completions,tokenizer_backend=none,max_length=32768,num_concurrent=8 --gen_kwargs max_gen_toks=2048,do_sample=false,stream=false,seed=42 --output_path /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release/eval_id_autoport_mistral-small-24b-instruct-2501_p300x2 --seed 42 --num_fewshot 5 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 0.2
+
+See error messages in logs above this RuntimeError for details on actual cause of failure.
+
+This command is optional or can be recovered from failure (check=False set). Continuing ...
+
+2026-08-14 01:36:09,271 [INFO] workflow_module.blocks_sink: BlockAccumulator: +2 block(s), total=2
+2026-08-14 01:36:09,271 [INFO] workflow_module.blocks_sink:   - kind=evals id=Mistral-Small-24B-Instruct-2501_P300X2 targets={'task_name': 'meta_ifeval', 'executed_task_name': 'ifeval', 'tolerance': 0.05, 'published_score': 82.9, 'published_score_ref': 'https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks'}
+2026-08-14 01:36:09,271 [INFO] workflow_module.blocks_sink:   - kind=evals id=Mistral-Small-24B-Instruct-2501_P300X2 targets={'task_name': 'meta_gpqa_cot'}
+2026-08-14 01:36:09,271 [INFO] workflow.evals: ✅ llm_eval blocks=2 kind=evals (1716.6s)
+2026-08-14 01:36:09,271 [INFO] workflow.release: --- release: benchmarks ---
+2026-08-14 01:36:09,272 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-08-14 01:36:09,276 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 1 sweep point(s)
+2026-08-14 01:36:09,277 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-08-14 01:36:09,278 [INFO] llm_module.runner: Running vllm sweep point 1/1  isl=128 osl=128 max_conc=1 n=8
+2026-08-14 01:36:09,278 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model mistralai/Mistral-Small-24B-Instruct-2501 --dataset-name random --max-concurrency 1 --num-prompts 8 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release/llm/benchmark_mistralai__Mistral-Small-24B-Instruct-2501_2026-08-14_01-36-09_isl-128_osl-128_maxcon-1_n-8.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-14 01:36:11 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-14 01:36:11 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-14 01:36:11 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-14 01:36:12 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x78b4e536ce00>, seed=0, num_prompts=8, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='mistralai/Mistral-Small-24B-Instruct-2501', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release/mistral-small-24b-2501/tti_cache_release_v3/workflow_logs/reports_output/release/Mistral-Small-24B-Instruct-2501_p300x2_release/llm/benchmark_mistralai__Mistral-Small-24B-Instruct-2501_2026-08-14_01-36-09_isl-128_osl-128_maxcon-1_n-8.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-5dfb7e47-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-14 01:36:13 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [128, 128]
+WARNING 08-14 01:36:13 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/8 [00:00<?, ?it/s]
+12%|█▎        | 1/8 [00:03<00:26,  3.72s/it]
+25%|██▌       | 2/8 [00:07<00:22,  3.71s/it]
+38%|███▊      | 3/8 [00:11<00:18,  3.71s/it]
+50%|█████     | 4/8 [00:14<00:14,  3.71s/it]
+62%|██████▎   | 5/8 [00:18<00:11,  3.71s/it]
+75%|███████▌  | 6/8 [00:22<00:07,  3.71s/it]
+88%|████████▊ | 7/8 [00:25<00:03,  3.71s/it]
+100%|██████████| 8/8 [00:29<00:00,  3.71s/it]
+100%|██████████| 8/8 [00:29<00:00,  3.71s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     8
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  29.66
+Total input tokens:                      1017
+Total generated tokens:                  1024
+Request throughput (req/s):              0.27
+Output token throughput (tok/s):         34.52
+Peak output token throughput (tok/s):    56.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          68.80
+---------------Time to First Token----------------
+Mean TTFT (ms):                          1271.60
+Median TTFT (ms):                        1271.89
+P99 TTFT (ms):                           1274.03
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          19.18
+Median TPOT (ms):                        19.17
+P99 TPOT (ms):                           19.26
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           19.03
+Median ITL (ms):                         17.94
+P99 ITL (ms):                            18.78
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          3707.83
+Median E2EL (ms):                        3707.01
+P99 E2EL (ms):                           3716.41
+==================================================
+2026-08-14 01:36:43,791 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 1 Block(s) over 1 sweep point(s)
+2026-08-14 01:36:43,791 [INFO] workflow_module.blocks_sink: BlockAccumulator: +1 block(s), total=3
+2026-08-14 01:36:43,791 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=mistralai__Mistral-Small-24B-Instruct-2501_P300X2 targets={'tool': 'vllm', 'model': 'mistralai/Mistral-Small-24B-Instruct-2501', 'device': 'P300X2', 'timestamp': '2026-08-14 01:36:43'}
+2026-08-14 01:36:43,791 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=1 kind=benchmarks (34.5s)
+2026-08-14 01:36:43,791 [INFO] workflow.release: --- release: spec_tests ---
+2026-08-14 01:36:43,792 [INFO] workflow.spec_tests: → task=spec_tests
+2026-08-14 01:36:43,792 [INFO] test_module.dispatch: Running spec_tests for model=Mistral-Small-24B-Instruct-2501, device=P300X2
+2026-08-14 01:36:43,794 [INFO] test_module.test_categorization_system.test_filter: Loading server tests configuration
+2026-08-14 01:36:43,794 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.test_filter: Loading test suites from discovery
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Loading suite files from /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/test_module/test_suites
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 5 suites
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Loaded 8 suites from audio.json (AUDIO)
+2026-08-14 01:36:43,795 [WARNING] test_module.test_categorization_system.suite_loader: Skipping efficientnet on n300: not in compatible_devices ['n150']
+2026-08-14 01:36:43,795 [WARNING] test_module.test_categorization_system.suite_loader: Skipping segformer on n300: not in compatible_devices ['n150']
+2026-08-14 01:36:43,795 [WARNING] test_module.test_categorization_system.suite_loader: Skipping unet on n300: not in compatible_devices ['n150']
+2026-08-14 01:36:43,795 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vit on n300: not in compatible_devices ['n150']
+2026-08-14 01:36:43,795 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vovnet on n300: not in compatible_devices ['n150']
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 9 suites
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Loaded 9 suites from cnn.json (CNN)
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 6 suites
+2026-08-14 01:36:43,795 [INFO] test_module.test_categorization_system.suite_loader: Loaded 6 suites from embedding.json (EMBEDDING)
+2026-08-14 01:36:43,796 [WARNING] test_module.test_categorization_system.suite_loader: Skipping motif on p300: not in compatible_devices ['t3k', 'galaxy', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,796 [INFO] test_module.test_categorization_system.suite_loader: Expanded 6 test matrices into 29 suites
+2026-08-14 01:36:43,796 [INFO] test_module.test_categorization_system.suite_loader: Loaded 32 suites from image.json (IMAGE)
+2026-08-14 01:36:43,796 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,796 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150x4: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on gpu: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p100: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x4: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x8: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300x2: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on n150: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on n300: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on t3k: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on galaxy: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on galaxy_t3k: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on gpu: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on p100: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on p150: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on p150x4: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on p150x8: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [WARNING] test_module.test_categorization_system.suite_loader: Skipping mistral_small_24b on p300: not in compatible_devices ['blackhole_galaxy', 'p300x2']
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 35 suites
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.suite_loader: Loaded 35 suites from llm.json (LLM)
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 2 suites
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.suite_loader: Loaded 2 suites from tts.json (TTS)
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 15 suites
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.suite_loader: Loaded 15 suites from video.json (VIDEO)
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.test_filter: Building reverse mapping: model -> category
+2026-08-14 01:36:43,797 [INFO] test_module.test_categorization_system.test_filter: Expanding 107 test suites
+2026-08-14 01:36:43,798 [INFO] test_module.test_categorization_system.test_filter: Including prerequisites by default
+2026-08-14 01:36:43,798 [INFO] test_module.test_categorization_system.test_filter: Getting filtered tests
+2026-08-14 01:36:43,798 [INFO] test_module.test_categorization_system.test_filter: Getting prerequisite tests for suite: mistral-small-3.1-24b-p300x2
+2026-08-14 01:36:43,798 [INFO] test_module.test_categorization_system.test_filter: Skipping prerequisite DeviceLivenessTest for engine vLLM (allowed: ['media', 'forge'])
+2026-08-14 01:36:43,798 [INFO] test_module.test_categorization_system.test_filter: Expanding prerequisite test: LoggerForkSafetyTest
+2026-08-14 01:36:43,798 [INFO] test_module.dispatch: [mistral-small-3.1-24b-p300x2] 2 test case(s)
+2026-08-14 01:36:43,798 [INFO] test_module.dispatch:   -> LoggerForkSafetyTest (test_module.unit_tests.logger_fork_safety_test)
+2026-08-14 01:36:43,800 [WARNING] test_module._test_common.base_test: Hardware-readiness probe got HTTP 404; skipping gate.
+2026-08-14 01:36:43,800 [INFO] test_module._test_common.base_test: Running tests (attempt 1/121)
+2026-08-14 01:36:43,801 [INFO] test_module.unit_tests.logger_fork_safety_test: Testing logger fork safety with held lock...
+2026-08-14 01:36:43,801 [INFO] test_module.unit_tests.logger_fork_safety_test: Handler lock held by background thread, forking...
+2026-08-14 01:36:43,802 [INFO] test_module.unit_tests.logger_fork_safety_test: Child logged without deadlock
+2026-08-14 01:36:43,803 [INFO] test_module._test_common.base_test: Tests completed successfully
+2026-08-14 01:36:43,803 [INFO] test_module.dispatch:   -> VLLMParamConformanceTest (test_module.llm_tests.vllm_param_conformance_test)
+2026-08-14 01:36:43,805 [WARNING] test_module._test_common.base_test: Hardware-readiness probe got HTTP 404; skipping gate.
+2026-08-14 01:36:43,805 [INFO] test_module._test_common.base_test: Running tests (attempt 1/1)
+2026-08-14 01:36:43,805 [INFO] test_module.llm_tests.vllm_param_conformance_test: Running vLLM parameter suite: /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python -m pytest /home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/llm_module/test_vllm_chat_completions.py --output-path /tmp/vllm_param_rzffsc40 --task-name vllm_chat_completions --endpoint-url http://127.0.0.1:8000/v1/chat/completions --model-name mistralai/Mistral-Small-24B-Instruct-2501 -q
+Traceback (most recent call last):
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/run_workflows.py", line 537, in <module>
+sys.exit(main())
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/run_workflows.py", line 533, in main
+return runner.run()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/runner.py", line 32, in run
+result = cmd.execute()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/commands.py", line 229, in execute
+result: WorkflowResult = workflow.run()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/execution.py", line 243, in run
+task_outcomes = self.run_tasks()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/workflows.py", line 504, in run_tasks
+return self._run_llm_tasks()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/workflows.py", line 517, in _run_llm_tasks
+outcomes.extend(self._run_child(child_name))
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/workflows.py", line 579, in _run_child
+return child.run_tasks()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/execution.py", line 303, in run_tasks
+return [self._dispatch_task(t) for t in self.task_types]
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/execution.py", line 303, in <listcomp>
+return [self._dispatch_task(t) for t in self.task_types]
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/workflow_module/execution.py", line 311, in _dispatch_task
+exit_code, block = run_media_task(self.ctx, task_type)
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/test_module/dispatch.py", line 161, in run_media_task
+return run_spec_tests(ctx)
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/test_module/dispatch.py", line 366, in run_spec_tests
+block = test.run_tests()
+File "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/test_module/_test_common/base_test.py", line 294, in run_tests
+result = asyncio.run(
+File "/home/mvasiljevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/runners.py", line 44, in run
+return loop.run_until_complete(main)
+File "/home/mvasiljevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 636, in run_until_complete
+self.run_forever()
+File "/home/mvasiljevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 603, in run_forever
+self._run_once()
+File "/home/mvasiljevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 1871, in _run_once
+event_list = self._selector.select(timeout)
+File "/home/mvasiljevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/selectors.py", line 469, in select
+fd_event_list = self._selector.poll(timeout, max_ev)
+KeyboardInterrupt

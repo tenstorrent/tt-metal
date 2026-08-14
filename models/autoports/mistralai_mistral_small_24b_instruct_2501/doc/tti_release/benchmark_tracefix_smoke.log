@@ -1,0 +1,43 @@
+INFO 08-14 18:43:52 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-14 18:43:52 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-14 18:43:52 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-14 18:43:53 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7ae775b70ea0>, seed=0, num_prompts=1, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=37, random_output_len=16, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='mistralai/Mistral-Small-24B-Instruct-2501', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/tmp/mistral_tracefix_tiny_benchmark.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-d8a9a9fa-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-14 18:43:53 [datasets.py:612] Sampling input_len from [36, 36] and output_len from [16, 16]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:01<00:00,  1.35s/it]100%|██████████| 1/1 [00:01<00:00,  1.35s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     1         
+Failed requests:                         0         
+Maximum request concurrency:             1         
+Benchmark duration (s):                  1.35      
+Total input tokens:                      36        
+Total generated tokens:                  16        
+Request throughput (req/s):              0.74      
+Output token throughput (tok/s):         11.84     
+Peak output token throughput (tok/s):    15.00     
+Peak concurrent requests:                1.00      
+Total token throughput (tok/s):          38.48     
+---------------Time to First Token----------------
+Mean TTFT (ms):                          939.16    
+Median TTFT (ms):                        939.16    
+P99 TTFT (ms):                           939.16    
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          27.45     
+Median TPOT (ms):                        27.45     
+P99 TPOT (ms):                           27.45     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           25.74     
+Median ITL (ms):                         17.73     
+P99 ITL (ms):                            146.99    
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          1350.95   
+Median E2EL (ms):                        1350.95   
+P99 E2EL (ms):                           1350.95   
+==================================================
