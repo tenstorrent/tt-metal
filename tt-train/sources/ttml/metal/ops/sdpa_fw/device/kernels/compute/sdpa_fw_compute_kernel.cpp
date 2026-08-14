@@ -327,6 +327,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_query, cb_key, cb_value);
     copy_init(cb_query);
+    // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
 

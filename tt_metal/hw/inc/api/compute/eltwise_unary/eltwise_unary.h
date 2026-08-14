@@ -49,7 +49,7 @@ namespace ckernel {
     "15-09-2026.")]] ALWI void
 unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     compute_kernel_hw_startup(icb, ocb);
-    copy_init(icb, 0, 0, call_line);
+    copy_init(icb, 0 /*transpose*/, 0 /*transpose_within_16x16_face*/, call_line);
 }
 
 // clang-format off
@@ -70,7 +70,7 @@ unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_
     "15-09-2026.")]] ALWI void
 init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     compute_kernel_hw_startup(icb, ocb);
-    copy_init(icb, 0, 0, call_line);
+    copy_init(icb, 0 /*transpose*/, 0 /*transpose_within_16x16_face*/, call_line);
 }
 
 }  // namespace ckernel

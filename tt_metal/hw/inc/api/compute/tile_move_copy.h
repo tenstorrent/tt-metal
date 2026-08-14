@@ -102,7 +102,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
  * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
  * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
- * (`copy_tile_init` / `copy_tile_to_dst_init_short`). The DST register buffer must be in acquired
+ * (`copy_init`). The DST register buffer must be in acquired
  * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.
@@ -149,7 +149,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  *
  * | Argument | Description                                      | Type     | Valid Range | Required |
  * |----------|--------------------------------------------------|----------|-------------|----------|
- * | cbid     | The identifier of the input circular buffer (CB) | uint32_t | 0 to 31     | False    |
+ * | cbid     | The identifier of the input circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
 [[deprecated("Renamed to copy_init(). This will be removed after 15-09-2026.")]] ALWI void copy_tile_init(
@@ -166,7 +166,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  *
  * | Argument                    | Description                                       | Type     | Valid Range                                                         | Required |
  * |-----------------------------|---------------------------------------------------|----------|--------------------------------------------------------------------|----------|
- * | cbid                        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                                            | False    |
+ * | cbid                        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                                            | True     |
  * | transpose                   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set                  | False    |
  * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face       | uint32_t | Any positive value will indicate transpose within 16x16 face is set | False    |
  */

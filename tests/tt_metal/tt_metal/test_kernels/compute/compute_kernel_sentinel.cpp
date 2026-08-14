@@ -119,6 +119,9 @@ void kernel_main() {
     // SrcA (cb_in0 -> cb_in1) and Pack (cb_out0 -> cb_out1) both change.
     reconfig_data_format_srca(cb_in1);
     pack_reconfig_data_format(cb_out1);
+    // pack_reconfig_data_format is PACK-only and does not reach the sentinel state; record the pack CB
+    // the way lines 50/57 do so m_pack_cb tracks cb_out1 and the assert below sees the PACK change.
+    state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
     copy_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 

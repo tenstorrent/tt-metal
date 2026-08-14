@@ -656,6 +656,9 @@ inline void matmul_configure_mop_throttled(
  * @param rt_dim: Number of row tiles in the output block.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
+ * @note Establishes the operand-driven DEFAULT Src zero-substitution state (tt-metal#49924); @ref
+ *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
+ *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(

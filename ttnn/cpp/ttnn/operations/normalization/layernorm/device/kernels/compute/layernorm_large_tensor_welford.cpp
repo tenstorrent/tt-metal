@@ -127,7 +127,6 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         copy_init(dfb_ex_welford);
         copy_tile(dfb_ex_welford, 0, mean_dst);
         reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
-        reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
         copy_init(dfb_ex2_welford);
         copy_tile(dfb_ex2_welford, 0, var_dst);
         welford_restore_state(mean_dst);
