@@ -163,14 +163,20 @@ class _DramShardedMatmul:
             batch *= int(dim)
         return batch == 1
 
-    def parts(self, x, compute_kernel_config=None):
+    def parts(self, x, compute_kernel_config=None, out_dtype=None):
         """The projection's output, as its column blocks, each still L1-sharded.
 
         Handed back unjoined on purpose: the caller knows what it does with the
         result, and joining N tile-layout blocks is much more expensive than
         joining whatever it actually needs them reduced to.
+
+        `out_dtype` narrows the block the CONSUMER then reads. The weight is
+        already at the lowest tiled format there is, so the only bytes on this op
+        still open to a dtype walk are the ones it WRITES.
         """
         kwargs = {"compute_kernel_config": compute_kernel_config} if compute_kernel_config else {}
+        if out_dtype is not None:
+            kwargs["dtype"] = out_dtype
         x = ttnn.to_memory_config(x, self.in_memory_config)
         return [
             ttnn.linear(
@@ -429,6 +435,15 @@ class VoxtralTtsBackbonePipeline:
         # product (logits at EVERY prompt position), so it keeps the general
         # routing. Two copies is 226 MB at bfloat4_b against 32 GB of board DRAM.
         self.lm_head_dram = _dram_sharded_plan(device, lm_head_host, ttnn.bfloat4_b)
+        # The head's WEIGHT is already at bfloat4_b, the lowest tiled matmul operand
+        # format there is (FP8_E4M3 exists but is row-major-only), so the dtype walk
+        # has nowhere left to go on the read. What is still open is the WRITE: each
+        # block lands a [tile, vocab/n] L1 shard -- 2 MB, 8 MB per token across the
+        # four blocks -- and the untilize that follows reads all of it to keep ONE
+        # row. bfloat8_b halves that shard. Nothing downstream carries the format
+        # (untilize hands ROW_MAJOR bfloat16 to argmax either way), and argmax needs
+        # only the ORDER of the logits, not their exact values.
+        self.lm_head_out_dtype = ttnn.bfloat8_b
 
         # --- resident KV, one pair per layer, [1, n_kv, C, head_dim] ---------
         cache_host = torch.zeros(1, self.n_kv_heads, self.capacity, self.head_dim, dtype=torch.bfloat16)
@@ -648,7 +663,9 @@ class VoxtralTtsBackbonePipeline:
         """
         if self.lm_head_dram is not None and self.lm_head_dram.matches(hidden):
             try:
-                parts = self.lm_head_dram.parts(hidden, self.lm_head_compute_kernel_config)
+                parts = self.lm_head_dram.parts(
+                    hidden, self.lm_head_compute_kernel_config, out_dtype=self.lm_head_out_dtype
+                )
                 rows = [ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT) for part in parts]
                 return rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=-1)
             except Exception:  # noqa: BLE001 - bank-sharded path refused: general routing
