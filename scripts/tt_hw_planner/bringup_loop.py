@@ -922,6 +922,7 @@ def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> s
 
 _FORWARD_TORCH_CALL_RE = re.compile(r"\btorch\.[A-Za-z_]\w*\s*\(")
 _DEVICE_READBACK_RE = re.compile(r"(?<!ttnn)\.to_torch\s*\(")
+_TTNN_DISPATCH_RE = re.compile(r"\bttnn\.[A-Za-z_]\w*\s*\(")
 
 
 def _stub_body_is_native(stub_path: Path) -> bool:
@@ -1024,13 +1025,24 @@ def _stub_body_is_native(stub_path: Path) -> bool:
                 return True
         return False
 
+    # __init__ IS SETUP, NOT THE COMPUTE PATH -- as this function's own docstring says ("Weight prep
+    # in __init__ ... is allowed"). The rule was never applied that way: the walk below checked EVERY
+    # method, so one-time table building was judged as if it were a per-forward torch fallback.
+    #
+    # Measured on Voxtral: llama_rotary_embedding builds its rope table once in __init__ under
+    # `with torch.no_grad():` -- calling the reference to produce cos/sin, then staging them to the
+    # device with ttnn.from_torch. Its runtime probe records ttnn_dispatch=2, torch_ops=0, and it
+    # passed the on-device graduation gate; the report still called it "runs on CPU (eager runner)".
+    #
+    # Delegation inside the FORWARD is still fatal, which is the thing this check exists for: a stub
+    # whose forward returns the torch reference's output has a meaningless PCC pass.
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name in helper_function_names:
+            if node.name in helper_function_names or node.name == "__init__":
                 continue
             if node.name in forward_method_names and _calls_fallback(node):
                 return False
-            if _calls_fallback(node) and node.name not in helper_function_names:
+            if _calls_fallback(node):
                 return False
 
     compute = []
@@ -1040,7 +1052,40 @@ def _stub_body_is_native(stub_path: Path) -> bool:
             if seg:
                 compute.append(seg)
     compute_src = "\n".join(compute)
-    if _FORWARD_TORCH_CALL_RE.search(compute_src) or _DEVICE_READBACK_RE.search(compute_src):
+    # A `torch.<fn>(` CALL IS NOT EVIDENCE OF HOST COMPUTE, and treating it as such reported working
+    # modules as running on CPU.
+    #
+    # This used to reject any torch call in the compute path. `llama_attention` builds an index to
+    # hand to ttnn -- `torch.full((batch,), int(pos), dtype=torch.int32)` -- and was rejected for it,
+    # so RUN_REPORT.md claimed for nine days that a module whose runtime probe records
+    # ttnn_dispatch=12, torch_ops=0 "runs on CPU (eager runner)". `llama_rotary_embedding`
+    # (ttnn_dispatch=2, torch_ops=0) the same. Both had PASSED the on-device graduation gate; a regex
+    # with no execution behind it overruled a measured verdict.
+    #
+    # What survives is what a source read can actually decide: DELEGATION (checked above --
+    # _get_torch_submodule, _coerce_to_torch, self._torch_module.forward, no_grad), which makes a PCC
+    # pass meaningless because the output IS the reference; and a bare `.to_torch(` readback, which
+    # moves data off the device and cannot be anything but host work. Whether a torch call is maths or
+    # plumbing is not decidable from text -- it is decidable by RUNNING it, which is what the runtime
+    # probe does, and the probe is preferred over this whole path whenever it is usable.
+    if _DEVICE_READBACK_RE.search(compute_src):
+        return False
+    # A TORCH CALL IS HOST COMPUTE ONLY IF NOTHING IS DISPATCHED TO THE DEVICE.
+    #
+    # Rejecting every `torch.<fn>(` in the compute path reported working modules as running on CPU:
+    # llama_attention builds an index with `torch.full((batch,), int(pos))` and hands it to ttnn, and
+    # was rejected for it -- while its runtime probe records ttnn_dispatch=12, torch_ops=0 and it had
+    # PASSED the on-device graduation gate. RUN_REPORT.md carried "runs on CPU (eager runner)" for
+    # nine days as a result.
+    #
+    # Dropping the check entirely is worse: a forward that is nothing but `return torch.softmax(x)`
+    # would graduate, and its PCC pass would be meaningless (test_torch_call_in_forward_is_rejected
+    # pins exactly that). What separates the two is not the torch call, it is whether the path also
+    # DISPATCHES: plumbing feeds ttnn, a reimplementation replaces it. Both are decidable from the
+    # source, unlike "is this particular torch call maths or plumbing".
+    #
+    # The runtime probe remains preferred over this whole path -- it counts what actually executes.
+    if _FORWARD_TORCH_CALL_RE.search(compute_src) and not _TTNN_DISPATCH_RE.search(compute_src):
         return False
     return True
 
