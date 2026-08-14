@@ -64,13 +64,53 @@ Controlled A/B on QB2, same box, same build system, single test in isolation:
 | Feature absent (pre-#52730) | **PASS in 4.0 s** |
 | Feature + the single-packet fix above | **HANG** — `TIMEOUT: device is unrecoverable` |
 
-So split forwarding still breaks this test through some mechanism the single-packet guard does not
-address. **This is the top open item; the feature is not landable until it is resolved.** Reset the
-devices (`tt-smi -r`) between attempts. Start by checking whether this test's shapes produce a
-relayed input that is unsplittable in some *other* way than `npkt == 1`, and whether its
-`kv_actual_isl` clamp (which shrinks `input_tile_id_end` on-device, in both AG kernels) can change
-`num_packets` after `first_half_pages` has already been derived — a clamp that lands between the two
-would desync the reader and writer halves.
+#### The hang: root-caused and fixed [VERIFIED]
+
+The `kv_actual_isl` clamp lead was correct. `clamp_input_ranges_to_gather_extent` sets
+`input_tile_id_end = valid_pages` whenever `valid_pages < end`, **without regard to
+`input_tile_id_start`**, so it can leave an inverted (empty) range. On-device `DPRINT` caught it:
+
+```
+GEOM R chip=0 dir=0 shard=3 in=0 start=4 end=2 tot=4294967294 npkt=2147483647 fh=2147483646 sp=1
+```
+
+`total_pages = end - start` underflows, `first_half_pages` becomes ~2^31, the `first_half_pages > 0`
+guard passes against garbage, and the relay range becomes ~2 billion pages. That is the hang.
+
+This had been latent forever: every read/write loop is `while (tiles_read < tiles_to_read)`, which
+simply does not execute on an inverted range. **Split forwarding is the only code that *subtracts*
+those two values.** Reader and writer compute identical garbage, so it is not a desync.
+
+Fix — saturate at zero in both kernels:
+
+```cpp
+const uint32_t total_pages = (input_tile_id_end[i] > input_tile_id_start[i])
+                                 ? (input_tile_id_end[i] - input_tile_id_start[i]) : 0;
+```
+
+#### What remains: a deterministic divergence [UNRESOLVED]
+
+With the underflow fixed the hang is gone, but the same test now fails its determinism check:
+
+```
+ring_mla chunked kv_actual_isl determinism failed at iter 1: chunk 4: 3957 diffs, max=0.287109375
+```
+
+**Byte-identical across repeated runs**, so despite the check's name this is not a race — it is a
+deterministic difference between iteration 0 and iteration 1, i.e. state carried across the
+persistent-cache reuse. Established so far:
+
+- Disabling the halving alone (counting left on) makes the test pass in 4.2 s, so it is still the
+  halving, same subsystem as §0.
+- It is **not** the partial final packet: restricting halving to ranges that divide evenly into
+  packets (`total_pages % packet_size_in_pages == 0`) reproduces the identical failure.
+- It is caused by the feature: the test passes in 4.0 s with the feature absent.
+
+Next lead: on iteration 1 the persistent KV cache is reused rather than fresh, so the clamped extent
+differs between iterations. Compare the per-chunk `first_half_pages` split point across iterations —
+if the split point moves, direction 0 and direction 1 cover different page sets on iter 1 than on
+iter 0, and any region written on iter 0 but not re-covered on iter 1 retains stale data. Chunk 4
+and a max diff of 0.287 (a real value, not garbage) is consistent with stale-but-valid data.
 
 ### What this corrects in the rest of this document
 
@@ -456,9 +496,9 @@ attempt in #38256. It has a track record of being hard to get right.
 The single-packet root cause is fixed (§0) and the two failures from §3 pass, but the nightly is
 **not green** — resolve the remaining hang first.
 
-0. **`test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism` hangs**
-   (§0). Passes with the feature absent, hangs with the feature plus the single-packet fix.
-   **This blocks the re-land.** Everything below is secondary to it.
+0. **`test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism` fails its
+   determinism check** (§0). Its hang is fixed (inverted-range underflow), but a deterministic
+   iter-0 vs iter-1 divergence remains. **This blocks the re-land.** Everything below is secondary.
 1. **The sliding-window path.** `get_next_ring_id_and_consume_one_signal()` still lacks the split
    second-half wait its sibling has (§9, defect 2). The failing tests used
    `get_next_ring_id_and_sync()`, so this path is untested against split forwarding. Find or add a

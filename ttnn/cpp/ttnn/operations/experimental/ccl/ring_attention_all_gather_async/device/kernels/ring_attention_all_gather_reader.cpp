@@ -238,7 +238,13 @@ void kernel_main() {
                 uint32_t stride_Wt = output_tensor_Wt[input_idx];
 
                 // Packet-aligned midpoint of this input's per-batch-head page range (matches the writer)
-                const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
+                // input_tile_id_end can be clamped BELOW input_tile_id_start by the on-device
+                // kv_actual_isl clamp, leaving an inverted (empty) range. Every read loop is
+                // `while (tiles_read < tiles_to_read)`, so an empty range is harmless there -- but
+                // subtracting these underflows and yields an absurd first_half_pages. Saturate at 0.
+                const uint32_t total_pages = (input_tile_id_end[input_idx] > input_tile_id_start[input_idx])
+                                                 ? (input_tile_id_end[input_idx] - input_tile_id_start[input_idx])
+                                                 : 0;
                 const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
                 const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
                 // A single-packet input cannot be halved: first_half_pages would be 0, degenerating the
