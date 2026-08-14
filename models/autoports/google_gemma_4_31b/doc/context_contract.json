@@ -76,7 +76,10 @@
   "multichip_decoder_plan": {
     "status": "complete_clean_pass",
     "target_hardware": "4x Blackhole P150b",
-    "mesh_shape": [1, 4],
+    "mesh_shape": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "residual_contract": "replicated_bfloat16_layer_input_output",
     "attention_weight_dtype": "bfloat8_b",
@@ -85,18 +88,26 @@
     "per_device_unique_weight_payload_bytes_full_stack": 4750735360,
     "per_device_duplicate_decode_weight_payload_bytes_full_stack": 4748083200,
     "per_device_physical_weight_payload_bytes_full_stack": 9498818560,
-    "per_device_kv_cache_bytes_batch1_advertised_context": 2789212160,
-    "per_device_physical_weight_plus_kv_payload_bytes": 12288030720,
+    "per_device_kv_cache_bytes_batch1_advertised_context": 2963537920,
+    "per_device_physical_weight_plus_kv_payload_bytes": 12462356480,
     "reserved_trace_activation_allocator_estimate_bytes": 12884901888,
-    "per_device_accounted_weight_kv_activation_total_bytes": 25172932608,
+    "per_device_accounted_weight_kv_activation_total_bytes": 25347258368,
     "planned_supported_context": 262144,
     "capability_reduction": null,
-    "calculation_document": "multichip_decoder/README.md"
+    "calculation_document": "multichip_decoder/README.md",
+    "per_device_kv_cache_values_batch1_advertised_context": 2789212160,
+    "per_device_kv_cache_bfloat8_physical_bytes_per_value": 1.0625,
+    "calculation_notes": [
+      "Corrected 2026-08-14: this plan had recorded the 2789212160 logical BFP8 KV value count as bytes. Tiled BFP8 stores 1.0625 bytes/value (1088-byte tiles per 1024 values), so the physical cache is 2963537920 bytes/device, and every total below that included it rose by 174325760. Same defect and same fix as full_model_plan; see full_model/stage_review_remediation_2026-07-17.md."
+    ]
   },
   "optimized_multichip_decoder_plan": {
     "status": "complete_clean_pass",
     "target_hardware": "4x Blackhole P150b",
-    "mesh_shape": [1, 4],
+    "mesh_shape": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "residual_contract": "replicated_bfloat16_layer_input_output_no_inter_layer_collective",
     "attention_weight_dtype": "bfloat8_b",
@@ -110,15 +121,21 @@
     "activation_sharding": "decode_working_tensors_width_sharded_l1_residual_dram_replicated",
     "per_device_persistent_ccl_scratch_bytes": 731136,
     "persistent_ccl_scratch_pool_scope": "shared_across_all_decoder_layers_one_tail24_physical_buffer_two_semaphore_epochs",
-    "per_device_accounted_weight_kv_activation_ccl_total_bytes": 25173663744,
+    "per_device_accounted_weight_kv_activation_ccl_total_bytes": 25347989504,
     "planned_supported_context": 262144,
     "capability_reduction": null,
-    "calculation_document": "optimized_multichip_decoder/README.md"
+    "calculation_document": "optimized_multichip_decoder/README.md",
+    "calculation_notes": [
+      "Corrected 2026-08-14: this plan had recorded the 2789212160 logical BFP8 KV value count as bytes. Tiled BFP8 stores 1.0625 bytes/value (1088-byte tiles per 1024 values), so the physical cache is 2963537920 bytes/device, and every total below that included it rose by 174325760. Same defect and same fix as full_model_plan; see full_model/stage_review_remediation_2026-07-17.md."
+    ]
   },
   "full_model_plan": {
     "status": "complete_clean_pass_capacity_recomputed_no_context_reduction",
     "target_hardware": "4x Blackhole P150b",
-    "mesh_shape": [1, 4],
+    "mesh_shape": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "decoder_strategy": "optimized_multichip_decoder_unchanged",
     "residual_contract": "replicated_bfloat16_layer_input_output_no_inter_layer_collective",
@@ -169,7 +186,10 @@
   "optimized_full_model_plan": {
     "status": "complete_clean_pass",
     "target_hardware": "4x Blackhole P150b",
-    "mesh_shape": [1, 4],
+    "mesh_shape": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "decoder_strategy": "optimized_multichip_decoder_unchanged",
     "residual_contract": "replicated_bfloat16_layer_input_output_no_inter_layer_collective",
@@ -192,10 +212,10 @@
       "math_fidelity": "HiFi2"
     },
     "per_device_physical_weight_payload_bytes": 10908115456,
-    "per_device_kv_cache_bytes_batch1_advertised_context": 2789212160,
-    "per_device_accounted_dram_total_bytes": 27672814984,
+    "per_device_kv_cache_bytes_batch1_advertised_context": 2963537920,
+    "per_device_accounted_dram_total_bytes": 27847140744,
     "per_device_usable_dram_bytes": 34225520640,
-    "per_device_accounted_dram_margin_bytes": 6552705656,
+    "per_device_accounted_dram_margin_bytes": 6378379896,
     "largest_non_aligned_full_logits_prompt_tested": 249,
     "largest_mixed_prompt_batch_tested": 2,
     "largest_mixed_prompt_context_tested": 128,
@@ -205,7 +225,8 @@
       "Stage 07 changes LM-head placement and program geometry but not tied BF16 value count, so the Stage 06 physical weight and full-context capacity accounting is unchanged.",
       "A full 249-row readiness request and a focused 33-row hardware regression cover the non-aligned multi-tile terminal path.",
       "The generator continues to accept arbitrary valid logical prompt lengths; internal 32-row terminal tiling is not an input restriction.",
-      "Batch-1 production evidence, batch-2 mixed fixed-slot testing, and the full-context physical batch-3 upper bound remain as recorded by the full-model plan."
+      "Batch-1 production evidence, batch-2 mixed fixed-slot testing, and the full-context physical batch-3 upper bound remain as recorded by the full-model plan.",
+      "Corrected 2026-08-14: this plan had recorded the 2789212160 logical BFP8 KV value count as bytes. Tiled BFP8 stores 1.0625 bytes/value (1088-byte tiles per 1024 values), so the physical cache is 2963537920 bytes/device, and every total below that included it rose by 174325760. Same defect and same fix as full_model_plan; see full_model/stage_review_remediation_2026-07-17.md."
     ],
     "evidence": {
       "prefill": "optimized_full_model/run_prefill_check.log",
@@ -216,12 +237,17 @@
       "profiler": "optimized_full_model/tt_perf_report.txt",
       "runtime_fallback_audit": "optimized_full_model/runtime_fallback_audit.md"
     },
-    "calculation_document": "optimized_full_model/README.md"
+    "calculation_document": "optimized_full_model/README.md",
+    "per_device_kv_cache_values_batch1_advertised_context": 2789212160,
+    "per_device_kv_cache_bfloat8_physical_bytes_per_value": 1.0625
   },
   "datatype_sweep_plan": {
     "status": "complete_clean_pass",
     "target_hardware": "4x Blackhole P150b",
-    "mesh_shape": [1, 4],
+    "mesh_shape": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "selected_config_id": "lm_head_bfp8_hifi2",
     "selected_precision_config": "datatype_sweep/selected_precision_config.json",
@@ -268,10 +294,10 @@
     "logits_dtype": "bfloat16",
     "sampling_gather_values_dtype": "float32",
     "per_device_physical_weight_payload_bytes": 10577814016,
-    "per_device_kv_cache_bytes_batch1_advertised_context": 2789212160,
-    "per_device_accounted_dram_total_bytes": 27342513544,
+    "per_device_kv_cache_bytes_batch1_advertised_context": 2963537920,
+    "per_device_accounted_dram_total_bytes": 27516839304,
     "per_device_usable_dram_bytes": 34225520640,
-    "per_device_accounted_dram_margin_bytes": 6883007096,
+    "per_device_accounted_dram_margin_bytes": 6708681336,
     "full_context_physical_batch_upper_bound": 3,
     "planned_supported_context": 262144,
     "capability_reduction": null,
@@ -280,7 +306,8 @@
     "calculation_notes": [
       "The selected BFP8 LM head stores the Stage 07 BF16 value count at the 1.0625/2 payload ratio, saving 330301440 bytes/device.",
       "The selected KV cache remains BFP8 with unchanged page layout and chunking; all selected-candidate teacher forcing used the non-aligned 149-token prompt.",
-      "The BF16 KV candidate and canonical BFP8-MLP/BF16-KV control both constructed at the full advertised batch-1 context; no context capability reduction is required."
+      "The BF16 KV candidate and canonical BFP8-MLP/BF16-KV control both constructed at the full advertised batch-1 context; no context capability reduction is required.",
+      "Corrected 2026-08-14: this plan had recorded the 2789212160 logical BFP8 KV value count as bytes. Tiled BFP8 stores 1.0625 bytes/value (1088-byte tiles per 1024 values), so the physical cache is 2963537920 bytes/device, and every total below that included it rose by 174325760. Same defect and same fix as full_model_plan; see full_model/stage_review_remediation_2026-07-17.md."
     ],
     "evidence": {
       "sweep_results": "datatype_sweep/sweep_results.json",
@@ -294,7 +321,9 @@
       "qualitative_degeneracy_check": "datatype_sweep/qualitative/degenerate_output_check.json",
       "qualitative_verdict": "datatype_sweep/qualitative/verdict.md"
     },
-    "calculation_document": "datatype_sweep/README.md"
+    "calculation_document": "datatype_sweep/README.md",
+    "per_device_kv_cache_values_batch1_advertised_context": 2789212160,
+    "per_device_kv_cache_bfloat8_physical_bytes_per_value": 1.0625
   },
   "optimized_vllm_plan": {
     "status": "complete_clean_pass",
