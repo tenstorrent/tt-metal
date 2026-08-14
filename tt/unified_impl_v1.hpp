@@ -60,8 +60,25 @@ inline PhysicalCoord LogicalCoord::to_physical(uint32_t y_offset, uint32_t x_off
 
 inline uint64_t LogicalCoord::get_noc_addr(uintptr_t l1_addr) const { return to_physical().get_noc_addr(l1_addr); }
 
+// A multicast rectangle is carried in ascending virtual coordinates, which is
+// what NOC 0 wants. NOC 1 runs the grid the other way round and wants the
+// corners in ITS traversal order -- high corner first -- so they swap. Nothing
+// downstream does this for us: get_noc_multicast_addr() maps each coordinate
+// through DYNAMIC_NOC_X/Y, which is NOC_0_X/Y, the identity here (the mirroring
+// variant is the separate NOC_0_X_PHYS_COORD). Handing NOC 1 an ascending
+// rectangle silently drops part of the destination set, which strands whoever
+// was dropped on the handshake.
+//
+// The swap is spelled out at each call site rather than hidden behind a helper,
+// because the same rectangle is ALSO the source of the sizes -- volume() and
+// num_dests_excluding_sender() -- and those must keep reading the original
+// ascending corners or they underflow. noc_index is constexpr in a kernel build,
+// so the branch folds at compile time.
 inline uint64_t PhysicalMcast::get_noc_addr(uintptr_t l1_addr) const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if (noc_index == 1) {
+        return ::get_noc_multicast_addr(end.x, end.y, start.x, start.y, static_cast<uint32_t>(l1_addr));
+    }
     return ::get_noc_multicast_addr(start.x, start.y, end.x, end.y, static_cast<uint32_t>(l1_addr));
 #else
     (void)l1_addr;
@@ -154,14 +171,23 @@ template <int thread>
 Semaphore<thread>& Semaphore<thread>::inc_mcast(PhysicalMcast mcast, uint32_t value) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        sem.inc_multicast(
-            Noc{},
-            mcast.start.x,
-            mcast.start.y,
-            mcast.end.x,
-            mcast.end.y,
-            value,
-            mcast.num_dests_excluding(PhysicalCoord::this_core()));
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        // The destination count assumes the issuing core is the rectangle's start
+        // corner -- see num_dests_excluding_sender(). Issuing from anywhere else
+        // undercounts, and the multicast then retires before the cores it missed
+        // ever hear about it, which surfaces as a stranded handshake rather than
+        // as anything resembling a miscount.
+        ASSERT(PhysicalCoord::this_core() == mcast.start);
+#endif
+        // Corners in NOC order, sizes from the ascending rectangle. See
+        // PhysicalMcast::get_noc_addr -- this path takes raw coordinates, so it
+        // needs the same swap.
+        const uint32_t dests = mcast.num_dests_excluding_sender();
+        if (noc_index == 1) {
+            sem.inc_multicast(Noc{}, mcast.end.x, mcast.end.y, mcast.start.x, mcast.start.y, value, dests);
+        } else {
+            sem.inc_multicast(Noc{}, mcast.start.x, mcast.start.y, mcast.end.x, mcast.end.y, value, dests);
+        }
     }
 #endif
     (void)mcast;
@@ -178,13 +204,17 @@ template <int thread>
 Semaphore<thread>& Semaphore<thread>::set_mcast(PhysicalMcast mcast) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        sem.set_multicast(
-            Noc{},
-            mcast.start.x,
-            mcast.start.y,
-            mcast.end.x,
-            mcast.end.y,
-            mcast.num_dests_excluding(PhysicalCoord::this_core()));
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        ASSERT(PhysicalCoord::this_core() == mcast.start);  // as in inc_mcast above
+#endif
+        // Corners in NOC order, sizes from the ascending rectangle -- as in
+        // inc_mcast above.
+        const uint32_t dests = mcast.num_dests_excluding_sender();
+        if (noc_index == 1) {
+            sem.set_multicast(Noc{}, mcast.end.x, mcast.end.y, mcast.start.x, mcast.start.y, dests);
+        } else {
+            sem.set_multicast(Noc{}, mcast.start.x, mcast.start.y, mcast.end.x, mcast.end.y, dests);
+        }
     }
 #endif
     (void)mcast;
