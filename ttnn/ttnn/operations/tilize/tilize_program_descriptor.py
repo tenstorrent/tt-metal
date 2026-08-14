@@ -229,6 +229,10 @@ LEVERS = {
     "read_vc": 0,
     "read_one_packet": 1,
     "out_fill": 1,
+    # Perf 1 (master.md A0, re-measured on the NT_H == 1 topology): on a shape that
+    # lands exactly one block per core, light HALF the cores so each gets two
+    # blocks and read/write can overlap. WT_CHUNK is untouched. 0 = the full grid.
+    "overlap_cores": 1,
     "pack_fast": 1,
     # master.md B13 (Refinement 6), both halves. Ship PARKED at their
     # byte-identical default — see PARKED_LEVERS for the measurements.
@@ -755,6 +759,45 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         ):
             cb_depth -= 1
 
+        # -- Perf 1: buy read/write OVERLAP on a ONE-BLOCK-PER-CORE shape --------
+        # When the block count lands at exactly one block per core the pipeline
+        # degenerates: the core reads its whole block, computes, then writes, with
+        # nothing to overlap against. Measured on [1,1,32,16384] bf16 by cumulative
+        # ablation: read 4,590 + write 8,680 + sync 1,020 = 14,290 against a
+        # measured wall of 13,830 — the exclusive costs SUM, i.e. the stages do not
+        # overlap at all, against a max(read, write) + floor ideal of ~9,700.
+        #
+        # Halving the lit core count gives every core TWO blocks and leaves
+        # WT_CHUNK — and therefore the 512 B read transfer — completely untouched.
+        # That distinction is the whole lever: shrinking the transfer instead
+        # (n_chunks x2 on the full grid) was measured at 0.908x, reconfirming the
+        # transfer-size floor.
+        #
+        # The predicate is over the BLOCKING, not over shapes: it fires only where
+        # the split really would light one core per block, and only for an EXACT
+        # halving that keeps every core's load equal. Everything outside it was
+        # measured and regresses, which is why each clause is there:
+        #   * already >= 2 blocks/core -> 0.968x on [1,1,2048,2048] (3 sessions)
+        #   * too few blocks to halve  -> 0.706x on [1,1,32,64]
+        #   * an unbalanced cap (48 cores, 1-or-2 blocks/core) -> 0.949x
+        # Measured ON: [1,1,32,16384] bf16 13,578 -> 13,066 ns (15-round in-session
+        # A/B, ~4 sigma), [1,1,32,8192] 8,589 -> 8,146, fp32 26,911 -> 26,447.
+        grid_x = grid.x if (plan.use_multicore and LEVERS["multicore"]) else 1
+        one_block_per_core = num_blocks_total <= num_cores_available
+        halve_cores = bool(
+            LEVERS["overlap_cores"]
+            and one_block_per_core
+            and num_blocks_total >= 2 * grid_x
+            and num_blocks_total % (2 * grid_x) == 0  # an EXACT, balanced halving
+        )
+        split_grid = (
+            ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, num_blocks_total // (2 * grid_x) - 1))]
+            )
+            if halve_cores
+            else full_grid
+        )
+
         (
             num_cores,
             all_cores,
@@ -763,13 +806,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             blocks_per_core_1,
             blocks_per_core_2,
         ) = ttnn.split_work_to_cores(
-            full_grid, num_blocks_total, bool(LEVERS["row_wise"])
+            split_grid, num_blocks_total, bool(LEVERS["row_wise"])
         )  # row_wise=True (master.md A1)
 
         cores = ttnn.corerange_to_cores(all_cores, num_cores, bool(LEVERS["row_wise"]))
     else:
         # Cores are the cores that HOLD the shards, in shard order (master.md A2:
         # launch only where the data is). Each owns its own shard's tile region.
+        halve_cores = False  # the sharded plan pins cores to shards, never to the split
         cores = shard["cores"]
         all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in cores})
         # Per shard, not per grid: an unevenly split grid gives its last shard
@@ -960,7 +1004,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # next is issued. cb_pages() is the single source for that geometry.
     trid_ok = cb_pages(cb_depth, wt_chunk) == 2 * NT_BLK * wt_chunk and NT_BLK == 1
     read_one_packet = int(aligned_accessor_read and LEVERS["read_one_packet"])
-    read_trid = int(aligned_accessor_read and trid_ok and LEVERS["read_trid"])
+    # Perf 1: B8's read-side double-issue is a LOSS at exactly two blocks per core,
+    # and `halve_cores` above produces exactly that. The trid loop issues block i+1
+    # BEFORE barriering block i, so block i is published one whole issue loop late;
+    # at 4+ blocks that is a steady state, but at 2 it is pure added latency on the
+    # only handoff there is. Splitting the pair isolates it: read-half off gives
+    # 1.052x on [1,1,32,16384], write-half off gives 0.995x. So the read twin is
+    # dropped here and the WRITE twin below is kept.
+    read_trid = int(aligned_accessor_read and trid_ok and LEVERS["read_trid"] and not halve_cores)
     read_vc_enable = int(aligned_accessor_read and LEVERS["read_vc"])
     # B8's WRITE twin. Same two-slot CB precondition, and every write must be a
     # whole page (the page_write OFF arm splits them, and an ablated arm issues
