@@ -193,6 +193,18 @@ MUTATIONS = [
         "| prefill (`run_prefill_check`) | fp32 control | 0.990 | **1.000** | **0.980** |",
     ),
     (
+        "the fail-closed negative control's discriminating assertion",
+        "doc/optimized_full_model/logs/trace_release_failclosed_negative_control.log",
+        "- AssertionError: the failed decode release must still clear the replayed slot",
+        "- AssertionError: some other assertion entirely",
+    ),
+    (
+        "the fail-closed negative control's verdict",
+        "doc/optimized_full_model/logs/trace_release_failclosed_negative_control.log",
+        "1 failed",
+        "1 passed",
+    ),
+    (
         "roofline row in the reconciliation table",
         "doc/optimized_full_model/README.md",
         "| roofline | **8.829 ms/token** |",
@@ -226,7 +238,30 @@ def run_gate() -> bool:
     return "FIGURES_OK" in out.stdout
 
 
+def _bootstrap_log() -> None:
+    """Keep the scratch copy self-consistent when the mutation table has just grown.
+
+    ``check_reported_figures.py`` asserts that this harness's committed log records as many
+    caught mutations as the table has entries -- so that a case cannot be quietly dropped from
+    the table while the log still advertises it.  That makes the log an input to the very gate
+    the baseline run checks, so adding a mutation would fail the baseline until the log is
+    rewritten, which only a completed run does.  Placeholder lines break the cycle; the real
+    transcript overwrites them at the end of this run, and the committed artifact is always a
+    real one.
+    """
+    wanted = len(MUTATIONS)
+    existing = LOG.read_text() if LOG.exists() else ""
+    if len([line for line in existing.splitlines() if line.startswith("CAUGHT ")]) == wanted:
+        return
+    placeholder = ["baseline: FIGURES_OK", ""]
+    placeholder += [f"CAUGHT  bootstrap placeholder {i + 1}" for i in range(wanted)]
+    placeholder += ["", f"ALL {wanted} MUTATIONS CAUGHT"]
+    LOG.write_text("\n".join(placeholder) + "\n")
+    print(f"(bootstrapped {LOG.name} to {wanted} entries; this run overwrites it)")
+
+
 def main() -> int:
+    _bootstrap_log()
     reset()
     if not run_gate():
         say("BASELINE FAILS -- the scratch copy is not clean; aborting")

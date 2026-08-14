@@ -47,7 +47,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 839
+ADVERTISED_CHECKS = 842
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -1045,6 +1045,35 @@ def main() -> int:
         "...and that the retry accounts for both orphans",
         "the two orphans are accounted for on retry" in tests_src,
         True,
+    )
+    # ...and that it discriminates, held to the same standard round 4's rebind test is: the
+    # committed failure against the code this replaced.  A test that passes against both the
+    # bug and the fix is not coverage, and nothing but a control shows which it is.
+    failclosed_control = text(D / "logs/trace_release_failclosed_negative_control.log")
+    same(
+        "the fail-closed test fails against round 7's retain-in-place code",
+        "1 failed" in failclosed_control,
+        True,
+    )
+    # Bound to pytest's own summary line -- test id and assertion together -- rather than to
+    # the assertion text appearing anywhere in the log, which the traceback repeats.
+    failclosed_summary = [
+        line
+        for line in re.sub(r"\x1b\[[0-9;]*m", "", failclosed_control).splitlines()
+        if line.startswith("FAILED ") and "test_a_trace_that_fails_to_release" in line
+    ]
+    same(
+        "...on the assertion that separates the two policies, in the summary line",
+        failclosed_summary
+        and failclosed_summary[0].endswith(
+            "AssertionError: the failed decode release must still clear the replayed slot"
+        ),
+        True,
+    )
+    same(
+        "...and the shipped source is not the patched one",
+        "TEMPORARY: pre-fix behaviour for the negative control" in generator_src,
+        False,
     )
     # Round 4's P2: the contract's provenance must name this stage, not the previous one.
     contract_perf = load(ROOT / "doc/context_contract.json")

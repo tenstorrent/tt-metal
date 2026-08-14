@@ -1,0 +1,193 @@
+[1m============================= test session starts ==============================[0m
+[1mcollecting ... [0mcollected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried 2026-08-14 12:53:33.348 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 12:53:33.348 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 12:53:33.348 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 12:53:33.348 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 12:54:04.636 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 12:54:04.636 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 12:54:04.715 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 12:54:04.715 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 12:54:04.715 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 12:54:04.715 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 12:54:04.716 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 12:54:04.901 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 12:54:05.027 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 12:54:05.027 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 12:54:05.027 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 12:54:05.028 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 12:54:05.028 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 12:54:05.068 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.069 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.069 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.070 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.070 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.071 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.072 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.072 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 12:54:05.073 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 12:54:05.098 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 12:54:05.099 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 12:54:05.100 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 12:54:05.101 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 12:54:05.101 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 12:54:05.101 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 12:54:22.636 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+2026-08-14 12:54:22.654 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 12:54:22.695 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 12:54:22.704 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 12:54:22.708 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+[31mFAILED[0m
+
+=================================== FAILURES ===================================
+[31m[1m_____ test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried ______[0m
+
+mesh = MeshDevice(1x4 grid, 4 devices)
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_a_trace_that_fails_to_release_is_never_replayed_and_is_retried[39;49;00m(mesh):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""A raising ``ttnn.release_trace`` must fail *closed* -- for both trace kinds.[39;49;00m
+    [33m[39;49;00m
+    [33m    Round 6 found the original failure path freeing a live trace's tensors and dropping its[39;49;00m
+    [33m    handle.  Round 7 fixed that by retaining everything in place, and round 8 found what[39;49;00m
+    [33m    that reintroduced: the retained handle is the one ``decode_forward`` tests[39;49;00m
+    [33m    (``if self._trace_id is None: capture``) and the retained bucket is the one[39;49;00m
+    [33m    ``_prefill_traced`` looks up, so on the rebind path -- the only path that releases while[39;49;00m
+    [33m    the generator stays alive -- a failed release meant replaying a trace against the cache[39;49;00m
+    [33m    the caller had just rebound away from.  That is round 4's silent-wrong-token bug, from a[39;49;00m
+    [33m    branch round 4's test does not take.[39;49;00m
+    [33m[39;49;00m
+    [33m    The four properties this pins, in the order the assertions make them:[39;49;00m
+    [33m[39;49;00m
+    [33m    1. the handle leaves the lookup paths, so nothing can replay it;[39;49;00m
+    [33m    2. the live-trace count stays raised and no tensor is deallocated, so[39;49;00m
+    [33m       ``deallocate()`` still warns and a possibly-live trace keeps its buffers;[39;49;00m
+    [33m    3. the next call answers from the cache it is bound to *now*, not the captured one;[39;49;00m
+    [33m    4. the release is retried, and on success the count comes back down.[39;49;00m
+    [33m[39;49;00m
+    [33m    The failure is injected rather than provoked because no input makes ``release_trace``[39;49;00m
+    [33m    raise on healthy hardware; what is under test is this module's control flow around it.[39;49;00m
+    [33m    Both prompts are 64 tokens on purpose, so both prefills land in the *same* bucket key --[39;49;00m
+    [33m    a retained entry would be found and replayed, which is precisely the defect.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        clear_generator_cache()[90m[39;49;00m
+        generator = build_generator([90m[39;49;00m
+            MODEL_DIR,[90m[39;49;00m
+            mesh,[90m[39;49;00m
+            max_seq_len=REDUCED_MAX_SEQ,[90m[39;49;00m
+            layer_indices=REDUCED_LAYERS,[90m[39;49;00m
+            reuse=[94mFalse[39;49;00m,[90m[39;49;00m
+            prefill_trace=[94mTrue[39;49;00m,[90m[39;49;00m
+        )[90m[39;49;00m
+        model = generator.model[90m[39;49;00m
+        prompt_a = _prompt([94m64[39;49;00m, seed=[94m23[39;49;00m)[90m[39;49;00m
+        prompt_b = _prompt([94m64[39;49;00m, seed=[94m71[39;49;00m)[90m[39;49;00m
+        [94massert[39;49;00m prompt_a != prompt_b[90m[39;49;00m
+        own = model.kv_cache[90m[39;49;00m
+        moved = [94mNone[39;49;00m[90m[39;49;00m
+        real_release = ttnn.release_trace[90m[39;49;00m
+        [94mtry[39;49;00m:[90m[39;49;00m
+            generator.prefill_forward(torch.tensor([prompt_a]), kv_cache=own, prompt_lens=[[96mlen[39;49;00m(prompt_a)])[90m[39;49;00m
+            generator.decode_forward([90m[39;49;00m
+                tokens=torch.tensor([[prompt_a[-[94m1[39;49;00m]]], dtype=torch.long),[90m[39;49;00m
+                start_pos=torch.tensor([[96mlen[39;49;00m(prompt_a)], dtype=torch.int32),[90m[39;49;00m
+                kv_cache=own,[90m[39;49;00m
+            )[90m[39;49;00m
+            [94massert[39;49;00m [96mlist[39;49;00m(generator._prefill_traces) == [[94m64[39;49;00m][90m[39;49;00m
+            [94massert[39;49;00m generator._trace_id [95mis[39;49;00m [95mnot[39;49;00m [94mNone[39;49;00m[90m[39;49;00m
+            [94massert[39;49;00m model.live_traces_over_kv_cache == [94m2[39;49;00m, [33m"[39;49;00m[33mone prefill trace and one decode trace[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            doomed = {generator._trace_id, generator._prefill_traces[[94m64[39;49;00m][[33m"[39;49;00m[33mid[39;49;00m[33m"[39;49;00m]}[90m[39;49;00m
+    [90m[39;49;00m
+            moved = [[90m[39;49;00m
+                [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())][90m[39;49;00m
+                [94mfor[39;49;00m k, v [95min[39;49;00m own[90m[39;49;00m
+            ][90m[39;49;00m
+            generator.reset()[90m[39;49;00m
+            generator.model.set_kv_cache(moved)[90m[39;49;00m
+            generator.model.reset_kv_cache()[90m[39;49;00m
+            generator.model.set_kv_cache(own)[90m[39;49;00m
+    [90m[39;49;00m
+            [94mdef[39;49;00m[90m [39;49;00m[92mrefuse[39;49;00m(*_a, **_k):[90m[39;49;00m
+                [94mraise[39;49;00m [96mRuntimeError[39;49;00m([33m"[39;49;00m[33minjected: release_trace refused[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+    [90m[39;49;00m
+            ttnn.release_trace = refuse[90m[39;49;00m
+            generator.prefill_forward(torch.tensor([prompt_b]), kv_cache=moved, prompt_lens=[[96mlen[39;49;00m(prompt_b)])[90m[39;49;00m
+    [90m[39;49;00m
+            [90m# (1) Neither handle is reachable from a lookup path any more.[39;49;00m[90m[39;49;00m
+>           [94massert[39;49;00m generator._trace_id [95mis[39;49;00m [94mNone[39;49;00m, [33m"[39;49;00m[33mthe failed decode release must still clear the replayed slot[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE           AssertionError: the failed decode release must still clear the replayed slot[0m
+[1m[31mE           assert MeshTraceId(1) is None[0m
+[1m[31mE            +  where MeshTraceId(1) = <models.autoports.meta_models_muse_glimmer_30b.tt.generator.MuseGlimmerGenerator object at 0x7b03055f85f0>._trace_id[0m
+
+[1m[31mmodels/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py[0m:1148: AssertionError
+[33m=============================== warnings summary ===============================[0m
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+32.62s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried
+16.77s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried
+0.13s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_a_trace_that_fails_to_release_is_never_replayed_and_is_retried[0m - AssertionError: the failed decode release must still clear the replayed slot
+[31m======================== [31m[1m1 failed[0m, [33m3 warnings[0m[31m in 50.23s[0m[31m ========================[0m
+2026-08-14 12:54:24.808 | info     |    BuildKernels | JIT cache stats: 400/400 hits (100.0%) [400 cached, 131 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 12:54:24.808 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 12:54:24.823 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 12:54:24.823 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 12:54:25.431 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 12:54:25.431 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 12:54:25.431 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+2026-08-14 12:53:31.990 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 12:54:22.292 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 12:54:22.409 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1557 - MuseGlimmerModel built in 15.3s
+2026-08-14 12:54:22.633 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_prefill_trace:618 - MuseGlimmerGenerator: captured a prefill trace for padded_len=64 (1/1 buckets)
+2026-08-14 12:54:22.644 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:402 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=64)
+2026-08-14 12:54:22.713 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:1015 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 12:54:22.728 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_invalidate_traces_if_cache_moved:693 - MuseGlimmerGenerator: the KV cache was rebound to different buffers; releasing the prefill x1 and decode trace(s). The next call recaptures against the new buffers; bind the cache before the first prefill to avoid paying for that.
+2026-08-14 12:54:22.729 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_release_prefill_traces:806 - failed to release the prefill trace for 64: injected: release_trace refused
+2026-08-14 12:54:22.729 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_release_prefill_traces:833 - MuseGlimmerGenerator: 1 prefill trace(s) failed to release; they are retained unusable (never replayed again) with their buffers, the live-trace count stays raised, and the release is retried at the next release and at teardown().
+2026-08-14 12:54:22.729 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_release_decode_trace:736 - failed to release the decode trace: injected: release_trace refused
+2026-08-14 12:54:22.729 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_release_decode_trace:753 - MuseGlimmerGenerator: the decode trace failed to release; it is retained unusable (never replayed again) with its logits, the live-trace count stays raised, and the release is retried at the next release and at teardown().
+2026-08-14 12:54:22.729 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_retry_orphaned_traces:856 - retrying the release of the decode trace failed again: injected: release_trace refused
+2026-08-14 12:54:22.739 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_retry_orphaned_traces:866 - MuseGlimmerGenerator: the retained decode trace released on retry.
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7b030b55d518 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7b030af2d348 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function "num_program_cache_entries"
+ - leaked function ""
+ - leaked function "GetPCIeDeviceID"
+ - leaked function "host_buffer"
+ - leaked function "GetNumAvailableDevices"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "devices"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

@@ -29,6 +29,8 @@ CAUGHT  arm row tally
 CAUGHT  work log accounting device figure
 CAUGHT  work log per-layer floor row
 CAUGHT  accuracy fp32 row top-100
+CAUGHT  the fail-closed negative control's discriminating assertion
+CAUGHT  the fail-closed negative control's verdict
 CAUGHT  roofline row in the reconciliation table
 
-ALL 30 MUTATIONS CAUGHT
+ALL 32 MUTATIONS CAUGHT
