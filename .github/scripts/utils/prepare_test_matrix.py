@@ -30,6 +30,9 @@ exit 0); otherwise comma-separated logical SKUs intersected with coverage.
 `weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
 it is copied into each output matrix entry.
 
+`ttsim_lib` is likewise copied through, and the distinct values are emitted as the JSON-array
+`sim-libs` output so a caller can run one fetch-ttsim leg per simulator binary it needs.
+
 Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
@@ -314,9 +317,10 @@ def write_matrix_output(filtered_matrix):
     print(json_output_pretty)
 
     json_output_compact = json.dumps(filtered_matrix)
-    # Simulator binaries this matrix needs, for the caller's fetch-ttsim job. Empty when the
-    # matrix has no sim SKUs, which is also how impls tell whether to run that job at all.
-    sim_libs = ",".join(sorted({entry["ttsim_lib"] for entry in filtered_matrix if entry.get("ttsim_lib")}))
+    # Simulator binaries this matrix needs, as a JSON array so the caller can feed it straight
+    # to a fetch-ttsim matrix. "[]" when the matrix has no sim SKUs, which is also how impls
+    # tell whether to run that job at all.
+    sim_libs = json.dumps(sorted({entry["ttsim_lib"] for entry in filtered_matrix if entry.get("ttsim_lib")}))
 
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:

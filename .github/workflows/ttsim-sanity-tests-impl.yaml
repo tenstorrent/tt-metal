@@ -51,8 +51,15 @@ jobs:
 
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.sim-libs != '' }}
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -67,10 +74,7 @@ jobs:
         uses: ./.github/actions/fetch-ttsim
         timeout-minutes: 10
         with:
-          libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
-          # Suffixed per impl: artifact names are per-run and sanity-tests runs several of
-          # these impls in one run. Must match the setup-ttsim step below.
-          artifact-name: ttsim-binaries-ttsim-sanity
+          lib: ${{ matrix.lib }}
 
   ttsim-sanity-tests:
     needs: [load-test-matrix, fetch-ttsim]
@@ -135,7 +139,6 @@ jobs:
         with:
           sku: ${{ matrix.test-group.sku }}
           root: ${{ env.TT_METAL_HOME }}
-          artifact-name: ttsim-binaries-ttsim-sanity
 
       # ttsim examples run on the simulator (no hardware power telemetry); wrap the run in the
       # host-load sidecar to capture host CPU/memory/disk/network usage.

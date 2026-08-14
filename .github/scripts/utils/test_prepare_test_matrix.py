@@ -734,7 +734,7 @@ def test_sim_libs_lists_only_selected_sim_skus(tmp_path: Path):
     result = _run_with_skus(path, "wh_n300_civ2,sim_wh_n300,sim_bh_p150")
     assert result.returncode == 0, result.stdout + result.stderr
     # sorted + unique, despite sim_wh_n300 appearing in two entries
-    assert sim_libs_line(result) == "libttsim_bh.so,libttsim_wh_x2.so"
+    assert json.loads(sim_libs_line(result)) == ["libttsim_bh.so", "libttsim_wh_x2.so"]
 
     # Every sim leg also carries its own lib, which is what setup-ttsim installs.
     matrix = json.loads(re.search(r"^matrix=(.*)$", result.stdout, re.M).group(1))
@@ -748,7 +748,7 @@ def test_sim_libs_empty_for_hardware_only_matrix(tmp_path: Path, tests_yaml: Pat
     """No sim SKUs selected -> empty sim-libs, which is how impls skip fetch-ttsim."""
     result = _run_with_skus(tests_yaml, "wh_n150_civ2")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert sim_libs_line(result) == ""
+    assert sim_libs_line(result) == "[]"
 
 
 def test_empty_matrix_is_not_fatal(tmp_path: Path, tests_yaml: Path):
@@ -757,4 +757,4 @@ def test_empty_matrix_is_not_fatal(tmp_path: Path, tests_yaml: Path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "No tests selected" in result.stdout
     assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
-    assert sim_libs_line(result) == ""
+    assert sim_libs_line(result) == "[]"

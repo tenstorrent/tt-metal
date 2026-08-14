@@ -4,10 +4,10 @@ description: |
   artifact, and export the env vars needed to run tests under the simulator
   (TT_METAL_SIMULATOR_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE,
   TT_METAL_DISABLE_SFPLOADMACRO). The caller workflow is expected to have
-  uploaded an artifact containing every libttsim_*.so of the pinned ttsim
-  release (see the fetch-ttsim job pattern in ttsim-sanity-tests-impl.yaml).
-  Which binary a SKU gets is declared by that SKU's ttsim_lib in
-  .github/sku_config.yaml, so callers pass only the SKU.
+  published each simulator binary as its own ttsim-lib-<library> artifact (see the
+  fetch-ttsim job pattern in ttsim-sanity-tests-impl.yaml). Which binary a SKU gets is
+  declared by that SKU's ttsim_lib in .github/sku_config.yaml, so callers pass only the
+  SKU and this action downloads the single artifact holding that library.
 
 inputs:
   sku:
@@ -16,12 +16,6 @@ inputs:
       .github/sku_config.yaml; that field selects the simulator binary and its
       wh/bh prefix selects the soc descriptor.
     required: true
-  artifact-name:
-    description: |
-      Name of the artifact containing the libttsim_*.so set, uploaded by an
-      upstream fetch-ttsim job in the calling workflow.
-    required: false
-    default: 'ttsim-binaries'
   root:
     description: |
       Root directory containing tt_metal/soc_descriptors/. The simulator install
@@ -80,6 +74,9 @@ runs:
         echo "Resolved ${{ inputs.sku }} -> $asset ($soc)"
         echo "asset_name=$asset" >> "$GITHUB_OUTPUT"
         echo "soc_desc=$soc" >> "$GITHUB_OUTPUT"
+        # fetch-ttsim publishes one artifact per library under this name, so the SKU's lib
+        # is all that is needed to find it — nothing to pass in from the workflow.
+        echo "artifact_name=ttsim-lib-$asset" >> "$GITHUB_OUTPUT"
 
     - name: Configure ttsim env vars
       shell: bash
@@ -94,7 +91,7 @@ runs:
     - name: Download ttsim binaries artifact
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
-        name: ${{ inputs.artifact-name }}
+        name: ${{ steps.ttsim-info.outputs.artifact_name }}
         path: /tmp/ttsim
 
     - name: Install ttsim
@@ -103,7 +100,7 @@ runs:
         set -euo pipefail
         asset="/tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }}"
         if [[ ! -f "$asset" ]]; then
-          echo "::error::${{ steps.ttsim-info.outputs.asset_name }} is not in the '${{ inputs.artifact-name }}' artifact. Available:"
+          echo "::error::${{ steps.ttsim-info.outputs.asset_name }} is not in the '${{ steps.ttsim-info.outputs.artifact_name }}' artifact. Available:"
           ls -1 /tmp/ttsim
           exit 1
         fi
