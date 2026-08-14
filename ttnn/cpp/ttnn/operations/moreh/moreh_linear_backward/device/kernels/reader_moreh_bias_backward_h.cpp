@@ -24,8 +24,15 @@ void kernel_main() {
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
 
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    if (do_mask_h) {
+        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+            cb_id_scaler,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_COL>(mask_h);
+    } else {
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    }
 
     if (do_mask_h || do_mask_w) {
         DataflowBuffer dfb_mask_h_w(cb_id_mask_h_w);

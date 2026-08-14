@@ -46,6 +46,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWLarge::create_program_artif
     const auto W = shape[-1];
     const auto Ht = H / tile_height;
     const auto Wt = W / tile_width;
+    std::uint32_t mask_w = input.logical_shape()[-1] % tile_width;
+    if (mask_w == 0) {
+        mask_w = tile_width;
+    }
+    const bool do_partial_w = mask_w < tt::constants::TILE_WIDTH;
 
     // Worksplit
     const auto num = input.physical_volume() / H / W;
@@ -109,7 +114,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWLarge::create_program_artif
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
             .entry_size = mask_scaler_tile_size,
-            .num_entries = 1,
+            .num_entries = do_partial_w ? 2U : 1U,
             .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
@@ -235,7 +240,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWLarge::create_program_artif
             .source = std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_w_large.cpp",
             .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = compute_dfb_bindings(),
-            .compile_time_args = {{"N", N}, {"Wt", Wt}},
+            .compile_time_args = {{"N", N}, {"Wt", Wt}, {"mask_w", mask_w}},
             .hw_config = make_compute_hw(),
         };
     };
@@ -272,11 +277,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWLarge::create_program_artif
 
     const auto core_x_offset = core_range.start_coord.x;
     const auto core_y_offset = core_range.start_coord.y;
-
-    std::uint32_t mask_w = input.logical_shape()[-1] % tile_width;
-    if (mask_w == 0) {
-        mask_w = tile_width;
-    }
 
     for (std::uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};

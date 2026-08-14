@@ -41,6 +41,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
+    std::uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+    if (mask_h == 0) {
+        mask_h = tt::constants::TILE_HEIGHT;
+    }
+    const bool do_partial_h = mask_h < tt::constants::TILE_HEIGHT;
 
     auto num = input.physical_volume() / H / W;
     std::uint32_t num_cols_tiles = num * Wt;
@@ -82,7 +87,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
     const DFBSpecName RECIP{"recip_sum_exps"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X_MINUS_MAX{"x_minus_max"};
-    const DFBSpecName TMP{"tmp"};
 
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{
@@ -92,7 +96,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
             .entry_size = tile_size_data,
-            .num_entries = 1,
+            .num_entries = do_partial_h ? 2u : 1u,
             .data_format_metadata = data_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
@@ -121,11 +125,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
             .unique_id = X_MINUS_MAX,
             .entry_size = tile_size_intermed,
             .num_entries = Ht,
-            .data_format_metadata = intermed_data_format},
-        DataflowBufferSpec{
-            .unique_id = TMP,
-            .entry_size = tile_size_intermed,
-            .num_entries = 1,
             .data_format_metadata = intermed_data_format},
     };
 
@@ -186,7 +185,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {X_MINUS_MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
-                {TMP, tt::tt_metal::UnpackMode::UnpackToSrc},
             };
         }
         return hw;
@@ -217,8 +215,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
                 .dfb_spec_name = X_MINUS_MAX,
                 .accessor_name = "x_minus_max",
                 .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::CONSUMER},
         };
     };
 
@@ -228,7 +224,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
             .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp",
             .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = compute_dfb_bindings(),
-            .compile_time_args = {{"N", N}, {"Ht", Ht}},
+            .compile_time_args = {{"N", N}, {"Ht", Ht}, {"mask_h", mask_h}},
             .hw_config = make_compute_hw(),
         };
     };
@@ -265,11 +261,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSma
 
     auto core_x_offset = core_range.start_coord.x;
     auto core_y_offset = core_range.start_coord.y;
-
-    std::uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
-    if (mask_h == 0) {
-        mask_h = tt::constants::TILE_HEIGHT;
-    }
 
     for (std::uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};

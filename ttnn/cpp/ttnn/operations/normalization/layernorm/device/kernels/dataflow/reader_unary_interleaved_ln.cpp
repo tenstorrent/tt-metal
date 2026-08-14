@@ -130,18 +130,19 @@ void kernel_main() {
     if constexpr (!use_welford) {
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
 
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-
         if constexpr (partial_last_tile_cols > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                dfb_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                partial_last_tile_cols,
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        } else {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 dfb_scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
         }
     }
 

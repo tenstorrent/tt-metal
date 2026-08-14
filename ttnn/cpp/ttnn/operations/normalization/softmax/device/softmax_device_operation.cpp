@@ -5,6 +5,7 @@
 #include "softmax_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include <utility>
 
 #include "ttnn/device_operation.hpp"
@@ -57,11 +58,18 @@ bool is_softmax_general_w_small_available(
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
     auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
+    uint32_t mask_w = w % tile_width;
+    if (mask_w == 0) {
+        mask_w = tile_width;
+    }
+    const int32_t num_max_scaler_tiles = (mask_w < tt::constants::TILE_WIDTH) ? 2 : 1;
+
     // Calculate total circular buffer memory requirements
-    int32_t cb_usage = 0;                   // bytes
-    cb_usage += Wt * tile_size;             // input buffer
-    cb_usage += 1 * mask_scaler_tile_size;  // mask buffer
-    cb_usage += 1 * mask_scaler_tile_size;  // scaler buffer
+    int32_t cb_usage = 0;                                      // bytes
+    cb_usage += Wt * tile_size;                                // input buffer
+    cb_usage += 1 * mask_scaler_tile_size;                     // mask buffer
+    cb_usage += num_max_scaler_tiles * mask_scaler_tile_size;  // max scaler buffer
+    cb_usage += 1 * mask_scaler_tile_size;                     // sum scaler buffer
 
     cb_usage += Wt * tile_size;  // output buffer
 
@@ -98,10 +106,17 @@ bool is_softmax_general_h_small_available(
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
     auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    int32_t cb_usage = 0;                   // bytes
-    cb_usage += Ht * tile_size;             // input;
-    cb_usage += 1 * mask_scaler_tile_size;  // mask;
-    cb_usage += 1 * mask_scaler_tile_size;  // scaler;
+    uint32_t mask_h = h % tile_height;
+    if (mask_h == 0) {
+        mask_h = tile_height;
+    }
+    const int32_t num_max_scaler_tiles = (mask_h < tt::constants::TILE_HEIGHT) ? 2 : 1;
+
+    int32_t cb_usage = 0;                                      // bytes
+    cb_usage += Ht * tile_size;                                // input;
+    cb_usage += 1 * mask_scaler_tile_size;                     // mask;
+    cb_usage += num_max_scaler_tiles * mask_scaler_tile_size;  // max scaler;
+    cb_usage += 1 * mask_scaler_tile_size;                     // sum scaler;
 
     cb_usage += Ht * tile_size;  // output;
 
@@ -381,7 +396,8 @@ SoftmaxDeviceOperation::create_op_performance_model(
 static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_fidelity = (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    const auto default_fidelity =
+        (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     verify_numerical_configuration(arch, compute_kernel_config);
     return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
 }

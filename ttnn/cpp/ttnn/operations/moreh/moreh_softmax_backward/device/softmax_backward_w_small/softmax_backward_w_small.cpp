@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <bit>
 #include <string>
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
@@ -35,6 +34,12 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
     auto Wt = W / tt::constants::TILE_WIDTH;
 
     auto num = input_grad.physical_volume() / H / W;
+
+    uint32_t mask_w = input_grad.logical_shape()[-1] % tt::constants::TILE_WIDTH;
+    if (mask_w == 0) {
+        mask_w = tt::constants::TILE_WIDTH;
+    }
+    const bool do_partial_w = mask_w < tt::constants::TILE_WIDTH;
 
     uint32_t num_kernel_rows = num * Ht;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -74,22 +79,11 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
             .page_size = tile_size_data,
         }}},
     });
-    // scaler
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 1 * tile_size_data,
+        .total_size = (do_partial_w ? 2 : 1) * tile_size_data,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
-            .data_format = data_format,
-            .page_size = tile_size_data,
-        }}},
-    });
-    // mask
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 1 * tile_size_data,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_3),
             .data_format = data_format,
             .page_size = tile_size_data,
         }}},
@@ -183,7 +177,7 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w.cpp";
     compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc_1.core_ranges = core_group_1;
-    compute_desc_1.compile_time_args = {num_tiles_per_core_group_1, Wt};
+    compute_desc_1.compile_time_args = {num_tiles_per_core_group_1, Wt, mask_w};
     compute_desc_1.defines = compute_defines;
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -200,7 +194,7 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
             "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w.cpp";
         compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc_2.core_ranges = core_group_2;
-        compute_desc_2.compile_time_args = {num_tiles_per_core_group_2, Wt};
+        compute_desc_2.compile_time_args = {num_tiles_per_core_group_2, Wt, mask_w};
         compute_desc_2.defines = compute_defines;
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
@@ -225,20 +219,8 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
             TT_THROW("Core not in specified core ranges");
         }
 
-        float scaler = 1.0f;
-        uint32_t mask_w = input_grad.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0) {
-            mask_w = tt::constants::TILE_WIDTH;
-        }
         reader_desc.emplace_runtime_args(
-            core,
-            {output.buffer(),
-             output_grad.buffer(),
-             num_tiles_per_core,
-             tile_offset,
-             Wt,
-             std::bit_cast<uint32_t>(scaler),
-             mask_w});
+            core, {output.buffer(), output_grad.buffer(), num_tiles_per_core, tile_offset, Wt, mask_w});
 
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset, Wt});
 

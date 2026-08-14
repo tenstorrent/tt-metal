@@ -206,6 +206,53 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
 @pytest.mark.parametrize(
     "shape_dim",
     [
+        [[1, 1, 32, 15], 3],  # ragged W, single tile
+        [[1, 1, 32, 32 * 2 + 10], 3],  # ragged W, multiple tiles
+        [[1, 1, 15, 32], 2],  # ragged H, single tile
+        [[1, 1, 32 * 2 + 10, 32], 2],  # ragged H, multiple tiles
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmax_large_algorithm_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
+    """Ragged reduce dimensions on the _large kernels.
+
+    test_softmax_large_algorithm_for_dim_hw above only uses multiples of 32, and the ragged shapes in
+    test_softmax_not_multiple_of_32_for_dim_hw are small enough that the op picks a SMALL strategy --
+    so the ragged tail of the _large kernels is only exercised by forcing the strategy here. The
+    single-tile cases matter on their own: they are the ones that used to take the separate
+    Wt == 1 / Ht == 1 branch.
+    """
+    shape, dim = shape_dim
+    torch.manual_seed(0)
+    strategy = (
+        ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W
+        if dim == 3
+        else ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H
+    )
+    rtol = atol = 0.05
+    run_moreh_softmax_test(
+        shape,
+        dim,
+        dtype,
+        ttnn.TILE_LAYOUT,
+        device,
+        rtol,
+        atol,
+        True,
+        compute_kernel_options=compute_kernel_options,
+        strategy=strategy,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape_dim",
+    [
         [[1, 1, 10, 15], 3],  # single tile
         [[1, 1, 10, 32 * 2 + 10], 3],  # mutiple tile with dim
         [[1, 1, 15, 10], 2],  # single tile

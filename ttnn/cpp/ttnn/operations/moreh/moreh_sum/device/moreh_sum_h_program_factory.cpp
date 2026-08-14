@@ -54,11 +54,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     uint32_t src0_single_tile_size = tile_size(src0_dfb_data_format);
     DataFormat scaler_dfb_data_format = DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tile_size(scaler_dfb_data_format);
-    DataFormat mask_h_dfb_data_format = DataFormat::Float16_b;
-    uint32_t mask_h_single_tile_size = tile_size(mask_h_dfb_data_format);
-    DataFormat intermed_dfb_data_format = (fp32_dest_acc_en) ? DataFormat::Float32 : DataFormat::Float16_b;
-    DataFormat intermed1_dfb_data_format = DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tile_size(intermed_dfb_data_format);
     DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tile_size(dst_dfb_data_format);
 
@@ -79,9 +74,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     // unity-build translation unit, so no anonymous-namespace constants are introduced.
     const DFBSpecName INPUT_DFB{"input"};
     const DFBSpecName SCALER_DFB{"scaler"};
-    const DFBSpecName MASK_H_DFB{"mask_h"};
-    const DFBSpecName ACCUM_DST_DFB{"accum_dst"};
-    const DFBSpecName MASKED_INPUT_DFB{"masked_input"};
     const DFBSpecName OUT_DFB{"out"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -101,30 +93,12 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         .num_entries = num_input_tiles,
         .data_format_metadata = src0_dfb_data_format,
     });
+    // Two scaler entries when H is not tile-aligned: entry 0 full, entry 1 partial (see the reader).
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = do_mask_h ? 2u : 1u,
         .data_format_metadata = scaler_dfb_data_format,
-    });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = MASK_H_DFB,
-        .entry_size = mask_h_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = mask_h_dfb_data_format,
-    });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = ACCUM_DST_DFB,
-        .entry_size = intermed_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = intermed_dfb_data_format,
-    });
-    uint32_t intermed1_single_tile_size = tile_size(intermed1_dfb_data_format);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = MASKED_INPUT_DFB,
-        .entry_size = intermed1_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = intermed1_dfb_data_format,
     });
     constexpr uint32_t num_output_tiles = 2;
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -139,8 +113,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()});
 
     // ---- Reader kernel ----
-    // The mask DFB is produced only when masking is active; the reader's DO_MASK_H define already
-    // gates that production, and gates the dfb::mask_h reference along with it.
     Group<DFBBinding> reader_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = INPUT_DFB,
@@ -155,11 +127,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     };
     KernelSpec::CompilerOptions::Defines reader_defines = {{"REDUCE_SCALER", "1"}};
     if (do_mask_h) {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = MASK_H_DFB,
-            .accessor_name = "mask_h",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
         reader_defines.emplace("DO_MASK_H", "1");
     }
 
@@ -176,8 +143,9 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
                 // Read by the kernel but unused there (the column loop strides by Wt); kept as-is,
                 // since dropping it would be a change to the kernel's argument list beyond the port.
                 {"HtWt", HtWt},
+                {"partial_h", mask_h},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols", "mask_h"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
 
@@ -203,21 +171,9 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     KernelSpec::CompilerOptions::Defines reduce_defines(reduce_defines_map);
 
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1 && fp32_dest_acc_en) {
-        // Legacy set unpack_to_dest_mode[CBIndex::c_24] = UnpackToDestFp32 when fp32 accumulation is
-        // on; reindexed onto the DFB name and translated to the Metal 2.0 spelling. Metal 2.0 also
-        // *requires* an explicit entry here (accum_dst is Float32 and the kernel consumes it with a
-        // 32-bit dest register).
-        compute_gen1->unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
-    }
+    // The accum_dst UnpackToDest entry went away with the accumulator buffer itself: a single
+    // reduce() per column keeps the running sum in DEST and never round-trips it through a DFB.
 
-    // The compute kernel binds the mask DFB in every configuration: it constructs the buffer object
-    // unconditionally and gates only some of its FIFO calls on do_mask_h. When masking is off the
-    // reader does not produce into it, leaving compute the single toucher — bound as both PRODUCER
-    // and CONSUMER (self-loop) so the DFB still presents one endpoint of each kind per node.
-    // masked_input is bound PRODUCER+CONSUMER in *every* configuration: the kernel constructs its
-    // buffer object outside the do_mask_h guard, so the dfb::masked_input token has to exist even
-    // where the guard discards all of its FIFO traffic.
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {
             DFBBinding{
@@ -231,46 +187,11 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
                 .endpoint_type = DFBEndpointType::CONSUMER,
             },
             DFBBinding{
-                .dfb_spec_name = MASK_H_DFB,
-                .accessor_name = "mask_h",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            // accum_dst holds the running reduction result: produced by the reduce output and read
-            // back by the next iteration's accumulation.
-            DFBBinding{
-                .dfb_spec_name = ACCUM_DST_DFB,
-                .accessor_name = "accum_dst",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-            DFBBinding{
-                .dfb_spec_name = ACCUM_DST_DFB,
-                .accessor_name = "accum_dst",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            // masked_input is packed by this kernel and immediately re-read as the reduce input.
-            DFBBinding{
-                .dfb_spec_name = MASKED_INPUT_DFB,
-                .accessor_name = "masked_input",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-            DFBBinding{
-                .dfb_spec_name = MASKED_INPUT_DFB,
-                .accessor_name = "masked_input",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            DFBBinding{
                 .dfb_spec_name = OUT_DFB,
                 .accessor_name = "out",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
         };
-        if (!do_mask_h) {
-            dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = MASK_H_DFB,
-                .accessor_name = "mask_h",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-        }
         return KernelSpec{
             .unique_id = unique_id,
             .source = "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp",
@@ -327,8 +248,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
             core,
             {{"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
              {"curr_col_in_batch", num_cols_read % Wt},
-             {"num_cols", num_cols_per_core},
-             {"mask_h", mask_h}});
+             {"num_cols", num_cols_per_core}});
 
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,

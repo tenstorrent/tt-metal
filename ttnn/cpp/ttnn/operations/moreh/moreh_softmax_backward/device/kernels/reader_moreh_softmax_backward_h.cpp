@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -16,13 +17,11 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(4);
     uint32_t Wt = get_arg_val<uint32_t>(5);
 
-    uint32_t scaler = get_arg_val<uint32_t>(6);
-    uint32_t mask_h = get_arg_val<uint32_t>(7);
+    uint32_t mask_h = get_arg_val<uint32_t>(6);
 
     constexpr auto cb_y = tt::CBIndex::c_0;
     constexpr auto cb_dy = tt::CBIndex::c_1;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_mask = tt::CBIndex::c_3;
 
     uint32_t l1_write_addr_in;
 
@@ -34,10 +33,15 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    DataflowBuffer dfb_scaler_obj(cb_scaler);
-    DataflowBuffer dfb_mask_obj(cb_mask);
-    generate_bcast_scaler(dfb_scaler_obj, scaler);
-    generate_mask_h(dfb_mask_obj, mask_h);
+    if (mask_h < tt::constants::TILE_HEIGHT) {
+        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+            cb_scaler,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_COL>(mask_h);
+    } else {
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    }
 
     Noc noc;
     DataflowBuffer dfb_y_obj(cb_y);

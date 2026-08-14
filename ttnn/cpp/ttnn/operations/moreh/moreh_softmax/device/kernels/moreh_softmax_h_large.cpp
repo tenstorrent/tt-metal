@@ -38,27 +38,20 @@ void kernel_main() {
     // force-unrolling the per-Ht loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
     std::uint32_t N = get_arg(args::N);
     std::uint32_t Ht = get_arg(args::Ht);
+    constexpr std::uint32_t mask_h = get_arg(args::mask_h);
+    constexpr std::uint32_t TILE_H = 32;
+    constexpr bool do_partial_h = mask_h < TILE_H;
+    constexpr auto max_partial_scaler = do_partial_h ? compute_kernel_lib::ReducePartialScaler::last_tile()
+                                                     : compute_kernel_lib::ReducePartialScaler::none();
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max
-        if (Ht == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Phase 1: Reduce Ht-1 tiles
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_in0, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
-
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
-
-            // Phase 2: Reduce final masked tile with accumulation
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb_max, 1));  // iteration=1, reload from dfb_max
-        }
+        compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_in0, dfb_max_scaler, dfb_max>(
+            compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{},
+            max_partial_scaler);
 
         for (std::uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x - max(x))

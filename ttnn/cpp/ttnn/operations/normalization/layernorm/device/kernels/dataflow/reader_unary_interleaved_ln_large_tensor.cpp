@@ -121,18 +121,19 @@ void kernel_main() {
         constexpr uint32_t dfb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         constexpr uint32_t partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
 
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_in_2,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-
         if constexpr (partial_last_tile_cols > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                dfb_in_2,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                partial_last_tile_cols,
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        } else {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 dfb_in_2,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
         }
     }
     constexpr uint32_t eps_dfb_id = get_named_compile_time_arg_val("cb_eps");
