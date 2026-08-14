@@ -166,6 +166,62 @@ def test_slot_remap_identity_is_a_noop():
     assert seed_manager._seed_active is True
 
 
+def test_duplicate_request_seeds_get_distinct_device_streams():
+    """Concurrent slots sharing one request seed must not draw identical streams.
+
+    Regression test for #53077: n>1 completions of one prompt with a fixed seed
+    land in different slots with the same request seed, and the device seed was
+    derived from (seed, position) only, so every completion came out identical.
+    """
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([1234, 1234, 1234, 1234], [0, 1, 2, 3])
+
+    assert sorted(seed_manager.seed_salts) == [0, 1, 2, 3]
+    first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
+    assert len(set(first_draws)) == 4, f"duplicate-seed slots drew identical device seeds: {first_draws}"
+
+
+def test_unique_seed_stream_is_unchanged_and_slot_independent():
+    """A request whose seed is unique among active slots keeps salt 0, so its
+    stream matches the pre-salt derivation and does not depend on the slot."""
+    manager_a = _make_host_only_seed_manager(max_batch_size=4)
+    manager_a.reset_seed([777], [0])
+    manager_b = _make_host_only_seed_manager(max_batch_size=4)
+    manager_b.reset_seed([777], [3])
+
+    draws_a = [manager_a._next_device_seed_for_slot(0) for _ in range(4)]
+    draws_b = [manager_b._next_device_seed_for_slot(3) for _ in range(4)]
+
+    assert manager_a.seed_salts[0] == 0
+    assert draws_a == draws_b
+
+
+def test_seed_salt_travels_with_slot_remap():
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([55, 55], [0, 3])  # duplicates: slot0 salt 0, slot3 salt 1
+    assert seed_manager.seed_salts[3] == 1
+
+    # Condense: slot3's request moves into empty slot1.
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
+
+    assert seed_manager.seed_salts[1] == 1  # stream identity survives the move
+    assert seed_manager.seed_salts[3] == 0  # vacated slot cleared
+
+
+def test_seed_salt_does_not_recollide_with_surviving_duplicate():
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([55, 55], [0, 1])  # slot0 salt 0, slot1 salt 1
+    # Slot 0 finishes and is vacated; a new request with the same seed arrives.
+    seed_manager.apply_slot_remap(torch.tensor([1, 1, 2, 3], dtype=torch.int32))
+    assert seed_manager.seeds == [55, None, None, None]
+
+    seed_manager.reset_seed([55], [2])
+
+    # The newcomer must not reuse the surviving request's salt.
+    survivor_slot = 0
+    assert seed_manager.seed_salts[2] != seed_manager.seed_salts[survivor_slot]
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
