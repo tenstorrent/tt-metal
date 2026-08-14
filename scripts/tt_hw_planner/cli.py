@@ -11082,7 +11082,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     popt.add_argument("--devices", default="0,1", help="single | all | explicit ids like '0,1'")
     popt.add_argument("--mesh", help="mesh shape like '2x2' for roofline calibration (needs --box)")
-    popt.add_argument("--box", help="declared TT box for roofline calibration (e.g. p300c, T3K, Galaxy)")
+    popt.add_argument(
+        "--box",
+        help=(
+            "declared TT box for roofline calibration: N150, N300, T3K, GalaxyWH, P100, P150, P300, "
+            "QB2, GalaxyBH (case-insensitive). NOT the board series tt-smi prints -- a host of four "
+            "'p300c' Blackhole chips is the 4-chip box QB2, and 'p300c' is not a box name"
+        ),
+    )
     popt.add_argument("--metric", default="device_ms", help="device_ms | wall_ms | auto")
     popt.add_argument(
         "--max-rounds",

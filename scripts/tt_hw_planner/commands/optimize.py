@@ -316,9 +316,21 @@ def _derive_mesh_device_env(args) -> None:
         # find_box is CASE-SENSITIVE ('p150' raises, 'P150' works) while the CLI help suggests
         # lowercase ("e.g. p300c, T3K, Galaxy"), so match case-insensitively before looking up.
         canon = next((b.name for b in HARDWARE if b.name.lower() == str(box_name).lower()), box_name)
+    except Exception:  # noqa: BLE001 -- the table itself failed to import; nothing to validate against
+        return
+    try:
         box = find_box(canon)
     except Exception:  # noqa: BLE001
-        return
+        # A BOX NAME THAT DOES NOT RESOLVE MUST NOT PASS QUIETLY. This used to fall into the same
+        # blanket `return` as an import failure, so --box p300c -- the board series tt-smi actually
+        # prints for these chips, and the example the CLI help itself used to give -- set nothing,
+        # printed nothing, and left the model loading a default profile. The operator asked for a
+        # specific board and got silence. The names are a closed set, so this is checkable.
+        raise SystemExit(
+            "unknown --box %r. Valid boxes: %s (case-insensitive). Note this is the planner's BOX "
+            "name, not the board series tt-smi prints: four 'p300c' Blackhole chips are the box QB2."
+            % (box_name, ", ".join(b.name for b in HARDWARE))
+        )
     shape = (1, 1)
     raw = getattr(args, "mesh", None)
     if raw:
