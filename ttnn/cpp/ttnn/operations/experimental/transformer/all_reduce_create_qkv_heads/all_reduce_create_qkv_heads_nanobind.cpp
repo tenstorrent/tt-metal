@@ -33,7 +33,7 @@ void bind_all_reduce_create_qkv_heads(nb::module_& mod) {
             buffer_tensor (ttnn.Tensor): buffer tensor for intermediate results
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on
             mesh_device (MeshDevice): Device mesh to perform the operation on
-            multi_device_global_semaphore (MultiDeviceGlobalSemaphore): Semaphore for multi-device synchronization
+            multi_device_global_semaphore (GlobalSemaphore): Semaphore for multi-device synchronization
             num_heads (int): Number of attention heads
 
         Keyword Args:
