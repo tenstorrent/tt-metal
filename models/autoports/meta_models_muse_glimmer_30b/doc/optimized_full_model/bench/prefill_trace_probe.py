@@ -6,8 +6,9 @@
 128-token prefill is host-issue bound (54.9 ms of issue against 55.1 ms to drain, over
 4122 ttnn dispatches at 9-60 us each) and that no collective implementation or
 persistent-buffer variant moves the per-call cost.  Tracing is the only mechanism that
-removes host issue, so the README's decision not to ship a prefill trace should rest on a
-*measurement* of the upside and the cost, not on an estimate.
+removes host issue, so the decision about a prefill trace had to rest on a *measurement* of
+the upside and the cost, not on an estimate.  It did: the stage **ships** one, as the opt-in
+``GeneratorConfig.prefill_trace``, on the strength of what this probe found.
 
 This probe measures it, on the real 52-layer build, at one padded prompt length:
 
@@ -18,9 +19,10 @@ This probe measures it, on the real 52-layer build, at one padded prompt length:
 * whether replay is correct: the logits from a replay are compared against the eager
   logits over the same persistent inputs.
 
-It is a probe, not a shipped path.  The generator does not gain a prefill trace: see
-`README.md` "Where TTFT actually goes" for why a per-32-row-bucket trace with retained
-intermediates does not pay back on non-repeating serving prompt lengths.
+It is also the tool for sizing the flag per bucket, which is what the README hands a serving
+stage: one run per padded length.  See `README.md` "Tracing the prefill" for why it is opt-in
+(one trace serves one 32-row bucket, capture costs ~98 ms, and the win is short-prompt only --
+1.33x at 128 rows, 1.00x at 8192).
 
 Usage::
 

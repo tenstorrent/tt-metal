@@ -945,6 +945,47 @@ def test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one(genera
         ttnn.deallocate(hidden)
 
 
+def test_a_failed_prefill_capture_falls_back_and_stays_off(generator):
+    """A capture failure must fall back to eager **and not be retried per request**.
+
+    Round 15 made the failure fall back instead of raising mid-call.  Round 16 pointed out that
+    falling back is only half of it: nothing recorded the failure, so with the shipped
+    ``prefill_trace_max_entries = 1`` the next request found the bucket cache empty and tried
+    again -- a retry on *every* request for the life of the generator, each paying two extra
+    full prefills before falling back.  Worse, the resource the real failure exhausts (the
+    mesh's fixed trace region) is accounted on the device *before* the throw, so retrying walks
+    the decode trace's recapture into the same wall, and that one is on the shipped default.
+
+    The state, not an injected fault, is what this pins.  Making ``ttnn.end_trace_capture``
+    raise **hangs the device** -- ending a trace twice does, and the injected failure leaves the
+    capture in a state the real one does not -- so this drives the flag the failure path sets
+    and asserts what the rest of the generator does with it: no capture attempt, an eager
+    prefill that still answers correctly, and a ``capability_report()`` that says so.  The
+    release side of the same subsystem *is* fault-injected (three committed negative controls);
+    this side is not, and that difference is stated rather than papered over.
+    """
+    prompt = _prompt(96, seed=63)
+    want = generator.generate(prompt_token_ids=prompt, max_new_tokens=3, enable_trace=True)
+    assert generator._prefill_traces == {}, "the shipped default captures no prefill trace"
+
+    generator._prefill_capture_disabled = True
+    generator._prefill_capture_failures = 1
+    generator.gen_config.prefill_trace = True
+    try:
+        generator.reset()
+        assert generator.generate(prompt_token_ids=prompt, max_new_tokens=3, enable_trace=True) == want
+        assert generator._prefill_traces == {}, "no capture is attempted while the flag is set"
+        report = generator.capability_report()
+        assert report["prefill_capture_failures"] == 1
+        assert report["prefill_capture_disabled_after_failure"] is True
+        assert report["prefill_trace_buckets_resident"] == []
+    finally:
+        generator.gen_config.prefill_trace = False
+        generator._prefill_capture_disabled = False
+        generator._prefill_capture_failures = 0
+        generator.reset()
+
+
 def test_prefill_trace_is_opt_in_and_matches_the_eager_path(mesh):
     """The opt-in prefill trace: same tokens, one bucket, eager fallback beyond it.
 
@@ -1002,6 +1043,7 @@ def test_prefill_trace_is_opt_in_and_matches_the_eager_path(mesh):
         traced.reset()
         assert traced.generate(prompt_token_ids=other, max_new_tokens=3, enable_trace=True) == want_other
         assert list(traced._prefill_traces) == [128]
+
     finally:
         traced.teardown()
         assert traced._prefill_traces == {}, "teardown must release every prefill trace"

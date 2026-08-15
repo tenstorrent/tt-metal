@@ -343,8 +343,11 @@ class MuseGlimmerGenerator(Generator):
         #: How many times a cache move has forced a release, for the log line and for the
         #: stage's evidence; see :meth:`_invalidate_traces_if_cache_moved`.
         self._prefill_trace_releases = 0
-        #: Prefill-trace captures that raised and fell back to the eager path (round 15).
+        #: Prefill-trace captures that raised and fell back to the eager path (round 15), and
+        #: whether capture is switched off because one did (round 16: retrying is worse than
+        #: not tracing, because the resource is global and accounted before the throw).
         self._prefill_capture_failures = 0
+        self._prefill_capture_disabled = False
         self._decode_trace_releases = 0
         #: Traces whose ``ttnn.release_trace`` *raised*.  Round 8 of the stage review found
         #: that round 7's retain-in-place policy fixed the leak by reintroducing round 4's
@@ -575,6 +578,8 @@ class MuseGlimmerGenerator(Generator):
         rows = model.normalize_page_table(page_table)
         entry = self._prefill_traces.get(padded_len)
         if entry is None:
+            if self._prefill_capture_disabled:
+                return None
             if len(self._prefill_traces) >= self.gen_config.prefill_trace_max_entries:
                 return None
             try:
@@ -583,16 +588,29 @@ class MuseGlimmerGenerator(Generator):
                 # This path already owns an eager-fallback contract -- a full bucket cache
                 # returns ``None`` and the caller prefills eagerly -- but a *failed capture*
                 # used to raise out of ``prefill_forward``/``generate()`` mid-request instead.
-                # Round 15 of the stage review pointed out that the resource this can exhaust
-                # (the fixed ``trace_region_size``, not DRAM) is the one a serving caller is
-                # told to push on by raising ``prefill_trace_max_entries``.  Falling back keeps
-                # the request correct at the eager path's cost, which is what the flag promises.
+                # Round 15 made it fall back; round 16 pointed out that falling back is only
+                # half of it, and the missing half is worse than the raise it replaced.
+                #
+                # The failure is **sticky**.  Nothing was recorded, so the bucket cache stayed
+                # under its bound and the very next request tried again -- at the shipped
+                # ``prefill_trace_max_entries = 1`` that is a retry on *every* request for the
+                # life of the generator, each one paying two extra full prefills (the warm
+                # compile and the capture forward) before falling back.  And the resource the
+                # named failure exhausts is accounted on the device before the throw, so each
+                # attempt permanently inflates the trace region's bookkeeping: retrying walks
+                # the *decode* trace's recapture into the same wall, and that one is on the
+                # shipped default path.  So capture is disabled for this generator after the
+                # first failure, which is the conservative reading of a global resource.
+                self._prefill_capture_failures += 1
+                self._prefill_capture_disabled = True
                 logger.warning(
                     f"MuseGlimmerGenerator: capturing the prefill trace for padded_len={padded_len} "
-                    f"failed ({exc}); this request falls back to the eager prefill. The trace "
-                    "region is the usual limit -- see open_multichip_mesh(trace_region_size=...)."
+                    f"failed ({exc}); this request falls back to the eager prefill, and prefill "
+                    "tracing is disabled for this generator rather than retried per request -- the "
+                    "trace region is the usual limit and it is a global, monotonically accounted "
+                    "resource. See open_multichip_mesh(trace_region_size=...) and "
+                    "capability_report()['prefill_capture_failures']."
                 )
-                self._prefill_capture_failures += 1
                 return None
 
         # These two counters are the *prefill*'s, and with this path on they are no
@@ -633,8 +651,32 @@ class MuseGlimmerGenerator(Generator):
         ttnn.synchronize_device(self.mesh_device)
         self.counters["synchronizations"] += 1
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        logits = forward()
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        # Everything from here to ``end_trace_capture`` runs with cq0 in record mode, and a
+        # raise inside it used to leave the queue recording -- the caller's eager fallback then
+        # died on its first host-to-device write ("Writes are not supported during trace
+        # capture"), masking the real cause -- and stranded both the pool entry and this
+        # bucket's two persistent inputs.  Round 16 asked for the cleanup; it is here rather
+        # than at the call site because this is the scope that owns the capture.
+        try:
+            logits = forward()
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        except Exception:
+            # Release the id, which is what would otherwise be stranded: ``begin_trace_capture``
+            # has already registered it and charged the trace region, and this generator keeps
+            # no handle to it once the local goes out of scope.  Deliberately *not* a second
+            # ``end_trace_capture``: ending a trace twice hangs the device (observed while
+            # building the injected-failure test for this path), so a capture that dies with
+            # cq0 still recording is left to the mesh's teardown rather than made worse here.
+            try:
+                ttnn.release_trace(self.mesh_device, trace_id)
+            except Exception:  # noqa: BLE001
+                pass
+            for tensor in (tokens, tt_page_table):
+                try:
+                    ttnn.deallocate(tensor)
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
         ttnn.synchronize_device(self.mesh_device)
         self.counters["synchronizations"] += 1
         entry = {
@@ -1520,6 +1562,12 @@ class MuseGlimmerGenerator(Generator):
             "decode_swiglu_mul_cores": dec_mod.DECODE_SWIGLU_MUL_CORES,
             "prefill_trace": bool(self.gen_config.prefill_trace),
             "prefill_trace_max_entries": int(self.gen_config.prefill_trace_max_entries),
+            # A dead counter is not evidence: round 16 pointed out that this stage's own answer
+            # to "make a state visible in every evidence file" is this block, and the capture
+            # failure count was written and never read anywhere.
+            "prefill_capture_failures": int(self._prefill_capture_failures),
+            "prefill_capture_disabled_after_failure": bool(self._prefill_capture_disabled),
+            "prefill_trace_buckets_resident": sorted(self._prefill_traces),
             "lm_head_dtype": str(self.gen_config.lm_head_dtype),
             "lm_head_matmul": self.gen_config.lm_head_matmul,
             "lm_head_cores": self.gen_config.lm_head_cores,

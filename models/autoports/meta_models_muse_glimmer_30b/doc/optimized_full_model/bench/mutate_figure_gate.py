@@ -155,8 +155,8 @@ MUTATIONS = [
     (
         "suite size",
         "doc/optimized_full_model/README.md",
-        "**58** cases (46 inherited + 12 new)",
         "**59** cases (46 inherited + 13 new)",
+        "**60** cases (46 inherited + 14 new)",
     ),
     (
         "eligibility bound",

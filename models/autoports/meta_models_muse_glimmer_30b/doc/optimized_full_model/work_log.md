@@ -307,8 +307,8 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | accuracy + sampling + fallback | `evidence_accuracy.json` | top-5 1.000, top-100 1.000 |
 | fp32 control + misses | `evidence_fp32_gate.json`, `evidence_misses.json` | all four gates pass |
 | greedy sampler benchmark | `sampler_ab.json` | split still wins, 15x |
-| 58-case suite, forward | `test_results.xml` | 58 passed |
-| 58-case suite, reverse | `logs/full_test_run_reverse.log` | 58 passed |
+| 59-case suite, forward | `test_results.xml` | 59 passed |
+| 59-case suite, reverse | `logs/full_test_run_reverse.log` | 59 passed |
 | qualitative, TT + compare | `qualitative/` | byte-identical to stage 6 |
 | degeneracy gate | `logs/check_degenerate_output.log` | no degenerate output |
 | watcher, shipped-default 10 cases | `watcher/`, `logs/run_watcher.log` | `WATCHER_CLEAN`, 0 tripped asserts |
@@ -781,7 +781,7 @@ to the new cache and the stale entry could never be invalidated again.
 | the round-6 conclusion sat in this log with no supersession marker | marked, with a pointer to the round-7 restatement and to limitation 6 |
 | §8 disagreed with the README on two figures from the same partition | corrected to the README's (**184.20 µs** of a 436.602 µs layer; the projections at **52.27–77.12 %**) |
 
-The suite is **58** cases (46 inherited + 12 new), forward and reverse.
+The suite is **59** cases (46 inherited + 13 new), forward and reverse.
 
 And the thing four rounds of this have implied: the mutation testing is **committed**
 (`bench/mutate_figure_gate.py`, `logs/mutate_figure_gate.log`). Forty-six mutations, each one a
@@ -1001,6 +1001,35 @@ pays, with one command per bucket to check.
 | **P2** §6's "every evidence row post-dates the last code change" is no longer true | replaced with per-artifact provenance: which files are current, and for each older one the specific reason it is unaffected |
 | the `506 µs` step delta was off by one | 507.2 µs, from the two arms' own minima |
 
+### Round 16 — `more-work-needed`
+
+The P1 was round 15's own fix. Making a failed prefill-trace capture fall back to eager was
+right; leaving it at that was not. Nothing recorded the failure, so at the shipped
+`prefill_trace_max_entries = 1` the next request found the bucket cache empty and tried again —
+a retry on **every** request for the life of the generator, each paying two extra full prefills
+before falling back. And the resource the real failure exhausts is accounted on the device
+*before* the throw, so retrying walks the always-on decode trace's recapture into the same wall.
+
+The failure is sticky now: capture is disabled for that generator, the trace id is released so
+the pool entry is not stranded, the bucket's two persistent inputs are freed, and
+`capability_report()` carries `prefill_capture_failures` and
+`prefill_capture_disabled_after_failure` — a counter that is written and never read is not
+evidence.
+
+**What the test could not be.** The release side of this subsystem is fault-injected three
+times over. The capture side cannot be: making `ttnn.end_trace_capture` raise **hangs the
+device** — ending a trace twice does, and the injection leaves the capture in a state the real
+failure does not. I found that the way one does, by hanging the mesh and resetting it. So the
+new case drives the *state* the failure path sets and asserts what the generator does with it,
+and the asymmetry is written down rather than papered over. The cleanup deliberately does not
+re-`end` a capture for the same reason.
+
+| finding | what was done |
+| --- | --- |
+| **P1** a failed capture was retried per request, stranded its pool entry and its inputs, and had a dead counter | sticky disable, release + deallocate on the failure path, the counter in `capability_report()`, and a state-driven test (`test_a_failed_prefill_capture_falls_back_and_stays_off`) |
+| **P2** `prefill_trace_max_entries > 1` — the configuration recommended to serving — had never been run by any test, probe or evidence file | `bench/prefill_trace_multibucket_probe.py`: two buckets resident, each replayed after the other, **every generation token-identical to an eager arm on the same build**. It also settled a false alarm: an in-suite version of the same sequence appeared to diverge, and the probe showed the divergence was my test's reuse of stale expectations, not the feature |
+| **P2** the probe's own docstring still said the stage had decided *not* to ship a prefill trace | rewritten to describe the shipped opt-in flag and what the probe is for |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -1023,7 +1052,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `d45ac8e2a0f` | round-12 review fixes: the terminal term derived from named ids with the NoPE asymmetry priced, the carried-forward decoder contract bound cell by cell, the stale mutation count, and the gate's perimeter stated rather than overclaimed |
 | `c6a85246281` | round-13 review fixes: the RoPE tables moved out of the terminal term with every dependent figure recomputed, the both-captures rule that catches the class, and the perimeter statement corrected against seven surviving in-perimeter mutations |
 | `d8c5d686b13` | round-14 review fixes: the layer-stack floor table bound cell by cell, the generated mutation sweep as a harness arm, the cross-check loop moved to where it covers every binding, and the cross-capture bracket derived rather than stated |
-| *(this commit)* | round-15 review fixes: the 8192-row prefill-trace measurement that replaced a 64x extrapolation, the eager fallback on a failed capture, and per-artifact evidence provenance |
+| `917a3225afd` | round-15 review fixes: the 8192-row prefill-trace measurement that replaced a 64x extrapolation, the eager fallback on a failed capture, and per-artifact evidence provenance |
+| *(this commit)* | round-16 review fixes: the sticky capture-failure disable with cleanup and a report field, the multi-bucket probe that exercises the recommended serving configuration, and the corrected probe docstring |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:

@@ -47,7 +47,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 1118
+ADVERTISED_CHECKS = 1123
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -747,6 +747,22 @@ def main() -> int:
         "this request falls back to the eager prefill" in text(ROOT / "tt/generator.py"),
         True,
     )
+    # The recommended serving configuration, which round 16 found had never been run: two
+    # buckets resident at once, both replaying, against an eager arm on the same build.
+    multibucket = text(D / "logs/prefill_trace_multibucket_probe.log")
+    same("the two-bucket probe ran both arms", "A two-bucket" in multibucket and "B eager" in multibucket, True)
+    same("...with both buckets resident", "A buckets    : [128, 256]" in multibucket, True)
+    same(
+        "...and every generation matching eager",
+        "A matches eager: first=True other=True repeat=True" in multibucket,
+        True,
+    )
+    same("...including the repeat after the other bucket", "A repeat matches first: True" in multibucket, True)
+    same(
+        "the README states that the recommended multi-bucket configuration is exercised",
+        "prefill_trace_multibucket_probe" in readme,
+        True,
+    )
     l1 = load(D / "l1_highwater_probe.json")
     same("L1 peak delta per bank", l1["l1_peak_delta_per_bank_bytes"], 126976)
     same("L1 free per bank at the peak", l1["l1_free_per_bank_at_peak_with_change"], 1238144)
@@ -871,10 +887,11 @@ def main() -> int:
             "test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried",
             "test_a_cache_rebound_out_of_band_still_invalidates_the_traces",
             "test_a_sampling_trace_that_fails_to_release_keeps_its_logits",
+            "test_a_failed_prefill_capture_falls_back_and_stays_off",
         )
         if f"`{name}" in readme
     ]
-    same("the README's new-case table lists every new test", len(new_cases), 10)
+    same("the README's new-case table lists every new test", len(new_cases), 11)
     # The Implementation table must name every code path this stage changed, derived from the
     # diff rather than from memory: round 10 found it listing three of six.
     changed = subprocess.run(
