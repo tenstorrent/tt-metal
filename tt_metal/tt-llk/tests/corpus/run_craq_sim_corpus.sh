@@ -5,6 +5,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/../../../.." && pwd)}"
 CRAQ_SIM_ROOT="${CRAQ_SIM_ROOT:-/localdev/nkapre/craq-sim}"
+# craq-sim runs pytest without xdist, while a few tt-llk fixtures still request
+# its worker_id fixture.  Keep the compatibility fixture explicit rather than
+# relying on an incidental shell environment.
+PYTEST_WORKERID_PLUGIN_DIR="${PYTEST_WORKERID_PLUGIN_DIR:-/localdev/nkapre/sfpi-gcc-lreg-artifacts}"
+PYTEST_WORKERID_PLUGIN="${PYTEST_WORKERID_PLUGIN:-pytest_workerid_plugin}"
 ARCH=bh
 TIER=1
 SAMPLE=1
@@ -46,6 +51,11 @@ HARNESS="$TT_METAL_HOME/tt_metal/tt-llk/tests"
 [ -f "$MANIFEST" ] || { echo "ERROR: missing manifest: $MANIFEST" >&2; exit 2; }
 [ -x "$SIM_RUNNER" ] || { echo "ERROR: missing craq-sim runner: $SIM_RUNNER" >&2; exit 2; }
 [ -d "$HARNESS/python_tests" ] || { echo "ERROR: missing tt-llk harness: $HARNESS" >&2; exit 2; }
+[ -f "$PYTEST_WORKERID_PLUGIN_DIR/${PYTEST_WORKERID_PLUGIN//./\/}.py" ] || {
+    echo "ERROR: missing required pytest worker-id plugin: $PYTEST_WORKERID_PLUGIN_DIR/${PYTEST_WORKERID_PLUGIN//./\/}.py" >&2
+    echo "       set PYTEST_WORKERID_PLUGIN_DIR/PYTEST_WORKERID_PLUGIN to an importable shim" >&2
+    exit 2
+}
 
 if [ -z "$RUN_ROOT" ]; then
     RUN_ROOT="$TT_METAL_HOME/tt_metal/tt-llk/tests/corpus/runs/$(date -u +%Y%m%dT%H%M%SZ)-$ARCH-tier$TIER"
@@ -61,7 +71,8 @@ awk -F '\t' -v arch="$ARCH" -v tier="$TIER" '
 {
     printf 'tt_metal_head\t'; git -C "$TT_METAL_HOME" rev-parse HEAD
     printf 'craq_sim_head\t'; git -C "$CRAQ_SIM_ROOT" rev-parse HEAD
-    printf 'arch\t%s\ntier\t%s\nsample\t%s\n' "$ARCH" "$TIER" "$SAMPLE"
+    printf 'arch\t%s\ntier\t%s\nsample\t%s\nworkerid_plugin_dir\t%s\nworkerid_plugin\t%s\n' \
+        "$ARCH" "$TIER" "$SAMPLE" "$PYTEST_WORKERID_PLUGIN_DIR" "$PYTEST_WORKERID_PLUGIN"
 } > "$RUN_ROOT/provenance.tsv"
 cp "$MANIFEST" "$RUN_ROOT/f1_candidates.tsv"
 
@@ -71,8 +82,16 @@ if [ "$LIST_ONLY" = 1 ]; then
 fi
 
 [ -d "$HARNESS/.venv" ] || { echo "ERROR: missing harness virtualenv: $HARNESS/.venv" >&2; exit 2; }
+PYTHONPATH="$PYTEST_WORKERID_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    "$HARNESS/.venv/bin/python" -c 'import importlib, sys; importlib.import_module(sys.argv[1])' \
+    "$PYTEST_WORKERID_PLUGIN" || {
+        echo "ERROR: required pytest worker-id plugin is not importable: $PYTEST_WORKERID_PLUGIN" >&2
+        exit 2
+    }
 
 args=(--sample "$SAMPLE" --run-root "$RUN_ROOT/sim")
 while IFS= read -r module; do args+=(--module "$module"); done < "$MODULES"
+PYTHONPATH="$PYTEST_WORKERID_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+PYTEST_PLUGINS="${PYTEST_PLUGINS:+$PYTEST_PLUGINS,}$PYTEST_WORKERID_PLUGIN" \
 SIM_ARCH="$SIM_ARCH" SHORT_ARCH="$SHORT_ARCH" TT_METAL_HOME="$TT_METAL_HOME" HARNESS="$HARNESS" \
     "$SIM_RUNNER" "${args[@]}"

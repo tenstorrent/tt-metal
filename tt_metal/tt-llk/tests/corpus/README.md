@@ -23,6 +23,13 @@ CRAQ_SIM_ROOT=/localdev/nkapre/craq-sim \
   tt_metal/tt-llk/tests/corpus/run_craq_sim_corpus.sh --arch bh --tier 1 --sample 1
 ```
 
+The launcher explicitly requires the `pytest_workerid_plugin` shim because
+craq-sim intentionally omits xdist while some fixtures request `worker_id`.
+Its default location is `/localdev/nkapre/sfpi-gcc-lreg-artifacts`; override
+`PYTEST_WORKERID_PLUGIN_DIR` (and, if needed, `PYTEST_WORKERID_PLUGIN`) for a
+different checked, importable shim.  The launcher exports both `PYTHONPATH` and
+`PYTEST_PLUGINS` and records the selected values in `provenance.tsv`.
+
 Use `--sample 0` only for the full parameterized corpus.  That is the
 reproducible training/evaluation mode; it can be large.  `--list` records the
 exact modules selected before spending simulator time.  The run directory
