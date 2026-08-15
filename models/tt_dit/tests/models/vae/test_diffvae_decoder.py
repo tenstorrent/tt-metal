@@ -63,6 +63,7 @@ def decoder(device):
     return model
 
 
+@pytest.mark.diffvae_gate
 def test_context_matches_upstream(*, decoder):
     """All four deterministic stages plus the ghost pad and crop, latent to stage-5 context.
 
@@ -82,6 +83,7 @@ def test_context_matches_upstream(*, decoder):
 
 @pytest.mark.parametrize("t", [12, 25, 145])
 @pytest.mark.parametrize("frames", [1, 3, 8, 16, 64])
+@pytest.mark.diffvae_gate
 def test_band_halo_covers_every_window(t: int, frames: int):
     """A band's local windows must be the volume's own, shifted by the band's halo.
 
@@ -109,6 +111,7 @@ def test_band_halo_covers_every_window(t: int, frames: int):
             assert local_ends[local] + band.pad_lo == ends[q], f"frame {q} of {band}: end moved"
 
 
+@pytest.mark.diffvae_gate
 def test_decode_matches_upstream(*, decoder):
     """Latent to pixels through the whole decoder, against upstream's own pixels."""
     latent, noise, expected = _captured("input.latent", "stage5.noise", "output.pixels")

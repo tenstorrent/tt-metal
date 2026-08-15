@@ -58,6 +58,7 @@ def _captured(names: tuple[str, ...]) -> tuple[torch.Tensor, ...]:
 
 
 @pytest.mark.parametrize("block_index", [0, 1])
+@pytest.mark.diffvae_gate
 def test_na_block_matches_upstream(*, device, block_index):
     """One deterministic NA block, real weights, real activations."""
     if not CAPTURE.exists():
@@ -87,6 +88,7 @@ def test_na_block_matches_upstream(*, device, block_index):
     assert_quality(expected, actual, pcc=0.99)
 
 
+@pytest.mark.diffvae_gate
 def test_row_chunking_is_exact(*, device, monkeypatch):
     """Chunking the pointwise parts changes nothing about the result.
 
@@ -99,8 +101,8 @@ def test_row_chunking_is_exact(*, device, monkeypatch):
     torch.manual_seed(0)
     dim, head_dim, kernel = 128, 64, (3, 3, 3)
     hidden = (int(dim * 4.0) + 15) // 16 * 16
-    dims = (4, 8, 7)
-    tokens = dims[0] * dims[1] * dims[2]
+    dims = (5, 8, 7)
+    tokens = dims[0] * dims[1] * dims[2]  # 280, not a multiple of TILE
     assert tokens % diffvae_ltx.TILE != 0, "want a ragged final chunk"
 
     weights = {
@@ -135,6 +137,7 @@ def test_row_chunking_is_exact(*, device, monkeypatch):
     assert torch.equal(whole, chunked), (whole - chunked).abs().max()
 
 
+@pytest.mark.diffvae_gate
 def test_det_stages_match_upstream(*, device):
     """Stages 1-3 end to end: 14 blocks, three kernels, three upsample strides.
 

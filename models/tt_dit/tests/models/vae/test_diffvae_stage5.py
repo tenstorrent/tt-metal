@@ -231,6 +231,7 @@ def test_rope_dim_split_matches_upstream():
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.diffvae_gate
 def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
     """The RoPE prelude in isolation: pair-swap matmul + fused cos/sin table against
     upstream's per-axis W-slabbed rotation."""
@@ -364,6 +365,7 @@ def test_unfolded_gates_are_rejected(mesh_device: ttnn.MeshDevice, expect_error)
     ids=["fp32", "bf16"],
 )
 @pytest.mark.parametrize("pcc", [0.999], ids=["pcc999"])
+@pytest.mark.diffvae_gate
 def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: float):
     config = DiffVAEStage5Config()
     grid = GRID
@@ -428,3 +430,56 @@ def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: 
         failures.append(f"pixels: {err}")
 
     assert not failures, "\n".join(failures)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+@pytest.mark.parametrize("submesh_shape", [(2, 4)], ids=["2x4"])
+@pytest.mark.parametrize("pcc", [0.999], ids=["pcc999"])
+@pytest.mark.diffvae_gate
+def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, submesh_shape, pcc: float):
+    """Sharded NA3D (``NA3DShard`` + ``all_gather``) on a real multi-chip mesh.
+
+    :func:`test_stage5_parity` runs the replicated path — it passes no ``ccl_manager``, so
+    ``build_device_plan`` keeps ``shard=None`` however large the mesh. Here a ``CCLManager``
+    activates the shard, so each chip evaluates a slice of every attention group and the
+    per-group ``all_gather`` reassembles the full volume. The reassembled result must still
+    match the full-volume reference, which is what verifies the split + gather on hardware.
+
+    Opens the full physical mesh and carves a contiguous ``submesh_shape`` block (its chips are
+    fabric-connected), so this runs on a 32-chip box without owning the whole cluster.
+    """
+    from models.tt_dit.layers.na3d import NA3DShard
+    from models.tt_dit.parallel.manager import CCLManager
+
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    config = DiffVAEStage5Config()
+    grid = GRID
+    dtype = ttnn.bfloat16
+
+    shard = NA3DShard.for_mesh(mesh)
+    assert shard is not None and shard.tile_factor * shard.row_factor > 1, f"shard inactive on {submesh_shape}: {shard}"
+    logger.info(f"sharded NA3D on {submesh_shape}: {shard}")
+
+    reference = TorchStage5(config)
+    reference.eval()
+    randomize(reference, seed=1234)
+    state = checkpoint_state(reference)
+
+    ccl_manager = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
+    model = DiffVAEStage5(config, mesh_device=mesh, dtype=dtype, ccl_manager=ccl_manager)
+    model.load_torch_state_dict(state)
+
+    context, x_t, timestep = make_inputs(config, grid, seed=99)
+    _, ref_pixels = reference.forward_diff_step(reference.build_buffer(context, x_t), timestep)
+
+    tt_context = ttnn.from_torch(
+        flat(context, config.context_channels).contiguous(),
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+    )
+    tt_t = tt_timestep(timestep, mesh)
+    tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
+    assert_quality(ref_pixels, tt_pixels, pcc=pcc)
