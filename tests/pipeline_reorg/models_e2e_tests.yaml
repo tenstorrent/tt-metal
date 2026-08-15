@@ -240,7 +240,7 @@
   model_family: Llama
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 45
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -312,7 +312,7 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
