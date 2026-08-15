@@ -3418,6 +3418,22 @@ topology the port does not have. The tool wrote the correct topology into its ow
 
 This is F20's shape again — the tool already knows, and the knowledge is not wired to the decision.
 
+### Addendum — the perf record does not carry the topology either
+
+Once the run was pinned to `--devices 0` and had resolved `topology : single chip -> mesh 1x1`, the
+scorecard it then wrote reads:
+
+```
+[full-pipeline-gate] PERF_SCORECARD mesh=unknown TP=unknown DP=unknown shard=unknown
+                     on_device=True ISL=128 OSL=128 batch=1 TTFT_ms=NA
+                     prefill_path=n/a decode_ms=1735.2656 decode_path=trace+1cq TSU=0.58 TS=0.58
+```
+
+`mesh=unknown TP=unknown DP=unknown` — in the same process that printed the resolved topology
+minutes earlier, and for a metric whose meaning depends entirely on it. A latency number without
+its mesh cannot be compared against another run, which is the whole purpose of a scorecard. Same
+root as the finding above: the topology is known and not propagated.
+
 ### Fixes
 
 1. **Default `--devices` to what is present**, not to `"0,1"`. `single` is already an accepted value
@@ -3427,6 +3443,8 @@ This is F20's shape again — the tool already knows, and the knowledge is not w
 3. **Never let a device-list default override an explicit `--mesh`.** If they disagree, stop and say
    so — the current behaviour prints both, one line apart, and proceeds with the one the user did
    not ask for.
+4. **Stamp the resolved topology into `PERF_SCORECARD`.** It is computed and printed at startup;
+   emitting `mesh=unknown TP=unknown` alongside a latency makes the record uncomparable.
 
 ---
 
