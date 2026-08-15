@@ -19,8 +19,8 @@ jobs:
         run: |
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list > sfpu-bh-plan.tsv
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch wh --list > sfpu-wh-plan.tsv
-          test "$(wc -l < sfpu-bh-plan.tsv)" -eq 41
-          test "$(wc -l < sfpu-wh-plan.tsv)" -eq 32
+          test "$(wc -l < sfpu-bh-plan.tsv)" -eq 152
+          test "$(wc -l < sfpu-wh-plan.tsv)" -eq 138
       - uses: actions/upload-artifact@v4
         with:
           name: sfpu-corpus-plans

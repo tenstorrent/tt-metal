@@ -2,8 +2,10 @@
 
 ## Complete SFPU corpus
 
-`sfpu_corpus_v1.tsv` is the authoritative, versioned inventory of every SFPU
-header shipped for Blackhole (41) and Wormhole (32, a strict subset). Unlike
+`sfpu_corpus_v1.tsv` inventories both active SFPU implementation surfaces:
+legacy tt-llk common headers (41 BH/32 WH) and Metal ckernels (111 BH/106 WH),
+for 152 distinct BH paths and 138 WH paths. Duplicate basenames remain distinct
+rows through the `surface` and full path identity columns. Unlike
 the 11-row `f1_candidates.tsv` prioritization seed, every row is present and
 has either audited functional/performance mappings or an explicit `unmapped`
 state. Static columns record raw TTI, typed SFPI, replay, and MOP presence.

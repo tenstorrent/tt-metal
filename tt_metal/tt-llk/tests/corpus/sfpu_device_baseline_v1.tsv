@@ -1,14 +1,14 @@
 # schema=1; cycles are scoped device profiler metrics, never whole-test wall time
 id	arch	metric	scope	selector	cycles	status	provenance
-ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	handwritten_replay	326	measured	SFPI_COMPILER_UPGRADE.md section 13.8
-ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	323	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 1
-ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	325	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 2
-ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	323	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 3
-ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	839	measured	REDUCE_SDPA_SILICON_AB.md
-ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	typed_generated	855.5	measured	REDUCE_SDPA_SILICON_AB.md
-ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	handwritten	608	measured	BINARY_BCAST_SILICON_AB.md
-ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	generated	608	measured	BINARY_BCAST_SILICON_AB.md
-ckernel_sfpu_mul_int	bh	device_cycles	MATH_ISOLATE	handwritten	283.9296875	measured	audited BH device archive
-ckernel_sfpu_mul_int	bh	device_cycles	MATH_ISOLATE	generated	562.625	measured	audited BH device archive
-ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY			BLOCKED	no isolated paired profiler metric
-ckernel_sfpu_topk	bh	device_cycles	TOPK_BODY			BLOCKED	no isolated paired profiler metric
+legacy__ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	handwritten_replay	326	measured	SFPI_COMPILER_UPGRADE.md section 13.8
+legacy__ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	323	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 1
+legacy__ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	325	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 2
+legacy__ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	323	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 3
+legacy__ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	839	measured	REDUCE_SDPA_SILICON_AB.md
+legacy__ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	typed_generated	855.5	measured	REDUCE_SDPA_SILICON_AB.md
+legacy__ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	handwritten	608	measured	BINARY_BCAST_SILICON_AB.md
+legacy__ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	generated	608	measured	BINARY_BCAST_SILICON_AB.md
+metal__ckernel_sfpu_mul_int	bh	device_cycles	MATH_ISOLATE	handwritten	283.9296875	measured	audited BH device archive
+metal__ckernel_sfpu_mul_int	bh	device_cycles	MATH_ISOLATE	generated	562.625	measured	audited BH device archive
+legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY			BLOCKED	no isolated paired profiler metric
+legacy__ckernel_sfpu_topk	bh	device_cycles	TOPK_BODY			BLOCKED	no isolated paired profiler metric

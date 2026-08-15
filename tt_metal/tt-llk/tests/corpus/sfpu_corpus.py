@@ -8,13 +8,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 HERE = pathlib.Path(__file__).resolve().parent
 LLK = ROOT / "tt_metal/tt-llk"
 MANIFEST = HERE / "sfpu_corpus_v1.tsv"
-EXPECTED = {"bh": 41, "wh": 32, "raw": 20, "typed": 38, "replay": 6, "mop": 2}
-FIELDS = ["version","id","arches","header_bh","header_wh","raw_tti","typed_sfpi","replay","mop",
+EXPECTED = {"bh":152,"wh":138,"physical_paths":290,"basename_union":138,"legacy_bh":41,"legacy_wh":32,"raw":42,"typed":146,"replay":13,"mop":2}
+FIELDS = ["version","id","surface","arches","header_bh","header_wh","raw_tti","typed_sfpi","replay","mop",
           "functional_modules","perf_modules","mapping_state","notes"]
 
 def headers(arch):
-    base = LLK / f"tt_llk_{'blackhole' if arch == 'bh' else 'wormhole_b0'}/common/inc/sfpu"
-    return {p.relative_to(base).as_posix(): p for p in base.rglob("*.h")}
+    chip='blackhole' if arch == 'bh' else 'wormhole_b0'
+    roots={"legacy":LLK/f"tt_llk_{chip}/common/inc/sfpu", "metal":ROOT/f"tt_metal/hw/ckernels/{chip}"}
+    return {f"{surface}:{p.relative_to(base).as_posix()}":p for surface,base in roots.items() for p in base.rglob("ckernel_sfpu*.h")}
 
 def modules(prefix):
     p = LLK / "tests/python_tests"
@@ -40,13 +41,14 @@ def inventory():
     rows=[]
     for rel,p in sorted(bh.items()):
         raw,typed,replay,mop=classify(p.read_text(errors="replace")); stem=p.stem.removeprefix("ckernel_sfpu_")
-        mapped=seed.get(p.name)
+        surface,shortrel=rel.split(":",1)
+        mapped=seed.get(p.name) if surface=="legacy" else None
         # Mapping is evidence, not name similarity.  Only the reviewed override
         # seed may map a header; every other header remains explicitly unmapped.
         functional=mapped[0] if mapped else ""
         perf=mapped[1] if mapped else ""
         state="mapped" if functional else "unmapped"
-        rows.append(dict(version="1",id=rel.removesuffix(".h").replace("/","__"),arches="bh,wh" if rel in wh else "bh",
+        rows.append(dict(version="1",id=(surface+"__"+shortrel.removesuffix(".h").replace("/","__")),surface=surface,arches="bh,wh" if rel in wh else "bh",
           header_bh=p.relative_to(ROOT).as_posix(),header_wh=wh[rel].relative_to(ROOT).as_posix() if rel in wh else "",
           raw_tti=str(int(raw)),typed_sfpi=str(int(typed)),replay=str(int(replay)),mop=str(int(mop)),
           functional_modules=functional,perf_modules=perf,mapping_state=state,
@@ -64,7 +66,10 @@ def write_manifest(rows):
 def validate(rows):
     inv=inventory(); errors=[]
     if rows != inv: errors.append("manifest differs from discovered inventory; run --update")
-    counts={"bh":len(inv),"wh":sum("wh" in r["arches"].split(",") for r in inv)}
+    counts={"bh":len(inv),"wh":sum("wh" in r["arches"].split(",") for r in inv),
+            "legacy_bh":sum(r["surface"]=="legacy" for r in inv),"legacy_wh":sum(r["surface"]=="legacy" and "wh" in r["arches"].split(",") for r in inv)}
+    counts["physical_paths"]=counts["bh"]+counts["wh"]
+    counts["basename_union"]=len({pathlib.Path(r["header_bh"]).name for r in inv})
     for key in ("raw","typed","replay","mop"):
         col={"raw":"raw_tti","typed":"typed_sfpi","replay":"replay","mop":"mop"}[key]
         counts[key]=sum(r[col]=="1" for r in inv)

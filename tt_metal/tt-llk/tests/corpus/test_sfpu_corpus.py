@@ -6,9 +6,9 @@ S=importlib.util.spec_from_file_location("sfpu_corpus",P); M=importlib.util.modu
 class CorpusTest(unittest.TestCase):
     def test_inventory_and_no_substring_mapping(self):
         rows={r["id"]:r for r in M.inventory()}
-        self.assertEqual(len(rows),41)
-        self.assertEqual(rows["ckernel_sfpu_clamp"]["mapping_state"],"unmapped")
-        self.assertEqual(rows["ckernel_sfpu_comp"]["mapping_state"],"unmapped")
+        self.assertEqual(len(rows),152)
+        self.assertEqual(rows["legacy__ckernel_sfpu_clamp"]["mapping_state"],"unmapped")
+        self.assertEqual(rows["legacy__ckernel_sfpu_comp"]["mapping_state"],"unmapped")
 
     def test_comparator(self):
         base={"id":"x","arch":"bh","metric":"device_cycles","scope":"body","selector":"generated","cycles":100}
