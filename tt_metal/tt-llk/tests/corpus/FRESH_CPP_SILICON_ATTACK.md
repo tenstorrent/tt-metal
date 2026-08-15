@@ -28,6 +28,7 @@ Only correctness-gated, scoped Blackhole device measurements appear here.
 | Reduce-SDPA body | 840 | 834 | -0.714% |
 | Binary broadcast body | 608 | 608 | parity |
 | Reciprocal body, accurate Float16_b | 467 | 459 | **-1.713%** |
+| Addcmul body with P4 | 292.9296875 | 292.9921875 | parity (+0.02134%) |
 | Exp body, accurate Float16_b | 579.7421875 | 989.75 | +70.72% |
 | TTNN Where body | 159.25 | 312.50 | +96.23% |
 | MulInt32 isolate | 283.9296875 | 562.625 | +98.16% |
@@ -71,16 +72,18 @@ This is a timeboxed negative, but it identifies a general compiler gap. The prod
 
 ## Blackhole silicon: Addcmul
 
-Both selectors passed fresh silicon correctness processes before profiling. Each perf cell is three more fresh, serialized device processes.
+The initial compiler-visible body lost by 21.89% in `MATH_ISOLATE`: it formed two independent seven-instruction replay groups instead of the handwritten implementation's interleaved 14-instruction group. That result identified adjacent Dst-iteration fusion and cross-row latency hiding as the durable compiler gap; it was not a win.
 
-| Scope | Production handwritten | Fresh semantic C++ | Delta |
-|---|---:|---:|---:|
-| `mean(MATH_ISOLATE)` cycles/tile | 292.921875 / 292.921875 / 292.921875 | 357.03125 / 357.03125 / 357.03125 | +21.89% |
-| `mean(L1_TO_L1)` cycles/tile | 297.625 / 297.625 / 297.625 | 361.6328125 / 361.6328125 / 361.6328125 | +21.51% |
+P4 phases 2 and 3 implement that mechanism generically and default-off in SFPI-GCC `3a5e7c4e4`: a pre-IRA pass proves two typed Dst iterations equivalent and disjoint, rewrites the second row's addresses and RWC advance, then interleaves the two independent dataflow chains before replay formation. It has no operation-name matching. The linked generated performance ELF contains the expected 14-instruction replay group and has SHA256 `ce31a5664442231732afaac37b267da2f810680515f667c450dd5d18093a5fb1`.
 
-Evidence is archived under `/localdev/nkapre/fresh-cpp-addcmul-bh-silicon-20260815`. It contains the correctness and perf logs, raw/post CSVs, the MATH_ISOLATE ELFs and disassemblies, per-run hashes, and an aggregate SHA256 manifest.
+Both selectors passed fresh silicon correctness before profiling. Each perf cell below is three additional fresh, serialized Blackhole processes using the same scoped `TILE_LOOP` zone.
 
-This negative isolates a second general compiler opportunity. Both variants form replay, so replay formation itself is not the gap. Production unrolls and interleaves two independent rows into one 14-instruction capture: two loads for each input stream, two multiplies, two MADs, two rounding operations, and two stores, then advances RWC by four. Fresh semantic C++ captures one row as seven instructions and advances by two after every replay. It therefore fails to overlap the independent multiply/MAD/round latency chains across adjacent loop iterations. The durable target is target-aware loop unroll-and-jam/software pipelining before replay capture, driven by dependency and SFPU latency/resource information. It must remain operation-agnostic and preserve the source expression's rounding/order semantics.
+| Scope | Production handwritten | Fresh semantic C++ + P4 | Delta of sample means | Classification |
+|---|---:|---:|---:|---|
+| `mean(MATH_ISOLATE)` cycles/tile | 292.921875 / 292.9453125 / 292.921875 | 292.9921875 / 292.9921875 / 292.9921875 | +0.0625 cycles (+0.02134%) | parity, not a win |
+| `mean(L1_TO_L1)` cycles/tile | 297.625 / 297.625 / 297.625 | 297.6640625 / 297.6640625 / 297.6640625 | +0.0390625 cycles (+0.01312%) | parity, not a win |
+
+This closes the measured 21.89% generated-code deficit to reproducible silicon parity; it does not establish a broad compiler win over hand tuning. The paired CRAQ gate also passed 2/2. Raw/post CSVs, per-process logs, and per-sample hashes are archived under `/localdev/nkapre/addcmul-phase3-silicon-v9-archive`. The SHA256 of the lexicographically sorted per-file SHA256 listing is `73854b6d47c34b37fc0e6fadd3cdd292bc1e7f8ee3b4f187f27a5cb815f113bf`.
 
 ## Blackhole silicon: SigmoidAppx
 
