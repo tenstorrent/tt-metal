@@ -2737,6 +2737,20 @@ at `SAMPLES_PER_FRAME=1920`). It was simply **where the loop stopped, because th
 Given a target it could not trivially clear, the same tool on the same code found another four
 points of accuracy.
 
+### The tool hands the user the loose default, in writing
+
+Confirmed again on the 2026-08-15 re-run. Bring-up ends by printing the command to run next, and
+that command carries no threshold (`run2_autoup.log:461`):
+
+```
+  NEXT STEP: wire the pipeline:
+    python -m scripts.tt_hw_planner emit-e2e /localdev/lserbedzija/hf_models/voxtral-tts-full
+```
+
+Copy the line the tool just gave you and you get 0.95 — the 0.9586 column of the table above. The
+0.99 column is reachable only by knowing to add a flag the tool never mentions. This is what makes
+F29 a default problem rather than a documentation one: the recommended path *is* the loose path.
+
 ### Why this is the important version of O8
 
 O8 recorded that the accept test has no exchange rate — it keeps any change that is faster and above
