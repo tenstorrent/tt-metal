@@ -958,13 +958,7 @@ class Conv1dViaConv3d(Module):
         # fp32 to be worth doing at all, and the unsharded path: under T- or channel-sharding the conv3d
         # route owns the halo exchange and the C_in gather, and duplicating that here would be a second
         # place for the same invariant to be wrong. Sharded audio decode is off by default.
-        self.tap_matmul = (
-            tap_matmul
-            and dtype == ttnn.float32
-            and stride == 1
-            and not sharded
-            and channel_axis(parallel_config) is None
-        )
+        self.tap_matmul = tap_matmul and dtype == ttnn.float32 and stride == 1 and channel_axis(parallel_config) is None
 
         self._alloc_weight_bias()
 
@@ -1102,29 +1096,33 @@ class Conv1dViaConv3d(Module):
         # because it supplies its own symmetric padding, so a tap path that re-derived `eff_k - 1` from
         # the mode would silently prepend zeros to all 7 upsamplers.
         #
-        # This is a local pad, valid only unsharded -- and only ever reached unsharded, because the
-        # `not sharded` in the constructor's `tap_matmul` gate is load-bearing. Enabling tap for
-        # T-sharding was tried (gate relaxed, halo from `_t_neighbor_pad` as the conv3d path does it) and
-        # hits two separate problems, in this order:
-        #
-        #   1. Output length. The taps consume `eff_k - 1` rows, but `halo_pad_left/right` are both
-        #      `eff_k // 2`, which only sums to that for odd `eff_k`; at the even ones (the K=12
-        #      anti-aliased downsamplers) the result is one row too long and the resblock's residual add
-        #      rejects it with "Invalid subtile broadcast type". Deriving `pad_right` as
-        #      `(eff_k - 1) - pad_left` here fixes it, and is what a sharded tap path would need.
-        #   2. Then, traced *and* untraced, `ttnn.experimental.neighbor_pad_async` fails
-        #      `input_tensor.is_allocated()`. `CCLManager.neighbor_pad` passes a ping-pong persistent
-        #      buffer cached on (shape, dims, pads, dtype); enabling tap adds halo call sites, and one of
-        #      those cached buffers is deallocated and then handed out again. That is shared CCL lifetime
-        #      machinery, not something this layer can paper over.
-        #
-        # So a sharded tap path needs (2) understood first. The +0.57 dB `tap_matmul` measures today
-        # comes from the convs that are unsharded anyway -- `conv_pre`, and the inner conv of
-        # `ConvTranspose1dViaConv3d` -- so the upside here is unquantified. Do not relax the gate without
-        # fixing (2) and measuring what sharded tap actually buys.
-        pad_left = self.external_pad_front + self.internal_padding[0]
-        pad_right = self.internal_padding[0]
-        x_padded = _zero_pad_t(x_BTC, pad_left, pad_right, self.mesh_device) if pad_left or pad_right else x_BTC
+        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
+        if sharded:
+            # Context comes from the neighbouring chip, as the conv3d path does it: `_zero_pad_t` is a
+            # *local* pad and would put zeros where the neighbour's rows belong.
+            #
+            # The widths must sum to `eff_k - 1`, which is what the taps below consume, or `t_out` is not
+            # the shard's own T and the resblock's residual add rejects the result ("Invalid subtile
+            # broadcast type"). `halo_pad_left/right` are both `eff_k // 2`, which sums correctly only
+            # for odd `eff_k`; at the even ones (the K=12 anti-aliased downsamplers) it over-pads by one.
+            pad_left = self.halo_pad_left
+            pad_right = (self.eff_k - 1) - pad_left
+            x_padded = _t_neighbor_pad(
+                x_BTC,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                parallel_config=self.parallel_config,
+                ccl_manager=self.ccl_manager,
+                padding_mode="zeros",
+            )
+            # BORROWED: this is the ccl_manager's ping-pong buffer, not ours to free. See the
+            # deallocate below.
+            owns_padded = False
+        else:
+            pad_left = self.external_pad_front + self.internal_padding[0]
+            pad_right = self.internal_padding[0]
+            x_padded = _zero_pad_t(x_BTC, pad_left, pad_right, self.mesh_device) if pad_left or pad_right else x_BTC
+            owns_padded = x_padded is not x_BTC
         t_out = x_padded.shape[1] - (self.eff_k - 1)
         batch, _, channels = x_padded.shape
 
@@ -1168,7 +1166,11 @@ class Conv1dViaConv3d(Module):
                 ttnn.deallocate(accumulator)
                 ttnn.deallocate(term)
                 accumulator = new_accumulator
-        if x_padded is not x_BTC:
+        # Only free what we allocated. Under T-sharding `x_padded` is the ccl_manager's cached ping-pong
+        # buffer, handed back as `neighbor_pad_async`'s output; freeing it left a dead buffer in that
+        # cache, and the next halo call with the same shape died on `input_tensor.is_allocated()` inside
+        # an unrelated op. `x_padded is not x_BTC` was the wrong test for ownership.
+        if owns_padded:
             ttnn.deallocate(x_padded)
 
         if self.bias is not None:
