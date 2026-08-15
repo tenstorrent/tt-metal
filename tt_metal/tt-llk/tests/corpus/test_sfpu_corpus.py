@@ -33,6 +33,7 @@ class CorpusTest(unittest.TestCase):
             "legacy__ckernel_sfpu_where":"loss",
             "legacy__ckernel_sfpu_mul_int":"loss",
             "metal__ckernel_sfpu_mul_int32":"loss",
+            "metal__ckernel_sfpu_exp":"loss",
             "metal__ckernel_sfpu_sigmoid_appx":"loss",
             "metal__ckernel_sfpu_recip":"win",
             "legacy__ckernel_sfpu_topk":"blocked",

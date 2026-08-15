@@ -16,5 +16,7 @@ legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY	generated	312.5	meas
 legacy__ckernel_sfpu_topk	bh	device_cycles	TOPK_BODY			BLOCKED	no isolated paired profiler metric
 metal__ckernel_sfpu_sigmoid_appx	bh	device_cycles	MATH_ISOLATE	production	222.8515625	measured	audited BH archive; three identical fresh samples
 metal__ckernel_sfpu_sigmoid_appx	bh	device_cycles	MATH_ISOLATE	fresh_cpp	446.8515625	measured	audited BH archive; three identical fresh samples
+metal__ckernel_sfpu_exp	bh	device_cycles	MATH_ISOLATE	production	579.7421875	measured	EXP_SEMANTIC_SILICON_AB.md; three identical fresh samples
+metal__ckernel_sfpu_exp	bh	device_cycles	MATH_ISOLATE	fresh_cpp	989.75	measured	EXP_SEMANTIC_SILICON_AB.md; three identical fresh samples
 metal__ckernel_sfpu_recip	bh	device_cycles	RECIPROCAL_BODY	production	467	measured	RECIPROCAL_SEMANTIC_SILICON_AB.md; accurate Float16_b; three fresh samples
 metal__ckernel_sfpu_recip	bh	device_cycles	RECIPROCAL_BODY	semantic	459	measured	RECIPROCAL_SEMANTIC_SILICON_AB.md; accurate Float16_b; three fresh samples

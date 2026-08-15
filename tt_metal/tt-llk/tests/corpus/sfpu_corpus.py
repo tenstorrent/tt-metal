@@ -25,6 +25,11 @@ CORRECTNESS_METRICS = {"none", "pcc", "exact", "tolerance"}
 # Every exception is keyed by the complete stable corpus ID.  There are no
 # basename fragments, substring matches, or inferred semantic classifications.
 AUDITED_SEEDS = {
+    "metal__ckernel_sfpu_exp": dict(
+        semantic_cpp_class="ready", semantic_cpp_blocker="Typed 21-bit BF16 Exp is functionally valid; competitive lowering needs loop-invariant SFPU constant placement and replay formation for counted typed loops.",
+        paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="tolerance",
+        correctness_threshold="Float16_b rtol=0.05 atol=0.05 plus PCC > 0.99; existing Exp functional domain and edge_spec", correctness_source="test_sfpu_unary.py::test_exp_fresh_cpp",
+        silicon_status="loss", silicon_result="BH MATH_ISOLATE: fresh semantic C++ 989.75 cycles vs production 579.7421875 (+70.72%), three fresh samples each.", silicon_source="EXP_SEMANTIC_SILICON_AB.md; sfpu_device_baseline_v1.tsv; audited BH device archive"),
     "metal__ckernel_sfpu_sigmoid_appx": dict(
         semantic_cpp_class="ready", semantic_cpp_blocker="Fresh typed cubic is functionally valid; competitive lowering needs loop-invariant SFPU constant materialization/hoisting, special-register allocation, and counted-loop replay formation.",
         paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="tolerance",
@@ -93,6 +98,11 @@ AUDITED_SEEDS = {
 }
 
 AUDITED_MAPPINGS = {
+    "metal__ckernel_sfpu_exp": dict(
+        functional_modules="test_sfpu_unary.py::test_exp_fresh_cpp",
+        perf_modules="perf_eltwise_unary_sfpu.py::test_perf_exp_fresh_cpp",
+        notes="Audited paired production/fresh typed 21-bit BF16 Exp selector with functional, edge, and isolated profiler fixtures.",
+    ),
     "metal__ckernel_sfpu_sigmoid_appx": dict(
         functional_modules="test_sfpu_unary.py::test_sigmoid_appx_fresh_cpp",
         perf_modules="perf_eltwise_unary_sfpu.py::test_perf_sigmoid_appx_fresh_cpp",

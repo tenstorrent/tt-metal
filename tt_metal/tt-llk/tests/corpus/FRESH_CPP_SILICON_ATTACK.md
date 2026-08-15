@@ -28,11 +28,12 @@ Only correctness-gated, scoped Blackhole device measurements appear here.
 | Reduce-SDPA body | 840 | 834 | -0.714% |
 | Binary broadcast body | 608 | 608 | parity |
 | Reciprocal body, accurate Float16_b | 467 | 459 | **-1.713%** |
+| Exp body, accurate Float16_b | 579.7421875 | 989.75 | +70.72% |
 | TTNN Where body | 159.25 | 312.50 | +96.23% |
 | MulInt32 isolate | 283.9296875 | 562.625 | +98.16% |
 
-The Reciprocal result and its correctness/evidence provenance are detailed in
-`RECIPROCAL_SEMANTIC_SILICON_AB.md`.
+The Reciprocal and Exp results and their correctness/evidence provenance are detailed in
+`RECIPROCAL_SEMANTIC_SILICON_AB.md` and `EXP_SEMANTIC_SILICON_AB.md`.
 
 ## Correctness contract
 
