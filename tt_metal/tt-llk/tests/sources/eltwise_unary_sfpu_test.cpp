@@ -158,6 +158,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     block_tile,
                     VectorMode::None);
             }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::signbit)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    calculate_signbit_fresh_cpp,
+                    (iterations),
+                    block_tile,
+                    VectorMode::None);
+            }
             else if constexpr (RECIPROCAL_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
             {
                 _llk_math_eltwise_unary_sfpu_params_(

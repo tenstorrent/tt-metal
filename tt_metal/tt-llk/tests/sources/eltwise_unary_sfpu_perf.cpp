@@ -245,6 +245,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile,
                                 VectorMode::None);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::signbit)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_signbit_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
                         else
                         {
                             test_utils::call_unary_sfpu_operation<
@@ -300,6 +310,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 DST_SYNC_MODE,
                                 is_fp32_dest_acc_en,
                                 calculate_sigmoid_appx_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::signbit)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_signbit_fresh_cpp,
                                 (ITERATIONS),
                                 block_tile,
                                 VectorMode::None);

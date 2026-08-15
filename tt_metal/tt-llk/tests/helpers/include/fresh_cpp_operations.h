@@ -29,6 +29,20 @@ inline void calculate_sigmoid_appx_fresh_cpp() {
     }
 }
 
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_signbit_fresh_cpp() {
+    for (int row = 0; row < ITERATIONS; ++row) {
+        // Keep the all-lane predicate boundary typed and local to this
+        // out-of-line semantic body so the compiler can prove its CC state.
+        __builtin_rvtt_sfppushc(0);
+        __builtin_rvtt_sfppopc(0);
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        const sfpi::vInt sign = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(input), -31));
+        sfpi::dst_reg[0] = sfpi::int32_to_float(sign, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool IS_MAX, int ITERATIONS>
 inline void calculate_binary_max_min_fresh_cpp(
     const std::uint32_t dst_index_in0,

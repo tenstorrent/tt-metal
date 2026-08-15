@@ -309,3 +309,29 @@ def test_perf_sigmoid_appx_fresh_cpp(
         [128, 64],
         fresh_cpp_impl,
     ).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_signbit_fresh_cpp(
+    perf_report,
+    formats,
+    dest_acc,
+    fresh_cpp_impl,
+):
+    _run(
+        formats,
+        MathOperation.Signbit,
+        ApproximationMode.No,
+        dest_acc,
+        16,
+        32,
+        FastMode.No,
+        StableSort.No,
+        [128, 64],
+        fresh_cpp_impl,
+    ).run(perf_report)

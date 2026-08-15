@@ -713,12 +713,14 @@ def test_eltwise_unary_sfpu_int(
     approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
+    fresh_cpp_impl=[0, 1],
 )
 def test_eltwise_unary_sfpu_signbit(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    fresh_cpp_impl: int,
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
@@ -734,6 +736,7 @@ def test_eltwise_unary_sfpu_signbit(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+        fresh_cpp_impl=fresh_cpp_impl,
     )
 
 
