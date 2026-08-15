@@ -1704,8 +1704,10 @@ def generate_reports(
                         else:
                             csv_row["OP TO OP LATENCY [ns]"] = 0
 
-                    # Track end cycle for fallback computation.
-                    if perf_device_id is not None and kernel_end_cycle is not None:
+                    # Track end cycle for fallback computation. Skip on an invalid row: its end cycle is
+                    # itself untrustworthy, and storing it would keep flagging every subsequent op on this
+                    # device as invalid too.
+                    if perf_device_id is not None and kernel_end_cycle is not None and not kernel_timing_invalid:
                         prev_device_kernel_end_cycle[perf_device_id] = kernel_end_cycle
 
                     perf_dm_latency = device_perf_row.get("OP TO OP LATENCY BR/NRISC START [ns]")
