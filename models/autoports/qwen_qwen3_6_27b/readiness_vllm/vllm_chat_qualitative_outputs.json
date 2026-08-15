@@ -1,0 +1,143 @@
+{
+  "model": "Qwen/Qwen3.6-27B",
+  "endpoint": "/v1/chat/completions",
+  "rendering": "server tokenizer chat_template",
+  "profiles": {
+    "greedy": {
+      "temperature": 0.0
+    },
+    "sampled": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "seed": 42
+    }
+  },
+  "cases": [
+    {
+      "prompt": "Write a haiku about machine learning.",
+      "greedy_completion": "Thinking process:\n\n1.  **Deconstruct the request:**\n    *   Topic: Machine learning.\n    *   Form: Haiku (5-7-5 syllables).\n\n2.  **Brainstorming concepts related to machine learning:**\n    *   Data, learning, patterns, algorithms, neural networks, training, predicting, future, code, silicon, mind, human vs. machine, feeding data, finding patterns.\n\n3.  **Drafting lines (Syllable counting):**\n    *   *Idea 1:* Data feeds the mind.\n        *   Da-ta feeds",
+      "greedy_finish_reason": "length",
+      "greedy_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 18,
+        "total_tokens": 146,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      "sampled_completion": "Thinking process:\n\n1.  **Deconstruct the request:**\n    *   Topic: Machine learning.\n    *   Form: Haiku (5-7-5 syllables).\n\n2.  **Brainstorming themes/concepts related to machine learning:**\n    *   Data, learning, patterns, algorithms, neural networks, training, models, predictions, future, code, silicon, mind, machine.\n\n3.  **Drafting lines (Syllable counting):**\n    *   *Attempt 1:*\n        *   Data flows in streams (5) -> Da-ta flows in streams (",
+      "sampled_finish_reason": "length",
+      "sampled_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 18,
+        "total_tokens": 146,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+      "greedy_completion": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - **Topic:** Supervised vs. Unsupervised Learning\n   - **Requirement:** Explain in simple terms\n   - **Goal:** Make it accessible to someone without a technical background\n\n2.  **Identify Key Concepts:**\n   - *Supervised Learning:* Uses labeled data (input-output pairs), learns a mapping from inputs to outputs, goal is prediction/classification, needs a \"teacher\" or guide.\n   - *Unsupervised Learning:* Uses unlabeled data, finds hidden patterns/structures, goal is discovery/clustering",
+      "greedy_finish_reason": "length",
+      "greedy_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 25,
+        "total_tokens": 153,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      "sampled_completion": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - **Topic:** Supervised vs. Unsupervised Learning\n   - **Requirement:** Explain in simple terms\n   - **Goal:** Make it accessible to someone without a technical background, while maintaining accuracy.\n\n2.  **Identify Key Concepts:**\n   - **Supervised Learning:** Uses labeled data (input + correct output/answer). The model learns to map inputs to known outputs. Examples: classification, regression.\n   - **Unsupervised Learning:** Uses unlabeled data (only inputs, no answers). The model finds",
+      "sampled_finish_reason": "length",
+      "sampled_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 25,
+        "total_tokens": 153,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+      "greedy_completion": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\"\n   - **Key Elements:** \n     - Setting: Faraway kingdom\n     - Protagonist: Curious young inventor\n     - Starting point: \"discovered\" (needs continuation)\n   - **Genre:** Fairy tale/fantasy with a steampunk/sci-fi twist (inventor theme)\n   - **Task:** Complete the story\n\n2.  **Identify Core Requirements",
+      "greedy_finish_reason": "length",
+      "greedy_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 33,
+        "total_tokens": 161,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      "sampled_completion": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\"\n   - **Key Elements:** \n     - Setting: Faraway kingdom\n     - Protagonist: Curious young inventor\n     - Action/Inciting Incident: Discovered [something]\n   - **Task:** Complete the story in a narrative format.\n\n2.  **Identify Core Requirements:**\n   - Continue from the given opening sentence\n   - Maintain a fairy tale/fantasy",
+      "sampled_finish_reason": "length",
+      "sampled_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 33,
+        "total_tokens": 161,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "What are the three laws of thermodynamics?",
+      "greedy_completion": "Here's a thinking process:\n\n1.  **Understand User Query**: The user is asking for \"the three laws of thermodynamics\". This is a straightforward factual question in physics/chemistry.\n\n2.  **Identify Key Information Needed**:\n   - Zeroth Law (sometimes included, but the question specifically asks for three)\n   - First Law\n   - Second Law\n   - Third Law\n   - I should present them clearly, concisely, and accurately.\n   - I'll note that there are actually four laws (including the zeroth), but focus on the three requested, and optionally mention",
+      "greedy_finish_reason": "length",
+      "greedy_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 19,
+        "total_tokens": 147,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      "sampled_completion": "Here's a thinking process:\n\n1.  **Understand User Query**: The user is asking for the three laws of thermodynamics. This is a straightforward factual question in physics/chemistry.\n\n2.  **Identify Core Concepts**: The three laws of thermodynamics are fundamental principles that govern energy, entropy, and temperature in physical systems. I need to state them clearly and accurately.\n\n3.  **Recall/Verify the Laws**:\n   - **Zeroth Law**: (Often included now, but the question specifically asks for \"three laws\", so I'll stick to the traditional 1st, 2nd",
+      "sampled_finish_reason": "length",
+      "sampled_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 19,
+        "total_tokens": 147,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+      "greedy_completion": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - Input text: \"Hello, how are you today?\"\n   - Target language: French\n   - Task: Translation\n\n2.  **Identify Key Components:**\n   - \"Hello\" -> Greeting\n   - \"how are you\" -> Inquiry about well-being\n   - \"today\" -> Time reference\n\n3.  **Determine Appropriate French Equivalents:**\n   - \"Hello\" -> \"Bonjour\" (standard, polite)\n   - \"how are you\" -> \"comment allez-vous\" (",
+      "greedy_finish_reason": "length",
+      "greedy_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 24,
+        "total_tokens": 152,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      "sampled_completion": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Input text:** \"Hello, how are you today?\"\n   - **Target language:** French\n   - **Context:** Standard greeting, polite/casual but appropriate for most situations.\n\n2.  **Identify Key Components:**\n   - \"Hello\" -> Bonjour / Salut (depending on formality)\n   - \"how are you\" -> comment allez-vous / comment \u00e7a va / comment vas-tu\n   - \"today\" -> aujourd'hui\n\n3.  **Determine Formality Level:**\n   -",
+      "sampled_finish_reason": "length",
+      "sampled_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 24,
+        "total_tokens": 152,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "greedy_completion": "Here's a thinking process:\n\n1.  **Understand User Request**: The user wants a Python function to calculate the Fibonacci sequence.\n2.  **Identify Key Requirements**:\n   - Function name: Something like `fibonacci` or `calculate_fibonacci`\n   - Input: Typically, the number of terms `n` or a specific index `n`\n   - Output: The Fibonacci sequence up to `n` terms, or the `n`-th Fibonacci number\n   - Need to clarify: Usually, when people ask for \"calculate the Fibonacci sequence\", they mean generating the first `n",
+      "greedy_finish_reason": "length",
+      "greedy_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 20,
+        "total_tokens": 148,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      "sampled_completion": "Here's a thinking process:\n\n1.  **Understand User Request**: The user wants a Python function to calculate the Fibonacci sequence.\n2.  **Identify Key Requirements**:\n   - Input: Typically, the number of terms (n) or a specific index (n-th term)\n   - Output: The Fibonacci sequence up to n terms, or just the n-th term\n   - Language: Python\n   - Need to provide a clear, efficient, and well-documented function\n3.  **Consider Different Approaches**:\n   - Iterative (efficient, O(n) time, O(1",
+      "sampled_finish_reason": "length",
+      "sampled_usage": {
+        "completion_tokens": 128,
+        "prompt_tokens": 20,
+        "total_tokens": 148,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ]
+}

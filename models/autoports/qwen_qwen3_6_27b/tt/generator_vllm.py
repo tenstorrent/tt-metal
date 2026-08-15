@@ -34,7 +34,6 @@ from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model, _shard
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import DEFAULT_PRECISION_CONFIG
 from models.common.sampling import format_sampling_params
 
-
 MODEL_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
 # The datatype-sweep capacity probe proves 2,496,512 tokens with a 4 MB trace
@@ -43,9 +42,11 @@ DEFAULT_SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") 
 # trace-backup evidence leaves a 2,084,000-token pool. vLLM adds one lookahead
 # page per sequence, so
 # report 32 pages less here.
-# vLLM adds 32 lookahead pages (25,600 tokens) to this value.  The resulting
-# 1,752,000-token pool leaves one 327 MiB contiguous linear-scan workspace plus
-# fragmentation margin for a full-capacity serving prefill.
+# Live A/B runs showed this advertised cache pool does not materially control
+# the fragmented linear-scan allocation peak. Keep the largest original pool;
+# the Qwen3.6 linear-prefill chunk size bounds that workspace instead. vLLM's
+# 32 lookahead pages produce 2,190 aggregate pages while preserving the
+# 262,144-token per-request context contract.
 MAX_TOKENS_ALL_USERS = 1_726_400
 
 
@@ -162,8 +163,18 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             global_shape = (shape[0], shape[1] * 4, shape[2], shape[3])
             result.append(
                 [
-                    _shard(torch.zeros(global_shape, dtype=torch.bfloat16), self.mesh_device, 1, dtype=layer.policy.cache_dtype),
-                    _shard(torch.zeros(global_shape, dtype=torch.bfloat16), self.mesh_device, 1, dtype=layer.policy.cache_dtype),
+                    _shard(
+                        torch.zeros(global_shape, dtype=torch.bfloat16),
+                        self.mesh_device,
+                        1,
+                        dtype=layer.policy.cache_dtype,
+                    ),
+                    _shard(
+                        torch.zeros(global_shape, dtype=torch.bfloat16),
+                        self.mesh_device,
+                        1,
+                        dtype=layer.policy.cache_dtype,
+                    ),
                 ]
             )
         gen.model.bind_kv_cache(result)
@@ -298,6 +309,9 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             # features (for example min-p) are not supported by TT sampling.
             # Performance/readiness profiles always supply sampling_params and
             # use the canonical split token-out traces below.
+            if slot_remap is not None:
+                remap = torch.as_tensor(slot_remap).reshape(-1)[: gen.model.batch].tolist()
+                gen.remap_decode_slots(remap)
             if isinstance(page_table, torch.Tensor):
                 gen.refresh_page_table(page_table)
                 self._last_page_table = page_table.clone()
@@ -327,9 +341,7 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             gen.sampling.seed_manager.apply_slot_remap(remap)
         if active_seed_slots:
             gen.sampling.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-            gen.sampling.seed_manager.align_seed_counters_to_positions(
-                seed_values, active_seed_slots, start_values
-            )
+            gen.sampling.seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_values)
         page_changed = self._last_page_table is None or not torch.equal(page_table, self._last_page_table)
         if reset_batch or not self._decode_ready or page_changed or remap_changed:
             gen.setup_token_out_decode(

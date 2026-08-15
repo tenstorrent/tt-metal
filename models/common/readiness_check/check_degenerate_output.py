@@ -19,7 +19,8 @@ Checked artifacts (discovered under one or more roots):
 
   - ``readiness_vllm/vllm_qualitative_outputs.json`` written by
     ``run_vllm_server`` (list of {prompt, greedy_completion,
-    sampled_completion}).
+    sampled_completion}), and ``vllm_chat_qualitative_outputs.json``
+    (the same cases under a top-level ``cases`` key).
   - ``autoregressive_meta.json`` written by ``run_autoregressive``
     ({hf: {token_ids}, tt: {token_ids}, ...}) plus the sibling
     ``tt_completion.txt`` when present.
@@ -241,6 +242,21 @@ def check_vllm_qualitative(report: Report, path: Path) -> None:
     items = _load_artifact(report, path)
     if items is None:
         return
+    if isinstance(items, dict):
+        items = items.get("cases", [])
+    if not isinstance(items, list):
+        report.findings.append(
+            Finding(
+                severity="critical",
+                artifact=str(path),
+                label="artifact schema",
+                metric="invalid_qualitative_schema",
+                value=0.0,
+                threshold=1.0,
+                detail="Expected a list of cases or an object containing a 'cases' list.",
+            )
+        )
+        return
     for i, item in enumerate(items):
         prompt = str(item.get("prompt", ""))[:60]
         for key in ("greedy_completion", "sampled_completion"):
@@ -293,6 +309,7 @@ def discover(roots: Iterable[Path], scope: str) -> tuple[list[Path], list[Path]]
             continue
         if scope in ("all", "vllm"):
             vllm_files.extend(sorted(root.rglob("vllm_qualitative_outputs.json")))
+            vllm_files.extend(sorted(root.rglob("vllm_chat_qualitative_outputs.json")))
         if scope in ("all", "autoregressive"):
             meta_files.extend(sorted(root.rglob("autoregressive_meta.json")))
     return vllm_files, meta_files

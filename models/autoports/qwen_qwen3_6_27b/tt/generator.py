@@ -13,7 +13,7 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE, MODEL_REVISION
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.readiness_check.contract import Generator as ReadinessGenerator
@@ -164,13 +164,13 @@ class Qwen36Generator(ReadinessGenerator):
         token_tt = self._upload(tokens, dtype=ttnn.uint32)
         positions = torch.arange(physical_len, dtype=torch.int64).to(torch.uint32).repeat(batch, 1)
         position_tt = self._upload(positions, dtype=ttnn.uint32)
-        # Linear attention scans in 64-token chunks. Metadata is chunk-local:
+        # Linear-attention metadata follows the same chunk size as the scan:
         # a row whose prompt ended in an earlier chunk gets a zero-length mask
         # and selectors that preserve the incoming four-token conv state.
         sequence_mask_tt, selector_tensors = [], []
         prompt_lens_tensor = torch.tensor(prompt_lens)
-        for start in range(0, physical_len, 64):
-            chunk_len = min(64, physical_len - start)
+        for start in range(0, physical_len, LINEAR_PREFILL_CHUNK_SIZE):
+            chunk_len = min(LINEAR_PREFILL_CHUNK_SIZE, physical_len - start)
             active_len = torch.clamp(prompt_lens_tensor - start, min=0, max=chunk_len)
             mask = (torch.arange(chunk_len).reshape(1, chunk_len) < active_len.reshape(batch, 1)).to(torch.bfloat16)
             sequence_mask_tt.append(self._upload(mask, dtype=ttnn.bfloat16))
@@ -208,7 +208,7 @@ class Qwen36Generator(ReadinessGenerator):
         finally:
             # Request metadata is consumed asynchronously by every decoder
             # layer.  Fence before clearing aliases and explicitly releasing
-            # the O(ceil(S/64)) uploaded masks/selectors; otherwise a maximum
+            # the O(ceil(S/LINEAR_PREFILL_CHUNK_SIZE)) uploaded metadata;
             # context request leaves 15,040 device tensors model-owned.
             ttnn.synchronize_device(self.mesh_device)
             self.model.clear_prefill_request_state()

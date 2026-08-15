@@ -31,7 +31,7 @@ MODEL_ID = "Qwen/Qwen3.6-27B"
 MODEL_REVISION = "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
 ADVERTISED_CONTEXT = 262_144
 REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
-LINEAR_PREFILL_CHUNK_SIZE = 64
+LINEAR_PREFILL_CHUNK_SIZE = 32
 
 
 def _candidate_keys(layer_idx: int, suffix: str) -> tuple[str, ...]:
@@ -402,7 +402,7 @@ class FunctionalDecoder(LightweightModule):
         return output.finish()
 
     def _linear_attention_prefill_chunk(self, hidden_states):
-        """Run one 64-token gated-delta chunk with a logarithmic affine scan.
+        """Run one gated-delta chunk with a logarithmic affine scan.
 
         For each token the recurrent update is ``R' = A R + B``, where
         ``A = d (I - beta k.T k)`` and ``B = beta k.T v``.  Affine transforms

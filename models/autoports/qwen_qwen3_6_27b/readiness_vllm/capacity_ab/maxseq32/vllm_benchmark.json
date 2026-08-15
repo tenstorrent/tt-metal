@@ -1,0 +1,102 @@
+{
+  "source": "vllm bench serve",
+  "profile": "single_user_decode",
+  "comparison_scope": "Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.",
+  "raw_result_file": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/readiness_vllm/vllm_result.json",
+  "command": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/vllm",
+    "bench",
+    "serve",
+    "--backend",
+    "vllm",
+    "--model",
+    "Qwen/Qwen3.6-27B",
+    "--base-url",
+    "http://localhost:8000",
+    "--endpoint",
+    "/v1/completions",
+    "--dataset-name",
+    "random",
+    "--random-input-len",
+    "128",
+    "--random-output-len",
+    "128",
+    "--num-prompts",
+    "1",
+    "--ignore-eos",
+    "--percentile-metrics",
+    "ttft,tpot,itl,e2el",
+    "--save-result",
+    "--result-filename",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/readiness_vllm/vllm_result.json",
+    "--max-concurrency",
+    "1",
+    "--temperature",
+    "0.0"
+  ],
+  "command_string": "/home/mvasiljevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-27B --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0",
+  "config": {
+    "prompt_len": 128,
+    "output_len": 128,
+    "num_requests": 1,
+    "concurrency": 1,
+    "temperature": 0.0,
+    "generation_config_mode": "explicit",
+    "dataset_name": "random",
+    "ignore_eos": true
+  },
+  "elapsed_s": 143.3766762027517,
+  "completed_requests": 1,
+  "total_input_tokens": 128.0,
+  "total_output_tokens": 128.0,
+  "requested_output_tokens": 128,
+  "missing_output_tokens": 0,
+  "ttft_ms": {
+    "p50": 111416.01974796504,
+    "p99": 111416.01974796504,
+    "mean": 111416.01974796504
+  },
+  "tpot_ms": {
+    "p50": 251.65562295743567,
+    "p99": 251.65562295743567,
+    "mean": 251.65562295743567
+  },
+  "itl_ms": {
+    "p50": 243.91579255461693,
+    "p99": 245.82121323794127,
+    "mean": 251.65562454141738
+  },
+  "e2el_ms": {
+    "p50": 143376.28386355937,
+    "p99": 143376.28386355937,
+    "mean": 143376.28386355937
+  },
+  "itl_p50_decode_tps": 4.099775539445987,
+  "itl_mean_decode_tps": 3.973684283124061,
+  "vllm_mean_tpot_decode_tps": 3.9736843081353967,
+  "mean_per_request_decode_tps": 3.9736843081353967,
+  "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
+  "output_throughput_tok_per_s": 0.8927532942596099,
+  "request_throughput_per_s": 0.0069746351114032025,
+  "total_token_throughput_tok_per_s": 1.7855065885192198,
+  "secondary_benchmarks": {
+    "ci_serving_burst": {
+      "summary_file": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/readiness_vllm/vllm_ci_serving_benchmark.json",
+      "raw_result_file": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/readiness_vllm/vllm_ci_serving_result.json",
+      "log_file": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/readiness_vllm/vllm_ci_serving_benchmark.log",
+      "config": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "output_throughput_tok_per_s": 16.78495682319826,
+      "vllm_mean_tpot_decode_tps": 3.5706189123905845,
+      "comparison_scope": "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT."
+    }
+  }
+}

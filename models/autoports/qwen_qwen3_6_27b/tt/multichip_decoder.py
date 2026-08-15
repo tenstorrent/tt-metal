@@ -862,13 +862,13 @@ class MultichipDecoder(OptimizedDecoder):
         distance = 1
         while distance < sequence:
             previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
-            previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
             old_transform = transform
             old_bias = bias
             transform = ttnn.matmul(old_transform, previous_transform)
+            ttnn.deallocate(previous_transform)
+            previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
             bias = ttnn.matmul(old_transform, previous_bias)
             ttnn.add(bias, old_bias, output_tensor=bias)
-            ttnn.deallocate(previous_transform)
             ttnn.deallocate(previous_bias)
             ttnn.deallocate(old_transform)
             ttnn.deallocate(old_bias)
