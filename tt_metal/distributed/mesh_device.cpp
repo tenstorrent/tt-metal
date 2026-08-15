@@ -1868,6 +1868,11 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
 }
 uint32_t MeshDevice::get_trace_buffers_size() const { return pimpl_->get_trace_buffers_size(); }
 void MeshDevice::set_trace_buffers_size(uint32_t size) { pimpl_->set_trace_buffers_size(size); }
+bool MeshDevice::has_parked_traces() const {
+    // MeshDeviceImpl::release_mesh_trace() re-enables allocations exactly when the aggregate
+    // trace-buffer size drops to zero, so a non-zero size means a parked trace is still live.
+    return pimpl_->get_trace_buffers_size() > 0;
+}
 bool MeshDevice::initialize(
     uint8_t num_hw_cqs,
     size_t l1_small_size,

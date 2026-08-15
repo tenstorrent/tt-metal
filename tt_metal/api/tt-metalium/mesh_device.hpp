@@ -188,6 +188,9 @@ public:
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
+    // True while at least one captured (parked) trace is live on this mesh. Compiling new
+    // programs in this state can clobber the parked traces (issue #48536).
+    bool has_parked_traces() const;
 
     // Initialization APIs
     bool initialize(

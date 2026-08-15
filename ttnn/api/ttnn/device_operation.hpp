@@ -5,6 +5,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstdlib>
 #include <exception>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
@@ -395,6 +396,29 @@ void launch_operation_with_adapter(
         if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
+        }
+        // A program-cache miss compiles a brand-new workload while the mesh may already hold
+        // parked traces whose captured buffers' addresses the new allocations can displace.
+        // That clobbers the parked traces and typically wedges the device fetch queue: issue
+        // #48536 saw a 300s "device timeout in fetch queue wait" on the first un-warmed
+        // request. Misses stay allowed in normal serving, so warn loudly instead of hanging
+        // silently; escalate to a throw behind TTNN_THROW_ON_POST_PARK_COMPILE=1.
+        if (!program_cache_hit && mesh_device->has_parked_traces()) {
+            auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+            log_warning(
+                tt::LogOp,
+                "Device operation \"{}\": compiling while traces are parked on the mesh; this can "
+                "clobber the parked traces and hang the device (issue #48536). Warm this shape "
+                "before trace capture, or release the traces first.",
+                op_name);
+            const char* throw_on_post_park_compile = std::getenv("TTNN_THROW_ON_POST_PARK_COMPILE");
+            if (throw_on_post_park_compile != nullptr && throw_on_post_park_compile[0] == '1' &&
+                throw_on_post_park_compile[1] == '\0') {
+                TT_THROW(
+                    "Device operation \"{}\": program cache miss while traces are parked "
+                    "(TTNN_THROW_ON_POST_PARK_COMPILE=1)",
+                    op_name);
+            }
         }
     }
 
