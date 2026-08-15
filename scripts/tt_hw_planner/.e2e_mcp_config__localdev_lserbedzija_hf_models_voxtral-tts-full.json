@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "e2e-mcp": {
+      "command": "/localdev/lserbedzija/repos/tt-metal-pr46283/python_env/bin/python",
+      "args": [
+        "/localdev/lserbedzija/repos/tt-metal-pr46283/scripts/tt_hw_planner/e2e_mcp.py"
+      ],
+      "env": {
+        "E2E_MCP_DEMO_DIR": "/localdev/lserbedzija/repos/tt-metal-pr46283/models/demos/voxtral_tts_full",
+        "E2E_MCP_PCC": "0.95",
+        "E2E_MCP_TIMEOUT": "14400",
+        "E2E_MODEL_ID": "/localdev/lserbedzija/hf_models/voxtral-tts-full",
+        "E2E_ALL_TASKS": "0",
+        "E2E_REQUIRE_TRACE": "1",
+        "E2E_REQUIRE_ON_DEVICE": "1",
+        "TT_METAL_HOME": "/localdev/lserbedzija/repos/tt-metal-pr46283",
+        "PYTHONPATH": "/localdev/lserbedzija/repos/tt-metal-pr46283",
+        "PATH": "/localdev/lserbedzija/repos/tt-metal-pr46283/python_env/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}

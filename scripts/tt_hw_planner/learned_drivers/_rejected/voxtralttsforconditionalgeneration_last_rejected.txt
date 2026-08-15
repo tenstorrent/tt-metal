@@ -1,0 +1,247 @@
+# Rejected LLM draft(s) for VoxtralTtsForConditionalGeneration (/localdev/lserbedzija/hf_models/voxtral-tts-full)
+# Reason: runtime ok but zero target components fired across 3 attempts
+# Uncaptured components: ['module', 'voxtral_codec_decoder', 'voxtral_flow_matching']
+
+
+===== ATTEMPT 1 (raw response) =====
+def driver(model, sample_input=None):
+    try:
+        import re
+        import torch
+
+        try:
+            model.eval()
+        except Exception:
+            pass
+
+        device = None
+        dtype = torch.float32
+        try:
+            p = next(model.parameters())
+            device = p.device
+            dtype = p.dtype
+        except Exception:
+            pass
+
+        embed_module = None
+        try:
+            embed_module = model.get_input_embeddings()
+        except Exception:
+            embed_module = None
+
+        cfg = getattr(model, "config", None)
+
+        vocab_size = None
+        for src in (cfg, embed_module):
+            if vocab_size is not None:
+                break
+            for attr in ("vocab_size", "num_embeddings"):
+                try:
+                    v = getattr(src, attr, None)
+                    if isinstance(v, int) and v > 0:
+                        vocab_size = v
+                        break
+                except Exception:
+                    continue
+        if not vocab_size:
+            vocab_size = 32000
+
+        hidden_size = None
+        for src in (cfg, embed_module):
+            if hidden_size is not None:
+                break
+            for attr in ("hidden_size", "embedding_dim", "d_model"):
+                try:
+                    v = getattr(src, attr, None)
+                    if isinstance(v, int) and v > 0:
+                        hidden_size = v
+                        break
+                except Exception:
+                    continue
+        if not hidden_size:
+            hidden_size = 3072
+
+        seq_len = 8
+
+        def _call(**kwargs):
+            with torch.no_grad():
+                model(**kwargs)
+
+        # Attempt 1: drive via inputs_embeds only. The blocked components sit
+        # behind an internal check that counts a special "audio placeholder"
+        # token inside input_ids and compares it against a voice-preset row
+        # count; that check has nothing to scan when input_ids is never
+        # constructed, so this is the most direct way to reach decode_audio's
+        # downstream flow-matching/codec stages.
+        try:
+            embeds = torch.randn(1, seq_len, hidden_size, dtype=dtype, device=device)
+            _call(inputs_embeds=embeds, voice=None, max_frames=2, decode_audio=True)
+            return None
+        except Exception:
+            pass
+
+        # Attempt 2: plain arbitrary input_ids, no voice preset requested.
+        last_err = None
+        try:
+            lo = 3
+            hi = max(lo + 1, min(vocab_size, 50000))
+            ids = torch.randint(low=lo, high=hi, size=(1, seq_len), dtype=torch.long, device=device)
+            _call(input_ids=ids, voice=None, max_frames=2, decode_audio=True)
+            return None
+        except Exception as e:
+            last_err = e
+
+        # Attempt 3: the model still wants a fixed number of audio-placeholder
+        # tokens even without a named voice. Parse the required count straight
+        # out of whatever assertion just fired (it is voice-specific, so
+        # nothing here is hardcoded) and retry with that many placeholder
+        # tokens, guessing the placeholder id from any audio/voice/speech
+        # token id on the config, and a preset name if one is discoverable.
+        try:
+            msg = str(last_err) if last_err is not None else ""
+            m = re.search(r"preset has (\d+) rows", msg)
+            n_rows = int(m.group(1)) if m else seq_len
+
+            placeholder_id = None
+            if cfg is not None:
+                try:
+                    items = vars(cfg).items()
+                except Exception:
+                    items = []
+                for k, v in items:
+                    kl = str(k).lower()
+                    if isinstance(v, int) and "token" in kl and any(t in kl for t in ("audio", "voice", "speech")):
+                        placeholder_id = v
+                        break
+            if placeholder_id is None:
+                placeholder_id = max(0, vocab_size - 1)
+
+            voice_name = None
+            for attr in ("voice_presets", "VOICE_PRESETS", "presets", "PRESETS", "voices", "VOICES"):
+                for src in (model, cfg):
+                    obj = getattr(src, attr, None)
+                    if obj:
+                        try:
+                            voice_name = next(iter(obj))
+                        except Exception:
+                            voice_name = None
+                        if voice_name is not None:
+                            break
+                if voice_name is not None:
+                    break
+
+            n = max(1, n_rows)
+            ids = torch.full((1, n), placeholder_id, dtype=torch.long, device=device)
+            _call(input_ids=ids, voice=voice_name, max_frames=2, decode_audio=True)
+            return None
+        except Exception:
+            pass
+
+        return None
+    except Exception:
+        return None
+
+===== END ATTEMPT =====
+
+===== ATTEMPT 2 (raw response) =====
+
+===== END ATTEMPT =====
+
+===== ATTEMPT 3 (raw response) =====
+def driver(model, sample_input=None):
+    try:
+        import re
+        import torch
+
+        try:
+            model.eval()
+        except Exception:
+            pass
+
+        try:
+            device = next(model.parameters()).device
+        except Exception:
+            device = torch.device("cpu")
+
+        try:
+            vocab_size = int(getattr(model.config, "vocab_size", 32000))
+        except Exception:
+            vocab_size = 32000
+
+        candidates = []
+        try:
+            cfg = getattr(model, "config", None)
+            cfg_dict = {}
+            if cfg is not None:
+                try:
+                    cfg_dict = cfg.to_dict()
+                except Exception:
+                    cfg_dict = dict(vars(cfg))
+            scored = []
+            for k, v in cfg_dict.items():
+                if isinstance(v, bool) or not isinstance(v, int):
+                    continue
+                lk = k.lower()
+                if ("audio" in lk or "speech" in lk) and ("token" in lk or "placeholder" in lk or "id" in lk):
+                    score = 0
+                    if "placeholder" in lk:
+                        score -= 2
+                    if "audio" in lk:
+                        score -= 1
+                    scored.append((score, v))
+            scored.sort(key=lambda t: t[0])
+            for _, v in scored:
+                if v not in candidates:
+                    candidates.append(v)
+        except Exception:
+            pass
+        for extra in (vocab_size - 1, 0, 1, 2):
+            if extra not in candidates:
+                candidates.append(extra)
+
+        def try_forward(ids):
+            with torch.no_grad():
+                model(input_ids=ids, voice=None, max_frames=2, cfg_alpha=None, decode_audio=True)
+
+        pat = re.compile(r"(\d+)\s+audio\s+placeholders?.*?(\d+)\s+rows", re.IGNORECASE)
+
+        for cand in candidates[:4]:
+            count = 169
+            for _ in range(2):
+                try:
+                    ids = torch.full((1, max(count, 1)), int(cand), dtype=torch.long, device=device)
+                except Exception:
+                    break
+                try:
+                    try_forward(ids)
+                    return None
+                except AssertionError as e:
+                    m = pat.search(str(e))
+                    if not m:
+                        break
+                    cur_count, need_count = int(m.group(1)), int(m.group(2))
+                    if cur_count == 0 or need_count == count:
+                        break
+                    count = need_count
+                    continue
+                except Exception:
+                    break
+
+        for name in ("synthesize", "tts", "generate_speech", "infer"):
+            fn = getattr(model, name, None)
+            if callable(fn):
+                try:
+                    fn(text="Hello world.", voice=None)
+                    return None
+                except Exception:
+                    try:
+                        fn("Hello world.")
+                        return None
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    return None
+
+===== END ATTEMPT =====
