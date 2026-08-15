@@ -41,9 +41,10 @@ def inventory():
     for rel,p in sorted(bh.items()):
         raw,typed,replay,mop=classify(p.read_text(errors="replace")); stem=p.stem.removeprefix("ckernel_sfpu_")
         mapped=seed.get(p.name)
-        key=stem.replace("_", "")
-        functional=mapped[0] if mapped else ",".join(x for x in tests if key in x.replace("_", ""))
-        perf=mapped[1] if mapped else ",".join(x for x in perfs if key in x.replace("_", ""))
+        # Mapping is evidence, not name similarity.  Only the reviewed override
+        # seed may map a header; every other header remains explicitly unmapped.
+        functional=mapped[0] if mapped else ""
+        perf=mapped[1] if mapped else ""
         state="mapped" if functional else "unmapped"
         rows.append(dict(version="1",id=rel.removesuffix(".h").replace("/","__"),arches="bh,wh" if rel in wh else "bh",
           header_bh=p.relative_to(ROOT).as_posix(),header_wh=wh[rel].relative_to(ROOT).as_posix() if rel in wh else "",
@@ -90,9 +91,10 @@ def emit_summary(run, records, provenance):
 
 def compare_baseline(records, baseline, threshold):
     old=json.loads(baseline.read_text()).get("results",[])
-    index={(r.get("id"),r.get("arch"),r.get("mode")):r for r in old}; compared=[]
+    key=lambda r:(r.get("id"),r.get("arch"),r.get("metric"),r.get("scope"),r.get("selector"))
+    index={key(r):r for r in old}; compared=[]
     for r in records:
-        prior=index.get((r["id"],r["arch"],r["mode"])); now=r.get("cycles"); before=prior and prior.get("cycles")
+        prior=index.get(key(r)); now=r.get("cycles"); before=prior and prior.get("cycles")
         if not isinstance(now,(int,float)) or not isinstance(before,(int,float)) or before==0:
             compared.append({"id":r["id"],"status":"SKIP_NO_DEVICE_CYCLES","reason":"both runs need numeric device cycles"}); continue
         delta=100.0*(now-before)/before
@@ -104,7 +106,15 @@ def main():
     ap.add_argument("--list",action="store_true"); ap.add_argument("--mode",choices=("compile","craq","silicon")); ap.add_argument("--arch",choices=("bh","wh"),default="bh")
     ap.add_argument("--run-root",type=pathlib.Path); ap.add_argument("--simulator",type=pathlib.Path); ap.add_argument("--baseline",type=pathlib.Path)
     ap.add_argument("--max-regression-pct",type=float,default=0.0); ap.add_argument("--execute",action="store_true",help="execute the selected mode (otherwise emit a plan)")
+    ap.add_argument("--allow-hardware",action="store_true"); ap.add_argument("--hardware-lock",type=pathlib.Path,default=pathlib.Path("/tmp/tt-llk-sfpu-silicon.lock"))
+    ap.add_argument("--measurements",type=pathlib.Path,help="silicon TSV: id,arch,metric,scope,selector,cycles")
+    ap.add_argument("--compare-results",type=pathlib.Path,help="compare an existing results.json to --baseline")
     a=ap.parse_args(); rows=inventory()
+    if a.compare_results:
+        if not a.baseline: ap.error("--compare-results requires --baseline")
+        results=json.loads(a.compare_results.read_text()).get("results",[])
+        out=compare_baseline(results,a.baseline,a.max_regression_pct); print(json.dumps(out,indent=2))
+        return int(any(x["status"]=="REGRESSION" for x in out))
     if a.update: write_manifest(rows)
     current=read_manifest() if MANIFEST.exists() else []
     errors,counts=validate(current)
@@ -116,12 +126,14 @@ def main():
     if not a.mode: return 0
     run=(a.run_root or HERE/"runs"/(time.strftime("%Y%m%dT%H%M%SZ",time.gmtime())+f"-{a.arch}-{a.mode}")); run.mkdir(parents=True,exist_ok=False)
     head=subprocess.check_output(["git","-C",str(ROOT),"rev-parse","HEAD"],text=True).strip()
-    prov={"schema":1,"mode":a.mode,"arch":a.arch,"tt_metal_head":head,"manifest_sha256":sha(MANIFEST),"simulator":str(a.simulator or ""),"threshold_pct":a.max_regression_pct}
+    prov={"schema":1,"mode":a.mode,"arch":a.arch,"tt_metal_head":head,"manifest_sha256":sha(MANIFEST),"simulator":str(a.simulator or ""),"threshold_pct":a.max_regression_pct,"hardware_lock":str(a.hardware_lock)}
     records=[]
     for r in selected:
         mods=r["functional_modules" if a.mode!="silicon" else "perf_modules"]
         if not mods: records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"SKIP_UNMAPPED","reason":"no audited module mapping","artifact":""}); continue
         if a.mode=="craq" and (not a.simulator or not a.simulator.is_file()): records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"SKIP_NO_SIMULATOR","reason":"--simulator required","artifact":""}); continue
+        if a.mode=="silicon" and (not a.execute or not a.allow_hardware):
+            records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"SKIP_HARDWARE_NOT_AUTHORIZED","reason":"requires --execute --allow-hardware","artifact":""}); continue
         if not a.execute:
             status="SKIP_HARDWARE_NOT_AUTHORIZED" if a.mode=="silicon" else "PLAN_ONLY"
             records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":status,"reason":mods,"artifact":""}); continue
@@ -144,17 +156,40 @@ def main():
             with log.open("w") as f: rc=subprocess.run(cmd,cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
         else:
             cmd=[str(python),"-m","pytest","-o","addopts=",*mods,"-q"]; why="serialized silicon gate"
-            lock=HERE/"sfpu-silicon.lock"
+            lock=a.hardware_lock
             import fcntl
             with lock.open("w") as lk, log.open("w") as f:
                 fcntl.flock(lk,fcntl.LOCK_EX); rc=subprocess.run(cmd,cwd=pydir,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
         for rec in queued:
             rec["status"]="SKIP_MISSING_ENV" if rc is None else ("PASS" if rc==0 else "FAIL")
             rec["reason"]=why; rec["artifact"]=str(log) if log.exists() else ""
+        if a.mode=="craq" and rc==0:
+            metric=run/"craq/llk_sim.tsv"; measured=[]
+            if metric.is_file():
+                with metric.open() as f: measured=list(csv.DictReader(f,delimiter="\t"))
+            for rec in queued:
+                names=[pathlib.Path(x).name for x in next(x for x in selected if x["id"]==rec["id"])["functional_modules"].split(",")]
+                vals=[float(x["simulated_cycles"]) for x in measured if any(x.get("nodeid","").startswith(n) for n in names) and x.get("simulated_cycles")]
+                if vals:
+                    rec.update(metric="simulated_cycles",scope="craq_program",selector="default",cycles=max(vals))
+                else:
+                    rec["status"]="FAIL"; rec["reason"]="mapped CRAQ row produced no device-cycle metric"
+        if a.mode=="silicon" and rc==0:
+            measured=[]
+            if a.measurements and a.measurements.is_file():
+                with a.measurements.open() as f: measured=list(csv.DictReader(f,delimiter="\t"))
+            for rec in queued:
+                hits=[x for x in measured if x.get("id")==rec["id"] and x.get("arch")==a.arch and x.get("cycles")]
+                if hits:
+                    x=hits[-1]; rec.update(metric=x["metric"],scope=x["scope"],selector=x["selector"],cycles=float(x["cycles"]))
+                else:
+                    rec["status"]="FAIL"; rec["reason"]="mapped silicon row produced no scoped device-cycle metric"
+    failed=False
     if a.baseline:
         comparisons=compare_baseline(records,a.baseline,a.max_regression_pct)
         (run/"comparison.json").write_text(json.dumps(comparisons,indent=2)+"\n")
         prov["baseline"]=str(a.baseline)
+        failed=any(x["status"]=="REGRESSION" for x in comparisons)
     emit_summary(run,records,prov); print(run)
-    return 0
+    return int(failed)
 if __name__=="__main__": raise SystemExit(main())

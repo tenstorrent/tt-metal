@@ -26,7 +26,24 @@ jobs:
           name: sfpu-corpus-plans
           path: sfpu-*-plan.tsv
 
-# Compile execution belongs in the normal tt-llk toolchain image. CRAQ needs a
-# pinned libttsim.so, and silicon needs a serialized lab runner. Those jobs call
-# sfpu_corpus.py with --mode compile|craq|silicon and publish its run directory;
-# absence of either resource is a recorded skip, never a green performance run.
+  compile-mapped-corpus:
+    runs-on: tt-ubuntu-2204-large-stable
+    strategy:
+      matrix: {arch: [bh, wh]}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision pinned LLK compiler environment
+        working-directory: tt_metal/tt-llk/tests
+        run: CHIP_ARCH=${{ matrix.arch == 'bh' && 'blackhole' || 'wormhole' }} ./setup_testing_env.sh
+      - name: Compile every mapped corpus module
+        run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --mode compile --arch ${{ matrix.arch }} --execute --run-root sfpu-${{ matrix.arch }}-compile
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sfpu-${{ matrix.arch }}-compile
+          path: sfpu-${{ matrix.arch }}-compile
+
+# CRAQ needs a pinned libttsim.so supplied by the simulator artifact workflow;
+# silicon needs a serialized lab runner. Those resource-owning workflows call
+# this runner and publish its run directory. Absence is a recorded skip, never
+# a green performance run.
