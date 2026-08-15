@@ -11,74 +11,12 @@ completer module so they can diverge independently.
 
 from __future__ import annotations
 
-import contextlib
-import os
-import time
 from typing import Any, List, Sequence, Tuple
 
 import numpy as np
 import ttnn
 
 import ttml
-
-SAMPLE_PROFILE_ENV = "GRPO_SAMPLE_PROFILE"
-
-
-def sample_profiling_enabled() -> bool:
-    return os.environ.get(SAMPLE_PROFILE_ENV, "0") == "1"
-
-
-@contextlib.contextmanager
-def profile_sample(mesh_device: Any, label: str):
-    """Time one ``sample_op`` call and capture the device memory it peaks at.
-
-    OFF unless ``GRPO_SAMPLE_PROFILE=1``, because measuring costs more than the op does:
-
-      * Dispatch is ASYNCHRONOUS. Without a synchronize on both sides the timer measures how
-        long it took to enqueue the program, which is roughly constant and says nothing about
-        the kernel. The two syncs make the number real, and simultaneously serialize a decode
-        loop that is otherwise pipelined -- so the surrounding tok/s figures degrade while
-        this is on. Read the per-call number, not the throughput, when profiling.
-      * The graph capture behind the memory numbers traces every allocation in the region.
-
-    ``peak_dram`` is the high-water mark of DRAM allocated during the call, and ``peak_l1``
-    the per-core L1 total (CBs plus program-scope buffers) -- for the fused sampler that is
-    the handful of streamed tiles, not anything proportional to the vocabulary.
-    """
-    if not sample_profiling_enabled():
-        yield
-        return
-
-    tracker = ttml.core.utils.MemoryUsageTracker
-    ttnn.synchronize_device(mesh_device)
-    guard = tracker.begin_capture()
-    started = time.perf_counter()
-    try:
-        yield
-    finally:
-        # Sync BEFORE stopping the clock: the op is only enqueued when the body returns.
-        ttnn.synchronize_device(mesh_device)
-        elapsed_ms = (time.perf_counter() - started) * 1e3
-        tracker.end_capture(label)
-        try:
-            dram = tracker.get_dram_usage(label)
-            l1 = tracker.get_l1_usage(label)
-            # print, not logging: logging writes to stderr, which the sbatch scripts route to the
-            # .err file, while stdout goes to .out alongside the rest of the run. flush because a
-            # redirected stdout is block-buffered, so without it these lines land late (or not at
-            # all, if the job is killed).
-            print(
-                f"[sample] {label:<16} {elapsed_ms:8.3f} ms"
-                f" | peak DRAM {dram.peak / 2**20:9.3f} MB"
-                f" (alloc {dram.total_allocations / 2**20:.3f} MB,"
-                f" free {dram.total_deallocations / 2**20:.3f} MB)"
-                f" | peak L1/core {l1.peak_total / 2**10:8.3f} KB"
-                f" (cb {l1.peak_cb / 2**10:.3f} KB)",
-                flush=True,
-            )
-        finally:
-            tracker.clear()
-            guard.release()
 
 
 def positions_to_tensor(positions: Sequence[int], B: int, tokens: int, dp_mapper: Any) -> ttml.autograd.Tensor:

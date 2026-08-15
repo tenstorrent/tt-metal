@@ -21,7 +21,7 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor, profile_sample
+from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor
 from .llama_overrides import LlamaCompositeKV
 
 TILE_SIZE = 32
@@ -458,15 +458,14 @@ class LlamaGRPOCompleter(GRPOCompleter):
             mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
-            with profile_sample(mesh_device, "prefill" if is_prefill else f"decode[{i}]"):
-                next_token_tensor = ttml.ops.sample.sample_op(
-                    logits,
-                    ctx.temperature,
-                    np.random.randint(low=1e7),
-                    logits_mask_tensor,
-                    self._seed_axes,
-                    prefill_positions if is_prefill else decode_positions,
-                )
+            next_token_tensor = ttml.ops.sample.sample_op(
+                logits,
+                ctx.temperature,
+                np.random.randint(low=1e7),
+                logits_mask_tensor,
+                self._seed_axes,
+                prefill_positions if is_prefill else decode_positions,
+            )
 
             last_token_column = next_token_tensor.get_value()
 
