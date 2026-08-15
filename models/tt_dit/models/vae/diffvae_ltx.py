@@ -213,7 +213,15 @@ def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tenso
 class NeighborhoodAttention(Module):
     """3D neighborhood attention with absolute RoPE, matching upstream's parameter shell."""
 
-    def __init__(self, dim: int, kernel_size: tuple[int, int, int], *, head_dim: int = 64, mesh_device=None):
+    def __init__(
+        self,
+        dim: int,
+        kernel_size: tuple[int, int, int],
+        *,
+        head_dim: int = 64,
+        mesh_device=None,
+        na3d_backend: str = "gather",
+    ):
         super().__init__()
         # No ccl_manager here: the deterministic stages build their device plans up front and
         # pass them in, and a sharded plan already carries the manager that reassembles it.
@@ -223,6 +231,9 @@ class NeighborhoodAttention(Module):
         self.num_heads = dim // head_dim
         self.kernel_size = tuple(kernel_size)
         self.scale = head_dim**-0.5
+        # "gather" (default) uses the grouped gather + dense masked attention with the passed-in
+        # device_plan; "op" uses the SDPA op's on-device neighborhood_3d mask and ignores the plan.
+        self.na3d_backend = na3d_backend
         self.rope_dim_split = default_rope_dim_split(head_dim)
 
         # Three projections rather than the checkpoint's fused one. Fused, the (rows, 3*dim) output
@@ -285,7 +296,9 @@ class NeighborhoodAttention(Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        attended = neighborhood_attention_3d(q, k, v, kernel_size=self.kernel_size, scale=1.0, device_plan=device_plan)
+        attended = neighborhood_attention_3d(
+            q, k, v, kernel_size=self.kernel_size, scale=1.0, device_plan=device_plan, backend=self.na3d_backend
+        )
         attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
         out = self.proj(attended)
         ttnn.deallocate(attended)
@@ -326,12 +339,22 @@ class SwiGLU(Module):
 class NABlock(Module):
     """Pre-norm block: neighborhood attention then SwiGLU, both with residual adds."""
 
-    def __init__(self, dim: int, kernel_size: tuple[int, int, int], *, head_dim: int = 64, mesh_device=None):
+    def __init__(
+        self,
+        dim: int,
+        kernel_size: tuple[int, int, int],
+        *,
+        head_dim: int = 64,
+        mesh_device=None,
+        na3d_backend: str = "gather",
+    ):
         super().__init__()
         # Upstream rounds the 4x MLP ratio up to a multiple of 16.
         hidden = (int(dim * 4.0) + 15) // 16 * 16
         self.norm1 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
-        self.attn = NeighborhoodAttention(dim, kernel_size, head_dim=head_dim, mesh_device=mesh_device)
+        self.attn = NeighborhoodAttention(
+            dim, kernel_size, head_dim=head_dim, mesh_device=mesh_device, na3d_backend=na3d_backend
+        )
         self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
         self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device)
 

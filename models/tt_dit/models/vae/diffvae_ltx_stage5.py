@@ -124,6 +124,7 @@ def neighborhood_attention_3d(
     kernel_size: tuple[int, int, int],
     scale: float = 1.0,
     ccl_manager=None,
+    backend: str = "gather",
 ) -> ttnn.Tensor:
     """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors.
 
@@ -135,12 +136,16 @@ def neighborhood_attention_3d(
     evaluating the whole volume; without one it runs replicated. Either way the result is the
     full volume on every chip, so nothing downstream changes.
 
+    ``backend`` picks the executor: ``"gather"`` (default) is the grouped gather path that the
+    ``ccl_manager`` split rides on; ``"op"`` uses the SDPA op's on-device neighborhood mask and
+    runs replicated (it ignores ``ccl_manager``), so it is the single-chip / pre-sharding path.
+
     This was a swap point for a host fallback while the device primitive was being written.
     The dispatch is now direct and unconditional on purpose: a fallback selected by
     ``except ImportError`` would move attention to the host silently, and every parity test
     here would still pass — slower, and no longer measuring the device.
     """
-    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager)
+    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, backend=backend)
 
 
 # ---------------------------------------------------------------------------

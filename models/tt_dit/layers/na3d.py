@@ -517,6 +517,60 @@ def _gather_stack(local: ttnn.Tensor, device_plan: NA3DDevicePlan) -> ttnn.Tenso
     return local
 
 
+def neighborhood_attention_3d_op(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    kernel_size: tuple[int, int, int],
+    scale: float | None = None,
+) -> ttnn.Tensor:
+    """3D neighborhood attention via the SDPA op's on-device ``neighborhood_3d`` mask.
+
+    Same contract as :func:`neighborhood_attention_3d` — ``q``/``k``/``v`` are
+    ``(B, T, H, W, num_heads, head_dim)`` and the return is ``(B, T, H, W, num_heads*head_dim)``
+    in ROW_MAJOR — but instead of gathering each window and running dense masked attention it
+    flattens the volume to a single ``(B, num_heads, T*H*W, head_dim)`` sequence and lets the op
+    synthesize the ``(kt, kh, kw)`` inward-shifted neighborhood mask on device. One op call, no
+    per-group gather, no mask upload, no CCL — so peak memory never sees the tens-of-GB K/V the
+    grouped path gathers at full resolution.
+
+    The op currently leaves the K-range full (step 2 of the generalization), so this streams all
+    K per query chunk and its compute is O(S^2); step 3 narrows the K-range to the neighborhood.
+    Correctness is independent of that: the mask makes out-of-window scores -inf either way.
+
+    Single-mesh / replicated only for now — sharding over T (SP) rides on the op's windowed
+    K-range work, not this gather-free path, so ``device_plan``/``ccl_manager`` do not apply here.
+    """
+    batch, t, h, w, heads, head_dim = tuple(q.shape)
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+    if scale is None:
+        scale = head_dim**-0.5
+    kernels = tuple(min(kk, d) for kk, d in zip(kernel_size, (t, h, w)))
+    seq = t * h * w
+
+    # (B, T, H, W, NH, HD) -> (B, NH, S, HD): the op treats (B, NH) as batch dims and attends over
+    # S = T*H*W (flattened T-outer, matching the mask's grid convention). Merging T,H,W and
+    # splitting off heads are pure stride changes in ROW_MAJOR; SDPA's matmuls want TILE.
+    def to_seq(x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (batch, seq, heads, head_dim))
+        x = ttnn.permute(x, (0, 2, 1, 3))
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    tq, tk, tv = (to_seq(x) for x in (q, k, v))
+    attended = ttnn.transformer.scaled_dot_product_attention(
+        tq, tk, tv, is_causal=False, neighborhood_3d=(t, h, w, *kernels), scale=scale
+    )
+    for tensor in (tq, tk, tv):
+        ttnn.deallocate(tensor)
+
+    # (B, NH, S, HD) -> (B, T, H, W, NH*HD) ROW_MAJOR.
+    attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+    attended = ttnn.permute(attended, (0, 2, 1, 3))
+    return ttnn.reshape(attended, (batch, t, h, w, heads * head_dim))
+
+
 def neighborhood_attention_3d(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -527,6 +581,7 @@ def neighborhood_attention_3d(
     device_plan: NA3DDevicePlan | None = None,
     chunk_budget: int = DEFAULT_CHUNK_BUDGET,
     ccl_manager=None,
+    backend: str = "gather",
 ) -> ttnn.Tensor:
     """3D neighborhood attention on device.
 
@@ -546,7 +601,17 @@ def neighborhood_attention_3d(
     group and the results are gathered back here, so the return value is the same full volume on
     every chip either way. ``ccl_manager`` is only consulted when this builds its own plan; a
     plan passed in carries the manager it was built with.
+
+    ``backend`` selects the executor. ``"gather"`` (default) is the grouped gather + dense masked
+    attention above. ``"op"`` routes to :func:`neighborhood_attention_3d_op`, which synthesizes the
+    neighborhood mask inside the SDPA op and needs no gather, mask upload, or CCL; the gather-only
+    arguments (``device_plan``, ``chunk_budget``, ``ccl_manager``) do not apply to it.
     """
+    if backend == "op":
+        return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
+    if backend != "gather":
+        raise ValueError(f"unknown NA3D backend {backend!r}; expected 'gather' or 'op'")
+
     batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
     # The gathers below are ttnn.embedding, which validates that its table is bfloat16. Caught
