@@ -93,15 +93,18 @@ void validate_buffer_parameters(
     const BufferType& buffer_type,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
+    uint32_t num_dram_banks) {
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
         // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
-        // A shard core off row 0 aliases onto an existing bank and corrupts data. Applies to both the
-        // ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
+        // A shard core off row 0 aliases onto an existing bank and corrupts data. The same is true of
+        // an x beyond the bank count -- there is no such bank, so the shard either faults when the
+        // channel is resolved or silently lands somewhere it should not. Applies to both the ND
+        // (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
         if (buffer_type == BufferType::DRAM) {
             std::vector<CoreCoord> shard_cores;
             if (buffer_distribution_spec.has_value()) {
@@ -116,6 +119,16 @@ void validate_buffer_parameters(
                     "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
                     core.x,
                     core.y);
+                TT_FATAL(
+                    core.x < num_dram_banks,
+                    "Invalid DRAM shard grid: shard core ({}, {}) is outside the {} DRAM banks on this "
+                    "device. bank_id == logical x-coordinate, so every shard core must have "
+                    "x < num_banks. Note that a harvested device exposes fewer banks than the full "
+                    "grid -- derive the shard grid from the device (e.g. dram_grid_size().x) rather "
+                    "than assuming a fixed bank count.",
+                    core.x,
+                    core.y,
+                    num_dram_banks);
             }
         }
     } else {
@@ -356,7 +369,14 @@ Buffer::Buffer(
     } else {
         this->allocator_ = device->allocator_impl().get();
     }
-    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
+    validate_buffer_parameters(
+        size,
+        page_size,
+        buffer_type,
+        buffer_layout_,
+        shard_spec_,
+        buffer_distribution_spec_,
+        this->allocator_->get_num_banks(BufferType::DRAM));
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
