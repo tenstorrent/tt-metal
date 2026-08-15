@@ -59,7 +59,10 @@ void SGDComposite::step() {
         }
 
         if (m_config.momentum != 0.0F) {
-            if (m_steps != 0) {
+            // A buffer's first update must produce theta = g (PyTorch seeds fresh buffers with
+            // the raw gradient), so momentum and dampening are skipped for it.
+            const bool first_momentum_update = m_theta_initialized.insert(name).second;
+            if (!first_momentum_update) {
                 // apply momentum
                 theta = ttnn::multiply(
                     theta,
@@ -114,6 +117,11 @@ void SGDComposite::set_state_dict(const serialization::StateDict& dict) {
     m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    // Restored buffers carry accumulated momentum, so they are past their first update.
+    m_theta_initialized.clear();
+    for (const auto& [name, tensor_ptr] : m_theta) {
+        m_theta_initialized.insert(name);
+    }
 }
 
 size_t SGDComposite::get_steps() const {

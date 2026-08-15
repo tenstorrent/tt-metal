@@ -62,6 +62,22 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
             momentum_buffer.value(), "Momentum Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     }
 
+    // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
+    // smaller companion tensor would be read or written past its allocation.
+    auto check_shape = [&param](const ttnn::Tensor& tensor, const std::string& name) {
+        TT_FATAL(
+            tensor.padded_shape() == param.padded_shape(),
+            "Tensor '{}' must match the parameter's padded shape. Parameter: {}, '{}': {}",
+            name,
+            param.padded_shape(),
+            name,
+            tensor.padded_shape());
+    };
+    check_shape(grad, "Gradient");
+    if (momentum_buffer.has_value()) {
+        check_shape(momentum_buffer.value(), "Momentum Buffer");
+    }
+
     const auto momentum = args.momentum;
     const auto use_momentum = (momentum > 0.0F);
     if (use_momentum) {
