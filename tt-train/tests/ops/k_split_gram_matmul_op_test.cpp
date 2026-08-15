@@ -89,7 +89,7 @@ void check_full_gram(
     const char* label) {
     xt::xarray<float> x = xt::adapt(in_vec, std::array<size_t, 2>{M, K});
     xt::xarray<float> ref = xt::linalg::dot(x, xt::transpose(x));
-    auto dev = xt::adapt(out_vec, std::array<size_t, 2>{M, M});
+    xt::xarray<float> dev = xt::adapt(out_vec, std::array<size_t, 2>{M, M});
 
     const uint32_t M_tiles = M / 32;
     uint32_t bad_tiles = 0;
