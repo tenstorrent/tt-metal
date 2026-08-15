@@ -481,9 +481,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     "windowed_q_token_offset_tensor must be INT32/UINT32, got {}.",
                     off.dtype());
                 TT_FATAL(off.layout() == Layout::ROW_MAJOR, "windowed_q_token_offset_tensor must be ROW_MAJOR.");
+                // The op reads element 0 on each device, so a single [1] tensor (one chip) and a
+                // mesh-distributed [num_shards] tensor (one offset per chip, for SP-over-T) are both
+                // valid -- the latter's global volume is the shard count, not 1.
                 TT_FATAL(
-                    off.logical_shape().volume() == 1,
-                    "windowed_q_token_offset_tensor must hold exactly 1 element, got {}.",
+                    off.logical_shape().volume() >= 1,
+                    "windowed_q_token_offset_tensor must hold at least 1 element, got {}.",
                     off.logical_shape().volume());
             }
             return;
