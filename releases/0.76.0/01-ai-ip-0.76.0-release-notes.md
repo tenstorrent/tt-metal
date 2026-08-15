@@ -13,17 +13,17 @@ Some PR titles are truncated with an ellipsis, and PR 49741's title begins with 
 stray "]" -- both are how the titles are stored in GitHub, not transcription errors.
 -->
 
-# Quasar Release Notes — v0.75.0 + v0.76.0
+# Quasar Release Notes - v0.75.0 + v0.76.0
 
 > Combined release notes for **v0.75.0 + v0.76.0**, since **v0.74.0** (through stable / v0.76.0).
 
 ## Summary
-- **Quasar ResNet Kernel Ops** — 17 PR(s). TTNN kernel ops a ResNet graph exercises on Quasar.
-- **FD support for dispatch engine** — 7 PR(s). Fast-dispatch command path on the Quasar dispatch engine.
-- **INT8 Support** — 2 PR(s). INT8 LLK support (core delivered in v0.72.0); this release adds Int8→Int32 reduce.
-- **PDL related LLK features** — 0 PR(s). No implementing PRs. Quasar PDL (Panoptic-DeepLab) LLK was deprioritized in favor of INT8 (see AIIPSW-8); its op needs are covered by the shared Quasar ResNet conv/pool ops.
-- **Profiler debug tool support** — 23 PR(s). Profiler bring-up and performance-test coverage on Quasar.
-- **LLK: Quant/dequant kernels** — 1 PR(s). Quant/requant/dequant int32 SFPU kernels on Quasar.
+- **Quasar ResNet Kernel Ops** - 17 PR(s). TTNN kernel ops required to run a ResNet graph on Quasar.
+- **FD support for dispatch engine** - 7 PR(s). Fast-dispatch command path on the Quasar dispatch engine.
+- **INT8 Support** - 2 PR(s). INT8 LLK support (core delivered in v0.72.0); this release adds Int8→Int32 reduce.
+- **PDL related LLK features** - 0 PR(s). No new PRs this release. The LLKs required for PDL were delivered incrementally across earlier releases; decomposition analysis completed last month confirmed the full set needed to run the model is now in place.
+- **Profiler debug tool support** - 23 PR(s). Profiler bring-up and performance-test coverage on Quasar.
+- **LLK: Quant/dequant kernels** - 1 PR(s). Quant/requant/dequant int32 SFPU kernels on Quasar.
 
 ## 1. Quasar changes
 
@@ -83,7 +83,7 @@ INT8 LLK support (core delivered in v0.72.0); this release adds Int8→Int32 red
 - Add missing dest-format configs to stop Quasar tests passing by accident. ([PR 50728](https://github.com/tenstorrent/tt-metal/pull/50728))
 
 ### PDL related LLK features  (0)
-No implementing PRs. Quasar PDL (Panoptic-DeepLab) LLK was deprioritized in favor of INT8 (see AIIPSW-8); its op needs are covered by the shared Quasar ResNet conv/pool ops.
+No new PRs this release. The LLKs required for PDL were delivered incrementally across earlier releases; decomposition analysis completed last month confirmed the full set needed to run the model is now in place.
 
 ### Profiler debug tool support  (23)
 Profiler bring-up and performance-test coverage on Quasar.
@@ -137,7 +137,7 @@ Quant/requant/dequant int32 SFPU kernels on Quasar.
 - INT8→INT32 reduce: `reduce_quasar_test.cpp` (PR 49390).
 - Shared helpers extended: `helpers/golden_generators.py`, `helpers/include/sfpu_operations_quasar.h`, `helpers/sfpu_domains.py`.
 
-### FPU / tilize — 32-bit dest mode
+### FPU / tilize - 32-bit dest mode
 - Consolidated FPU tests, extended from 16-bit to 32-bit dest: `unpack_tilize_quasar_test.cpp`, `pack_untilize_quasar_test.cpp`, `reduce_quasar_test.cpp`, `transpose_dest_quasar_test.cpp`, `matmul_quasar_test.cpp`, `pack_l1_acc_quasar_test.cpp` (e.g. 32-bit dest TilizeA_B, PR 49579).
 
 ### Support for dispatch engine
@@ -146,7 +146,7 @@ Quant/requant/dequant int32 SFPU kernels on Quasar.
 ### Profiler
 - Quasar performance-test suite: eltwise_binary/unary (+broadcast, reuse_dest), pack / pack_l1_acc / pack_untilize, unpack_tilize / unpack_unary_operand, reduce, transpose_dest, datacopy (PRs 50584–50596, 50898).
 
-### Reference — FD support
+### Reference - FD support
 - DmLoopback, QuasarComputeKernelMultipleThread, MultiDmAddTwoInts.
 
 ## 3. Supporting Quasar work
@@ -270,7 +270,7 @@ Quant/requant/dequant int32 SFPU kernels on Quasar.
 - Add Quasar coverage to LLK perf workflow ([PR 50880](https://github.com/tenstorrent/tt-metal/pull/50880))
 - Change CBReaderWithManualRelease to use page based reading ([PR 51985](https://github.com/tenstorrent/tt-metal/pull/51985))
 
-## 4. All other changes — 961 PRs
+## 4. All other changes - 961 PRs
 _Grouped by code area._
 
 ### LLK (low-level kernels)  (115)

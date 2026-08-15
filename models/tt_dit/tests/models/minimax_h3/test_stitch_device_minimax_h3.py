@@ -163,3 +163,89 @@ def test_two_axis_all_gather_permutes_dim0_by_transpose(mesh_device):
     for index, replica in enumerate(replicas[1:], start=1):
         other = [int(v) for v in ttnn.to_torch(replica)[:, 0, 0, 0].round().tolist()]
         assert other == observed, f"device {index} sees order {other}, device 0 sees {observed}"
+
+
+# --- host-only numerics for the YUV decode path (no device, no fixtures) ---------------------
+
+MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
+MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
+
+
+def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
+    """Folding the de-normalization into ``proj_out`` must be exact, not merely close.
+
+    Exactness is what lets the fold sit *before* the tile cross-fade: the blend is a convex
+    combination and the fold is affine, so they commute -- and if they did not, every seam would
+    carry the error.
+    """
+    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+
+    config = MiniMaxH3VaeConfig()
+    channels = config.out_channels
+    per_channel = config.temporal_compression_ratio * config.spatial_compression_ratio**2
+    out_features, in_features = channels * per_channel, 64
+
+    torch.manual_seed(0)
+    weight = torch.randn(out_features, in_features, dtype=torch.float64) * 0.1
+    bias = torch.randn(out_features, dtype=torch.float64) * 0.1
+    hidden = torch.randn(5, in_features, dtype=torch.float64)
+
+    vae = MiniMaxH3Vae(config, mesh_device=None, pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    state = {"proj_out.weight": weight.clone(), "proj_out.bias": bias.clone()}
+    vae._fold_pixel_denorm(state)
+
+    mean = torch.tensor(MINIMAX_H3_PIXEL_MEAN, dtype=torch.float64).view(1, channels, 1, 1, 1)
+    std = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=torch.float64).view(1, channels, 1, 1, 1)
+    patch = (config.temporal_compression_ratio, config.spatial_compression_ratio, config.spatial_compression_ratio)
+    reference = (hidden @ weight.T + bias).reshape(5, channels, *patch)
+    reference = 2.0 * (reference * std + mean) - 1.0  # pipeline `_denormalize` -> [0,1], then to [-1,1]
+
+    folded = (hidden @ state["proj_out.weight"].T + state["proj_out.bias"]).reshape(5, channels, *patch)
+    assert torch.allclose(folded, reference, atol=1e-12), f"max error {(folded - reference).abs().max()}"
+
+    a, b = torch.randn(4, in_features, dtype=torch.float64), torch.randn(4, in_features, dtype=torch.float64)
+    w = torch.rand(4, 1, dtype=torch.float64)
+    blend_then_project = (w * a + (1 - w) * b) @ state["proj_out.weight"].T + state["proj_out.bias"]
+    project_then_blend = w * (a @ state["proj_out.weight"].T + state["proj_out.bias"]) + (1 - w) * (
+        b @ state["proj_out.weight"].T + state["proj_out.bias"]
+    )
+    assert torch.allclose(blend_then_project, project_then_blend, atol=1e-12), "fold does not commute with the blend"
+
+
+def test_temporal_crossfade_survives_the_yuv_conversion():
+    """The chunk cross-fade runs on planar uint8, after the colour conversion, not before it.
+
+    BT.601 is affine and 4:2:0 decimation is linear, so a convex blend commutes with both and only
+    the re-rounding costs anything. This pins that cost at 1 LSB; more would mean the reordering is
+    unsound and the blend has to move back in front of the conversion.
+    """
+    import numpy as np
+
+    from ....models.vae.minimax_h3.vae_minimax_h3 import blend_clip_frames
+
+    frames, height, width, extent = 8, 32, 48, 5
+
+    def to_yuv420(rgb):
+        r01 = (rgb + 1.0) * 0.5
+        r, g, b = r01[:, 0], r01[:, 1], r01[:, 2]
+        y = 16.0 + 219.0 * (0.299 * r + 0.587 * g + 0.114 * b)
+        cb = 128.0 + 224.0 * (-0.168736 * r - 0.331264 * g + 0.5 * b)
+        cr = 128.0 + 224.0 * (0.5 * r - 0.418688 * g - 0.081312 * b)
+        sub = lambda p: p.reshape(p.shape[0], p.shape[1] // 2, 2, p.shape[2] // 2, 2).mean(axis=(2, 4))
+        q = lambda p: np.clip(np.rint(p), 0, 255).astype(np.uint8)
+        planes = [q(y).reshape(frames, -1), q(sub(cb)).reshape(frames, -1), q(sub(cr)).reshape(frames, -1)]
+        return np.concatenate(planes, axis=1).reshape(frames, height * 3 // 2, width)
+
+    rng = np.random.default_rng(0)
+    a = rng.uniform(-1, 1, size=(frames, 3, height, width))
+    b = rng.uniform(-1, 1, size=(frames, 3, height, width))
+
+    pos = np.arange(extent, dtype=np.float64).reshape(-1, 1, 1, 1)
+    rgb_blended = np.concatenate([a[-extent:] * (1 - pos / extent) + b[:extent] * (pos / extent), b[extent:]], axis=0)
+
+    convert_last = to_yuv420(rgb_blended)
+    blend_last = blend_clip_frames(to_yuv420(a), to_yuv420(b), extent)
+
+    assert convert_last.shape == blend_last.shape, f"{convert_last.shape} != {blend_last.shape}"
+    worst = np.abs(convert_last.astype(int) - blend_last.astype(int)).max()
+    assert worst <= 1, f"reordering the cross-fade past the YUV conversion costs {worst} LSB, not <=1"
