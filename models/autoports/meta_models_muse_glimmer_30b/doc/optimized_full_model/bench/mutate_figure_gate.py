@@ -541,6 +541,7 @@ def sweep_mutations() -> list:
     """
     readme = (SRC / "doc/optimized_full_model/README.md").read_text()
     seen, out = set(), []
+    skipped = {"value already mutated": 0, "cell text not unique": 0, "bumped value occurs elsewhere": 0}
     for raw in readme.splitlines():
         line = raw.strip()
         if not line.startswith("| ") or not (set(line) - set("| -:\n")):
@@ -548,11 +549,18 @@ def sweep_mutations() -> list:
         for cell in line.strip("|").split("|"):
             cell = cell.strip()
             for token in re.findall(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\d])", cell):
-                if token in seen or readme.count(cell) != 1 or not cell or not token[-1].isdigit():
+                if not cell or not token[-1].isdigit():
+                    continue
+                if token in seen:
+                    skipped["value already mutated"] += 1
+                    continue
+                if readme.count(cell) != 1:
+                    skipped["cell text not unique"] += 1
                     continue
                 seen.add(token)
                 bumped = token[:-1] + str((int(token[-1]) + 1) % 10)
                 if bumped == token or bumped in readme:
+                    skipped["bumped value occurs elsewhere"] += 1
                     continue
                 out.append(
                     (
@@ -562,6 +570,11 @@ def sweep_mutations() -> list:
                         cell.replace(token, bumped, 1),
                     )
                 )
+    # Round 18 counted these and found the sweep covering 211 of 697 numeric table-cell
+    # occurrences, with the three filters disclosed nowhere.  They are printed now, so the
+    # log says what the arm did *not* reach as well as what it caught.
+    for reason, count in skipped.items():
+        say(f"sweep skipped {count} tokens: {reason}")
     return out
 
 

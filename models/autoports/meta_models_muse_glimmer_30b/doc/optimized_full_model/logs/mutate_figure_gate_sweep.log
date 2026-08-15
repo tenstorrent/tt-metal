@@ -1,3 +1,6 @@
+sweep skipped 257 tokens: value already mutated
+sweep skipped 80 tokens: cell text not unique
+sweep skipped 87 tokens: bumped value occurs elsewhere
 sweep mode: 211 generated mutations over README table cells
 baseline: FIGURES_OK
 
@@ -7,6 +10,7 @@ CAUGHT  sweep: 23.298 in **23.298 ms/token · 42.92 t/s/u**  [a6ab681948d4]
 CAUGHT  sweep: 42.92 in **23.298 ms/token · 42.92 t/s/u**  [451302e4a7bf]
 CAUGHT  sweep: 23.164 in 23.164 ms/token · 43.17 t/s/u  [f4368bf9cf25]
 CAUGHT  sweep: 43.17 in 23.164 ms/token · 43.17 t/s/u  [66a232e3a807]
+CAUGHT  sweep: 22.656 in **22.656 ms/token · 44.14 t/s/u**  [4f2edc7acc6f]
 CAUGHT  sweep: 44.14 in **22.656 ms/token · 44.14 t/s/u**  [5178c205d718]
 CAUGHT  sweep: 36.88 in 36.88–37.99 t/s/u †  [4dc3165d7bb8]
 CAUGHT  sweep: 37.99 in 36.88–37.99 t/s/u †  [11fd0311834c]
@@ -111,7 +115,6 @@ CAUGHT  sweep: 67.43 in 63.68 ms (min of 3; 67.74 / 63.68 /   [74e1030fd32b]
 CAUGHT  sweep: 50.53 in **49.76 ms (min of 3; 50.53 / 50.51   [b2585d622f8f]
 CAUGHT  sweep: 50.51 in **49.76 ms (min of 3; 50.53 / 50.51   [aab85623cce0]
 CAUGHT  sweep: 23.330 in 23.330 ms/token  [b16da9cdeeb5]
-CAUGHT  sweep: 22.657 in 22.657 ms/token  [f7a0fa1e9f77]
 CAUGHT  sweep: 308.91 in 308.91 ms  [443db6713f19]
 CAUGHT  sweep: 917.36 in 917.36 ms  [8ed4f3ca9b4a]
 CAUGHT  sweep: 921.52 in 921.52 ms  [1117d2fdfd88]
@@ -210,7 +213,7 @@ CAUGHT  sweep: 23.811 in `--baseline` reproduces the full-mod  [ec89806975eb]
 CAUGHT  sweep: 22.81 in predicted 22.81 from the reduced A/B  [b7653280d8a0]
 CAUGHT  sweep: 632 in terminal priced at 685.949 µs and sa  [a90017406fd1]
 CAUGHT  sweep: 4,32 in `test_batched_prefill_and_decode_wit  [061f59b44736]
-CAUGHT  sweep: 21.05 in `bench/check_reported_figures.py`, w  [6782d87d1ebe]
-CAUGHT  sweep: 328 in `bench/check_reported_figures.py`, w  [655b067e6183]
+CAUGHT  sweep: 21.05 in `bench/check_reported_figures.py`, w  [5362884f2b5c]
+CAUGHT  sweep: 328 in `bench/check_reported_figures.py`, w  [6c0ad46d0b29]
 
 ALL 211 MUTATIONS CAUGHT

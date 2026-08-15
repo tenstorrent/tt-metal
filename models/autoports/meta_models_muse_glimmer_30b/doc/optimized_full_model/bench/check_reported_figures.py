@@ -2432,7 +2432,9 @@ def main() -> int:
             rows.append([c.strip() for c in line.strip().strip("|").split("|")])
         return rows
 
-    result_table = readme[readme.index("| | before | **after** | delta |") : readme.index("† The teacher-forcing row")]
+    result_table = readme[
+        readme.index("| | before | **after** | delta |") : readme.index("† Two rows in this table are cross-process")
+    ]
     result_rows = {row[0]: row for row in table_rows(result_table) if len(row) >= 3}
     same("the Result table has the rows the checks below name", len(result_rows) >= 9, True)
     for label, before_value, after_value, digits in (
@@ -2651,6 +2653,12 @@ def main() -> int:
     sweep_count = len(re.findall(r"^CAUGHT ", sweep_log, re.M))
     same("the sweep ran from a clean baseline", "baseline: FIGURES_OK" in sweep_log, True)
     same("...over one mutation per numeric table cell", f"sweep mode: {sweep_count} generated" in sweep_log, True)
+    # ...and the log states what the arm did *not* reach (round 18: three undisclosed filters).
+    same(
+        "the sweep log states its own skip counts",
+        len(re.findall(r"^sweep skipped \d+ tokens: ", sweep_log, re.M)),
+        3,
+    )
     same("...and every one of them was caught", "MUTATION_SURVIVORS" in sweep_log, False)
     same("...all of them", f"ALL {sweep_count} MUTATIONS CAUGHT" in sweep_log, True)
     same(
@@ -3303,42 +3311,33 @@ def main() -> int:
                 or "inherited" in window,
                 True,
             )
-    # The provenance partition, against git rather than against memory.
-    at_head = subprocess.run(
-        ["git", "log", "-1", "--format=%h"],
-        capture_output=True,
-        text=True,
-        cwd=str(ROOT.parents[2]),
-    ).stdout.strip()
-    # Off git where there is a repo; off the recorded expectation where there is not (the
-    # mutation harness's scratch copy), so the check count is the same in both.
-    for artifact, bucket in (
-        ("test_results.xml", "At HEAD"),
-        ("logs/mutate_figure_gate.log", "At HEAD"),
-        ("evidence_perf.json", "Older than the last code change"),
-        ("perf_summary.json", "Older than the last code change"),
-    ):
-        last = (
-            subprocess.run(
-                ["git", "log", "-1", "--format=%h", "--", str((D / artifact).relative_to(ROOT.parents[2]))],
-                capture_output=True,
-                text=True,
-                cwd=str(ROOT.parents[2]),
-            ).stdout.strip()
-            if at_head
-            else ("" if bucket == "At HEAD" else "older")
-        )
-        is_head = (last == at_head) if at_head else (bucket == "At HEAD")
-        same(
-            f"the work log files {artifact} in the right provenance bucket",
-            is_head == (bucket == "At HEAD"),
-            True,
-        )
+    # The provenance partition.  Round 17 checked it with ``git log -1 -- <path> == HEAD``,
+    # which round 18 showed is **ill-posed**: a re-run that produces a byte-identical log
+    # changes nothing, so git keeps the older commit and the check can never pass again.  It
+    # failed at the commit that introduced it.  What actually matters is not which commit last
+    # touched an artifact but whether its content is consistent with the tree it describes, so
+    # that is what is checked -- each "at HEAD" artifact against the thing it must agree with.
     same(
-        "...and the partition is derived from git rather than maintained by hand",
-        "derived from `git log -1 -- <path>` now" in work_log,
+        "the mutation log agrees with the current mutation table",
+        logged_digests == {harness.digest(mutation) for mutation in harness.MUTATIONS},
         True,
     )
+    same(
+        "the junit artifact agrees with the suite size the documents state",
+        len(list(ET.parse(_record(D / "test_results.xml")).iter("testcase"))),
+        suite_cases,
+    )
+    same(
+        "the watcher verdict agrees with the log it is re-derived from",
+        "WATCHER_CLEAN" in text(D / "logs/check_watcher.log"),
+        True,
+    )
+    same(
+        "...and the work log says what 'current' means, since git cannot",
+        "byte-identical" in work_log and "git log" in work_log,
+        True,
+    )
+
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)
     same("the gate's advertised check count is right", checks + 2, ADVERTISED_CHECKS)

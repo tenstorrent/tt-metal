@@ -324,12 +324,22 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 last code change. That was true when it was written and stopped being true around round 7;
 round 15 caught it and replaced it with a partition — and round 17 caught *that* partition
 misfiling six artifacts into "current". Both times the failure was the same: a hand-maintained
-classification of files that keep moving. It is derived from `git log -1 -- <path>` now, and
-what it says is:
+classification of files that keep moving. Round 18 then showed that deriving it from `git log` is
+itself ill-posed — a re-run that produces a **byte-identical** log changes nothing, so git keeps
+the older commit and an artifact that *was* re-run looks stale. (That is exactly what happened
+to `logs/mutate_figure_gate.log`, and the check round 17 added to enforce the partition failed
+at the commit that introduced it.) So what the gate checks is not which commit last touched an
+artifact but whether its **content agrees with the tree it describes**: the mutation log's
+digests against the current mutation table, the junit file against the suite size both documents
+state, the watcher verdict against the log it is re-derived from. The buckets below are what was
+re-run, with git as the evidence where content did change:
 
-* **At HEAD** — `test_results.xml` and both suite logs, the gated watcher run and its verdicts,
-  `logs/mutate_figure_gate.log`, `logs/mutate_figure_gate_sweep.log` and
-  `logs/prefill_trace_multibucket_probe.log`.
+* **Re-run at the reviewed commit** — `test_results.xml` and both suite logs, the gated watcher
+  run, and both mutation-harness arms. Three of these are byte-identical to their previous
+  contents (`logs/check_watcher.log`, `logs/mutate_figure_gate.log`,
+  `logs/mutate_figure_gate_sweep.log`), which is why git dates them earlier and why the gate
+  checks their content rather than their commit. `logs/prefill_trace_multibucket_probe.log` is
+  round 16's and unchanged since.
 * **Older than the last code change, and unaffected for a stated reason** — the perf arms
   (`evidence_perf{,_before}.json`, round 7), the prefill-trace arm (round 8),
   `perf_summary.json` (round 13), `invalidation_cost_probe.json` (round 10),
@@ -1067,6 +1077,32 @@ thing that matters: **the failure is not retried on the next request**.
 | **P2** three stale counts and a false record of a completed fix | corrected, and the numbering bound so the next drift is a gate failure |
 | **P2** the trace-region budget behind the serving advice is unmeasured | **not closed**: stated as a named limitation instead. The region is 400 MB, one 52-layer capture's occupancy is unmeasured, and the multi-bucket probe runs on a 2-layer build — so the advice to raise `prefill_trace_max_entries` now says what is known and what is not, and the sticky disable's cost is stated with it |
 
+### Round 18 — `more-work-needed`
+
+A **P1 of my own making, and the worst kind**: the figure gate was **red at the reviewed
+commit** while three documents said it was green. Round 17's provenance check asserted
+`git log -1 -- logs/mutate_figure_gate.log == HEAD`. Both mutation arms *were* re-run — and
+produced **byte-identical** logs, so git recorded no change and the file's last-touching commit
+stayed at round 16's. The check was unsatisfiable by construction for any commit that does not
+alter that log's content, and it failed at the commit that introduced it. I committed on the
+strength of a gate run I made *before* the harness re-ran, which is the same "a record of a fix
+is not the fix" failure I had written into the round-17 entry one screen earlier.
+
+The lesson is the one the check was reaching for and missed: **what matters is not which commit
+last touched an artifact but whether its content agrees with the tree it describes.** That is
+what the gate checks now — the mutation log's digests against the current table, the junit file
+against the suite size, the watcher verdict against the log it is re-derived from — and the
+partition says plainly that a byte-identical re-run leaves git behind, which is why git is not
+the arbiter.
+
+| finding | what was done |
+| --- | --- |
+| **P1** the gate failed at HEAD; the provenance check was ill-posed | replaced with content-agreement checks; the partition rewritten to say what was re-run and why git dates three of them earlier |
+| **P2** the Tests table still called the capture-failure test "state-driven rather than fault-injected" — round 17's own fix, unpropagated | rewritten to describe the two-half injection that actually ships |
+| **P2** the headline footnote called teacher forcing "the **one** cross-process comparison"; the layer-stack row is a second, and it carries a claim | both named, with the layer-stack row's provenance pointed at the section that derives it |
+| **P2** the sweep arm was described as "one mutation per numeric table cell" while three undisclosed filters cut 697 tokens to 211 | the filters print their skip counts, the log is self-describing, and both sentences say what the arm does |
+| **P2** four figures that resolve to nothing: a −3.7 % that is −3.6 %, a gap range of 0.47–1.47 µs that is 0.475–0.688, two references to a `ccl_host_probe.json` that does not exist, and a mean quoted where every neighbouring cell is a min | all four corrected against the artifacts |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -1091,7 +1127,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `d8c5d686b13` | round-14 review fixes: the layer-stack floor table bound cell by cell, the generated mutation sweep as a harness arm, the cross-check loop moved to where it covers every binding, and the cross-capture bracket derived rather than stated |
 | `917a3225afd` | round-15 review fixes: the 8192-row prefill-trace measurement that replaced a 64x extrapolation, the eager fallback on a failed capture, and per-artifact evidence provenance |
 | `b1b3a3569fd` | round-16 review fixes: the sticky capture-failure disable with cleanup and a report field, the multi-bucket probe that exercises the recommended serving configuration, and the corrected probe docstring |
-| *(this commit)* | round-17 review fixes: the provenance partition derived from git, the capture-failure branch actually injected, the earlier cleanup boundary, the limitation numbering bound, and the unmeasured trace-region budget stated as a limitation |
+| `3bc742fd6f6` | round-17 review fixes: the provenance partition derived from git, the capture-failure branch actually injected, the earlier cleanup boundary, the limitation numbering bound, and the unmeasured trace-region budget stated as a limitation |
+| *(this commit)* | round-18 review fixes: the ill-posed provenance check replaced by content agreement (it had left the gate red at the previous commit), the Tests-table and footnote claims corrected, the sweep's filters disclosed, and four unresolvable figures fixed |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:
