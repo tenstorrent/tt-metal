@@ -1125,6 +1125,39 @@ rather than read off the console file that reports it.
 | **P2** §4's datatype row carried 41 % and 52–72 %, which round 13 had already corrected elsewhere to 42.2 % and 52.27–77.12 % | corrected |
 | **P2** `_release_prefill_traces`' orphan branch left its bucket in the dict, relying on a post-loop clear an unguarded drain could skip | `del` moved into the branch that orphans, and `teardown()`'s last-chance retry moved inside a `finally` so a raising release cannot skip it |
 
+### Round 20 — `clean-pass`
+
+Twenty rounds. The verdict is `clean-pass`, with three non-blocking Other Concerns and no
+required work.
+
+What the review re-derived for itself, rather than reading off this document: the audit table
+is an exact partition (14 groups, 55 ids, 1122.551 µs); the terminal term is 685.949 over its
+eleven named ids; 39 × 436.602 + 13 × 414.279 + 685.949 = 23.099 ms; the roofline is 8.829 ms
+and 37.9 % of the step; the dtype/fidelity policy holds **in the measured rows**; every headline
+delta; the two-trace residual at 9.86 µs; 59 junit cases with nothing skipped; and all six chat
+completions byte-identical to the full-model stage. Both mutation arms reproduce byte-for-byte
+from a scratch copy, which is what makes the committed logs evidence rather than decoration.
+
+The three concerns are recorded here because they are real and cheap for the next stage to
+know, and none of them is a defect in this one:
+
+* `_embed`'s `memory_config` argument is honoured only on the ≤32-row branch; the chunked
+  prefill-gather path drops it silently. Unreachable today — only `embed_decode` passes it, and
+  always at 32 rows — but a later stage wanting a sharded prefill gather would get a silently
+  wrong layout rather than an error.
+* `set_kv_cache` validates shape but not dtype or memory config. Every test binds `ttnn.clone`s,
+  so the gap is never exercised; a serving integrator binding a BF16 cache against the BFP8
+  contract passes the check.
+* The trace-region occupancy of one 52-layer prefill capture is still unmeasured (limitation 10),
+  which is the one thing a vLLM stage wanting `prefill_trace=True` should measure first.
+
+Nineteen rounds of findings and not one of them, from round 3 onwards, was a defect in the
+model's numerics, its measured performance, its accuracy or its generated text. They were
+claims: figures that resolved to nothing, provenance that had drifted, a gate that asserted
+less than it advertised, and — three times running, twice mine — a record of a fix standing in
+for the fix. The stage's real output is the three decode-path layout changes, the opt-in traced
+prefill, and an evidence set that now fails when it is wrong.
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -1151,7 +1184,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `b1b3a3569fd` | round-16 review fixes: the sticky capture-failure disable with cleanup and a report field, the multi-bucket probe that exercises the recommended serving configuration, and the corrected probe docstring |
 | `3bc742fd6f6` | round-17 review fixes: the provenance partition derived from git, the capture-failure branch actually injected, the earlier cleanup boundary, the limitation numbering bound, and the unmeasured trace-region budget stated as a limitation |
 | `c6b1c6c3022` | round-18 review fixes: the ill-posed provenance check replaced by content agreement (it had left the gate red at the previous commit), the Tests-table and footnote claims corrected, the sweep's filters disclosed, and four unresolvable figures fixed |
-| *(this commit)* | round-19 review fixes: currency checks that discriminate, the orphan branch made raise-safe with teardown's retry in a finally, and three figures/claims corrected against their artifacts |
+| `fa64e97c700` | round-19 review fixes: currency checks that discriminate, the orphan branch made raise-safe with teardown's retry in a finally, and three figures/claims corrected against their artifacts |
+| *(this commit)* | round-20 `clean-pass` recorded, with the one loose clause it noted corrected |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:

@@ -705,7 +705,7 @@ capture; nothing in this column is a pre-change value wearing a post-change labe
 
 | op group | ids | device µs | candidate | action |
 | --- | --- | --- | --- | --- |
-| LM-head matmul, 32 x 6656 x 50688 BFP4 | 3139 | 603.798 | **2.6 %** of the 23.298 ms token-out step, and 40.8 % of this one-layer profiling window (the CSV's own `Total %` cell); DRAM-bound at 279.38 GB/s reading 190 MB of weights | kept: the geometry ladder (`dram_sharded`, cores=52, `in0_block_w=2`) is the full-model stage's measured winner over the legal values 1/2/4 at BFP4, and `in0_block_w=4` fails with an exact L1 blocker (*"Statically allocated circular buffers ... grow to 1821824 B which is beyond max L1 size of 1572864 B"*) |
+| LM-head matmul, 32 x 6656 x 50688 BFP4 | 3139 | 603.798 | **2.6 %** of the 23.298 ms token-out step, and 40.8 % of this one-layer profiling window (the CSV's own `Total %` cell); DRAM-bound at 279.38 GB/s reading 190 MB of weights | kept: the geometry ladder (`dram_sharded`, cores=52, `in0_block_w=2`) is the full-model stage's measured winner: 1 and 2 were both measured at BFP4 and 2 won, while `in0_block_w=4` never produced a figure because it fails with an exact L1 blocker (*"Statically allocated circular buffers ... grow to 1821824 B which is beyond max L1 size of 1572864 B"*) |
 | MLP gate/up/down, 3 x BFP4 | 3071, 3127, 3132 | 190.266 | `in0_block_w` already at the largest legal divisor (13/13/10); packed gate/up measured +5.5 % by the decoder stage | kept |
 | `wqkv` + `attn_gate`, 2 x BFP8, same input | 3039, 3172 | 40.772 | OPT-001: two projections consuming the same post-norm activation could be one | **not taken, with a reason**: both rows are the *best* DRAM utilisation in the layer (77.12 % and 69.35 %), so packing cannot reduce the bytes, and the two outputs need different downstream layouts — QKV `sharded_to_interleaved` into head creation, the gate kept sharded until after SDPA — so a packed output needs an unshard plus two slices plus a reshard to split |
 | `o_proj`, BFP8 | 3065 | 21.368 | OPT-011 narrower working shard (8 cores / `in0_block_w=4`) | **re-measured on this stage's shipped path** rather than re-declined on the decoder stage's note ([`logs/layer_ab_oproj.log`](logs/layer_ab_oproj.log), `layer_ab.py --candidates tp4,tp4b,oproj_c8_bw4`): **sliding 0.4467 against 0.4474 / 0.4475**, i.e. −0.17 %, and **full 0.4163 against 0.4166 / 0.4162**, i.e. inside the repeat control's own spread. HF-reference PCC is unchanged on prefill (0.993700 / 0.992220) and marginally *better* on decode (0.993503 vs 0.993488 sliding, 0.992196 vs 0.992188 full). Worth **−0.03 ms/token, 0.12 %** of the step. Declined, and the reason is now specific: adopting it changes the **decoder stage's** shipped geometry and its single-grid invariant, which three of that stage's tests assert and whose multichip-vs-single-chip gate (0.999183 against a 0.999 bar) this stage's harness does not run. 0.12 % is not worth moving another stage's default and gate from here; the measurement is committed so that stage can take it |
@@ -1649,4 +1649,9 @@ Evidence:
 
 ## Stage review
 
-See [`work_log.md`](work_log.md) for the review rounds and their outcomes.
+Twenty rounds, the last returning **`clean-pass`**. See [`work_log.md`](work_log.md) for each
+round and what it changed. Rounds 1 and 2 found real defects in the work; from round 3 onwards
+every finding was about a *claim* — a figure that resolved to nothing, provenance that had
+drifted, a gate that asserted less than it advertised — and three rounds running found a record
+of a fix standing in for the fix. That is what the figure gate, its two mutation arms and the
+three committed negative controls exist to make expensive.
