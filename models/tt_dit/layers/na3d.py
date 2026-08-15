@@ -496,6 +496,71 @@ def build_device_plan(
     )
 
 
+def build_mesh_device_plan(
+    plans: list[NA3DPlan],
+    *,
+    mesh_device,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+) -> NA3DDevicePlan:
+    """One device plan whose gather indices and masks differ per device.
+
+    ``plans`` is one plan per device in row-major mesh order. Every device runs the same
+    program, so the plans must agree on group count and on each group's query/key counts —
+    what they may differ in is the index *values* and the mask, which is exactly what a shard's
+    position in the volume changes. :func:`plan_na3d_sharded` with ``uniform_spans=True`` is
+    what makes that agreement hold; a mismatch here means the geometry needs more than one
+    program and cannot run as a single mesh dispatch.
+    """
+    rows, cols = tuple(mesh_device.shape)
+    assert len(plans) == rows * cols, f"{len(plans)} plans for a {rows}x{cols} mesh"
+
+    def signature(plan: NA3DPlan):
+        return (plan.dims, plan.output_dims, tuple((g.n_queries, g.n_keys, len(g.query_slices)) for g in plan.groups))
+
+    distinct = {signature(p) for p in plans}
+    assert len(distinct) == 1, f"{len(distinct)} distinct plan shapes; a mesh dispatch needs one"
+
+    def shard(per_device: list[torch.Tensor], tt_dtype, layout):
+        hosts = [ttnn.from_torch(t, dtype=tt_dtype, layout=layout) for t in per_device]
+        return ttnn.to_device(ttnn.from_host_shards(hosts, ttnn.MeshShape(rows, cols)), mesh_device)
+
+    reference = plans[0]
+    query_indices, key_indices, masks = [], [], []
+    for index in range(len(reference.groups)):
+        rows_q, rows_k, group_masks = [], [], []
+        for plan in plans:
+            group = plan.groups[index]
+            rows_q.append(
+                torch.cat([_flat_indices(plan.dims, block) for block in group.query_slices])
+                .to(torch.int32)
+                .reshape(1, -1)
+            )
+            rows_k.append(
+                torch.cat([_flat_indices(plan.dims, block) for block in group.key_slices])
+                .to(torch.int32)
+                .reshape(1, -1)
+            )
+            group_masks.append(group_mask(group, dtype=torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32))
+        query_indices.append(shard(rows_q, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT))
+        key_indices.append(shard(rows_k, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT))
+        masks.append(shard(group_masks, dtype, ttnn.TILE_LAYOUT))
+
+    restores = []
+    for plan in plans:
+        order = torch.cat([torch.cat([_flat_indices(plan.dims, b) for b in g.query_slices]) for g in plan.groups])
+        assert order.numel() == math.prod(plan.output_dims)
+        restores.append(torch.argsort(order).to(torch.int32).reshape(1, -1))
+
+    return NA3DDevicePlan(
+        plan=reference,
+        query_indices=tuple(query_indices),
+        key_indices=tuple(key_indices),
+        masks=tuple(masks),
+        tiles_per_group=tuple(len(g.query_slices) for g in reference.groups),
+        restore_indices=shard(restores, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+    )
+
+
 _PLAN_CACHE: dict[tuple, NA3DDevicePlan] = {}
 
 
