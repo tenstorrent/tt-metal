@@ -20,6 +20,7 @@ from safetensors import safe_open
 from transformers import AutoConfig
 
 import ttnn
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE
 from models.autoports.qwen_qwen3_6_27b.tt.multichip_decoder import TARGET_MESH_SHAPE, MultichipDecoder
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import _dram_weight_memory_config, _l1_width_memory_config
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import load_precision_config
@@ -490,8 +491,8 @@ class Qwen36Model:
             position_chunk = ttnn.slice(current_positions, (0, start), (self.batch, end))
             hidden = self.embed_tokens(token_chunk)
             hidden = ttnn.reshape(hidden, (1, self.batch, end - start, int(self.config.hidden_size)))
-            metadata_start = start // 64
-            metadata_end = math.ceil(end / 64)
+            metadata_start = start // LINEAR_PREFILL_CHUNK_SIZE
+            metadata_end = math.ceil(end / LINEAR_PREFILL_CHUNK_SIZE)
             masks = sequence_mask[metadata_start:metadata_end] if sequence_mask is not None else None
             selectors = conv_state_selectors[metadata_start:metadata_end] if conv_state_selectors is not None else None
             for layer in self.layers:

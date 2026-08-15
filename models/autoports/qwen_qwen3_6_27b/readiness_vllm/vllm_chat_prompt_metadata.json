@@ -1,0 +1,231 @@
+{
+  "model": "Qwen/Qwen3.6-27B",
+  "snapshot": "/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "chat_template_present": true,
+  "rendering_method": "tokenizer.apply_chat_template(add_generation_prompt=True); live requests used /v1/chat/completions so server applied the same checkpoint template",
+  "cases": [
+    {
+      "prompt": "Write a haiku about machine learning.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a haiku about machine learning."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>user\nWrite a haiku about machine learning.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        7734,
+        264,
+        6185,
+        36974,
+        883,
+        5484,
+        6618,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ],
+      "num_prompt_tokens": 18
+    },
+    {
+      "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain the difference between supervised and unsupervised learning in simple terms."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>user\nExplain the difference between supervised and unsupervised learning in simple terms.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        814,
+        20139,
+        279,
+        6463,
+        1881,
+        56994,
+        321,
+        6758,
+        446,
+        75318,
+        6618,
+        303,
+        4145,
+        3665,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ],
+      "num_prompt_tokens": 25
+    },
+    {
+      "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered"
+        }
+      ],
+      "rendered_prompt": "<|im_start|>user\nComplete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        12188,
+        411,
+        3255,
+        25,
+        9358,
+        5028,
+        264,
+        854,
+        11,
+        303,
+        264,
+        2944,
+        13362,
+        24284,
+        11,
+        1017,
+        11815,
+        264,
+        21520,
+        3777,
+        68496,
+        852,
+        10782,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ],
+      "num_prompt_tokens": 33
+    },
+    {
+      "prompt": "What are the three laws of thermodynamics?",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What are the three laws of thermodynamics?"
+        }
+      ],
+      "rendered_prompt": "<|im_start|>user\nWhat are the three laws of thermodynamics?<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        3710,
+        513,
+        279,
+        2250,
+        6657,
+        314,
+        28868,
+        76214,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ],
+      "num_prompt_tokens": 19
+    },
+    {
+      "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Translate the following to French: \"Hello, how are you today?\""
+        }
+      ],
+      "rendered_prompt": "<|im_start|>user\nTranslate the following to French: \"Hello, how are you today?\"<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        26583,
+        279,
+        2614,
+        310,
+        8323,
+        25,
+        328,
+        9419,
+        11,
+        1204,
+        513,
+        488,
+        3242,
+        7285,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ],
+      "num_prompt_tokens": 24
+    },
+    {
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a Python function to calculate the Fibonacci sequence."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>user\nWrite a Python function to calculate the Fibonacci sequence.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        7734,
+        264,
+        12654,
+        709,
+        310,
+        10724,
+        279,
+        76938,
+        8240,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ],
+      "num_prompt_tokens": 20
+    }
+  ],
+  "controls": {
+    "datatype_sweep": "models/autoports/qwen_qwen3_6_27b/doc/datatype_sweep/artifacts/selected_qualitative_shared_suite.json",
+    "full_model": "models/autoports/qwen_qwen3_6_27b/doc/full_model/artifacts/full_model_qualitative_200_final.json"
+  },
+  "control_comparison": "Same six shared readiness prompts; prior HF/full-model artifacts use the same checkpoint tokenizer/chat template and show the same reasoning-first behavior."
+}

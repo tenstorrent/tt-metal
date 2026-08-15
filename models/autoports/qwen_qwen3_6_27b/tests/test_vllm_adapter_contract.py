@@ -2,6 +2,7 @@ import ast
 import inspect
 from pathlib import Path
 
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE
 from models.autoports.qwen_qwen3_6_27b.tt.generator_vllm import Qwen36ForCausalLM
 from models.common.sampling import SamplingParams
 
@@ -16,9 +17,15 @@ def test_vllm_capabilities_and_context_pool():
         "max_device_top_k": 32,
     }
     pool = Qwen36ForCausalLM.get_max_tokens_all_users(max_model_len=262144, max_num_seqs=32)
+    page_size = 800
     assert pool == 1_726_400
-    assert (pool + 32 * 800) // 800 == 2_190
+    assert (pool + 32 * page_size) // page_size == 2_190
     assert pool >= 262_144
+    measured_largest_free_block = 62_914_560
+    concat_bytes_per_bank_at_64 = 805_306_368 // 8
+    assert LINEAR_PREFILL_CHUNK_SIZE == 32
+    assert concat_bytes_per_bank_at_64 // 2 == 50_331_648
+    assert concat_bytes_per_bank_at_64 // 2 < measured_largest_free_block
 
 
 def test_decode_delegates_to_canonical_token_out_path():
@@ -29,9 +36,41 @@ def test_decode_delegates_to_canonical_token_out_path():
     assert all(name not in source for name in forbidden)
 
 
+def test_host_sampling_compatibility_preserves_slot_remap():
+    source = inspect.getsource(Qwen36ForCausalLM.decode_forward)
+    host_branch = source.split("if sampling_params is None:", 1)[1].split("gen.sampling.apply_decode_state", 1)[0]
+    assert "if slot_remap is not None:" in host_branch
+    assert "gen.remap_decode_slots(remap)" in host_branch
+
+
+def test_linear_scan_does_not_hold_both_concat_workspaces():
+    source = (Path(__file__).parents[1] / "tt" / "multichip_decoder.py").read_text()
+    transform_concat = source.index("previous_transform = ttnn.concat")
+    transform_deallocate = source.index("ttnn.deallocate(previous_transform)", transform_concat)
+    bias_concat = source.index("previous_bias = ttnn.concat", transform_concat)
+    assert transform_concat < transform_deallocate < bias_concat
+    assert "output_tensor=scan_scratch" not in source
+    assert "linear_scan_scratch" not in source
+
+
+def test_linear_prefill_metadata_uses_scan_chunk_size():
+    tt_dir = Path(__file__).parents[1] / "tt"
+    generator_source = (tt_dir / "generator.py").read_text()
+    model_source = (tt_dir / "model.py").read_text()
+    decoder_source = (tt_dir / "multichip_decoder.py").read_text()
+    assert "range(0, physical_len, LINEAR_PREFILL_CHUNK_SIZE)" in generator_source
+    assert "min(LINEAR_PREFILL_CHUNK_SIZE, physical_len - start)" in generator_source
+    assert "start // LINEAR_PREFILL_CHUNK_SIZE" in model_source
+    assert "math.ceil(end / LINEAR_PREFILL_CHUNK_SIZE)" in model_source
+    assert "(batch, chunk_len + 4)" in generator_source
+    assert "(1, self.batch, 1, sequence + 4)" in decoder_source
+
+
 def test_adapter_has_no_independent_sampling_implementation():
     tree = ast.parse(inspect.getsource(Qwen36ForCausalLM))
-    method_names = {node.name for node in tree.body[0].body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    method_names = {
+        node.name for node in tree.body[0].body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     assert "sample" not in method_names
     assert "sampling" not in method_names
 

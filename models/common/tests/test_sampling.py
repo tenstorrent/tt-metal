@@ -90,6 +90,53 @@ def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
     assert seed_manager.seed_counters == [6, 0, 0, 0]
 
 
+def test_seed_manager_request_stream_is_independent_of_batch_slot():
+    first = _make_host_only_seed_manager()
+    second = _make_host_only_seed_manager()
+
+    first.reset_seed_from_slots([42, None, None, None], [0])
+    second.reset_seed_from_slots([None, None, 42, None], [2])
+
+    assert [first._next_device_seed_for_slot(0) for _ in range(4)] == [
+        second._next_device_seed_for_slot(2) for _ in range(4)
+    ]
+
+
+def test_seed_manager_slot_remap_preserves_request_stream():
+    baseline = _make_host_only_seed_manager()
+    remapped = _make_host_only_seed_manager()
+    baseline.reset_seed_from_slots([None, 42, None, None], [1])
+    remapped.reset_seed_from_slots([None, 42, None, None], [1])
+
+    assert baseline._next_device_seed_for_slot(1) == remapped._next_device_seed_for_slot(1)
+    remapped.apply_slot_remap([0, 1, 1, 3])
+
+    assert baseline._next_device_seed_for_slot(1) == remapped._next_device_seed_for_slot(2)
+
+
+def test_unchanged_decode_seed_does_not_rewind_stream_on_stale_input():
+    seed_manager = _make_host_only_seed_manager()
+    slot_seeds = [42, None, None, None]
+    seed_manager.reset_seed_from_slots(slot_seeds, [0])
+
+    first = seed_manager._next_device_seed_for_slot(0)
+    assert not seed_manager.reset_seed_from_slots_if_needed(slot_seeds, [0])
+    second = seed_manager._next_device_seed_for_slot(0)
+
+    assert first != second
+    assert seed_manager.seed_counters[0] == 2
+
+
+def test_seed_counter_position_alignment_currently_rewinds_on_stale_position():
+    seed_manager = _make_host_only_seed_manager()
+    seed_manager.reset_seed_from_slots([42, None, None, None], [0])
+    seed_manager.seed_counters[0] = 12
+
+    seed_manager.align_seed_counters_to_positions([42, None, None, None], [0], [8])
+
+    assert seed_manager.seed_counters[0] == 9
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import os
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -102,7 +103,7 @@ class SamplingGenerator:
         self.mesh_device = mesh_device
         self.cq_id = cq_id
         self.args = args
-        self._sampling_debug_enabled = is_llama33_70b_model(args)
+        self._sampling_debug_enabled = is_llama33_70b_model(args) or os.getenv("TT_SAMPLING_DEBUG") == "1"
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
@@ -747,6 +748,7 @@ class SeedManager:
             def _position(_slot):
                 return int(positions)
 
+        counters_before = list(self.seed_counters)
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
@@ -756,6 +758,15 @@ class SeedManager:
             if position is None or position < 0:
                 continue
             self.seed_counters[slot] = max(0, position + offset)
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SeedManager align counters",
+            user_ids=_compact_debug_list(user_ids),
+            positions=_compact_debug_list(positions),
+            requested_seeds=_compact_debug_list(seeds),
+            counters_before=_compact_debug_list(counters_before),
+            counters_after=_compact_debug_list(self.seed_counters),
+        )
 
     def has_active_request_seed(self) -> bool:
         return self._active_request_seed

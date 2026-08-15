@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import os
 import sys
 
 import torch
@@ -124,7 +125,7 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
-        self._sampling_debug_enabled = is_llama33_70b_model(args)
+        self._sampling_debug_enabled = is_llama33_70b_model(args) or os.getenv("TT_SAMPLING_DEBUG") == "1"
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl

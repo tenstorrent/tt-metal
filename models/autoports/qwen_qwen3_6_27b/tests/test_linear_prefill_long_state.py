@@ -42,9 +42,9 @@ def _recur_token(state, key, value, beta, decay):
 def test_advertised_context_concat_retention_is_logarithmic():
     chunks = math.ceil(ADVERTISED_CONTEXT / LINEAR_PREFILL_CHUNK_SIZE)
     peak = _peak_retained_chunks(ADVERTISED_CONTEXT, LINEAR_PREFILL_CHUNK_SIZE)
-    assert chunks == 4096
+    assert chunks == 8192
     assert peak <= math.ceil(math.log2(chunks))
-    assert LINEAR_PREFILL_CHUNK_SIZE + peak <= 76
+    assert LINEAR_PREFILL_CHUNK_SIZE + peak <= 45
 
 
 def test_balanced_concat_preserves_chronological_order(monkeypatch):
