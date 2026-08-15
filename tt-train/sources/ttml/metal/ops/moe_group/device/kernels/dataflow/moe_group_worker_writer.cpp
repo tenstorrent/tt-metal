@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Worker writer: drains cb_out tiled pages to grouped DRAM.
-// - Skips DRAM writes for tile_rows >= offsets[E_local]/32 (grouped is pre-zeroed).
+// - Active tile_rows (< offsets[E_local]/32) are written from cb_out.
+// - Tail tile_rows [offsets[E_local]/32, T_cap/32) are zero-filled so grouped
+//   holds no uninitialized DRAM for cross-row consumers downstream.
 // - In the last chunk per tile-row, writes only last_chunk_tiles tiles
 //   (the remaining are zero-pad from the reader).
 // Always pops cb_out to keep the pipeline flowing.
@@ -16,7 +18,8 @@
 //   4: last_chunk_tiles   (tiles in final chunk; <= tiles_per_chunk)
 //   5: stride             (= num_workers; interleaved tile_row step)
 //   6: plan_ready_sem_id
-//   7+: TensorAccessorArgs for grouped
+//   7: total_tile_rows    (= T_cap / TILE_HEIGHT)
+//   8+: TensorAccessorArgs for grouped
 //   next+: TensorAccessorArgs for offsets
 //
 // Runtime args:
@@ -37,7 +40,8 @@ constexpr uint32_t e_local = get_compile_time_arg_val(3);
 constexpr uint32_t last_chunk_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t stride = get_compile_time_arg_val(5);
 constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
-constexpr auto grouped_args = TensorAccessorArgs<7>();
+constexpr uint32_t total_tile_rows = get_compile_time_arg_val(7);
+constexpr auto grouped_args = TensorAccessorArgs<8>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
 
 void kernel_main() {
@@ -90,5 +94,20 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_out, tiles_per_chunk);
         }
+    }
+
+    // Zero the tail tile_rows this core owns past the active range. my_count
+    // is a uniform worst-case bound, so clamp to total_tile_rows. Bursts from
+    // MEM_ZEROS_BASE, matching the grouped_scores pre-fill in the combined
+    // kernel.
+    for (uint32_t step = my_active_count; step < my_count && tile_row < total_tile_rows; ++step, tile_row += stride) {
+        for (uint32_t t = 0; t < Wt; ++t) {
+            uint64_t dst_noc = grouped_addrgen.get_noc_addr(tile_row * Wt + t);
+            for (uint32_t off = 0; off < tile_bytes; off += MEM_ZEROS_SIZE) {
+                uint32_t m = (off + MEM_ZEROS_SIZE <= tile_bytes) ? MEM_ZEROS_SIZE : (tile_bytes - off);
+                noc_async_write(MEM_ZEROS_BASE, dst_noc + off, m);
+            }
+        }
+        noc_async_write_barrier();
     }
 }
