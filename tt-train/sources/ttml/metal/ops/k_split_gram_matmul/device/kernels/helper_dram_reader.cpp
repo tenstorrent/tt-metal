@@ -75,10 +75,11 @@ void kernel_main() {
                 cb_push_back(cb_id, block_size);
             }
 
-            // Write output per block
+            // Write output per block. Compute pushes fixed M_block-tile row groups
+            // (partial rows occupy a valid prefix) so c_6 pushes always wrap exactly.
             const auto out_writer = TensorAccessor(output_ta, out_addr, out_tile_size);
             for (uint32_t m = 0; m < current_M_block; m++) {
-                cb_wait_front(cb_out, current_N);
+                cb_wait_front(cb_out, M_block);
                 const uint32_t l1_read_addr = get_read_ptr(cb_out);
                 const uint32_t row = M_start_tile + M_start + m;
                 for (uint32_t n = 0; n < current_N; n++) {
@@ -89,7 +90,7 @@ void kernel_main() {
                     }
                 }
                 noc_async_write_barrier();
-                cb_pop_front(cb_out, current_N);
+                cb_pop_front(cb_out, M_block);
             }
         }
     }
