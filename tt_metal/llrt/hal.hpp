@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "tt_memory.h"
+#include "hostdev/debug_ring_buffer_common.h"
 #include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
 #include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
@@ -441,6 +442,18 @@ public:
         bool enable_blackhole_dram_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
+
+    // Debug ring buffer: MPSC on Quasar/Blackhole (lock-free, many-writer), SPSC on Wormhole.
+    // MPSC capacity differs per arch -- see debug_ring_buffer_common.h.
+    bool has_mpsc_ring_buffer() const { return arch_ == tt::ARCH::QUASAR || arch_ == tt::ARCH::BLACKHOLE; }
+    uint32_t get_ring_buffer_capacity() const {
+        switch (arch_) {
+            case tt::ARCH::QUASAR: return DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR;
+            case tt::ARCH::BLACKHOLE: return DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE;
+            default: return DEBUG_RING_BUFFER_SPSC_ELEMENTS;
+        }
+    }
+    uint32_t get_ring_buffer_mask() const { return get_ring_buffer_capacity() - 1; }
 
     // Returns the NoC topology type (MESH or TORUS)
     NoCTopologyType get_noc_topology() const { return noc_topology_; }

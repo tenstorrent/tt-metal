@@ -16,24 +16,14 @@
 
 #if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
 #include "internal/hw_thread.h"
-
-#if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-
-inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
-    asm volatile("fence" ::: "memory");
-    volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-    *flush_reg = static_cast<uint64_t>(addr);
-    asm volatile("fence" ::: "memory");
-}
-#endif  // ARCH_QUASAR
+#include "risc_common.h"
 
 // Must be inline - DM stack is only 1KB, can't afford function call overhead
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(wrapper->data);
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Remap to cached for atomics
     uintptr_t addr = reinterpret_cast<uintptr_t>(buf);
     if (addr >= MEM_L1_UNCACHED_BASE) {
@@ -51,7 +41,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     uint32_t thread_idx = internal_::get_hw_thread_idx();
     __atomic_store_n(&buf->slots[idx].write_id, thread_idx + 1, __ATOMIC_RELEASE);
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Flush cache line for host visibility
     // TODO: can this be optimized by flushing only after N amount of heads
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->slots[idx]));

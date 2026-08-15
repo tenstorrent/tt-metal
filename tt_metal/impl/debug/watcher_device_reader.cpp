@@ -905,7 +905,7 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
 
     // On Quasar and Blackhole (Zaamo-capable), use MPSC ring buffer format
-    if (hal.get_arch() == tt::ARCH::QUASAR || hal.get_arch() == tt::ARCH::BLACKHOLE) {
+    if (hal.has_mpsc_ring_buffer()) {
         DumpMpscRingBuffer(to_stdout);
         return;
     }
@@ -936,20 +936,24 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
         dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::debug_ring_buf);
     auto ring_buf_offset = watcher_offset + ring_buf_field_offset;
     const auto* raw_ptr = reinterpret_cast<const uint8_t*>(l1_read_buf_.data());
-    const auto* rb = reinterpret_cast<const debug_mpsc_ring_buf_msg_t*>(raw_ptr + ring_buf_offset);
+    // The host doesn't know at compile time which arch's (differently-capacitied)
+    // debug_mpsc_ring_buf_msg_t is laid out here, so read via arch-agnostic pointer helpers
+    // (head and the offset to slots are identical across arch variants) rather than a fixed
+    // struct type.
+    const uint8_t* rb_base = raw_ptr + ring_buf_offset;
 
-    constexpr uint32_t capacity = DEBUG_RING_BUFFER_MPSC_ELEMENTS;
-    constexpr uint32_t mask = DEBUG_RING_BUFFER_MPSC_MASK;
-    uint32_t head = rb->head;
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = hal.get_ring_buffer_mask();
+    uint32_t head = debug_mpsc_ring_buffer_head(rb_base);
     uint32_t count = head < capacity ? head : capacity;
 
     std::vector<MpscRingBufEntry> entries;  // newest first
     for (uint32_t i = 0; i < count; i++) {
-        const auto& slot = rb->slots[(head - 1 - i) & mask];
-        if (!debug_ring_buffer_is_slot_valid(slot.write_id)) {
+        const auto* slot = debug_mpsc_ring_buffer_slot(rb_base, (head - 1 - i) & mask);
+        if (!debug_ring_buffer_is_slot_valid(slot->write_id)) {
             continue;
         }
-        entries.push_back({slot.data, debug_ring_buffer_get_thread_idx(slot.write_id)});
+        entries.push_back({slot->data, debug_ring_buffer_get_thread_idx(slot->write_id)});
     }
 
     if (!entries.empty()) {
