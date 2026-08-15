@@ -207,3 +207,10 @@ Fresh stage rereview and local commit are the remaining gates.
   Every skipped hardware body was also run explicitly above with its gate set.
 
 Fresh stage rereview and local commit remain.
+
+## Local checkpoint
+
+- Stage implementation, evidence, and final clean-pass review committed locally
+  as `0a92e9ed5c5` (`Add Gemma4 full-model TP4 readiness path`).
+- No push was performed. Unrelated untracked Qwen and nested third-party trees
+  remained excluded.
