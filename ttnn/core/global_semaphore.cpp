@@ -4,16 +4,10 @@
 
 #include "ttnn/global_semaphore.hpp"
 
-#include <algorithm>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt_stl/span.hpp>
 
 namespace ttnn::global_semaphore {
-
-MultiDeviceGlobalSemaphore::MultiDeviceGlobalSemaphore(size_t num_devices) {
-    this->global_semaphores.reserve(num_devices);
-}
 
 GlobalSemaphore create_global_semaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
