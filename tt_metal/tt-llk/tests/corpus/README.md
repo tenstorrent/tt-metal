@@ -30,6 +30,17 @@ Its default location is `/localdev/nkapre/sfpi-gcc-lreg-artifacts`; override
 different checked, importable shim.  The launcher exports both `PYTHONPATH` and
 `PYTEST_PLUGINS` and records the selected values in `provenance.tsv`.
 
+It defaults unconditionally to the tt-metal checkout containing this script,
+even if the caller has `TT_METAL_HOME` exported.  Use
+`CORPUS_TT_METAL_HOME=/path/to/checkout` or `--tt-metal-home /path/to/checkout`
+only when deliberately measuring a different checkout; the resolved path is
+recorded in `provenance.tsv`.
+
+The runner also clears pytest's configured `addopts` for CRAQ collection and
+execution.  This keeps a corpus checkout usable with a deliberately xdist-free
+venv even when its normal `pytest.ini` contains xdist-only options; it does not
+turn a failed test into a metric.
+
 Use `--sample 0` only for the full parameterized corpus.  That is the
 reproducible training/evaluation mode; it can be large.  `--list` records the
 exact modules selected before spending simulator time.  The run directory

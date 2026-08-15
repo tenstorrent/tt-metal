@@ -3,7 +3,10 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/../../../.." && pwd)}"
+# This script defines a corpus in its checkout.  Deliberately do not consume an
+# ambient TT_METAL_HOME, which otherwise silently changes the test/source pair.
+CORPUS_CHECKOUT="$(cd "$HERE/../../../.." && pwd)"
+TT_METAL_HOME="${CORPUS_TT_METAL_HOME:-$CORPUS_CHECKOUT}"
 CRAQ_SIM_ROOT="${CRAQ_SIM_ROOT:-/localdev/nkapre/craq-sim}"
 # craq-sim runs pytest without xdist, while a few tt-llk fixtures still request
 # its worker_id fixture.  Keep the compatibility fixture explicit rather than
@@ -18,7 +21,7 @@ RUN_ROOT=""
 
 usage() {
     cat <<'EOF'
-Usage: run_craq_sim_corpus.sh [--arch bh|wh] [--tier 1..4] [--sample N] [--run-root DIR] [--list]
+Usage: run_craq_sim_corpus.sh [--arch bh|wh] [--tier 1..4] [--sample N] [--run-root DIR] [--tt-metal-home DIR] [--list]
 
 Selects rows from f1_candidates.tsv, then invokes craq-sim's llk-sim-perf.sh.
 N=0 selects every parametrized nodeid in each selected functional module.
@@ -31,6 +34,7 @@ while [ "$#" -gt 0 ]; do
         --tier) TIER="$2"; shift 2 ;;
         --sample) SAMPLE="$2"; shift 2 ;;
         --run-root) RUN_ROOT="$2"; shift 2 ;;
+        --tt-metal-home) TT_METAL_HOME="$2"; shift 2 ;;
         --list) LIST_ONLY=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -71,8 +75,8 @@ awk -F '\t' -v arch="$ARCH" -v tier="$TIER" '
 {
     printf 'tt_metal_head\t'; git -C "$TT_METAL_HOME" rev-parse HEAD
     printf 'craq_sim_head\t'; git -C "$CRAQ_SIM_ROOT" rev-parse HEAD
-    printf 'arch\t%s\ntier\t%s\nsample\t%s\nworkerid_plugin_dir\t%s\nworkerid_plugin\t%s\n' \
-        "$ARCH" "$TIER" "$SAMPLE" "$PYTEST_WORKERID_PLUGIN_DIR" "$PYTEST_WORKERID_PLUGIN"
+    printf 'tt_metal_home\t%s\narch\t%s\ntier\t%s\nsample\t%s\nworkerid_plugin_dir\t%s\nworkerid_plugin\t%s\n' \
+        "$TT_METAL_HOME" "$ARCH" "$TIER" "$SAMPLE" "$PYTEST_WORKERID_PLUGIN_DIR" "$PYTEST_WORKERID_PLUGIN"
 } > "$RUN_ROOT/provenance.tsv"
 cp "$MANIFEST" "$RUN_ROOT/f1_candidates.tsv"
 
@@ -91,6 +95,7 @@ PYTHONPATH="$PYTEST_WORKERID_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
 
 args=(--sample "$SAMPLE" --run-root "$RUN_ROOT/sim")
 while IFS= read -r module; do args+=(--module "$module"); done < "$MODULES"
+PYTEST_ADDOPTS='-o addopts=' \
 PYTHONPATH="$PYTEST_WORKERID_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
 PYTEST_PLUGINS="${PYTEST_PLUGINS:+$PYTEST_PLUGINS,}$PYTEST_WORKERID_PLUGIN" \
 SIM_ARCH="$SIM_ARCH" SHORT_ARCH="$SHORT_ARCH" TT_METAL_HOME="$TT_METAL_HOME" HARNESS="$HARNESS" \
