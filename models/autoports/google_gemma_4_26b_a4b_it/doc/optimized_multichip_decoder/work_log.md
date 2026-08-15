@@ -1,5 +1,7 @@
 # Optimized multichip decoder work log
 
+Stage implementation/evidence commit: `c78b0d5959a` (local only; not pushed).
+
 ## 2026-08-15 inventory and operation-topology audit
 
 - Stage baseline: commit `e45e0994778`; completed TP=4 decoder implementation
