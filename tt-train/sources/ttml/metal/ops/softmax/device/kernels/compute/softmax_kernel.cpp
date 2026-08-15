@@ -59,7 +59,7 @@ constexpr bool do_mask_w = false;
 void find_max_value_in_row() {
     const uint32_t max_value_register = 0;
     const uint32_t tile_register = 1U;
-    // cb_reserve_back(cb_max_value_before_reduction, onetile);
+    cb_reserve_back(cb_max_value_before_reduction, onetile);
     tile_regs_acquire();
     reconfig_data_format(cb_input, cb_input);
     for (uint32_t col = 0; col < Wt;) {
@@ -436,6 +436,25 @@ void kernel_main() {
 
                 mul_binary_tile_init();
                 mul_binary_tile(block_idx, sum_exp_register, block_idx);  // multiply by scaler
+
+#ifndef EVERYTHING_FITS_IN_L1
+                // The L1 path reads already-masked tiles from cb_exp; here exp(x - max) is
+                // recomputed, so the row's last tile must be masked again or padding lanes
+                // leave nonzero output. mask_tile needs the mask right next to the data
+                // register; for the block's last tile that slot is sum_exp_register, which
+                // has no further use in this acquire window (it is re-broadcast per block),
+                // so masking after the multiply keeps DST usage at block_size + 1 tiles.
+                if constexpr (do_mask_w) {
+                    if (col + block_idx + 1 == Wt) {
+                        const uint32_t mask_register = block_idx + 1U;
+                        copy_tile_init(cb_mask);
+                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
+                        mask_tile_init();
+                        mask_tile(block_idx, mask_register);
+                    }
+                }
+#endif
             }
             tile_regs_commit();
 
