@@ -42,8 +42,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
