@@ -61,9 +61,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
     const experimental::DFBSpecName IN2_DFB{"in2_dfb"};
     const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER0{"reader0"};
-    const experimental::KernelSpecName READER1{"reader1"};
-    const experimental::KernelSpecName READER2{"reader2"};
+    const experimental::KernelSpecName READER{"reader"};
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
@@ -92,30 +90,46 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    auto make_reader_spec = [](const experimental::DFBSpecName& dfb) {
-        return experimental::KernelSpec{
-            .unique_id = experimental::KernelSpecName{""},  // patched by caller
-            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
-            .num_threads = 1,
-            .dfb_bindings = {experimental::ProducerOf(dfb, "out")},
-            .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-            .hw_config = experimental::DataMovementGen2Config{},
-        };
+    // Single reader, one producer per input DFB, explicit reserve/read/barrier/push
+    // sync with DFB implicit HW sync disabled. STRIDED with 1 producer + 1 consumer
+    // per DFB is non-interleaved (stride factor 1); producers must be STRIDED.
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/bfd_datacopy_reader_quasar.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern =
+                     experimental::DFBAccessPattern::STRIDED,  // producers must be STRIDED (ALL unsupported)
+             },
+             {
+                 .dfb_spec_name = IN1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern =
+                     experimental::DFBAccessPattern::STRIDED,  // producers must be STRIDED (ALL unsupported)
+             },
+             {
+                 .dfb_spec_name = IN2_DFB,
+                 .accessor_name = "in2",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern =
+                     experimental::DFBAccessPattern::STRIDED,  // producers must be STRIDED (ALL unsupported)
+             }},
+        .runtime_arg_schema = {.runtime_arg_names = {"src0_addr", "src1_addr", "src2_addr", "bank_id", "num_tiles"}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
-    experimental::KernelSpec reader0_spec = make_reader_spec(IN0_DFB);
-    reader0_spec.unique_id = READER0;
-    experimental::KernelSpec reader1_spec = make_reader_spec(IN1_DFB);
-    reader1_spec.unique_id = READER1;
-    experimental::KernelSpec reader2_spec = make_reader_spec(IN2_DFB);
-    reader2_spec.unique_id = READER2;
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .dfb_bindings = {experimental::StridedConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec compute_spec{
@@ -145,7 +159,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .access_pattern =
+                     experimental::DFBAccessPattern::STRIDED,  // producers must be STRIDED (ALL unsupported)
              }},
         .compile_time_args = {{"num_cycles", NUM_CYCLES}},
         .hw_config = experimental::ComputeGen2Config{},
@@ -153,13 +168,13 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
 
     experimental::WorkUnitSpec wu{
         .name = "main",
-        .kernels = {READER0, READER1, READER2, WRITER, COMPUTE},
+        .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
     experimental::ProgramSpec spec{
         .name = "bfd_datacopy",
-        .kernels = {reader0_spec, reader1_spec, reader2_spec, writer_spec, compute_spec},
+        .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {in0_dfb_spec, in1_dfb_spec, in2_dfb_spec, out_dfb_spec},
         .work_units = {wu},
     };
@@ -177,34 +192,21 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     tt::tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
     tt::tt_metal::detail::WriteToBuffer(src2_dram_buffer, src2_vec);
 
-    const std::uint32_t src_aligned_page_size = static_cast<std::uint32_t>(src0_dram_buffer->aligned_page_size());
-    const std::uint32_t dst_aligned_page_size = static_cast<std::uint32_t>(dst_dram_buffer->aligned_page_size());
-
-    auto reader_run_args = [&](const std::shared_ptr<Buffer>& buf) {
-        return experimental::MakeRuntimeArgsForSingleNode(
-            node,
-            {{"src_addr", buf->address()},
-             {"src_bank_id", 0u},
-             {"num_tiles", TILES_PER_INPUT},
-             {"dram_page_stride", src_aligned_page_size}});
-    };
-
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER0, .runtime_arg_values = reader_run_args(src0_dram_buffer)},
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER1, .runtime_arg_values = reader_run_args(src1_dram_buffer)},
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER2, .runtime_arg_values = reader_run_args(src2_dram_buffer)},
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", src0_dram_buffer->address()},
+                 {"src1_addr", src1_dram_buffer->address()},
+                 {"src2_addr", src2_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", TILES_PER_INPUT}})},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node,
-                {{"dst_addr", dst_dram_buffer->address()},
-                 {"dst_bank_id", 0u},
-                 {"num_tiles", NUM_CYCLES},
-                 {"dram_page_stride", dst_aligned_page_size}}),
+                node, {{"dst_addr", dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", NUM_CYCLES}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);

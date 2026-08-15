@@ -33,31 +33,41 @@ void kernel_main() {
         // table entries + MOPs for the newly selected input and the output.
         unary_op_init_common(in_id, dfb::out);
 
-        tile_regs_acquire();
-        tile_regs_wait();
-
+        // Per input: wait for the tile, copy it through dest into the output DFB,
+        // then pop. The copy_tile/pack_tile TDMA sits between wait_front and
+        // pop_front (required on Quasar), and the tile_regs handshake wraps the
+        // math->pack dest exchange.
         if (in_sel == 0) {
             dfb_in0.wait_front(1);
             dfb_out.reserve_back(1);
+            tile_regs_acquire();
+            tile_regs_wait();
             copy_tile(dfb::in0, 0, 0);
             pack_tile(0, dfb::out);
+            tile_regs_commit();
+            tile_regs_release();
             dfb_in0.pop_front(1);
         } else if (in_sel == 1) {
             dfb_in1.wait_front(1);
             dfb_out.reserve_back(1);
+            tile_regs_acquire();
+            tile_regs_wait();
             copy_tile(dfb::in1, 0, 0);
             pack_tile(0, dfb::out);
+            tile_regs_commit();
+            tile_regs_release();
             dfb_in1.pop_front(1);
         } else {
             dfb_in2.wait_front(1);
             dfb_out.reserve_back(1);
+            tile_regs_acquire();
+            tile_regs_wait();
             copy_tile(dfb::in2, 0, 0);
             pack_tile(0, dfb::out);
+            tile_regs_commit();
+            tile_regs_release();
             dfb_in2.pop_front(1);
         }
         dfb_out.push_back(1);
-
-        tile_regs_commit();
-        tile_regs_release();
     }
 }
