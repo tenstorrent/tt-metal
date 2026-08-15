@@ -79,7 +79,7 @@ class WeightSyncCallback:
         pass
 
     def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        if (step + 1) % self.every == 0:
+        if step % self.every == 0:
             self.completer.push_weights()
 
     def on_before_optimizer_step(self, trainer: Any) -> None:
