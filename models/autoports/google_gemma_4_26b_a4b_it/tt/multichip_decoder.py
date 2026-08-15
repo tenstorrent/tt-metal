@@ -345,9 +345,9 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.decode_weight_intermediates = []
         candidate_roles = tuple(
             role.strip()
-            for role in os.getenv(
-                "GEMMA4_MULTICHIP_DRAM_SHARDED_ROLES", "qkv,o_proj,packed_mlp_gate_up,mlp_down"
-            ).split(",")
+            for role in os.getenv("GEMMA4_MULTICHIP_DRAM_SHARDED_ROLES", "o_proj,packed_mlp_gate_up,mlp_down").split(
+                ","
+            )
             if role.strip()
         )
         valid_roles = {"qkv", "o_proj", "mlp_gate", "mlp_up", "packed_mlp_gate_up", "mlp_down"}
@@ -518,6 +518,8 @@ class MultichipDecoder(OptimizedDecoder):
         # Shape alone is ambiguous: a valid prefill can contain exactly one
         # tile (S=32), and batch-32 decode has the same matrix row count.  The
         # public forward entrypoint is the authoritative phase boundary.
+        if weight_name == "qkv" and self.layer_kind.name == "full_attention":
+            return False
         return self.multichip_execution_phase != "prefill" and super()._use_decode_dram_weight(x, weight_name)
 
     def prefill_forward(self, *args, **kwargs) -> ttnn.Tensor:
@@ -639,13 +641,7 @@ class MultichipDecoder(OptimizedDecoder):
         kind = self.layer_kind
         seq_len = x.shape[-2]
         local_kv_heads = 1 if kind.name == "full_attention" else 2
-        xqkv = ttnn.linear(
-            x,
-            self.weights.qkv,
-            dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.attention_compute_config,
-        )
+        xqkv = self._linear(x, "qkv", compute_kernel_config=self.attention_compute_config)
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=LOCAL_Q_HEADS,
@@ -799,13 +795,7 @@ class MultichipDecoder(OptimizedDecoder):
         kind = self.layer_kind
         batch = x.shape[-2]
         local_kv_heads = 1 if kind.name == "full_attention" else 2
-        xqkv = ttnn.linear(
-            x,
-            self.weights.qkv,
-            dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.attention_compute_config,
-        )
+        xqkv = self._linear(x, "qkv", compute_kernel_config=self.attention_compute_config)
         if xqkv.dtype == ttnn.bfloat8_b:
             bf16_xqkv = ttnn.typecast(xqkv, ttnn.bfloat16)
             xqkv.deallocate(True)

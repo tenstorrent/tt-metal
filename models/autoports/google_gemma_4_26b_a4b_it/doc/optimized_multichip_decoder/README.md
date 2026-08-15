@@ -11,8 +11,10 @@ top-eight active experts.
 - Sliding attention weights use BFP8 with HiFi2; full attention remains BFP8
   with LoFi. Dense and expert weights remain BFP8. Residuals and CCL payloads
   remain BF16 because lower precision missed PCC or lost latency after casts.
-- Decode QKV, O, packed dense gate/up, and dense down use TP-local
-  DRAM-sharded weights with block widths 11, 4, 11, and 17. Dense gate/up
+- Decode O, packed dense gate/up, and dense down use TP-local DRAM-sharded
+  weights with block widths 4, 11, and 17. QKV remains packed/interleaved:
+  wiring its block-11 DRAM candidate into the actual decode call reduced
+  sliding decode PCC to 0.992642. Dense gate/up
   stays packed and its decode-only copy uses BFP4 from an independent host
   upload; explicit execution-phase selection keeps that copy out of prefill.
 - Sparse expert gate/up uses `in0_block_w=44`, `per_core_N=2`; sparse down uses
@@ -40,11 +42,11 @@ thresholds are 0.995.
 
 | Layer kind | Baseline prefill/decode PCC | Final prefill/decode PCC | Prefill before/after (ms) | Traced decode before/after (ms) |
 | --- | ---: | ---: | ---: | ---: |
-| sliding, layer 0 | 0.998613 / 0.999653 | 0.998493 / 0.997778 | 77.524 / 77.524 | 1.146865 / 1.068946 |
-| full, layer 5 | 0.997088 / 0.999786 | 0.997408 / 0.998347 | 85.728 / 86.154 | 1.252950 / 1.110031 |
+| sliding, layer 0 | 0.998613 / 0.999653 | 0.998493 / 0.997778 | 77.524 / 77.817 | 1.146865 / 1.068942 |
+| full, layer 5 | 0.997088 / 0.999786 | 0.997408 / 0.998347 | 85.728 / 86.199 | 1.252950 / 1.110293 |
 
-Decode improves 6.79% for sliding and 11.41% for full attention. Prefill is
-unchanged for sliding and 0.50% slower for full; the selected
+Decode improves 6.79% for sliding and 11.38% for full attention. Prefill is
+0.38% slower for sliding and 0.55% slower for full; the selected
 changes target the traced decode path and do not alter prefill kernels.
 
 Final default also passes logical sequence 33 prefill plus repeated traced

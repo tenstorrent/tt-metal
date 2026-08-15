@@ -8,8 +8,8 @@ prefill, setup, and repeated replay rows.
 
 | Layer | Scoped rows | Merged device-op sum (us) | Reported op-gap sum (us) | Warmed host decode (us) | Approx. local weight payload/token | Ideal 512 GB/s weight floor |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| sliding | 88 | 1042.552 | 341.663 | 1068.946 | 25.1 MB | 49 us |
-| full | 93 | 1087.357 | 323.911 | 1110.031 | 37.4 MB | 73 us |
+| sliding | 88 | 1041.138 | 319.950 | 1068.942 | 25.1 MB | 49 us |
+| full | 93 | 1089.118 | 352.227 | 1110.293 | 37.4 MB | 73 us |
 
 Device rows are merged from four concurrently executing devices, so the
 device-op and op-gap columns are diagnostics, not quantities to add into a
@@ -27,7 +27,7 @@ rank/layer (`3 * 1.5 * 2816 * 2`) before protocol overhead.
 | Family | Sliding evidence | Full evidence | Final configuration / boundary |
 | --- | --- | --- | --- |
 | SDPA decode | 31.637 us, row 6247 | 38.791 us, row 6414 | height-sharded L1 input; 8x4 grid, q-chunk 32, k-chunk 64, exact exp |
-| QKV matmul | 51.808 us, row 6494 | 64.510 us, row 6581 | DRAM input, packed BFP8 weight, block K=2, 1x1 subblock; BF16 head-split boundary |
+| QKV matmul | 51.808 us, row 6494 | 64.510 us, row 6581 | DRAM-interleaved input/packed BFP8 weight, block K=2, 1x1 subblock; DRAM block-11 retry failed sliding PCC |
 | Attention O | 14.536 us, row 6428 | 17.165 us, row 6512 | width-sharded L1 input, DRAM-sharded BFP8 weight, block K=4; HiFi2 sliding/LoFi full |
 | Dense packed gate/up | 10.725 us, row 6437 | 10.834 us, row 6615 | width-sharded L1, DRAM-sharded BFP4 decode copy, block K=11 |
 | Dense down | 8.772 us, row 6356 | 8.755 us, row 6436 | width-sharded L1, DRAM-sharded BFP8, block K=17 |

@@ -62,7 +62,7 @@ mesh with fallback raising.
 | Expert BFP4 | 1.08328 | 1.18927 | Full prefill PCC 0.994712 failed; combined sliding candidate was not faster than final BFP8. |
 | Decode-only packed gate/up BFP4 | 1.06782 | 1.10939 | Kept. `$autofix` proved the earlier corruption came from selecting decode weights for 32-row prefill. Explicit phase selection plus independent per-rank host upload passes 0.998493/0.997778 sliding and 0.997408/0.998347 full. |
 | BF16 / BFP8 CCL payload | 1.07880 / 1.09268 | 1.15732 / 1.17184 | BF16 kept; cast overhead exceeds byte saving. |
-| Decode QKV DRAM auto / block 11 | 1.07168 / 1.06833 | 1.13256 / 1.11327 | Block 11 kept; exact final composition is 1.06918/1.10904. |
+| Decode QKV DRAM auto / block 11 | 1.07168 / 1.06833 | 1.13256 / 1.11327 | Initial timing bypassed the role-aware helper. After wiring the material path, sliding decode PCC was 0.992642; rejected and removed from defaults. |
 | Whole activation BF16 / adapted BFP8 | 1.06918 / n/a | 1.10904 / n/a | BFP8 first hit the BF16-only head splitter; a BF16 boundary cast retried the whole path, then prefill PCC failed at 0.97662 for both layer kinds. |
 | BF16 / adapted BFP8 KV cache | 1.06918 / 1.07216 | 1.10904 / 1.11181 | BFP8 first hit packed-input rejection in `paged_update_cache`; retry leaves update tokens BF16 so the kernel repacks. PCC passes but decode is slower, so BF16 remains default. |
 
@@ -108,7 +108,7 @@ matmul); separate dense projections were directly slower.
 - Default PCC: sliding 0.998493 prefill / 0.997778 decode; full 0.997408 /
   0.998347 (threshold 0.995).
 - Default sequence 1024, batch 1, five extra warmups and 30 replays: sliding
-  77.524 ms prefill / 1.068946 ms decode; full 86.154 / 1.110031 ms.
+  77.817 ms prefill / 1.068942 ms decode; full 86.199 / 1.110293 ms.
 - Batch-32 trace, logical sequence 33 prefill/repeated decode, and advertised
   current position 262143 pass for both layer kinds.
 - Fallback audit passes. Separate worker watcher run with

@@ -6,6 +6,6 @@
   "profile_command": "GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS=0 GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS=1 python -m tracy -r -p -v --check-exit-code --dump-device-data-mid-run --op-support-count=5000 -o <layer-output> -m pytest -q tests/test_multichip_decoder.py::test_multichip_perf_profile[blackhole-<layer-kind>-batch1-mesh_device0-device_params0]",
   "report_command": "tt-perf-report <ops_perf_results.csv> --start-signpost <PERF_{PREFILL,DECODE}_case> --end-signpost <matching_END> --active-experts 8 --no-color --csv <scope>_analyzed.csv --summary-file <scope>_summary.csv",
   "runtime_fallback_policy": "TTNN_CONFIG_OVERRIDES={throw_exception_on_fallback:true}",
-  "profile_capture_utc": "2026-08-15T17:20:42Z sliding; 2026-08-15T17:21:53Z full",
+  "profile_capture_utc": "2026-08-15T17:36:43Z sliding; 2026-08-15T17:37:50Z full",
   "notes": "Latency JSON embeds checkout, extension and test hashes. Profiles are four-device captures. Active experts is eight, never dense all-expert execution."
 }
