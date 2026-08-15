@@ -75,6 +75,56 @@ class CorpusTest(unittest.TestCase):
             c=pathlib.Path(d)/"c.json"; c.write_text(json.dumps({"results":[current]}))
             self.assertNotEqual(subprocess.run([sys.executable,str(P),"--compare-results",str(c),"--baseline",str(p),"--max-regression-pct","2"],stdout=subprocess.DEVNULL).returncode,0)
 
+    def test_compiler_ab_artifact_classification(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            off=root/"off"; on=root/"on"; off.mkdir(); on.mkdir()
+            (off/"math.elf").write_bytes(b"same")
+            (on/"math.elf").write_bytes(b"same")
+            (off/"ignored.txt").write_text("off")
+            (on/"ignored.txt").write_text("on")
+            off_manifest=M.artifact_manifest(off)
+            on_manifest=M.artifact_manifest(on)
+            self.assertEqual(M.classify_artifact_pair(off_manifest,on_manifest)["status"],
+                             "BYTE_IDENTICAL")
+            (on/"math.elf").write_bytes(b"changed")
+            pair=M.classify_artifact_pair(off_manifest,M.artifact_manifest(on))
+            self.assertEqual(pair["status"],"CHANGED_BINARY")
+            self.assertEqual(pair["changed_artifacts"],["math.elf"])
+
+    def test_compiler_ab_hashes_text_not_debug_paths(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d); off=root/"off"; on=root/"on"
+            off.mkdir(); on.mkdir()
+            (off/"math.elf").write_bytes(b"TEXTSAMEdebug=/off")
+            (on/"math.elf").write_bytes(b"TEXTSAMEdebug=/on")
+            def fake_objcopy(cmd,**kwargs):
+                source=pathlib.Path(cmd[-2]); output=pathlib.Path(cmd[-1])
+                output.write_bytes(source.read_bytes()[:8])
+                return subprocess.CompletedProcess(cmd,0,stdout="")
+            off_manifest,off_errors=M.elf_text_manifest(
+                off,root/"objcopy",root/"off-text",fake_objcopy)
+            on_manifest,on_errors=M.elf_text_manifest(
+                on,root/"objcopy",root/"on-text",fake_objcopy)
+            self.assertEqual(off_errors,{})
+            self.assertEqual(on_errors,{})
+            self.assertEqual(M.classify_artifact_pair(off_manifest,on_manifest)["status"],
+                             "BYTE_IDENTICAL")
+
+    def test_compiler_ab_requires_compile_execution_and_both_options(self):
+        cases=(
+            ["--mode","compile","--compiler-ab-off-options=-mno-x",
+             "--compiler-ab-on-options=-mx"],
+            ["--mode","craq","--execute","--compiler-ab-off-options=-mno-x",
+             "--compiler-ab-on-options=-mx"],
+            ["--mode","compile","--execute","--compiler-ab-on-options=-mx"],
+            ["--mode","compile","--execute","--require-changed-binary"],
+        )
+        for args in cases:
+            result=subprocess.run([sys.executable,str(P),*args],stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+            self.assertNotEqual(result.returncode,0)
+
     def test_checked_in_tsv_baseline(self):
         rows=M.load_baseline(M.DEVICE_BASELINE)
         ids={r["id"] for r in M.inventory()}

@@ -102,6 +102,29 @@ to stable corpus row IDs: for example, a compiler without indexed TopK
 multi-result builtins blocks the TopK row as `BLOCKED_COMPILER_CAPABILITY` but
 does not suppress unrelated Sigmoid, Exp, broadcast, or reduction rows.
 
+For an identical-source compiler flag differential, select one or more exact
+rows and give both control and candidate options.  The runner executes each
+row twice in isolated `RUNNER_TEMP` trees, records exact pytest node outcomes,
+extracts and hashes every ELF's executable `.text` by stable relative path,
+and classifies the pair as `CHANGED_BINARY` or `BYTE_IDENTICAL`. Comparing
+`.text` deliberately excludes different build-root paths in DWARF/debug data.
+This is a structural discriminator, not a performance claim; CRAQ remains a
+functional gate and scoped silicon cycles remain the performance authority.
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
+  --mode compile --arch bh --execute \
+  --row legacy__ckernel_sfpu_welfords \
+  --compiler-ab-off-options=-mno-tt-tensix-optimize-lp \
+  --compiler-ab-on-options=-mtt-tensix-optimize-lp \
+  --require-changed-binary --require-compiler-pin \
+  --run-root /tmp/sfpu-welford-compiler-ab
+```
+
+Use `--require-changed-binary` only for a row expected to exercise the pass.
+Byte identity is the correct result for ineligible fallback fixtures and can
+be archived without that gate.
+
 Current evidence seeds the program honestly: Welford, Reduce-SDPA, and the
 accurate-BF16 Reciprocal lane are scoped body wins, binary broadcast is exact
 cycle parity, Where and MulInt32 are macro-dependent losses, and TopK requires typed multi-result architectural

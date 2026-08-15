@@ -242,6 +242,34 @@ def validate(rows):
 def sha(path):
     h=hashlib.sha256(); h.update(path.read_bytes()); return h.hexdigest()
 
+def artifact_manifest(root, suffixes=(".elf",)):
+    """Return stable content hashes keyed relative to one isolated build root."""
+    if not root.is_dir(): return {}
+    return {str(path.relative_to(root)):sha(path) for path in sorted(root.rglob("*"))
+            if path.is_file() and path.suffix in suffixes}
+
+def elf_text_manifest(root, objcopy, output, run=subprocess.run):
+    """Hash executable .text, excluding build-root-dependent debug/provenance data."""
+    manifest={}; errors={}
+    for elf in sorted(root.rglob("*.elf")) if root.is_dir() else ():
+        rel=elf.relative_to(root)
+        text_bin=output/rel.parent/(rel.name+".text.bin")
+        text_bin.parent.mkdir(parents=True,exist_ok=True)
+        result=run([str(objcopy),"-O","binary","--only-section=.text",str(elf),
+                    str(text_bin)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+        if result.returncode or not text_bin.is_file():
+            errors[str(rel)]={"returncode":result.returncode,"output":result.stdout or ""}
+        else:
+            manifest[str(rel)]=sha(text_bin)
+    return manifest,errors
+
+def classify_artifact_pair(off, on):
+    paths=sorted(set(off)|set(on))
+    changed=[path for path in paths if off.get(path)!=on.get(path)]
+    return {"status":"CHANGED_BINARY" if changed else "BYTE_IDENTICAL",
+            "changed_artifacts":changed,"off_artifact_count":len(off),
+            "on_artifact_count":len(on)}
+
 def split_selectors(value):
     return [x for x in value.split(",") if x and " " not in x]
 
@@ -341,6 +369,8 @@ def emit_summary(run, records, provenance):
     with (run/"results.tsv").open("w",newline="") as f:
         keys=["id","arch","mode","status","reason","artifact","selectors","nodeids",
               "outcome_counts","failing_nodeids","missing_nodeids",*AUDIT_FIELDS]
+        keys += ["compiler_ab_status","changed_artifacts","off_artifact_count",
+                 "on_artifact_count","compiler_ab_comparison_scope","compiler_ab_artifact"]
         w=csv.DictWriter(f,keys,delimiter="\t",extrasaction="ignore",lineterminator="\n"); w.writeheader(); w.writerows(records)
     lines=["# SFPU corpus run","",f"- mode: `{provenance['mode']}`",f"- revision: `{provenance['tt_metal_head']}`","",
            "| id | arch | status | semantic C++ | correctness gate | silicon | reason |","|---|---|---|---|---|---|---|"]
@@ -389,15 +419,26 @@ def record(row, arch, mode, status, reason, artifact=""):
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--update",action="store_true"); ap.add_argument("--validate",action="store_true")
     ap.add_argument("--list",action="store_true"); ap.add_argument("--mode",choices=("compile","craq","silicon")); ap.add_argument("--arch",choices=("bh","wh","qsr"),default="bh")
+    ap.add_argument("--row",action="append",default=[],help="exact corpus row id (repeatable)")
     ap.add_argument("--plan-format",choices=("tsv","json","markdown"),default="tsv")
     ap.add_argument("--run-root",type=pathlib.Path); ap.add_argument("--simulator",type=pathlib.Path); ap.add_argument("--baseline",type=pathlib.Path)
     ap.add_argument("--max-regression-pct",type=float,default=0.0); ap.add_argument("--execute",action="store_true",help="execute the selected mode (otherwise emit a plan)")
     ap.add_argument("--require-executed-mapped",action="store_true",help="fail unless at least one mapped row executed and every mapped row passed")
     ap.add_argument("--require-compiler-pin",action="store_true",help="block execution when the installed SFPI version differs from tt_metal/sfpi-version")
+    ap.add_argument("--compiler-ab-off-options",help="compile-mode A/B: options for the control build")
+    ap.add_argument("--compiler-ab-on-options",help="compile-mode A/B: options for the candidate build")
+    ap.add_argument("--require-changed-binary",action="store_true",help="fail compiler A/B rows whose ELF sets are byte-identical")
     ap.add_argument("--allow-hardware",action="store_true"); ap.add_argument("--hardware-lock",type=pathlib.Path,default=pathlib.Path("/tmp/tt-llk-sfpu-silicon.lock"))
     ap.add_argument("--measurements",type=pathlib.Path,help="silicon TSV: id,arch,metric,scope,selector,cycles")
     ap.add_argument("--compare-results",type=pathlib.Path,help="compare an existing results.json to --baseline")
     a=ap.parse_args(); rows=inventory()
+    compiler_ab=a.compiler_ab_off_options is not None or a.compiler_ab_on_options is not None
+    if compiler_ab and (a.mode != "compile" or not a.execute):
+        ap.error("compiler A/B requires --mode compile --execute")
+    if compiler_ab and (a.compiler_ab_off_options is None or a.compiler_ab_on_options is None):
+        ap.error("compiler A/B requires both --compiler-ab-off-options and --compiler-ab-on-options")
+    if a.require_changed_binary and not compiler_ab:
+        ap.error("--require-changed-binary requires compiler A/B options")
     if a.compare_results:
         if not a.baseline: ap.error("--compare-results requires --baseline")
         results=json.loads(a.compare_results.read_text()).get("results",[])
@@ -417,13 +458,21 @@ def main():
     errors,counts=validate(current)
     if a.validate or a.update: print(json.dumps({"counts":counts,"errors":errors},sort_keys=True));
     if errors and (a.validate or a.mode): return 1
-    selected=[r for r in current if a.arch in r["arches"].split(",")]
+    requested=set(a.row)
+    unknown=requested-{r["id"] for r in current}
+    if unknown: ap.error("unknown corpus row(s): "+",".join(sorted(unknown)))
+    selected=[r for r in current if a.arch in r["arches"].split(",")
+              and (not requested or r["id"] in requested)]
     if a.list:
         emit_plan(selected,a.arch,a.plan_format)
     if not a.mode: return 0
     run=(a.run_root or HERE/"runs"/(time.strftime("%Y%m%dT%H%M%SZ",time.gmtime())+f"-{a.arch}-{a.mode}")); run.mkdir(parents=True,exist_ok=False)
     head=subprocess.check_output(["git","-C",str(ROOT),"rev-parse","HEAD"],text=True).strip()
     prov={"schema":2,"mode":a.mode,"arch":a.arch,"tt_metal_head":head,"manifest_sha256":sha(MANIFEST),"simulator":str(a.simulator or ""),"threshold_pct":a.max_regression_pct,"hardware_lock":str(a.hardware_lock)}
+    if compiler_ab:
+        prov["compiler_ab"]={"off_options":a.compiler_ab_off_options,
+                             "on_options":a.compiler_ab_on_options,
+                             "require_changed_binary":a.require_changed_binary}
     records=[]
     for r in selected:
         selectors=row_selectors(r,a.mode)
@@ -485,7 +534,59 @@ def main():
 
             runnable=[x for x in queued if x["status"]=="QUEUED"]
             mods=sorted({selector for rec in runnable for selector in rec["selectors"]})
-            if runnable and a.mode in {"compile","silicon"}:
+            if runnable and compiler_ab:
+                ab_returncodes={}
+                for rec in runnable:
+                    stem=re.sub(r"[^A-Za-z0-9_.-]+","_",rec["id"])
+                    variants={}
+                    for label,options in (("off",a.compiler_ab_off_options),("on",a.compiler_ab_on_options)):
+                        variant_root=run/"compiler-ab"/stem/label
+                        variant_root.mkdir(parents=True)
+                        variant_env=env.copy()
+                        variant_env["RUNNER_TEMP"]=str(variant_root)
+                        variant_env["TT_LLK_EXTRA_COMPILER_OPTIONS"]=options
+                        report=variant_root/"pytest.json"; variant_log=variant_root/"pytest.log"
+                        rc,payload=invoke_pytest_report(
+                            python,pydir,rec["selectors"],["--compile-producer"],report,
+                            variant_log,variant_env)
+                        outcome={"status":"QUEUED"}
+                        attribute_pytest_row(outcome,row_nodes[rec["id"]],
+                                             payload.get("reports",{}),
+                                             f"compiler A/B {label} compile",variant_log)
+                        build_root=variant_root/"tt-llk-build"
+                        objcopy=compiler.with_name("riscv-tt-elf-objcopy")
+                        manifest,manifest_errors=elf_text_manifest(
+                            build_root,objcopy,variant_root/"text")
+                        (variant_root/"elf-manifest.json").write_text(
+                            json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+                        (variant_root/"elf-manifest-errors.json").write_text(
+                            json.dumps(manifest_errors,indent=2,sort_keys=True)+"\n")
+                        variants[label]={"returncode":rc,"outcome":outcome["status"],
+                                         "report":str(report),"log":str(variant_log),
+                                         "manifest":manifest,"manifest_errors":manifest_errors}
+                    ab_returncodes[rec["id"]]={k:v["returncode"] for k,v in variants.items()}
+                    pair=classify_artifact_pair(variants["off"]["manifest"],
+                                                variants["on"]["manifest"])
+                    rec.update(compiler_ab_status=pair["status"],
+                               changed_artifacts=pair["changed_artifacts"],
+                               off_artifact_count=pair["off_artifact_count"],
+                               on_artifact_count=pair["on_artifact_count"],
+                               compiler_ab_comparison_scope="ELF .text",
+                               compiler_ab_artifact=str(run/"compiler-ab"/stem))
+                    if variants["off"]["outcome"]!="PASS" or variants["on"]["outcome"]!="PASS":
+                        rec.update(status="FAIL",reason="compiler A/B compile/correctness gate failed",
+                                   artifact=str(run/"compiler-ab"/stem))
+                    elif (variants["off"]["manifest_errors"] or variants["on"]["manifest_errors"]
+                          or not variants["off"]["manifest"] or not variants["on"]["manifest"]):
+                        rec.update(status="ERROR_NOT_RUN",reason="compiler A/B could not extract ELF .text",
+                                   artifact=str(run/"compiler-ab"/stem))
+                    else:
+                        rec.update(status="PASS",reason="compiler A/B "+pair["status"],
+                                   artifact=str(run/"compiler-ab"/stem))
+                        if a.require_changed_binary and pair["status"]!="CHANGED_BINARY":
+                            rec.update(status="FAIL",reason="compiler A/B required a changed ELF")
+                prov["compiler_ab_returncodes"]=ab_returncodes
+            elif runnable and a.mode in {"compile","silicon"}:
                 extra=["--compile-producer"] if a.mode=="compile" else []
                 report=run/f"{a.mode}-pytest.json"
                 if a.mode=="silicon":
@@ -539,6 +640,9 @@ def main():
             prov["executed_mapped_gate"]="FAIL"
         else:
             prov["executed_mapped_gate"]="PASS"
+    if compiler_ab and a.require_changed_binary:
+        failed=failed or any(r.get("compiler_ab_status")!="CHANGED_BINARY"
+                             for r in records if r.get("selectors"))
     if a.baseline:
         comparisons=compare_baseline(records,a.baseline,a.max_regression_pct)
         (run/"comparison.json").write_text(json.dumps(comparisons,indent=2)+"\n")
