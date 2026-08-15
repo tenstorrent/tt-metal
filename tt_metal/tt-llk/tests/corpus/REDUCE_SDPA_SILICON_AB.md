@@ -100,6 +100,18 @@ baseline failures and two expected failures, and ineligible on/off output is
 byte-identical.  CRAQ passes functionally but is not used as the performance
 authority.
 
+The optimization remains default-off.  Reproduce the D1 binary through the
+checked-in LLK harness, without a driver/specs override, by exporting:
+
+```bash
+TT_LLK_EXTRA_COMPILER_OPTIONS=-mtt-tensix-optimize-replay-hoist
+```
+
+The same option applies to both selectors in a paired process; the handwritten
+raw replay path is ineligible, while the compiler-visible generated loop is
+transformed.  An empty or unset variable preserves the ordinary harness command
+byte-for-byte.
+
 ## General compiler opportunity
 
 The first conservative late, post-register-allocation Tensix replay-hoist phase

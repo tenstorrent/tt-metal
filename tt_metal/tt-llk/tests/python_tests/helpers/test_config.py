@@ -449,12 +449,19 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
+        # Test-only compiler experiments must be reproducible without replacing
+        # the driver or editing its specs.  Keep the hook explicit and
+        # default-empty so ordinary LLK output is unchanged.
+        extra_compiler_options = os.environ.get(
+            "TT_LLK_EXTRA_COMPILER_OPTIONS", ""
+        ).strip()
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math "
             "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
             "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            f"{extra_compiler_options} "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
