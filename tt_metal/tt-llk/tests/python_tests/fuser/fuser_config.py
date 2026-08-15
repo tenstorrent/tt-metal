@@ -33,6 +33,7 @@ class GlobalConfig:
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
     quasar_use_dvalid: bool = False
+    quasar_isolate_sfpu: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property

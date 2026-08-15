@@ -16,7 +16,7 @@ _SFPU_WAIT_STALL = "p_stall::STALL_SFPU | p_stall::STALL_SYNC"
 
 
 def sfpu_on_isolated_trisc(config: "GlobalConfig") -> bool:
-    return not config.quasar_use_dvalid
+    return config.quasar_isolate_sfpu
 
 
 def math_handoff_to_sfpu(config: "GlobalConfig", operation: "L1Operation") -> str:
