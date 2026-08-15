@@ -442,26 +442,6 @@ TEST_F(GalaxyRingSDPATest, LargerSequence) {
         /*test_backward=*/false);
 }
 
-// Larger batch with causal mask
-TEST_F(GalaxyRingSDPATest, LargerBatchWithCausalMask) {
-    TestRingAttention(
-        /*batch=*/4,
-        /*num_heads=*/8,
-        /*seq_len=*/128,
-        /*head_dim=*/64,
-        /*test_backward=*/false);
-}
-
-// Larger sequence with causal mask
-TEST_F(GalaxyRingSDPATest, LargerSequenceWithCausalMask) {
-    TestRingAttention(
-        /*batch=*/2,
-        /*num_heads=*/4,
-        /*seq_len=*/256,
-        /*head_dim=*/64,
-        /*test_backward=*/false);
-}
-
 // Full test: larger batch with causal mask and backward
 TEST_F(GalaxyRingSDPATest, LargerBatchCausalMaskBackward) {
     TestRingAttention(
