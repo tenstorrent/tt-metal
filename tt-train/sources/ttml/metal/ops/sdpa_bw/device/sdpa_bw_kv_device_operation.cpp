@@ -106,8 +106,11 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     check_tile_aligned(key, "Key");
     check_tile_aligned(value, "Value");
 
-    // The reader streams `intermediates` (forward-pass logsumexp) as FP32 tiles straight
-    // from DRAM; a wrong tensor here would produce garbage gradients with no error.
+    // The reader streams `intermediates` (forward-pass logsumexp) as FP32 tiles via a
+    // TensorAccessor, which handles DRAM and L1 interleaved buffers alike; a wrong tensor
+    // here would produce garbage gradients with no error. sdpa_fw allocates it with query's
+    // memory config, so an L1-interleaved query legitimately yields L1-interleaved
+    // intermediates — only sharded layouts are unsupported.
     const auto& intermediates = tensor_args.intermediates;
     TT_FATAL(intermediates.device() == query.device(), "intermediates must be on the same device as query");
     TT_FATAL(
@@ -119,12 +122,12 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         "intermediates must be FLOAT32, got {}",
         intermediates.dtype());
     TT_FATAL(
-        intermediates.buffer() != nullptr && intermediates.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+        intermediates.buffer() != nullptr &&
             intermediates.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "intermediates must be DRAM interleaved");
+        "intermediates must be interleaved");
     {
         constexpr uint32_t kIntermediateWidth = 32U;  // one logsumexp tile per query row
-        const auto interm_shape = intermediates.padded_shape();
+        const auto interm_shape = intermediates.logical_shape();
         TT_FATAL(
             interm_shape[0] == qB && interm_shape[1] == qH && interm_shape[2] == qS &&
                 interm_shape[3] == kIntermediateWidth,
@@ -173,6 +176,11 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
             mask.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "Attention mask must be BFLOAT16 (mask CB pages are sized for BFLOAT16 tiles), got {}",
             mask.dtype());
+        TT_FATAL(
+            mask.layout() == tt::tt_metal::Layout::TILE,
+            "Attention mask must have TILE layout, got {}",
+            mask.layout());
+        TT_FATAL(mask.device() == query.device(), "Attention mask must be on the same device as query");
         auto mask_shape = mask.logical_shape();
         auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
 

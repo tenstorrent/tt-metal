@@ -15,6 +15,8 @@
 // the full FP32 scale — the rounding error would become a systematic fw/bw
 // mismatch instead of noise. RTN halves the worst-case error; carrying full FP32
 // through the WH SFPU scale multiply would remove it entirely but needs LLK work.
+// Unlike the host-side bfloat16 conversion this has no NaN guard: the bias carry
+// would turn a NaN into Inf, but the only input is 1/sqrt(head_dim), always finite.
 inline constexpr uint16_t sdpa_fp32_bits_to_bf16_rne(uint32_t fp32_bits) {
     const uint32_t rounding_bias = 0x7FFFU + ((fp32_bits >> 16) & 1U);
     return static_cast<uint16_t>((fp32_bits + rounding_bias) >> 16);
