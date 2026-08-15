@@ -16,6 +16,7 @@ require: splitting the fused QKV, and the RoPE reordering described in :func:`ro
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
@@ -24,7 +25,16 @@ import ttnn
 
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList
-from ...layers.na3d import NA3DDevicePlan, build_device_plan, neighborhood_attention_3d, plan_na3d
+from ...layers.na3d import (
+    AxisShard,
+    NA3DDevicePlan,
+    build_device_plan,
+    build_mesh_device_plan,
+    neighborhood_attention_3d,
+    plan_na3d,
+    plan_na3d_mesh,
+    uniform_halo,
+)
 from ...layers.normalization import RMSNorm
 
 ROPE_BASE = 10000.0
@@ -283,6 +293,26 @@ class NABlock(Module):
         return x
 
 
+@dataclass(frozen=True)
+class MeshShardConfig:
+    """Split the deterministic stages' volume over a 2D mesh: H on axis 0, W on axis 1.
+
+    ``enter_stage`` is the first stage that runs split. The stages before it stay replicated,
+    which is what lets the latent grid keep a height the mesh does not divide — 34 over 4 —
+    while every grid from the first upsample on divides cleanly.
+    """
+
+    ccl: object
+    mesh: tuple[int, int]
+    enter_stage: int = 1
+
+
+def _even_shards(length: int, parts: int) -> list[AxisShard]:
+    assert length % parts == 0, f"axis {length} does not split evenly over {parts} devices"
+    step = length // parts
+    return [AxisShard(length=length, start=i * step, stop=(i + 1) * step) for i in range(parts)]
+
+
 class LinearPixelShuffleUpsample(Module):
     """Channel-expanding Linear then a channels-last 3D pixel shuffle.
 
@@ -307,6 +337,18 @@ class LinearPixelShuffleUpsample(Module):
         self.proj_out_channels = span * in_channels // out_channels_reduction_factor
         self.out_channels = self.proj_out_channels // span
         self.proj = Linear(in_channels, self.proj_out_channels, bias=True, mesh_device=mesh_device)
+
+    def output_dims(self, dims: tuple[int, int, int], *, drop_leading_frame: bool = True) -> tuple[int, int, int]:
+        """Grid this upsample produces, without running it.
+
+        A sharded run still has to track the whole volume's grid alongside its own, because the
+        window bounds every shard plans against are global.
+        """
+        p1, p2, p3 = self.stride
+        t, h, w = dims[0] * p1, dims[1] * p2, dims[2] * p3
+        if p1 == 2 and drop_leading_frame:
+            t -= 1
+        return t, h, w
 
     def channel_permutation(self) -> torch.Tensor:
         """Row order taking the checkpoint's ``(c p1 p2 p3)`` output channels to ``(p1 p2 p3 c)``.
@@ -399,12 +441,57 @@ class DeterministicStages(Module):
         )
         self._plan_cache: dict[tuple, NA3DDevicePlan] = {}
         self._rope_cache: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._mesh_plan_cache: dict[tuple, tuple[NA3DDevicePlan, tuple[int, int, int], tuple[int, int, int]]] = {}
 
     def _plan(self, dims: tuple[int, int, int], kernel: tuple[int, int, int]) -> NA3DDevicePlan:
         key = (dims, kernel)
         if key not in self._plan_cache:
             self._plan_cache[key] = build_device_plan(plan_na3d(dims, kernel), mesh_device=self.mesh_device)
         return self._plan_cache[key]
+
+    def _mesh_plan(
+        self, dims: tuple[int, int, int], kernel: tuple[int, int, int], shard: "MeshShardConfig"
+    ) -> tuple[NA3DDevicePlan, tuple[int, int, int], tuple[int, int, int]]:
+        """Device plan, buffer grid and halo for one stage of a mesh-split volume.
+
+        ``dims`` is the whole grid; the split is H over cluster axis 0 and W over axis 1, with
+        T left alone because a mesh has two axes and T is the one that divides worst.
+        """
+        key = (dims, kernel, shard.mesh)
+        if key not in self._mesh_plan_cache:
+            halo = (0,) + tuple(uniform_halo(dims[i], shard.mesh[i - 1], kernel[i]) for i in (1, 2))
+            grid = [
+                (AxisShard(dims[0], 0, dims[0]), h, w)
+                for h in _even_shards(dims[1], shard.mesh[0])
+                for w in _even_shards(dims[2], shard.mesh[1])
+            ]
+            plans = plan_na3d_mesh(grid, kernel, halo=halo)
+            self._mesh_plan_cache[key] = (
+                build_mesh_device_plan(plans, mesh_device=self.mesh_device),
+                plans[0].dims,
+                halo,
+            )
+        return self._mesh_plan_cache[key]
+
+    def _enter_shard(
+        self, x: ttnn.Tensor, dims: tuple[int, int, int], channels: int, shard: "MeshShardConfig"
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """Replicated volume to one shard per device, via host.
+
+        Each device keeps a different sub-box, which no device-side op expresses: a ttnn program
+        carries the same arguments everywhere. The round trip is paid once, and the entry stage
+        is chosen so the volume is still small when it happens.
+        """
+        local = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).reshape(1, *dims, channels)
+        sharded = ttnn.from_torch(
+            local,
+            device=self.mesh_device,
+            dtype=x.get_dtype(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=shard.mesh, dims=[2, 3]),
+        )
+        query = (dims[0], dims[1] // shard.mesh[0], dims[2] // shard.mesh[1])
+        return ttnn.to_layout(ttnn.reshape(sharded, (-1, channels)), ttnn.TILE_LAYOUT), query
 
     def _rope(self, dims: tuple[int, int, int]) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if dims not in self._rope_cache:
@@ -457,18 +544,66 @@ class DeterministicStages(Module):
         self.load_state_dict(self.state_from_checkpoint(path, statistics=statistics))
 
     def forward(
-        self, x: ttnn.Tensor, *, dims: tuple[int, int, int], drop_leading_frame: bool = True, stages: int | None = None
+        self,
+        x: ttnn.Tensor,
+        *,
+        dims: tuple[int, int, int],
+        drop_leading_frame: bool = True,
+        stages: int | None = None,
+        shard: MeshShardConfig | None = None,
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
-        """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent."""
+        """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent.
+
+        With ``shard``, the returned volume is this device's share and ``dims`` describes it;
+        the caller reassembles. The upsamples need no special handling — a pixel shuffle only
+        redistributes a token's own channels, so a shard's boundaries scale with the stride and
+        stay aligned with its neighbours'.
+        """
         x = self.conv_in(x)
         count = len(self.upsamples) if stages is None else stages
+        whole = dims
         for stage in range(count):
-            cos, sin = self._rope(dims)
-            plan = self._plan(dims, self.stage_kernels[stage])
+            kernel = self.stage_kernels[stage]
+            if shard is not None and stage == shard.enter_stage:
+                x, dims = self._enter_shard(x, dims, x.shape[-1], shard)
+
+            if shard is not None and stage >= shard.enter_stage:
+                plan, buffer_dims, halo = self._mesh_plan(whole, kernel, shard)
+                cos, sin = self._rope(buffer_dims)
+                exchange = self._halo_exchange(shard, halo, dims, x.shape[-1])
+                grid = buffer_dims
+            else:
+                plan = self._plan(dims, kernel)
+                cos, sin = self._rope(dims)
+                exchange, grid = None, dims
+
             for block in self.det_stages[stage]:
-                x = block(x, dims=dims, cos=cos, sin=sin, device_plan=plan)
+                x = block(x, dims=grid, cos=cos, sin=sin, device_plan=plan, exchange=exchange)
             x, dims = self.upsamples[stage](x, dims=dims, drop_leading_frame=drop_leading_frame)
+            whole = self.upsamples[stage].output_dims(whole, drop_leading_frame=drop_leading_frame)
         return x, dims
+
+    def _halo_exchange(self, shard: MeshShardConfig, halo, query_dims, channels):
+        """Wrap a shard's tokens back into a volume, pad from the neighbours, flatten again."""
+
+        def exchange(tokens: ttnn.Tensor) -> ttnn.Tensor:
+            volume = ttnn.reshape(ttnn.to_layout(tokens, ttnn.ROW_MAJOR_LAYOUT), (1, *query_dims, channels))
+            padded = shard.ccl.neighbor_pad(
+                volume,
+                dims=[2, 3],
+                pad_left=[halo[1], halo[2]],
+                pad_right=[halo[1], halo[2]],
+                padding_mode="replicate",
+                axes=[0, 1],
+                neighbor_sems=[
+                    shard.ccl.get_np_ping_pong_semaphore(0),
+                    shard.ccl.get_np_ping_pong_semaphore(1),
+                ],
+                num_links=[1, 1],
+            )
+            return ttnn.to_layout(ttnn.reshape(padded, (-1, channels)), ttnn.TILE_LAYOUT)
+
+        return exchange
 
 
 class DiffVAEDecoder(Module):
