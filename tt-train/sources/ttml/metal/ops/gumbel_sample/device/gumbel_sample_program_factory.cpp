@@ -52,19 +52,20 @@ const std::string kDoLogitsMaskDefineKey = "DO_LOGITS_MASK";
 const std::string kDoGumbelNoiseDefineKey = "DO_GUMBEL_NOISE";
 const std::string kDoPositionsDefineKey = "DO_POSITIONS";
 
-// The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), so its positions
-// start one slot later than the writer's. These two MUST diverge -- bumping them together would make
-// the writer read its core_index as positions[0], so every core would write a different wrong row
-// with no fault raised.
+// The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), so the positions
+// BUFFER ADDRESS that follows sits one slot later than the writer's. These two MUST diverge --
+// bumping them together would make the writer read its core_index as the positions address.
 constexpr uint32_t kReaderHtIdx = 4U;
+constexpr uint32_t kReaderPositionsBufferIdx = 5U;
+constexpr uint32_t kWriterPositionsBufferIdx = 4U;
+static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
 
-// First runtime-arg slot of the per-entry token positions, which are appended to both dataflow
-// kernels' fixed args. Every core receives the FULL local list (B_local entries), not just the
-// entries it touches: the origin core has to re-derive the target row of any boundary entry it
-// merges, and B_local is a couple of dozen at most.
-constexpr uint32_t kReaderPositionsArgBase = 5U;
-constexpr uint32_t kWriterPositionsArgBase = 4U;
-static_assert(kReaderPositionsArgBase == kReaderHtIdx + 1U);
+// Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
+// whole local list into L1 once at kernel start (the origin core needs all of it to re-derive target
+// rows during the boundary merge). Carrying it in runtime args instead capped the batch at ~336 rows
+// and wrote B_local words into every core's args on both kernels, every dispatch.
+constexpr auto kReaderPositionsCbIndex = tt::CBIndex::c_5;
+constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 
 // Uniform draw bounds for the Gumbel transform g = -log(-log(U)).
 //
@@ -224,31 +225,6 @@ uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index,
     return device_index * layout.total_tiles + start_tile;
 }
 
-// This device's slice of the caller's GLOBAL position list.
-//
-// A tensor's shape here is its LOCAL shard, so the op sees B_local rows and cannot tell on its own
-// which global rows those are. The mapping is exactly the one the RNG already uses: batch shards are
-// laid out along the SEEDED (data-parallel) axes, and devices that differ only on a replicated axis
-// hold the SAME rows -- so they must get the same slice, which is what seeded_linear_index returns.
-// A list already sized to B_local is taken as replicated and used verbatim.
-std::vector<uint32_t> local_positions_of(
-    const operation_attributes_t& args, const GumbelSampleLayout& layout, uint32_t device_index) {
-    if (!layout.position_aware) {
-        return {};
-    }
-    if (args.positions.size() == layout.num_entries) {
-        return args.positions;
-    }
-    const uint32_t offset = device_index * layout.num_entries;
-    TT_FATAL(
-        offset + layout.num_entries <= args.positions.size(),
-        "GumbelSample: positions list of {} is too short for batch shard {} of {} rows",
-        args.positions.size(),
-        device_index,
-        layout.num_entries);
-    return std::vector<uint32_t>(args.positions.begin() + offset, args.positions.begin() + offset + layout.num_entries);
-}
-
 tt::tt_metal::Program build_program(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -299,6 +275,19 @@ tt::tt_metal::Program build_program(
         tt::DataFormat::UInt32,
         layout.num_cores * kRecordsPerCore * kRecordBytes);
 
+    // Positions staging. One ALIGNED page per entry, not four packed bytes: a DRAM read moves a
+    // whole aligned page, and the NOC requires the L1 destination to match the DRAM alignment
+    // (64 B on Blackhole) rather than L1's own -- see the alignment_mask logic in
+    // hw/inc/internal/debug/sanitize.h. Sized to exactly num_entries pages so the final read ends at
+    // the CB end, which is what watcher's bounds check wants.
+    if (layout.position_aware) {
+        const uint32_t slot_bytes = static_cast<uint32_t>(tensor_args.positions->buffer()->aligned_page_size());
+        for (auto cb_index : {kReaderPositionsCbIndex, kWriterPositionsCbIndex}) {
+            create_circular_buffer_bytes(
+                program, layout.all_cores, cb_index, tt::DataFormat::UInt32, layout.num_entries * slot_bytes);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Kernels
     // -------------------------------------------------------------------------
@@ -325,10 +314,20 @@ tt::tt_metal::Program build_program(
     // count in step with TensorAccessorArgs<N> in reader_gumbel_sample.cpp -- the accessor offset is
     // hard-coded there and the mask accessor chains off it, so a mismatch misdecodes the accessor
     // words (page size read as the config flags) instead of failing to compile.
-    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt};
+    // num_entries is NC = padded_shape[0] * padded_shape[1] -- token-INDEPENDENT, so it adds no new
+    // cache-miss source. Anything derived from the token dimension must never land in a compile-time
+    // arg here; that is what the normalized program hash depends on.
+    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt, layout.num_entries};
     tt::tt_metal::TensorAccessorArgs(logits_buffer).append_to(reader_ct_args);
     if (has_mask) {
         tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_ct_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
+    }
+    // The null append is mandatory in the non-position case: without it the accessor chain's length
+    // becomes mode-dependent and the next accessor misdecodes its page size as the config flags.
+    if (layout.position_aware) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(reader_ct_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
     }
@@ -355,8 +354,14 @@ tt::tt_metal::Program build_program(
         layout.num_cores,
         reduction_sem_id,
         static_cast<uint32_t>(origin_phys.x),
-        static_cast<uint32_t>(origin_phys.y)};
+        static_cast<uint32_t>(origin_phys.y),
+        layout.num_entries};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
+    if (layout.position_aware) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(writer_ct_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(writer_ct_args);
+    }
     shared_vars.writer_kernel_id =
         create_writer_kernel(program, layout.all_cores, writer_ct_args, defines, kWriterKernelPath);
 
@@ -379,18 +384,28 @@ tt::tt_metal::Program build_program(
     // but an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
     const uint32_t inv_temperature_bits = do_gumbel_noise ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
 
-    const auto local_positions = local_positions_of(args, layout, device_index);
+    // Zero when absent: the slot exists in BOTH modes so override_runtime_arguments can patch it
+    // unconditionally, exactly as it does for Ht.
+    const uint32_t positions_address = layout.position_aware ? tensor_args.positions->buffer()->address() : 0U;
 
     uint32_t core_index = 0U;
     for (const auto& [core, num_tiles, start_tile] : core_layout(layout)) {
-        std::vector<uint32_t> reader_args{
-            logits_buffer->address(), has_mask ? mask_buffer->address() : 0U, num_tiles, start_tile, layout.Ht};
-        reader_args.insert(reader_args.end(), local_positions.begin(), local_positions.end());
-        SetRuntimeArgs(program, shared_vars.reader_kernel_id, core, reader_args);
+        SetRuntimeArgs(
+            program,
+            shared_vars.reader_kernel_id,
+            core,
+            {logits_buffer->address(),
+             has_mask ? mask_buffer->address() : 0U,
+             num_tiles,
+             start_tile,
+             layout.Ht,
+             positions_address});
 
-        std::vector<uint32_t> writer_args{output_buffer->address(), num_tiles, start_tile, core_index};
-        writer_args.insert(writer_args.end(), local_positions.begin(), local_positions.end());
-        SetRuntimeArgs(program, shared_vars.writer_kernel_id, core, writer_args);
+        SetRuntimeArgs(
+            program,
+            shared_vars.writer_kernel_id,
+            core,
+            {output_buffer->address(), num_tiles, start_tile, core_index, positions_address});
 
         const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
                                                                        : shared_vars.compute_kernel_group_2_id;
@@ -427,7 +442,7 @@ GumbelSampleProgramFactory::cached_mesh_workload_t GumbelSampleProgramFactory::c
     TT_FATAL(mesh_device != nullptr, "GumbelSample: logits must live on a mesh device");
 
     const auto mesh_shape = mesh_device->shape();
-    const auto layout = compute_layout(logits, !operation_attributes.positions.empty());
+    const auto layout = compute_layout(logits, tensor_args.positions.has_value());
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
@@ -457,12 +472,14 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const auto& logits = tensor_args.logits;
     const bool has_mask = tensor_args.logits_padding_mask.has_value();
 
-    const auto layout = compute_layout(logits, !operation_attributes.positions.empty());
+    const auto layout = compute_layout(logits, tensor_args.positions.has_value());
     const auto work = core_layout(layout);
 
     const uint32_t logits_address = logits.buffer()->address();
     const uint32_t mask_address = has_mask ? tensor_args.logits_padding_mask->buffer()->address() : 0U;
     const uint32_t output_address = tensor_return_value.buffer()->address();
+    const uint32_t positions_address =
+        tensor_args.positions.has_value() ? tensor_args.positions->buffer()->address() : 0U;
 
     // seed and temperature are runtime-only (deliberately excluded from the program hash so that
     // changing either reuses the cached program), so they must be re-applied on every cache hit
@@ -474,9 +491,6 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& vars = cached_workload.shared_variables.at(coord_range);
-        // Positions are runtime-only and change on every prefill (each sequence's prompt ends
-        // somewhere different), so they must be re-applied here just like the seed.
-        const auto local_positions = local_positions_of(operation_attributes, layout, vars.device_seed_offset);
 
         auto& reader_args = GetRuntimeArgs(program, vars.reader_kernel_id);
         auto& writer_args = GetRuntimeArgs(program, vars.writer_kernel_id);
@@ -499,16 +513,16 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 // the end -- and RuntimeArgsData's bounds check is a TT_ASSERT that compiles away in
                 // Release, so it would land silently in the packed dispatch command.
                 core_args[kReaderHtIdx] = layout.Ht;
-                for (size_t i = 0; i < local_positions.size(); ++i) {
-                    core_args[kReaderPositionsArgBase + i] = local_positions[i];
-                }
+                // The positions BUFFER moves between dispatches (each prefill builds a new one), and
+                // a cached program replayed against a stale address reads whatever DRAM now occupies
+                // that region -- in bounds, no fault, a plausible-looking token. This patch is the
+                // only thing preventing that.
+                core_args[kReaderPositionsBufferIdx] = positions_address;
             }
             {
                 auto& core_args = writer_args[core.x][core.y];
                 core_args[kWriterOutputBufferIdx] = output_address;
-                for (size_t i = 0; i < local_positions.size(); ++i) {
-                    core_args[kWriterPositionsArgBase + i] = local_positions[i];
-                }
+                core_args[kWriterPositionsBufferIdx] = positions_address;
             }
             {
                 auto& core_args = vars.core_group_1.contains(core) ? compute_g1_args[core.x][core.y]

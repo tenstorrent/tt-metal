@@ -19,12 +19,12 @@ namespace {
 // derives its output page indices from the logits geometry (its logical_tokens / Ht compile-time
 // args), never from the output tensor -- so validation and the output spec drifting apart would not
 // be caught anywhere downstream.
-tt::tt_metal::Shape expected_output_shape(const operation_attributes_t& args, const ttnn::Tensor& logits) {
+tt::tt_metal::Shape expected_output_shape(bool position_aware, const ttnn::Tensor& logits) {
     // Matches ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1] -- or [B, 1, 1, 1] when a
     // position per batch entry was given, since then only one row per entry is sampled.
     auto shape = logits.logical_shape();
     shape[-1] = 1U;
-    if (!args.positions.empty()) {
+    if (position_aware) {
         shape[-2] = 1U;
     }
     return shape;
@@ -83,58 +83,6 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     // LFSR whose only lock-up state is all-ones, and ckernel_sfpu_rand.h already rewrites
     // 0xFFFFFFFF to 0xFFFFFFFE. A zero seed therefore yields an ordinary reproducible stream.
 
-    if (!args.positions.empty()) {
-        // A device tensor's shape is its LOCAL shard, so `entries` is this device's batch, not the
-        // job's. The caller may hand over either: its own rows (already sharded) or the whole global
-        // list, which the program factory slices by the same seeded linear index the RNG uses. Any
-        // other length is a mismatch the kernel could not detect, so it is rejected here.
-        const auto& mesh_shape = device->shape();
-        uint32_t batch_shards = 1U;
-        for (uint32_t axis : args.seed_axes) {
-            if (axis < mesh_shape.dims() && mesh_shape[axis] > 1U) {
-                batch_shards *= static_cast<uint32_t>(mesh_shape[axis]);
-            }
-        }
-        const uint32_t entries = logits.padded_shape()[0] * logits.padded_shape()[1];
-        TT_FATAL(
-            args.positions.size() == entries || args.positions.size() == entries * batch_shards,
-            "GumbelSample: positions must hold either this device's {} batch rows or all {} rows "
-            "across the {} data-parallel shards, got {}",
-            entries,
-            entries * batch_shards,
-            batch_shards,
-            args.positions.size());
-
-        // Both dataflow kernels carry the full local list as runtime args (the origin core has to
-        // re-derive the target row of any entry it merges), so the batch is bounded by the per-core
-        // runtime-arg budget. The reader binds it: it carries five fixed args to the writer's four.
-        //
-        // The bound is tt_metal::max_runtime_args, the documented PORTABLE FLOOR, not the enforced
-        // ceiling -- for a Tensix kernel that is max_runtime_args_tensix = 4096, with the real L1
-        // fit checked at program finalize. Sitting under the floor is deliberate: it holds whatever
-        // core type the op is ever placed on, and the practical limit is lower than either number
-        // anyway, since every core receives its own copy of the list and the host therefore writes
-        // B_local * cores * 2 args per dispatch. Anything approaching this bound should move the
-        // positions into a small tensor the cores read once instead.
-        constexpr uint32_t kReaderFixedArgs = 5U;
-        constexpr uint32_t kMaxEntries = tt::tt_metal::max_runtime_args - kReaderFixedArgs;
-        TT_FATAL(
-            entries <= kMaxEntries,
-            "GumbelSample: position-aware sampling supports up to {} batch rows per device, got {}",
-            kMaxEntries,
-            entries);
-
-        const uint32_t tokens = logits.logical_shape()[-2];
-        for (size_t i = 0; i < args.positions.size(); ++i) {
-            TT_FATAL(
-                args.positions[i] < tokens,
-                "GumbelSample: positions[{}] = {} is outside the {} token positions",
-                i,
-                args.positions[i],
-                tokens);
-        }
-    }
-
     if (tensor_args.logits_padding_mask.has_value()) {
         const auto& mask = tensor_args.logits_padding_mask.value();
         check_tensor(mask, "logits_padding_mask");
@@ -177,50 +125,61 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             mask.logical_shape()[-1]);
     }
 
+    // [B, 1, 1, 1] UINT32 ROW_MAJOR INTERLEAVED on THIS device -- byte-for-byte this op's own
+    // position-mode output spec, so page e of positions IS batch entry e IS output page e: one
+    // indexing convention end to end, and a previous sample's output can be fed straight back in.
+    //
+    // ROW_MAJOR, not TILE: a tiled [B, 1, 1, 1] pads to a 32x32 tile, making each page read 4 KB
+    // instead of one aligned word. INTERLEAVED because only the buffer TYPE is in the program hash,
+    // not the memory layout, so a sharded tensor would collide with an interleaved one and reuse an
+    // accessor compiled for the other encoding. Same device because only a raw ADDRESS reaches the
+    // kernel, and addresses are not portable across devices.
+    auto check_index_tensor = [&](const ttnn::Tensor& t, const std::string& name, bool position_aware) {
+        TT_FATAL(
+            t.storage_type() == ttnn::StorageType::DEVICE,
+            "GumbelSample requires '{}' to be on DEVICE, got storage type '{}'",
+            name,
+            enchantum::to_string(t.storage_type()));
+        TT_FATAL(t.buffer() != nullptr, "GumbelSample: '{}' has a null buffer", name);
+        TT_FATAL(t.device() == device, "GumbelSample: '{}' must be on the same device as the logits", name);
+        TT_FATAL(
+            t.dtype() == tt::tt_metal::DataType::UINT32,
+            "GumbelSample: '{}' must be UINT32, got '{}'",
+            name,
+            enchantum::to_string(t.dtype()));
+        TT_FATAL(
+            t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "GumbelSample: '{}' must be ROW_MAJOR, got '{}'",
+            name,
+            enchantum::to_string(t.layout()));
+        TT_FATAL(
+            t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "GumbelSample: '{}' must be INTERLEAVED, got '{}'",
+            name,
+            enchantum::to_string(t.memory_config().memory_layout()));
+        // The exact shape is what guarantees page e is in bounds for every entry the kernels index.
+        // It also removes the old local-vs-global length ambiguity: a device tensor's shape IS its
+        // local shard, so there is exactly one correct length and no heuristic to get wrong.
+        const auto expected = expected_output_shape(position_aware, logits);
+        TT_FATAL(
+            t.logical_shape() == expected,
+            "GumbelSample: '{}' shape must be {}, got {}",
+            name,
+            expected,
+            t.logical_shape());
+    };
+
+    if (tensor_args.positions.has_value()) {
+        // NOTE: the per-element bound (position < tokens) can no longer be checked here -- the values
+        // live in device memory, and reading them back would mean a blocking sync on exactly the
+        // dispatch path this op exists to keep async. Two things stand in for it: callers range-check
+        // when they BUILD this tensor, where the values are still on the host, and the reader clamps
+        // the tile row so a bad value cannot read outside the logits buffer.
+        check_index_tensor(*tensor_args.positions, "positions", /*position_aware=*/true);
+    }
+
     if (tensor_args.preallocated_output.has_value()) {
-        const auto& out = tensor_args.preallocated_output.value();
-        // Same reasoning as the mask, plus: build_program dereferences output.buffer() directly, so a
-        // host-side tensor here would be a null dereference rather than a diagnosable error.
-        TT_FATAL(
-            out.storage_type() == ttnn::StorageType::DEVICE,
-            "GumbelSample requires 'preallocated_output' to be on DEVICE, got storage type '{}'",
-            enchantum::to_string(out.storage_type()));
-        TT_FATAL(out.buffer() != nullptr, "GumbelSample: preallocated output has a null buffer");
-        TT_FATAL(
-            out.device() == device, "GumbelSample: the preallocated output must be on the same device as the logits");
-        TT_FATAL(
-            out.dtype() == tt::tt_metal::DataType::UINT32,
-            "GumbelSample: preallocated output must be UINT32, got '{}'",
-            enchantum::to_string(out.dtype()));
-        TT_FATAL(
-            out.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "GumbelSample: preallocated output must be ROW_MAJOR, got '{}'",
-            enchantum::to_string(out.layout()));
-        // The writer addresses output pages from the LOGITS geometry -- page_base is built from the
-        // logical_tokens / Ht compile-time args, and in position mode the page IS the batch entry --
-        // so it emits exactly the page count implied by the logits no matter what it was handed. An
-        // undersized output therefore takes NOC writes past the end of its buffer (page addressing
-        // is plain arithmetic, with no bounds check), and an oversized or differently-shaped one is
-        // returned with only part of it written. Neither is detectable downstream, because
-        // compute_output_specs adopts this tensor's spec verbatim.
-        //
-        // Requiring an exact match also keeps the program cache sound: the output shape is not
-        // hashed, but pinning it to a function of the logits shape and positions-presence -- both of
-        // which ARE hashed -- means it cannot vary independently of the key.
-        const auto expected_shape = expected_output_shape(args, logits);
-        TT_FATAL(
-            out.logical_shape() == expected_shape,
-            "GumbelSample: preallocated output shape must be {}, got {}",
-            expected_shape,
-            out.logical_shape());
-        // Interleaved for the same reason the other tensors are: the writer walks a linear page
-        // space, and only the buffer TYPE (DRAM vs L1) is in the program hash, not the memory
-        // layout -- so a sharded output would collide with an interleaved one of the same type and
-        // reuse an accessor compiled for the other.
-        TT_FATAL(
-            out.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "GumbelSample: preallocated output must be INTERLEAVED, got '{}'",
-            enchantum::to_string(out.memory_config().memory_layout()));
+        check_index_tensor(*tensor_args.preallocated_output, "preallocated_output", tensor_args.positions.has_value());
     }
 }
 
@@ -231,7 +190,7 @@ GumbelSampleDeviceOperation::spec_return_value_t GumbelSampleDeviceOperation::co
     }
 
     return tt::tt_metal::TensorSpec(
-        ttnn::Shape(expected_output_shape(args, tensor_args.logits)),
+        ttnn::Shape(expected_output_shape(tensor_args.positions.has_value(), tensor_args.logits)),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -270,7 +229,7 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
 
     // Whether positions were supplied changes the output spec and the kernel defines; the position
     // VALUES are runtime args, re-applied per dispatch, so they stay out of the key.
-    const bool position_aware = !args.positions.empty();
+    const bool position_aware = tensor_args.positions.has_value();
 
     // In position mode the program does not depend on the token dimension AT ALL: the work split is
     // NC * Wt (see the program factory), the reader's Ht is a runtime arg, and the writer's
@@ -306,6 +265,10 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
         static_cast<int>(logits.memory_config().buffer_type()),
         tensor_args.logits_padding_mask.has_value(),
         placement_of(tensor_args.logits_padding_mask),
+        // The positions SHAPE is not hashed separately: its entry count is NC = padded_shape[0] *
+        // padded_shape[1], already in the key via dims 0 and 1, which token_normalized leaves alone.
+        // Only its placement matters, for the accessor reason above.
+        placement_of(tensor_args.positions),
         placement_of(tensor_args.preallocated_output));
 }
 
@@ -319,7 +282,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes,
     const std::optional<ttnn::Tensor>& logits_padding_mask,
-    const std::vector<uint32_t>& positions,
+    const std::optional<ttnn::Tensor>& positions,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation;
 
@@ -327,11 +290,11 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
         .temperature = temperature,
         .seed = seed,
         .seed_axes = seed_axes,
-        .positions = positions,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .logits = logits,
         .logits_padding_mask = logits_padding_mask,
+        .positions = positions,
         .preallocated_output = preallocated_output,
     };
 

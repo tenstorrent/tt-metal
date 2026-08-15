@@ -28,12 +28,17 @@ void kernel_main() {
     // unconditionally so the runtime-arg layout is identical in both modes: the host patches this
     // slot on every dispatch, and in non-position mode the slot would otherwise not exist.
     const uint32_t Ht = get_arg_val<uint32_t>(rt_idx++);
+    // Base address of the positions tensor, 0 when absent. Emitted in BOTH modes for the same reason
+    // Ht is: the host patches this slot unconditionally on every dispatch.
+    const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_logits_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_1;
+    constexpr uint32_t cb_positions_idx = tt::CBIndex::c_5;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(2);
 
 #ifdef DO_LOGITS_MASK
     constexpr bool do_logits_mask = true;
@@ -47,15 +52,34 @@ void kernel_main() {
     constexpr bool do_positions = false;
 #endif
 
-    // Per-entry token positions, appended after the five fixed args (see kReaderPositionsArgBase).
-    const uint32_t positions_arg_base = rt_idx;
-
-    constexpr auto logits_args = TensorAccessorArgs<2>();
+    constexpr auto logits_args = TensorAccessorArgs<3>();
     constexpr auto mask_args = TensorAccessorArgs<logits_args.next_compile_time_args_offset()>();
+    constexpr auto positions_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     const auto logits_address_generator = TensorAccessor(logits_args, logits_address);
     const auto mask_address_generator = TensorAccessor(mask_args, mask_address);
 
     const uint32_t logits_tile_bytes = get_tile_size(cb_logits_idx);
+
+    // Stage the whole local position list into L1 up front. It cannot be deferred: the very first
+    // logits page address depends on it.
+    //
+    // One ALIGNED page per entry rather than four packed bytes -- a DRAM read moves a whole aligned
+    // page, and the NOC requires the L1 destination to be congruent with the DRAM address modulo the
+    // DRAM alignment (64 B on Blackhole), not L1's own 16 B. The CB base satisfies that, so
+    // base + entry * slot does too.
+    uint32_t positions_l1_base = 0U;
+    uint32_t positions_slot_bytes = 0U;
+    if constexpr (do_positions) {
+        const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
+        positions_slot_bytes = positions_address_generator.get_aligned_page_size();
+        positions_l1_base = get_write_ptr(cb_positions_idx);
+        uint32_t l1_addr = positions_l1_base;
+        for (uint32_t entry = 0U; entry < num_entries; ++entry) {
+            noc_async_read_page(entry, positions_address_generator, l1_addr);
+            l1_addr += positions_slot_bytes;
+        }
+        noc_async_read_barrier();
+    }
 
     // With positions supplied, the indices this loop walks are VIRTUAL: one tile row per batch
     // entry rather than Ht of them. Virtual tile vt covers entry vt / Wt at column vt % Wt, and the
@@ -66,8 +90,22 @@ void kernel_main() {
         if constexpr (do_positions) {
             const uint32_t entry = virtual_tile / Wt;
             const uint32_t column = virtual_tile - entry * Wt;
-            const uint32_t position = get_arg_val<uint32_t>(positions_arg_base + entry);
-            return (entry * Ht + position / 32U) * Wt + column;
+            // volatile so the load cannot be hoisted above the barrier above.
+            const uint32_t position =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t *>(positions_l1_base + entry * positions_slot_bytes);
+            // Clamp the TILE ROW, not the position. This kernel consumes position >> 5 and the writer
+            // consumes position & 31 -- disjoint bit fields -- so bounding the row here cannot
+            // desynchronize the pair, and the writer needs no matching change. Clamping before the
+            // multiply also contains the uint32 overflow case.
+            //
+            // The host can no longer range-check positions (they live in device memory), so without
+            // this a bad value reads outside the logits buffer entirely: interleaved accessors do no
+            // bounds checking, and watcher validates the whole DRAM window rather than the buffer, so
+            // it would not be caught there either. With it, the worst case degrades to the
+            // already-documented silent-wrong-row class.
+            const uint32_t tile_row = position >> 5U;
+            const uint32_t clamped_row = (tile_row < Ht) ? tile_row : (Ht - 1U);
+            return (entry * Ht + clamped_row) * Wt + column;
         } else {
             return virtual_tile;
         }

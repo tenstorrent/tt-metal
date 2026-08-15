@@ -565,6 +565,21 @@ TEST_F(TrivialTnnFixedTest, TestSamplingHonoursBufferPlacement) {
     EXPECT_EQ(masked_l1, expected) << "L1 mask must suppress the decoy exactly as a DRAM mask does";
 }
 
+namespace {
+
+// Positions as the op wants them: [B, 1, 1, 1] UINT32 ROW_MAJOR. Note the explicit layout --
+// core::from_vector defaults to TILE, which the op rejects (a tiled [B,1,1,1] pads to a 32x32 tile
+// and would make every page read 4 KB instead of one aligned word).
+ttnn::Tensor make_positions(const std::vector<uint32_t>& positions) {
+    return ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        positions,
+        ttnn::Shape({static_cast<uint32_t>(positions.size()), 1U, 1U, 1U}),
+        &ttml::autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR);
+}
+
+}  // namespace
+
 TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositions) {
     // Prefill wants ONE token per sequence, taken at that sequence's own prompt end -- a different
     // row for every batch entry. Passing those positions makes the op read only the tiles holding
@@ -611,8 +626,8 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositions) {
         expected_at_positions[b] = expected_all[b * kTokens + positions[b]];
     }
 
-    auto greedy_at = ttml::core::to_vector<uint32_t>(
-        ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions));
+    auto greedy_at = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+        tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(positions)));
     ASSERT_EQ(greedy_at.size(), kBatch) << "one sampled id per batch entry, not per token";
     EXPECT_EQ(greedy_at, expected_at_positions);
 
@@ -620,8 +635,8 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositions) {
     // (DO_GUMBEL_NOISE). The noise makes the winner unpredictable, but every real logit here is
     // negative while from_xtensor zero-fills the padding, so any index that leaves the logical
     // vocabulary means the scan walked into padding.
-    auto sampled_at = ttml::core::to_vector<uint32_t>(
-        ttml::ttnn_fixed::sample(tensor_a, 1.0F, 99, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions));
+    auto sampled_at = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+        tensor_a, 1.0F, 99, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(positions)));
     ASSERT_EQ(sampled_at.size(), kBatch);
     for (uint32_t b = 0; b < kBatch; ++b) {
         EXPECT_LT(sampled_at[b], kVocab) << "batch entry " << b << " left the logical vocabulary";
@@ -631,8 +646,8 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositions) {
     // entries now read the same tile row of their own shard, and the boundary-merge path sees three
     // groups that each span whatever cores the split handed them.
     const std::vector<uint32_t> uniform(kBatch, kTokens - 1U);
-    auto greedy_uniform = ttml::core::to_vector<uint32_t>(
-        ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, uniform));
+    auto greedy_uniform = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+        tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(uniform)));
     ASSERT_EQ(greedy_uniform.size(), kBatch);
     for (uint32_t b = 0; b < kBatch; ++b) {
         EXPECT_EQ(greedy_uniform[b], expected_all[b * kTokens + (kTokens - 1U)]);
@@ -673,7 +688,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
 
         auto tensor = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
         auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
-            tensor, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions));
+            tensor, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(positions)));
 
         std::vector<uint32_t> expected(kBatch);
         for (uint32_t b = 0; b < kBatch; ++b) {
@@ -694,6 +709,147 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
     const auto second = run(134U, {0U, 70U, 133U});
     ASSERT_EQ(second.first.size(), kBatch);
     EXPECT_EQ(second.first, second.second) << "134-token call reusing the 70-token program";
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsAboveOldRuntimeArgCap) {
+    // The positions used to ride in per-core RUNTIME ARGS, which capped the batch at 336 rows and
+    // TT_FATALed above it -- this case could not be expressed at all. Now they live in a small
+    // tensor each core stages into L1, so the batch is bounded only by memory. This is the single
+    // test that proves the change achieved its purpose, and it also exercises the positions CB at a
+    // size where an off-by-one in its bound would trip watcher.
+    constexpr uint32_t kBatch = 512U;  // > the old 336 cap
+    constexpr uint32_t kTokens = 64U;
+    constexpr uint32_t kVocab = 33U;
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+
+    std::vector<uint32_t> positions(kBatch);
+    std::vector<uint32_t> expected(kBatch);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        positions[b] = (b * 13U) % kTokens;
+        const uint32_t winner = (b * 7U) % kVocab;
+        a(b, 0, positions[b], winner) = -0.5F;
+        expected[b] = winner;
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+        tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(positions)));
+    ASSERT_EQ(got.size(), kBatch);
+    EXPECT_EQ(got, expected);
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingRepatchesPositionsBufferOnCacheHit) {
+    // The positions BUFFER ADDRESS is a runtime arg, and every prefill builds a new tensor. A cached
+    // program replayed against a stale address reads whatever DRAM now occupies that region: in
+    // bounds, no fault, a plausible-looking token. Nothing else in this file varies the positions
+    // buffer across two calls that share a program, so a dropped re-patch passes every other test.
+    //
+    // The first tensor is deallocated before the second is built, so the allocator is likely to hand
+    // back the same region -- which is exactly the case where a stale address looks healthy.
+    constexpr uint32_t kBatch = 4U;
+    constexpr uint32_t kTokens = 96U;
+    constexpr uint32_t kVocab = 40U;
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+    std::vector<uint32_t> winner_at(kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            const uint32_t winner = ((b * kTokens + t) * 3U) % kVocab;
+            a(b, 0, t, winner) = -0.5F;
+            winner_at[b * kTokens + t] = winner;
+        }
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    auto sample_at = [&](const std::vector<uint32_t>& positions) {
+        auto positions_tt = make_positions(positions);
+        auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+            tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions_tt));
+        positions_tt.deallocate(/* force */ true);
+        return got;
+    };
+
+    const std::vector<uint32_t> first_positions = {0U, 31U, 64U, 95U};
+    const std::vector<uint32_t> second_positions = {95U, 64U, 31U, 0U};  // same shapes, different values
+
+    auto first = sample_at(first_positions);
+    auto second = sample_at(second_positions);
+
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        EXPECT_EQ(first[b], winner_at[b * kTokens + first_positions[b]]) << "first call, entry " << b;
+        EXPECT_EQ(second[b], winner_at[b * kTokens + second_positions[b]])
+            << "second call reused the first call's program, entry " << b;
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingClampsOutOfRangePosition) {
+    // The host cannot range-check positions any more -- they live in device memory. An unclamped
+    // out-of-range value would resolve to a page outside the logits buffer entirely: interleaved
+    // accessors bounds-check nothing, and watcher validates the whole DRAM window rather than the
+    // buffer, so it would not be caught there either. The reader clamps the tile row, which bounds
+    // the read to this entry's own data. Assert the op returns an in-range id and does not hang.
+    constexpr uint32_t kBatch = 3U;
+    constexpr uint32_t kTokens = 64U;
+    constexpr uint32_t kVocab = 40U;
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            a(b, 0, t, ((b * kTokens + t) * 5U) % kVocab) = -0.5F;
+        }
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    // Entry 2 is far out of range; entry 0 cannot exercise the clamp, since entry * Ht is zero.
+    const std::vector<uint32_t> positions = {0U, 33U, 10U * kTokens};
+    auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+        tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(positions)));
+    ASSERT_EQ(got.size(), kBatch);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        EXPECT_LT(got[b], kVocab) << "entry " << b << " left the logical vocabulary";
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingWithoutPositionsUnchangedByAccessorChain) {
+    // The non-position path gained a NULL TensorAccessorArgs append so the accessor chain's length is
+    // the same in both modes. If that append is dropped, or the hard-coded offsets drift, the next
+    // accessor misdecodes its page size as the config flags -- silently, not as a build error. Cover
+    // the reader chain at its new length both with and without a mask.
+    constexpr uint32_t kBatch = 2U;
+    constexpr uint32_t kTokens = 37U;
+    constexpr uint32_t kVocab = 77U;
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+    std::vector<uint32_t> expected(kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            const uint32_t winner = ((b * kTokens + t) * 7U) % kVocab;
+            a(b, 0, t, winner) = -0.5F;
+            expected[b * kTokens + t] = winner;
+        }
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    auto no_mask = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7));
+    ASSERT_EQ(no_mask.size(), kBatch * kTokens) << "no-positions output must stay [B, 1, tokens, 1]";
+    EXPECT_EQ(no_mask, expected);
+
+    // A mask sits between the logits and positions accessors in the chain, so it is the case where a
+    // length mismatch shows up.
+    xt::xarray<float> m = xt::zeros<float>(xt::xarray<float>::shape_type{1U, 1U, 1U, kVocab});
+    auto mask = ttml::core::from_xtensor(m, &ttml::autograd::ctx().get_device());
+    auto with_mask = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, mask));
+    ASSERT_EQ(with_mask.size(), kBatch * kTokens);
+    EXPECT_EQ(with_mask, expected) << "an all-zero mask must not change the result";
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {

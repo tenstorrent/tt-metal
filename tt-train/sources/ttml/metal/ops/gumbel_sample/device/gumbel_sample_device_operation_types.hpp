@@ -32,18 +32,6 @@ struct GumbelSampleParams {
     // device must draw different noise), axes omitted are treated as replicated (every device must
     // draw the SAME noise or the replicas desync). Empty => every device draws identical noise.
     std::vector<uint32_t> seed_axes{};
-
-    // OPTIONAL per-batch-entry token position to sample at, in GLOBAL batch order (size B, or empty).
-    //
-    // Empty (default): sample every token position, output [B, 1, tokens, 1].
-    //
-    // Non-empty: sample ONLY row positions[b] of batch entry b, output [B, 1, 1, 1]. Prefill needs
-    // exactly one token per sequence -- the position of that sequence's last real prompt token -- but
-    // the logits carry all `tokens` positions, so sampling everything does `tokens` times the
-    // necessary work and throws away all but one row. Those positions differ per row, so no uniform
-    // slice can express them and ttnn::gather would need a V-wide index tensor; carrying them as
-    // runtime args costs nothing and lets the op read only the tiles it needs.
-    std::vector<uint32_t> positions{};
 };
 
 struct GumbelSampleInputs {
@@ -52,6 +40,23 @@ struct GumbelSampleInputs {
 
     // Optional additive padding mask with the same shape as `logits`; subtracted from the scores.
     std::optional<ttnn::Tensor> logits_padding_mask;
+
+    // OPTIONAL per-batch-entry token position to sample at: [B, 1, 1, 1] UINT32 ROW_MAJOR
+    // INTERLEAVED -- byte-for-byte this op's OWN position-mode output spec, so page e of this tensor
+    // IS batch entry e IS output page e, one indexing convention end to end.
+    //
+    // Absent: sample every token position, output [B, 1, tokens, 1].
+    //
+    // Present: sample ONLY row positions[b] of batch entry b, output [B, 1, 1, 1]. Prefill needs
+    // exactly one token per sequence -- the position of that sequence's last real prompt token --
+    // but the logits carry all `tokens` positions, so sampling everything does `tokens` times the
+    // necessary work and throws away all but one row. Those positions differ per row, so no uniform
+    // slice can express them.
+    //
+    // A device tensor's shape IS its local shard, so there is no global->local mapping for the op to
+    // re-derive: the caller shards this with the SAME mapper it sharded the batch with, which makes
+    // shard agreement true by construction rather than by two mapper configs happening to match.
+    std::optional<ttnn::Tensor> positions;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };

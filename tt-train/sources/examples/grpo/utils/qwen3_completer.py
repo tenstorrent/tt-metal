@@ -36,7 +36,7 @@ from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .completer_common import deallocate_tensors, async_read_to_host
+from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor, profile_sample
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache
@@ -373,14 +373,16 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 #
                 # Seed uniquely only over the batch-sharded axes (dp/fsdp) so each device's rollout
                 # draws independent noise; a replicated (tp) axis, if any, is excluded via _seed_axes.
-                sampled = ttml.ops.sample.sample_op(
-                    logits,
-                    ctx.temperature,
-                    seed,
-                    None,
-                    self._seed_axes,
-                    [int(p) for p in pred_pos],
-                )
+                positions_tensor = positions_to_tensor(pred_pos, B, Np, self._dp_mapper)
+                with profile_sample(mesh_device, "prefill"):
+                    sampled = ttml.ops.sample.sample_op(
+                        logits,
+                        ctx.temperature,
+                        seed,
+                        None,
+                        self._seed_axes,
+                        positions_tensor,
+                    )
                 sampled_host = ttnn.to_torch(sampled.get_value(), mesh_composer=composer)
                 sampled_host = sampled_host.reshape(B).to(int).numpy()
                 for b in range(B):
@@ -388,7 +390,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     first_tokens[b] = tok
                     if tok in stop_ids:
                         done[b] = True
-                deallocate_tensors([input_tensor, prefill_mask, logits, sampled])
+                deallocate_tensors([input_tensor, prefill_mask, logits, sampled, positions_tensor])
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
                 # --- Decode: feed one token per step. The first decode input is
@@ -405,7 +407,8 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     logits = self._model(last_input, decode_mask, past_key_values=kv)
 
                     seed = int(np.random.randint(low=1, high=int(1e7)))
-                    sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
+                    with profile_sample(mesh_device, f"decode[{i}]"):
+                        sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
 
                     last_token_column = sampled.get_value()
                     generated_columns.append(last_token_column)

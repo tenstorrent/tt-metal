@@ -21,9 +21,8 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .completer_common import deallocate_tensors, async_read_to_host
+from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor, profile_sample
 from .llama_overrides import LlamaCompositeKV
-
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
@@ -432,8 +431,17 @@ class LlamaGRPOCompleter(GRPOCompleter):
                 arr[:, j] = column.to_numpy(composer).reshape(B)
             return arr
 
+        # Positions are hoisted out of the loop, not rebuilt per step. Both phases are uniform, so
+        # there is nothing to recompute: prompts are LEFT-padded, so every row's last real token sits
+        # at column N-1 for prefill, and new_tokens is pinned to 1 for decode so its position is 0
+        # forever. Building inside the loop would add ~255 numpy->shard->H2D uploads and as many DRAM
+        # allocations per generate, on a loop whose whole design is to stay device-resident.
+        prefill_positions = positions_to_tensor([N - 1] * B, B, N, self._dp_mapper)
+        decode_positions = positions_to_tensor([0] * B, B, 1, self._dp_mapper)
+
         for i in range(tokens_to_complete):
-            if kv_cache.get_cache_position() == 0:
+            is_prefill = kv_cache.get_cache_position() == 0
+            if is_prefill:
                 processed = 0
                 new_tokens = prompt_tokens_np.shape[1]
                 token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
@@ -450,14 +458,15 @@ class LlamaGRPOCompleter(GRPOCompleter):
             mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
-            next_token_tensor = ttml.ops.sample.sample_op(
-                logits,
-                ctx.temperature,
-                np.random.randint(low=1e7),
-                logits_mask_tensor,
-                self._seed_axes,
-                [new_tokens - 1] * B_local,
-            )
+            with profile_sample(mesh_device, "prefill" if is_prefill else f"decode[{i}]"):
+                next_token_tensor = ttml.ops.sample.sample_op(
+                    logits,
+                    ctx.temperature,
+                    np.random.randint(low=1e7),
+                    logits_mask_tensor,
+                    self._seed_axes,
+                    prefill_positions if is_prefill else decode_positions,
+                )
 
             last_token_column = next_token_tensor.get_value()
 
@@ -482,7 +491,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
                 chunk_columns = []
 
         completions_np = to_np(generated_columns)
-        deallocate_tensors(generated_columns)
+        deallocate_tensors(generated_columns + [prefill_positions, decode_positions])
         deallocate_tensors([logits_mask_tensor])
         kv_cache.reset()
 

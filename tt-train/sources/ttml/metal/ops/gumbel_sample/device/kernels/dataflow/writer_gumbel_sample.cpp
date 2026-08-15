@@ -52,10 +52,14 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t start_tile = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t core_index = get_arg_val<uint32_t>(rt_idx++);
+    // Base address of the positions tensor, 0 when absent; emitted in both modes so the host can
+    // patch the slot unconditionally.
+    const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_scores_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_output_staging_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_records_idx = tt::CBIndex::c_4;
+    constexpr uint32_t cb_positions_idx = tt::CBIndex::c_6;
 
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t logical_vocab = get_compile_time_arg_val(1);
@@ -65,6 +69,7 @@ void kernel_main() {
     constexpr uint32_t reduction_sem_id = get_compile_time_arg_val(5);
     constexpr uint32_t origin_phys_x = get_compile_time_arg_val(6);
     constexpr uint32_t origin_phys_y = get_compile_time_arg_val(7);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(8);
 
 #ifdef DO_POSITIONS
     constexpr bool do_positions = true;
@@ -72,19 +77,41 @@ void kernel_main() {
     constexpr bool do_positions = false;
 #endif
 
-    // Per-entry token positions, appended after the four fixed args (see kWriterPositionsArgBase).
-    // Every core holds the full local list, so the origin can re-derive the target row of any entry
-    // it merges without that row travelling in the record.
-    constexpr uint32_t positions_arg_base = 4U;
-    auto target_row_of = [](uint32_t entry) -> uint32_t {
-        return get_arg_val<uint32_t>(positions_arg_base + entry) & (kTileHeight - 1U);
-    };
-
-    constexpr auto output_args = TensorAccessorArgs<8>();
+    constexpr auto output_args = TensorAccessorArgs<9>();
+    constexpr auto positions_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     const auto output_address_generator = TensorAccessor(output_args, output_address);
 
     const uint32_t staging_address = get_write_ptr(cb_output_staging_idx);
     const uint32_t records_base = get_write_ptr(cb_records_idx);
+
+    // Stage the full local position list, as the reader does. This core needs entries beyond its own
+    // run: the origin re-derives the target row of every boundary entry it merges, which keeps that
+    // row out of the record format entirely.
+    //
+    // The read is free here -- the next thing this kernel does is block on cb_wait_front(scores),
+    // which cannot clear until the reader has already fetched logits from DRAM. BRISC issues reads
+    // exactly as NCRISC does (brisc.cc runs noc_init + noc_local_state_init), on its own NOC, and
+    // noc_async_read_barrier tracks a counter independent of the write/semaphore rendezvous below.
+    uint32_t positions_l1_base = 0U;
+    uint32_t positions_slot_bytes = 0U;
+    if constexpr (do_positions) {
+        const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
+        positions_slot_bytes = positions_address_generator.get_aligned_page_size();
+        positions_l1_base = get_write_ptr(cb_positions_idx);
+        uint32_t l1_addr = positions_l1_base;
+        for (uint32_t entry = 0U; entry < num_entries; ++entry) {
+            noc_async_read_page(entry, positions_address_generator, l1_addr);
+            l1_addr += positions_slot_bytes;
+        }
+        noc_async_read_barrier();
+    }
+
+    // Only the low 5 bits are consumed here; the reader consumes the tile row (position >> 5) and
+    // clamps it. Disjoint bit fields, so the reader's clamp needs no mirror in this kernel.
+    auto target_row_of = [&](uint32_t entry) -> uint32_t {
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1_base + entry * positions_slot_bytes) &
+               (kTileHeight - 1U);
+    };
 
     uint32_t max_values[kTileHeight];
     uint32_t arg_max[kTileHeight];
