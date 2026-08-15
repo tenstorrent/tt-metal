@@ -19,7 +19,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include "device_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/program.hpp>
@@ -122,7 +122,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     EXPECT_THROW(this->create_kernel(kernel_file), std::exception);
 }
 
-TEST_F(UnitMeshAnyDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
+TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
     const std::string inline_source = "void kernel_main() {}";
 

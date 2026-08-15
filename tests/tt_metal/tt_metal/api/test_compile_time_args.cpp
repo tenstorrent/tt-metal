@@ -21,7 +21,10 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+
+namespace tt::tt_metal {
+class IDevice;
+}  // namespace tt::tt_metal
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -37,6 +40,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         Program program;
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
+        auto* device = mesh_device->get_devices()[0];
 
         const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -62,7 +66,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
             std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0u)};
 
         std::vector<uint32_t> compile_time_args_actual;
-        slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);
+        detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);
 
         ASSERT_EQ(compile_time_args_actual, compile_time_args_expected);
     }
@@ -77,6 +81,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     Program program;
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
+    auto* device = mesh_device->get_devices()[0];
 
     const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -102,7 +107,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
+    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     ASSERT_EQ(results[0], compile_time_args[0]) << "'!@#$%^&*()' should be 12";
     ASSERT_EQ(results[1], compile_time_args[1])

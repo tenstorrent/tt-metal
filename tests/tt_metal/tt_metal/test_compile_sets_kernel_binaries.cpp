@@ -57,8 +57,8 @@ void construct_program(Program& program, distributed::MeshDevice& mesh_device, C
 
     distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
-    [[maybe_unused]] auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
-    [[maybe_unused]] auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 8;

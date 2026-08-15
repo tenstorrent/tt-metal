@@ -11,9 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/allocator.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "device_fixture.hpp"
