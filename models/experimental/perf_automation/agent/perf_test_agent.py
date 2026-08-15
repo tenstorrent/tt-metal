@@ -140,6 +140,7 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     import json as _json
     import signal
     import subprocess
+    import subprocess as _sp
     import tempfile
 
     root = Path(root)
@@ -147,6 +148,32 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     repo_root = _repo_root()
     server = repo_root / _PERF_TEST_MCP_REL
     if not server.is_file():
+        print(
+            "      · agentic builder unavailable: no perf-test MCP server at %s" % server,
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+    # SAY WHY IT IS UNAVAILABLE. Without run_perf_test the agent can write a test but never run it,
+    # so it cannot converge -- and the caller reports "agentic builder did not converge", which reads
+    # as the model being hard to generate for. On 2026-08-15 the real cause was a dependency: mcp
+    # 2.0.0 moved FastMCP, so the server died at import and the tool silently fell back to the
+    # one-shot generator for three runs. Import failures are cheap to check and expensive to guess.
+    _probe = _sp.run(
+        [sys.executable, "-c", "import mcp.server.fastmcp"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if _probe.returncode != 0:
+        print(
+            "      · agentic builder unavailable: the perf-test MCP server cannot start, so the "
+            "agent would have no way to RUN what it writes.\n        %s\n        fix: pip install "
+            "'mcp>=1.0,<2' (see requirements-agent.txt)"
+            % ((_probe.stderr or "").strip().splitlines() or ["import failed"])[-1],
+            file=sys.stderr,
+            flush=True,
+        )
         return False
     try:
         from .agent_bin import resolve_claude_bin
