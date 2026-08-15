@@ -99,7 +99,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: tenstorrent/craq-sim
-          ref: 5b73c068d79a11b36e9e4946246c75aab07b468b
+          ref: aabbd10c12bd0a1a263dbec46f1c9c3c57104a32
           path: craq-sim
 
       - name: Run informational SFPU CRAQ cycle corpus
