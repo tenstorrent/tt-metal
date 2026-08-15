@@ -116,3 +116,4 @@ and isolated gates resolved them as follows:
   `1.272 -> 1.122 ms` and full `1.270 -> 1.220 ms`.
 - Final fresh `$stage-review`: `clean-pass`; no required work, hard-check gaps,
   or blocking concerns remained.
+- Stage implementation commit: `aef721434f4` (local only; never pushed).
