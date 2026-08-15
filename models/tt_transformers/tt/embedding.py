@@ -23,6 +23,7 @@ class Embedding(LightweightModule):
         self._memory_config = args.get_model_config()["EMB_WEIGHTS_MEMCFG"]
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
+        self.num_devices = args.num_devices
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
         torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
         cache_name = None if args.dummy_weights else weight_cache_path / base_name
@@ -51,6 +52,12 @@ class Embedding(LightweightModule):
         cluster_axis=1)`` before the copy. Buffer address is preserved so any
         captured trace stays valid.
         """
+        assert self.num_devices == 1, (
+            f"Embedding.update for num_devices > 1 is not yet implemented "
+            f"(got num_devices={self.num_devices}); the multi-device path "
+            "needs a ttnn.mesh_partition(dim=3, cluster_axis=1) into the "
+            "(None, 3)-sharded buffer before copy."
+        )
         assert self.vocab_size == self.padded_vocab_size, (
             f"Embedding.update requires self.vocab_size == self.padded_vocab_size "
             f"(got {self.vocab_size} vs {self.padded_vocab_size}); "
