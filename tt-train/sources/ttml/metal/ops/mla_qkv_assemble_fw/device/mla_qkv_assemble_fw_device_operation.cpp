@@ -52,6 +52,12 @@ void MLAQKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
         q_pre.device() == kv_up.device() && kv_up.device() == k_pe.device(),
         "MLAQKVAssembleFw: q_pre, kv_up, and k_pe must be on the same device.");
 
+    // compute_output_specs derives each output layout from one input; the outputs are only
+    // interchangeable if every input shares the same placement.
+    TT_FATAL(
+        q_pre.memory_config() == kv_up.memory_config() && kv_up.memory_config() == k_pe.memory_config(),
+        "MLAQKVAssembleFw: q_pre, kv_up, and k_pe must share the same memory config.");
+
     const auto q_pre_shape = q_pre.padded_shape();
     const auto kv_up_shape = kv_up.padded_shape();
     const auto k_pe_shape = k_pe.padded_shape();
@@ -158,12 +164,17 @@ MLAQKVAssembleFwDeviceOperation::tensor_return_value_t MLAQKVAssembleFwDeviceOpe
 
 ttsl::hash::hash_t MLAQKVAssembleFwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
+    // compile-time args, so a placement change must not reuse a cached program.
     return tt::tt_metal::operation::hash_operation<MLAQKVAssembleFwDeviceOperation>(
         args,
         tensor_args.kv_up.dtype(),
         tensor_args.q_pre.logical_shape(),
         tensor_args.kv_up.logical_shape(),
-        tensor_args.k_pe.logical_shape());
+        tensor_args.k_pe.logical_shape(),
+        tensor_args.q_pre.memory_config(),
+        tensor_args.kv_up.memory_config(),
+        tensor_args.k_pe.memory_config());
 }
 
 MLAQKVAssembleFwDeviceOperation::program_factory_t MLAQKVAssembleFwDeviceOperation::select_program_factory(

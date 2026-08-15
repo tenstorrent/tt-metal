@@ -215,3 +215,20 @@ TEST_F(MLAQKVAssembleTest, BackwardMatchesReference) {
 TEST_F(MLAQKVAssembleTest, AutogradWrapperBackwardMatchesReference) {
     run_autograd_wrapper_bw({"wrapper_heads4", 2, 64, 4, 64, 32, 64});
 }
+
+TEST_F(MLAQKVAssembleTest, BackwardRejectsRopeDimBeyondDstBudget) {
+    // qk_rope_dim = 128 (Tr = 4) needs Tr + 1 = 5 dst slots; with fp32 dest accumulation the
+    // backward compute kernel's DST accumulator budget is 4, so the op must refuse to launch.
+    constexpr uint32_t n_heads = 2U;
+    constexpr uint32_t qk_nope_dim = 32U;
+    constexpr uint32_t qk_rope_dim = 128U;
+    constexpr uint32_t v_dim = 32U;
+    constexpr uint32_t qk_head = qk_nope_dim + qk_rope_dim;
+
+    const auto dQ = make_input(1U, n_heads, 32U, qk_head, 111U);
+    const auto dK = make_input(1U, n_heads, 32U, qk_head, 222U);
+    const auto dV = make_input(1U, n_heads, 32U, v_dim, 333U);
+
+    EXPECT_ANY_THROW(ttml::metal::mla_qkv_assemble_bw(dQ, dK, dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim))
+        << "mla_qkv_assemble_bw should reject a rope tile count that overflows the DST accumulator";
+}

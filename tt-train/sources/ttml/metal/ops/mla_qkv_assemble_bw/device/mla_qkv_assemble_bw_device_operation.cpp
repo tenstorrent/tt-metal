@@ -52,6 +52,12 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
         dQ.device() == dK.device() && dK.device() == dV.device(),
         "MLAQKVAssembleBw: dQ, dK, and dV must be on the same device.");
 
+    // compute_output_specs derives each output layout from one input; the outputs are only
+    // interchangeable if every input shares the same placement.
+    TT_FATAL(
+        dQ.memory_config() == dK.memory_config() && dK.memory_config() == dV.memory_config(),
+        "MLAQKVAssembleBw: dQ, dK, and dV must share the same memory config.");
+
     const auto dQ_shape = dQ.padded_shape();
     const auto dK_shape = dK.padded_shape();
     const auto dV_shape = dV.padded_shape();
@@ -155,12 +161,17 @@ MLAQKVAssembleBwDeviceOperation::tensor_return_value_t MLAQKVAssembleBwDeviceOpe
 
 ttsl::hash::hash_t MLAQKVAssembleBwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
+    // compile-time args, so a placement change must not reuse a cached program.
     return tt::tt_metal::operation::hash_operation<MLAQKVAssembleBwDeviceOperation>(
         args,
         tensor_args.dQ.dtype(),
         tensor_args.dQ.logical_shape(),
         tensor_args.dK.logical_shape(),
-        tensor_args.dV.logical_shape());
+        tensor_args.dV.logical_shape(),
+        tensor_args.dQ.memory_config(),
+        tensor_args.dK.memory_config(),
+        tensor_args.dV.memory_config());
 }
 
 MLAQKVAssembleBwDeviceOperation::program_factory_t MLAQKVAssembleBwDeviceOperation::select_program_factory(
