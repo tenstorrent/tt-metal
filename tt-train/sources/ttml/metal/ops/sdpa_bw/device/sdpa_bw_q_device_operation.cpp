@@ -75,20 +75,23 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
     // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
     // iterate the padded sequence, so tile padding on S or head_dim would silently
     // mis-scale attention instead of erroring out.
-    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name) {
+    // V's head_dim never feeds the softmax scaler and non-tile-aligned vdim is a
+    // supported configuration (DiffVDim), so V is only checked on the sequence dim.
+    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name, bool check_last_dim) {
         const auto& logical = tensor.logical_shape();
         const auto& padded = tensor.padded_shape();
         TT_FATAL(
-            logical[-1] == padded[-1] && logical[-2] == padded[-2],
-            "Tensor '{}' must be tile-aligned in sequence and head_dim (padded shape == logical shape). "
+            (!check_last_dim || logical[-1] == padded[-1]) && logical[-2] == padded[-2],
+            "Tensor '{}' must be tile-aligned in sequence{} (padded shape == logical shape). "
             "Got logical={}, padded={}",
             name,
+            check_last_dim ? " and head_dim" : "",
             logical,
             padded);
     };
-    check_tile_aligned(query, "Query");
-    check_tile_aligned(key, "Key");
-    check_tile_aligned(value, "Value");
+    check_tile_aligned(query, "Query", /*check_last_dim=*/true);
+    check_tile_aligned(key, "Key", /*check_last_dim=*/true);
+    check_tile_aligned(value, "Value", /*check_last_dim=*/false);
 
     // The reader streams `intermediates` (forward-pass logsumexp) as FP32 tiles via a
     // TensorAccessor, which handles DRAM and L1 interleaved buffers alike; a wrong tensor
