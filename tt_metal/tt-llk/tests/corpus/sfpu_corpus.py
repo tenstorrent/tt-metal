@@ -60,6 +60,11 @@ AUDITED_SEEDS = {
         paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="exact",
         correctness_threshold="Int32 element tolerance rtol=0 atol=0 plus PCC > 0.99 when signal is nonzero", correctness_source="test_sfpu_binary.py:902-921; helpers/utils.py:548-785",
         silicon_status="loss", silicon_result="BH MATH_ISOLATE: generated 562.625 cycles vs handwritten 283.9296875 (+98.16%).", silicon_source="sfpu_device_baseline_v1.tsv; audited BH device archive"),
+    "metal__ckernel_sfpu_recip": dict(
+        semantic_cpp_class="ready", semantic_cpp_blocker="A fresh typed value-space body is implemented. BH's canonical accurate sfpu_reciprocal<false> expansion still trips rvtt_expand SSA verification; the branch-free cubic Newton correction is the audited semantic route, while architectural replay selection remains compiler-owned.",
+        paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="pcc",
+        correctness_threshold="PCC > 0.99 and per-format element tolerance; measured accurate Float16_b lane uses rtol=0.05 atol=0.05", correctness_source="test_sfpu_unary.py:964-1021; helpers/utils.py:548-785; RECIPROCAL_SEMANTIC_SILICON_AB.md",
+        silicon_status="win", silicon_result="BH RECIPROCAL_BODY accurate Float16_b: semantic 459 cycles vs production 467 (-1.713%), three fresh samples.", silicon_source="RECIPROCAL_SEMANTIC_SILICON_AB.md; sfpu_device_baseline_v1.tsv"),
     "legacy__ckernel_sfpu_topk": dict(
         semantic_cpp_class="typed_wrapper_needed", semantic_cpp_blocker="Needs sound multi-result indexed SFPSWAP and eight-value SFPTRANSP modeling plus explicit RWC/DST/config/replay boundaries before a full selector is accepted.",
         paired_selector_status="blocked", test_status="blocked", perf_status="blocked", correctness_metric="exact",
@@ -92,6 +97,11 @@ AUDITED_MAPPINGS = {
         functional_modules="test_sfpu_unary.py::test_sigmoid_appx_fresh_cpp",
         perf_modules="perf_eltwise_unary_sfpu.py::test_perf_sigmoid_appx_fresh_cpp",
         notes="Audited paired production/fresh semantic-C++ SigmoidAppx selector and isolated profiler fixture.",
+    ),
+    "metal__ckernel_sfpu_recip": dict(
+        functional_modules="test_sfpu_unary.py::test_reciprocal_semantic,test_sfpu_unary.py::test_reciprocal_semantic_edges",
+        perf_modules="test_sfpu_unary.py::test_reciprocal_device_profile",
+        notes="audited test-only production/semantic selector; accurate and approximate BF16/FP32 plus registered-domain edges; scoped accurate-BF16 profiler",
     ),
 }
 
@@ -149,7 +159,8 @@ def inventory():
           functional_modules=functional,perf_modules=perf,mapping_state=state,
           notes=mapped[2] if mapped else "explicitly unmapped: no audited functional module")
         if row["id"] in AUDITED_MAPPINGS:
-            row.update(AUDITED_MAPPINGS[row["id"]]); row["mapping_state"]="mapped"
+            row.update(AUDITED_MAPPINGS[row["id"]])
+            row["mapping_state"] = "mapped"
         row.update(DEFAULT_AUDIT); row.update(AUDITED_SEEDS.get(row["id"], {})); rows.append(row)
     return rows
 

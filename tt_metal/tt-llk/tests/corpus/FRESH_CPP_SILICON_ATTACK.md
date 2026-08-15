@@ -18,6 +18,22 @@ This lane asks whether compiler-visible SFPI C++ can beat an existing hand sched
 
 Welford, Reduce-SDPA, binary broadcast, TTNNWhere, and MulInt32 are excluded because they were already measured. TopK is excluded from this lane until its typed multi-result/index-tracking conversion is accepted.
 
+## Corpus scorecard
+
+Only correctness-gated, scoped Blackhole device measurements appear here.
+
+| Operation | Production | Fresh semantic C++ | Result |
+|---|---:|---:|---:|
+| Welford body | 326 | 323 | -0.92% |
+| Reduce-SDPA body | 840 | 834 | -0.714% |
+| Binary broadcast body | 608 | 608 | parity |
+| Reciprocal body, accurate Float16_b | 467 | 459 | **-1.713%** |
+| TTNN Where body | 159.25 | 312.50 | +96.23% |
+| MulInt32 isolate | 283.9296875 | 562.625 | +98.16% |
+
+The Reciprocal result and its correctness/evidence provenance are detailed in
+`RECIPROCAL_SEMANTIC_SILICON_AB.md`.
+
 ## Correctness contract
 
 The A/B variants use identical seeded stimuli and the existing operation golden. For the selected Float16_b lane, `passed_test` requires both:

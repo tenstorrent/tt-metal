@@ -34,6 +34,7 @@ class CorpusTest(unittest.TestCase):
             "legacy__ckernel_sfpu_mul_int":"loss",
             "metal__ckernel_sfpu_mul_int32":"loss",
             "metal__ckernel_sfpu_sigmoid_appx":"loss",
+            "metal__ckernel_sfpu_recip":"win",
             "legacy__ckernel_sfpu_topk":"blocked",
         }
         for row_id,status in expected.items():
@@ -83,6 +84,15 @@ class CorpusTest(unittest.TestCase):
         result=M.compare_baseline([current],M.DEVICE_BASELINE,0)[0]
         self.assertEqual(result["status"],"REGRESSION")
         self.assertAlmostEqual(result["delta_pct"],100.0/323.0)
+
+    def test_reciprocal_mapping_and_correctness_contract_are_explicit(self):
+        row={r["id"]:r for r in M.inventory()}["metal__ckernel_sfpu_recip"]
+        self.assertEqual(row["mapping_state"],"mapped")
+        self.assertEqual(row["paired_selector_status"],"implemented")
+        self.assertEqual(row["correctness_metric"],"pcc")
+        self.assertIn("rtol=0.05 atol=0.05",row["correctness_threshold"])
+        self.assertEqual(row["silicon_status"],"win")
+        self.assertIn("459 cycles vs production 467",row["silicon_result"])
 
     def test_v1_is_retained_as_an_immutable_migration_source(self):
         old=P.with_name("sfpu_corpus_v1.tsv")

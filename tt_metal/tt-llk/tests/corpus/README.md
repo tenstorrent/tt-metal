@@ -54,9 +54,9 @@ is not a pull-request gate.
 
 Every checked-in `win`, `parity`, or `loss` is correctness-gated.  That does
 not mean every kernel uses PCC: the manifest records the actual contract.
-Welford uses explicit mean/M2 tolerances; Reduce-SDPA and binary broadcast use
-the shared element-tolerance plus PCC gate; TTNN Where uses bit-exact selection
-(including NaN equality); MulInt32 uses exact integer tolerance.  TopK remains
+Welford uses explicit mean/M2 tolerances; Reduce-SDPA, binary broadcast, and
+Reciprocal use the shared element-tolerance plus PCC gate; TTNN Where uses
+bit-exact selection (including NaN equality); MulInt32 uses exact integer tolerance.  TopK remains
 blocked until values and companion indices are represented soundly and then
 checked together.  The silicon runner rejects rows without an implemented
 selector, a passing test status, and a non-`none` metric, and executes mapped
@@ -82,9 +82,9 @@ paths are published in all three plan formats, but QSR is deliberately absent
 from the compile-gate matrix until it has a reviewed functional mapping; an
 all-`SKIP_UNMAPPED` lane is not reported as green compilation.
 
-Current evidence seeds the program honestly: Welford and Reduce-SDPA are
-scoped body wins, binary broadcast is exact cycle parity, Where and MulInt32
-are macro-dependent losses, and TopK requires typed multi-result architectural
+Current evidence seeds the program honestly: Welford, Reduce-SDPA, and the
+accurate-BF16 Reciprocal lane are scoped body wins, binary broadcast is exact
+cycle parity, Where and MulInt32 are macro-dependent losses, and TopK requires typed multi-result architectural
 modeling before a performance claim.  `SEMANTIC_CPP_CI_PLAN.md` defines the
 presubmit/nightly artifact and promotion policy.
 
