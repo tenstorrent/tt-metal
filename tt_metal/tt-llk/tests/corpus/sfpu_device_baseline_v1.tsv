@@ -6,6 +6,7 @@ legacy__ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	325	measur
 legacy__ckernel_sfpu_welfords	bh	device_cycles	WELFORD_BODY	generated	323	measured	SFPI_COMPILER_UPGRADE.md section 13.8 sample 3
 legacy__ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	839	measured	REDUCE_SDPA_SILICON_AB.md
 legacy__ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	typed_generated	855.5	measured	REDUCE_SDPA_SILICON_AB.md
+legacy__ckernel_sfpu_reduce_custom	bh	device_cycles	REDUCE_SDPA_BODY	d1_generated	834	measured	REDUCE_SDPA_SILICON_AB.md; SFPI-GCC 5a849606f
 legacy__ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	handwritten	608	measured	BINARY_BCAST_SILICON_AB.md
 legacy__ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	generated	608	measured	BINARY_BCAST_SILICON_AB.md
 metal__ckernel_sfpu_mul_int32	bh	device_cycles	MATH_ISOLATE	handwritten	283.9296875	measured	audited BH device archive

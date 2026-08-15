@@ -2,14 +2,15 @@
 
 ## Result
 
-Blackhole P100A silicon rejects the current generated implementation on
-performance, while accepting it on correctness.
+Blackhole P100A silicon accepts the final generated implementation on both
+correctness and performance after generic compiler replay hoisting.
 
 | implementation | fresh-process body samples | median | delta |
 | --- | --- | ---: | ---: |
 | handwritten replay | 839, 839, 839 | 839 | baseline |
 | generated SFPI | 914, 914, 914 | 914 | +75 cycles (+8.94%) |
 | generated, compiler-owned load | 855.5, 855.5, 855.5 | 855.5 | +16.5 cycles (+1.97%) |
+| generated, typed boundaries + D1 replay hoist | 834, 834, 834 | 834 | -6 cycles (-0.714%) |
 
 The profiler marker is `REDUCE_SDPA_BODY` on PACK/TRISC2. It excludes SFPU
 initialization, prologue, epilogue, packing, and host time. The whole profiled
@@ -79,9 +80,30 @@ Matched capture-hoisting A/B must establish full causality; the next compiler
 experiment is therefore safe capture hoisting, not opaque-asm decoding or
 kernel-specific instruction selection.
 
+That experiment is now complete.  SFPI-GCC `5a849606f` recognizes only
+fixed-encoding, compiler-visible replay-safe payloads in a single-block loop,
+records them without execution in a dedicated preheader, and replaces the loop
+copies with playback.  It rejects calls, opaque assembly, explicit replay
+owners, abnormal entries, MEM/GPR-dependent encodings, and unsupported CFGs.
+The typed fixture also represents TTINCRWC as a compiler barrier and the
+architectural L8 dummy load as a no-result typed builtin.  Final linked code has
+two static eight-slot preheader captures and eight playbacks per loop; dynamic
+capture executions at block height four fall from eight to two.
+
+The final paired archive is
+`/localdev/nkapre/reduce-sdpa-d1-bh-silicon-20260815`.  Both selectors pass the
+physical golden; three fresh processes produce `840,840,840` handwritten and
+`834,834,834` generated `REDUCE_SDPA_BODY` cycles.  Raw/post profiler rows,
+ELFs, objdumps, build headers, logs, provenance, and SHA256SUMS are retained.
+The compiler's replay suite is 52/52, full RVTT is 713 pass with the same 15
+baseline failures and two expected failures, and ineligible on/off output is
+byte-identical.  CRAQ passes functionally but is not used as the performance
+authority.
+
 ## General compiler opportunity
 
-Finish late, post-register-allocation Tensix replay formation. Keep the payload
+The first conservative late, post-register-allocation Tensix replay-hoist phase
+is implemented behind an opt-in flag. Keep the payload
 compiler-visible, fingerprint repeated fixed-encoding Tensix subsequences,
 record one copy with no execution in a safe preheader, and replace eligible
 occurrences with replay commands. This is not a Reduce-SDPA pattern: it applies
