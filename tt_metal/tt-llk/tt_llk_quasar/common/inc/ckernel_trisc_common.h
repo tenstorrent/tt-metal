@@ -333,6 +333,8 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     // - PACK_UNPACK = pack->unpack
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t FPU_SFPU    = 2;
+    constexpr static std::uint32_t SFPU_FPU    = 3;
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
