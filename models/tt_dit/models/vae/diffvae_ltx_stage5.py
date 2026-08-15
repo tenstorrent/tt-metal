@@ -32,6 +32,7 @@ from ...layers.na3d import AxisShard, build_mesh_device_plan
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.na3d import plan_na3d_mesh, uniform_halo
 from ...layers.normalization import RMSNorm
+from ...utils.tensor import fast_device_to_host
 from .diffvae_ltx import MeshShardConfig, _even_shards, pad_from_neighbours
 
 if TYPE_CHECKING:
@@ -593,6 +594,7 @@ class DiffVAEStage5(Module):
         self.padded_patch_channels = math.ceil(cfg.patch_channels / TILE) * TILE
         self._rope_cache: dict[Grid, _RopeTables] = {}
         self._mesh_plan_cache: dict[tuple, tuple] = {}
+        self._x_t_cache: dict[tuple, ttnn.Tensor] = {}
 
         self.conv_in_x_t = Linear(self.padded_patch_channels, cfg.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
         # The timestep sinusoid and everything downstream of it feed multiplicative
@@ -645,6 +647,21 @@ class DiffVAEStage5(Module):
         on opposite sides of the trace boundary and calls the two halves itself.
         """
         return self.conv_in_x_t(self.upload_x_t(x_t, shard=shard))
+
+    def cached_x_t(self, grid: Grid, seed: int, *, shard: "MeshShardConfig | None" = None) -> ttnn.Tensor:
+        """Uploaded noise for one geometry and seed, drawn and patchified once.
+
+        A fixed seed makes every decode's noise identical, so redrawing and repacking it per call
+        is 8 GB of host copies for a tensor that never changes. Callers passing their own noise go
+        through :meth:`upload_x_t` and pay for it.
+        """
+        key = (grid, seed, shard.mesh if shard else None)
+        if key not in self._x_t_cache:
+            cfg = self.config
+            shape = (grid.batch, cfg.out_channels, grid.t, grid.h * cfg.patch_size, grid.w * cfg.patch_size)
+            noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
+            self._x_t_cache[key] = self.upload_x_t(noise, shard=shard)
+        return self._x_t_cache[key]
 
     def upload_x_t(self, x_t: torch.Tensor, *, shard: "MeshShardConfig | None" = None) -> ttnn.Tensor:
         """Patchify pixel-space ``(B, C, T, H, W)`` noise and upload it, unprojected.
@@ -795,16 +812,41 @@ class DiffVAEStage5(Module):
         return self.forward_diff_step(context_and_x, timestep, grid, shard=shard)
 
     def unpack_pixels(self, out: ttnn.Tensor, grid: Grid, *, shard: "MeshShardConfig | None" = None) -> torch.Tensor:
-        """Gather the shards and undo the patch packing. Host work, so outside any trace."""
-        cfg = self.config
+        """Depth-to-space on device, then one download of the pixels themselves.
+
+        The packing is a permutation, and ttnn expresses it — the conv decoder does the same
+        depth-to-space in ``decode_device``. Doing it on host instead cost a download of the
+        tile-padded channels plus two full-volume permutes, which at 145 frames was most of the
+        decode's wall time.
+        """
+        pixels = self.unpack_pixels_device(out, grid, shard=shard)
         if shard is None:
-            packed = ttnn.to_torch(out)
-        else:
-            local = self.shard_grid(grid, shard)
-            packed = ttnn.to_torch(
-                ttnn.reshape(out, (grid.batch, local.t, local.h, local.w, self.padded_patch_channels)),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[2, 3], mesh_shape=shard.mesh),
-            )
-        packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, self.padded_patch_channels)
-        packed = packed[..., : cfg.patch_channels].permute(0, 4, 1, 2, 3)
-        return unpatchify(packed, cfg.patch_size)
+            return ttnn.to_torch(pixels).float()
+        # H and W of the pixel grid are dims 3 and 4, and are what the mesh splits. The async-DMA
+        # path reads every shard concurrently and casts in flight, where a mesh composer walks
+        # them serially and leaves a full-volume conversion for the host.
+        return fast_device_to_host(
+            pixels,
+            self.mesh_device,
+            [3, 4],
+            ccl_manager=shard.ccl,
+            dtype=torch.float32,
+        )
+
+    def unpack_pixels_device(
+        self, out: ttnn.Tensor, grid: Grid, *, shard: "MeshShardConfig | None" = None
+    ) -> ttnn.Tensor:
+        """``(1, B, sites, padded)`` to ``(B, C, T, H*p, W*p)``, still on device.
+
+        The packed channel order is ``(c, w_sub, h_sub)`` (see :func:`patchify`), so the width
+        sub-index is the outer of the two and the permute has to place it last.
+        """
+        cfg = self.config
+        local = grid if shard is None else self.shard_grid(grid, shard)
+        p = cfg.patch_size
+        x = ttnn.slice(out, [0, 0, 0, 0], [1, local.batch, local.sites, cfg.patch_channels])
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (local.batch, local.t, local.h, local.w, cfg.out_channels, p, p))
+        # (B, T, H, W, C, w_sub, h_sub) -> (B, C, T, H, h_sub, W, w_sub)
+        x = ttnn.permute(x, (0, 4, 1, 2, 6, 3, 5))
+        return ttnn.reshape(x, (local.batch, cfg.out_channels, local.t, local.h * p, local.w * p))

@@ -81,9 +81,45 @@ def test_sharded_decode_at_production_size(*, mesh_device, num_frames, height, w
         enter_stage=1,
     )
 
+    from ....models.vae.diffvae_ltx_stage5 import Grid
+
+    # Warm first: a cold call folds every program's compilation into whichever phase touches it.
+    decoder.decode(latent, seed=0, shard=shard)
+
     start = time.perf_counter()
     pixels = decoder.decode(latent, seed=0, shard=shard)
     elapsed = time.perf_counter() - start
+
+    # Same work again, split, so the host halves are attributable rather than inferred.
+    t0 = time.perf_counter()
+    latent_tt, padded_dims = decoder.upload_latent(latent)
+    grid = Grid(
+        batch=1,
+        t=decoder.context_frames(latent.shape[2]),
+        h=padded_dims[1] * decoder.space_scale[0],
+        w=padded_dims[2] * decoder.space_scale[1],
+    )
+    noise = torch.randn(
+        (1, config["out_channels"], grid.t, grid.h * decoder.patch_size, grid.w * decoder.patch_size),
+        generator=torch.Generator().manual_seed(0),
+    )
+    t1 = time.perf_counter()
+    noise_tt = decoder.stage5.upload_x_t(noise, shard=shard)
+    t2 = time.perf_counter()
+    timestep = ttnn.from_torch(
+        torch.tensor([[[[1.0]]]]), device=mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+    )
+    out = decoder.decode_device(
+        latent_tt, noise_tt, timestep, grid, padded_dims=padded_dims, latent_frames=latent.shape[2], shard=shard
+    )
+    ttnn.synchronize_device(mesh_device)
+    t3 = time.perf_counter()
+    decoder.stage5.unpack_pixels(out, grid, shard=shard)
+    t4 = time.perf_counter()
+    print(
+        f"\n  PHASES  latent+noise host {t1 - t0:6.2f}s | upload_x_t {t2 - t1:6.2f}s | "
+        f"device {t3 - t2:6.2f}s | unpack {t4 - t3:6.2f}s"
+    )
 
     expected = (1, config["out_channels"], num_frames, height, width)
     print(

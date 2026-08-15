@@ -780,10 +780,13 @@ class DiffVAEDecoder(Module):
             w=padded_dims[2] * self.space_scale[1],
         )
 
-        if noise is None:
-            shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
-            noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
-        noise_tt = self.stage5.upload_x_t(noise, shard=shard)
+        # A caller-supplied noise is data and gets uploaded; a seeded one is the same tensor on
+        # every call, so it is drawn and packed once.
+        noise_tt = (
+            self.stage5.cached_x_t(grid, seed, shard=shard)
+            if noise is None
+            else self.stage5.upload_x_t(noise, shard=shard)
+        )
 
         # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0].
         timestep = ttnn.from_torch(
