@@ -162,6 +162,12 @@ jobs:
           HardwareController().reset_card()
           print("card reset OK")
           PY
+      # Every non-zero status fails the shard; the steps below only exist to say
+      # which kind of failure it was. The status is passed out rather than left to
+      # fail here so those messages can be attached to it — hence the exit 0.
+      #   1  the sweep found races (ordinary test failures, listed in the junit)
+      #  70  the sweep produced no junit.xml, so it never really ran
+      #  75  a perturbation wedged a Tensix core and a case was skipped
       - name: Run ttnop sweep
         id: ttnop
         shell: bash
@@ -177,6 +183,20 @@ jobs:
           echo "ttnop sweep exited $status"
           exit 0
 
+      # These used to be left green, on the reasoning that a found race is a result
+      # rather than a broken shard. In practice that produced shards reporting
+      # success while GitHub annotated them with dozens of errors and the junit file
+      # listed every one as a failure — run 31846727063 had two such shards, one
+      # carrying 995 failing perturbations. A failing test fails the shard.
+      - name: Fail the shard if the sweep found races
+        if: steps.ttnop.outputs.status == '1'
+        shell: bash
+        run: |
+          echo "::error::The ttnop sweep found timing races. Each failing case is" \
+               "in the junit artifact, and the variant that broke it (with its" \
+               "resolved source location) is in the ttnop report artifact."
+          exit 1
+
       # Not only the reset case any more: the usual recovery now kills the wedged
       # worker and carries on with a spare core, so this fires without the card
       # having been reset at all. Either way a case was skipped and the variant
@@ -190,8 +210,9 @@ jobs:
                "that wedged it is in the ttnop report artifact."
           exit 1
 
-      # Only 0 (nothing found) and 1 (races found, which is a result) mean the sweep
-      # ran. Everything else was being swallowed by the `exit 0` above, and a sweep
+      # The catch-all, and the one that matters most: a status here means the sweep
+      # did not produce results at all, which is far worse than producing bad ones.
+      # Everything except 0 was once swallowed by the `exit 0` above, and a sweep
       # that died on an import in under a second passed for a clean shard in run
       # 31807922124 — green, in four minutes, having tested nothing. ci.sh reports 70
       # when the sweep produced no junit.xml, which is how a crash is told apart from
