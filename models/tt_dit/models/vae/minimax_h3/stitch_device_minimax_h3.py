@@ -4,16 +4,15 @@
 
 """The video VAE's tile blend and unpatchify, on device.
 
-Why this exists: at 1344x768 the decode stage reads **2.51 GB** of *overlapping* pixel tiles back to
-host and spends ~1.3 s blending them there, against ~1.25 s of actual device compute. The final
-canvas is only ~0.77 GB in bf16, so most of that transfer is overlap that gets averaged away.
+Why this exists: the host path reads *overlapping* pixel tiles back and blends them on host. The
+assembled canvas is far smaller than the tiles that produce it, so most of that transfer is overlap
+that gets averaged away.
 
 Why it is not simply a weighted accumulation: the reference `stitch_tiles` is **sequential and
 asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a)*T)` where `L` is the
-*unblended* left tile and the diagonal tile never appears. Measured against a separable ramp
-formulation at the production geometry, 11.1 % of pixels differ by up to 4.66 --- an O(1) error over a
-ninth of every frame, which surfaces as visible seams. So this mirrors the reference order exactly,
-tile by tile, rather than reformulating it.
+*unblended* left tile and the diagonal tile never appears. A separable ramp formulation gives an
+O(1) error over roughly a ninth of every frame, which surfaces as visible seams. So this mirrors the
+reference order exactly, tile by tile, rather than reformulating it.
 
 The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
 it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what
@@ -32,6 +31,13 @@ class DeviceTileStitcher:
 
     The weights depend only on `(extent, axis, shape)`, and a decode reuses the same geometry for
     every chunk, so they are built once and reused for the whole video.
+
+    Everything here stays ROW_MAJOR. This grid's derived overlaps are [96, 80, 80] by height and
+    [80, 80, 80, 80, 64, 64] by width, so the blend slices begin at 176 and 80 -- neither a multiple
+    of 32 -- and `ttnn.slice` drops to untilize -> row-major -> retilize for exactly that case. The
+    trims then hand `ttnn.concat` extents of 80 and 176, which is tile padding on the concat dim and
+    triggers the same fallback again. `binary_ng` takes ROW_MAJOR operands and keeps the layout on
+    output, so the arithmetic is unaffected and the blend stays float32.
     """
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
@@ -54,7 +60,7 @@ class DeviceTileStitcher:
             weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
             weight_b = (positions / extent).view(view).expand(slab).contiguous()
             self._ramps[key] = tuple(
-                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
                 for w in (weight_a, weight_b)
             )
         return self._ramps[key]
