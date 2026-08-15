@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -142,13 +143,17 @@ def test_reduced_real_weight_full_model_probe(mesh_device):
     full_stack = os.environ.get("GEMMA4_FULL_STACK_PROBE") == "1"
     batch32 = os.environ.get("GEMMA4_BATCH32_PROBE") == "1"
     long_context = os.environ.get("GEMMA4_LONG_CONTEXT_PROBE") == "1"
-    prompt_len = 262_111 if long_context else 32
+    prompt_len = 262_111 if long_context else int(os.environ.get("GEMMA4_PROBE_PROMPT_LEN", "32"))
     state = _load_probe_state(full_stack=full_stack)
     model = Gemma4FullModel(
         mesh_device=mesh_device,
         hf_config=_config(),
         state_dict=state,
-        max_seq_len=262_144 if (batch32 or long_context) else 128,
+        max_seq_len=(
+            262_144
+            if (batch32 or long_context)
+            else (512 if os.environ.get("GEMMA4_NO_HOST_TOKEN_OUT_BENCH") == "1" else 128)
+        ),
         max_batch_size=32 if batch32 else 1,
         layer_indices=None if full_stack else [0, 5],
         tensor_cache_path=("/tmp/gemma4_full_model_cache" if full_stack else "/tmp/gemma4_full_model_probe_cache"),
@@ -226,6 +231,53 @@ def test_reduced_real_weight_full_model_probe(mesh_device):
     assert generator.trace_counters.replays == 1
     trace = next(iter(generator._trace_cache.values()))
     assert int(ttnn.to_torch(ttnn.get_device_tensors(trace.current_pos)[0]).reshape(-1)[0]) == prompt_len + 1
+
+    if os.environ.get("GEMMA4_NO_HOST_TOKEN_OUT_BENCH") == "1":
+        warmups = int(os.environ.get("GEMMA4_NO_HOST_WARMUPS", "5"))
+        iterations = int(os.environ.get("GEMMA4_NO_HOST_ITERATIONS", "128"))
+        for _ in range(warmups):
+            generator.decode_forward(
+                torch.zeros((probe_batch, 1), dtype=torch.long),
+                torch.full((probe_batch,), 999, dtype=torch.int32),
+                page_table=model.state.page_tables,
+                kv_cache=model.state,
+                enable_trace=True,
+            )
+        ttnn.synchronize_device(mesh_device)
+        start_s = time.perf_counter()
+        for _ in range(iterations):
+            generator.decode_forward(
+                torch.zeros((probe_batch, 1), dtype=torch.long),
+                torch.full((probe_batch,), 999, dtype=torch.int32),
+                page_table=model.state.page_tables,
+                kv_cache=model.state,
+                enable_trace=True,
+            )
+        ttnn.synchronize_device(mesh_device)
+        elapsed_s = time.perf_counter() - start_s
+        final_position = int(ttnn.to_torch(ttnn.get_device_tensors(trace.current_pos)[0]).reshape(-1)[0])
+        print(
+            "GEMMA4_NO_HOST_TOKEN_OUT_RESULT="
+            + json.dumps(
+                {
+                    "warmups": warmups,
+                    "iterations": iterations,
+                    "elapsed_s": elapsed_s,
+                    "ms_per_token": elapsed_s * 1000.0 / iterations,
+                    "decode_t_s_u": iterations / elapsed_s,
+                    "trace_replays": generator.trace_counters.replays,
+                    "final_position": final_position,
+                    "token_refreshes": generator.trace_counters.token_refreshes,
+                    "position_refreshes": generator.trace_counters.position_refreshes,
+                    "rope_refreshes": generator.trace_counters.rope_refreshes,
+                    "page_table_refreshes": generator.trace_counters.page_table_refreshes,
+                    "token_readbacks": generator.trace_counters.token_readbacks,
+                    "synchronizations": generator.trace_counters.synchronizations,
+                },
+                sort_keys=True,
+            )
+        )
+        return
 
     # A second replay consumes the prior sampled token without a host token
     # refresh and advances both position buffers exactly once.

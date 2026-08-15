@@ -202,5 +202,31 @@
       "public_generator_long_non_aligned_probe": "logical prompt length 262111 (non-tile, non-page, non-8192 final attention chunk) passed through Gemma4Generator.prefill_forward, all 30 real-weight layers, exact sliding/full paged-cache fill, terminal head, and first canonical traced decode in 341.29 seconds with fallback exceptions enabled; /tmp/gemma4_long_context_public_full_stack.log"
     }
   },
-  "notes": "No context reduction: batch 1 retains 262144 tokens and the public generator passed an all-30-layer non-aligned 262111-token prefill plus first traced decode. The batch-32 serving profile divides the same 262144-token global full-attention cache budget into 8192 tokens per equal slot. The conservative worst validated profile is 22.285305300727487 GiB/device, leaving 9.714694699272513 GiB/device. The public generator additionally passed mixed non-aligned 33/47-token prompt handling with fixed slots, an inactive row, and both unchanged and scheduler-boundary changed page tables."
+  "optimized_full_model": {
+    "validated_at_utc": "2026-08-15",
+    "mesh": [1, 4],
+    "architecture": "Blackhole P300C",
+    "current_supported_context": 262144,
+    "capability_reduction": null,
+    "largest_all_layer_non_aligned_prompt": 262111,
+    "fresh_mixed_prompt_lengths": [33, 47],
+    "fixed_slots": 32,
+    "inactive_rows_tested": true,
+    "changed_only_page_tables_tested": true,
+    "batch32_full_stack_tested": true,
+    "token_out_trace": {
+      "model_and_sampling_split": true,
+      "tt_out_tok_feedback": true,
+      "device_position_and_rope_advance": true,
+      "nonblocking_replay": true,
+      "per_token_host_boundary": false
+    },
+    "artifacts": {
+      "mixed_prompt": "optimized_full_model/mixed_prompt_probe.log",
+      "batch32": "optimized_full_model/full_stack_batch32_probe.log",
+      "token_out": "optimized_full_model/no_host_boundary_token_out.json",
+      "runtime_audit": "optimized_full_model/runtime_fallback_audit.json"
+    }
+  },
+  "notes": "No context reduction: batch 1 retains 262144 tokens and the public generator passed an all-30-layer non-aligned 262111-token prefill plus first traced decode. The batch-32 serving profile divides the same 262144-token global full-attention cache budget into 8192 tokens per equal slot. The conservative worst validated profile is 22.285305300727487 GiB/device, leaving 9.714694699272513 GiB/device. The optimized full-model stage freshly passed mixed non-aligned 33/47-token prompt handling with fixed slots, an inactive row, changed-only page tables, and full-stack batch 32."
 }

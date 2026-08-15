@@ -1,0 +1,13 @@
+{
+  "logical_prompt_length": 262111,
+  "max_context": 262144,
+  "layers": 30,
+  "path": "public Gemma4Generator prefill plus first traced token-out decode",
+  "fallback_exceptions": true,
+  "result": "pass",
+  "elapsed_s": 343.89,
+  "source_log": "/tmp/gemma4_long_context_public_full_stack.log",
+  "source_log_sha256": "46d7d9e66f4b2148b95916dec1f7141d3e0af71975470371fdcbba7e6d1e61a9",
+  "durable_contract": "../context_contract.json",
+  "note": "The compact provenance and context contract are retained; the original verbose log remains machine-local."
+}

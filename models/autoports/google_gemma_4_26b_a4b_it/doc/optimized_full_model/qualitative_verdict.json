@@ -1,0 +1,17 @@
+{
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "checkpoint_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "prompt_mode": "chat",
+  "chat_template_present": true,
+  "rendering": "checkpoint chat_template.jinja via apply_chat_template(add_generation_prompt=true)",
+  "prompt_source": "../full_model/aime24_prompt.txt plus models/common/readiness_check/vllm_prompts.txt",
+  "generation": {"greedy": true, "max_new_tokens": 100},
+  "hf_artifact": "autoregressive_aime24/hf_completion.txt",
+  "tt_artifact": "autoregressive_aime24/tt_completion.txt",
+  "metadata_artifact": "autoregressive_aime24/autoregressive_meta.json",
+  "degeneracy_artifact": "autoregressive_aime24_degeneracy.json",
+  "shared_suite": "shared_qualitative_suite.json",
+  "shared_suite_degeneracy": "shared_qualitative_degeneracy.json",
+  "verdict": "pass",
+  "notes": "AIME24 plus all six shared prompts have rendered token IDs, HF controls, and TT outputs. They are coherent and on-topic with no wrong-language drift, prompt echo, control-token leakage, adjacent duplication, mechanical loop, or gibberish."
+}

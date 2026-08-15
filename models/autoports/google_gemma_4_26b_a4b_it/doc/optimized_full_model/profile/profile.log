@@ -1,0 +1,892 @@
+2026-08-15 21:02:22.146 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw
+2026-08-15 21:02:22.147 | INFO     | __main__:main:395 - Using port 8086
+2026-08-15 21:02:22.147 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-15 21:02:22.149 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/mvasiljevic/tt-metal/build/tools/profiler/bin/tracy-capture -o models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-15 21:02:22.154 | INFO     | __main__:main:413 - Test process started
+2026-08-15 21:02:22.882 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw
+2026-08-15 21:02:23.115 | DEBUG    | ttnn:<module>:76 - Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES
+2026-08-15 21:02:23.116 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe[blackhole-mesh_device0-device_params0] 2026-08-15 21:02:25.860 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 21:02:25.860 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-15 21:02:25.860 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-15 21:02:25.860 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-15 21:02:25.862 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-08-15 21:02:25.862 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-15 21:02:25.866 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-15 21:02:26.086 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-15 21:02:26.086 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-15 21:02:26.086 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-08-15 21:02:26.086 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-15 21:02:26.088 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-15 21:02:26.347 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-15 21:02:26.481 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-15 21:02:26.481 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-15 21:02:26.481 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-15 21:02:26.481 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.481 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:02:26.482 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-15 21:02:26.482 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-15 21:02:26.560 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-15 21:02:26.587 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-08-15 21:02:26.614 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-08-15 21:02:26.640 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-15 21:02:26.641 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-15 21:02:26.671 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-15 21:02:26.671 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-15 21:02:26.679 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-15 21:02:26.681 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-15 21:02:26.681 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-15 21:02:26.681 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-15 21:02:26.734 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:02:26.734 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:02:26.734 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:02:26.734 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:02:27.315 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=614969053449 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:02:27.315 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=617312874848 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:02:27.315 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=615596067239 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:02:27.317 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=616430077928 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:02:27.345 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-08-15 21:02:27.519 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/full_model/embedding_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 262144, 704])
+2026-08-15 21:02:28.244 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/full_model/lm_head_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 65536])
+2026-08-15 21:02:28.283 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/full_model/final_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.699 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/layer_scalar_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 1])
+2026-08-15 21:02:28.699 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/input_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.699 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_attn_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.699 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/pre_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.700 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.700 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_ff_ln_1_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.700 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.700 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/pre_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.700 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/q_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 256])
+2026-08-15 21:02:28.700 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/k_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 256])
+2026-08-15 21:02:28.702 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/qkv_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 2048])
+2026-08-15 21:02:28.713 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/o_proj_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 1024, 2816])
+2026-08-15 21:02:28.714 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/mlp_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:02:28.715 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/mlp_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:02:28.715 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/mlp_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 544, 2816])
+2026-08-15 21:02:28.716 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/router_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:28.716 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/router_proj_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 128])
+2026-08-15 21:02:28.716 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/router_per_expert_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 128])
+2026-08-15 21:02:28.748 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:02:28.780 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:02:28.810 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 192, 2816])
+2026-08-15 21:02:28.811 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_prefill_sparsity_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 1, 128])
+2026-08-15 21:02:28.830 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/packed_mlp_gate_up_decode_bfp4_tp4_dtype_BFLOAT4_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 1088])
+2026-08-15 21:02:29.284 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/layer_scalar_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 1])
+2026-08-15 21:02:29.284 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/input_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.284 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_attn_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/pre_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_ff_ln_1_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/pre_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/q_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 512])
+2026-08-15 21:02:29.285 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/k_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 512])
+2026-08-15 21:02:29.292 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/qkv_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 3072])
+2026-08-15 21:02:29.312 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/o_proj_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 2816])
+2026-08-15 21:02:29.313 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/mlp_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:02:29.314 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/mlp_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:02:29.315 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/mlp_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 544, 2816])
+2026-08-15 21:02:29.315 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/router_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:02:29.316 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/router_proj_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 128])
+2026-08-15 21:02:29.316 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/router_per_expert_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 128])
+2026-08-15 21:02:29.346 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:02:29.378 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:02:29.409 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 192, 2816])
+2026-08-15 21:02:29.410 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_prefill_sparsity_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 1, 128])
+2026-08-15 21:02:29.419 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/packed_mlp_gate_up_decode_bfp4_tp4_dtype_BFLOAT4_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 1088])
+2026-08-15 21:02:29.420 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-08-15 21:02:29.428 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-08-15 21:02:29.429 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_writer_unary_stick_layout_interleaved_start_id/7924570019876066794/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_writer_unary_stick_layout_interleaved_start_id/7924570019876066794/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_writer_unary_stick_layout_interleaved_start_id/7924570019876066794/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"slice_writer_unary_stick_layout_interleaved_start_id/7924570019876066794/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,2,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/1028383743528870012/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/1028383743528870012/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/1028383743528870012/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"slice_reader_unary_unpad_dims_rm_interleaved_start_id/1028383743528870012/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2,128
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/1676796464144283358/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/1676796464144283358/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/1676796464144283358/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"slice_reader_unary_unpad_dims_rm_interleaved_start_id/1676796464144283358/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2,128
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_writer_unary_stick_layout_interleaved_start_id/5663482968553796279/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_writer_unary_stick_layout_interleaved_start_id/5663482968553796279/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_writer_unary_stick_layout_interleaved_start_id/5663482968553796279/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"slice_writer_unary_stick_layout_interleaved_start_id/5663482968553796279/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,2,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_unary_stick_layout_interleaved_start_id/3987422039287605604/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/kernel/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_unary_stick_layout_interleaved_start_id/3987422039287605604/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_unary_stick_layout_interleaved_start_id/3987422039287605604/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_unary_stick_layout_interleaved_start_id/3987422039287605604/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,512,2,512
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/embeddings/13015363308655264991/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/embeddings/13015363308655264991/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/embeddings/13015363308655264991/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"embeddings/13015363308655264991/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DGENERIC='1' -DROUTING_MODE='145' -DUINT32='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,1,2,4,512,16,64,512,1,512,2,64,2,512
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/4468157846325918103/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/4468157846325918103/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/slice_reader_unary_unpad_dims_rm_interleaved_start_id/4468157846325918103/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"slice_reader_unary_unpad_dims_rm_interleaved_start_id/4468157846325918103/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_update_cache_interleaved_start_id/3895493076204057488/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_update_cache_interleaved_start_id/3895493076204057488/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_update_cache_interleaved_start_id/3895493076204057488/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_update_cache_interleaved_start_id/3895493076204057488/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,1,1,2,32,8,0,64,1,2,64,2,16,0,64,3,2,0,1024,2,2048,2,64,2,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_decode_all/8158449806571452739/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_decode_all/8158449806571452739/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_decode_all/8158449806571452739/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_decode_all/8158449806571452739/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,1,32,8,8,2,32,1,32,64,64,1,2,2,16,1,16,1,1,1,0,0,8,0,0,1,8192,0,0,2048,1024,64,2,0,0,16,0,1,2048,1,1,8,8,258,2,2048,2,2048,0,0,2,64,2,64,0,0
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc0/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc0/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc0/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"sdpa_flash_decode/6111163987505824791/\"" -DKERNEL_COMPILE_TIME_ARGS=32,8,8,1,2,8,2,1,1,1,1,2,8,1,1,1,1,32,64,16,1,1,0,0,8,0,1,1,1065353216,1024,4,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:94,
+                 from /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp:11,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:707:5: note: in expansion of macro 'DO_PRAGMA'
+  707 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc2/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc2/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc2/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"sdpa_flash_decode/6111163987505824791/\"" -DKERNEL_COMPILE_TIME_ARGS=32,8,8,1,2,8,2,1,1,1,1,2,8,1,1,1,1,32,64,16,1,1,0,0,8,0,1,1,1065353216,1024,4,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:69,
+                 from /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp:11,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:712:5: note: in expansion of macro 'DO_PRAGMA'
+  712 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_decode_all/2710407398845052521/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_decode_all/2710407398845052521/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_decode_all/2710407398845052521/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_decode_all/2710407398845052521/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,1,32,8,8,2,1065369472,0,1065353216,32,32,0,1,0,64,4,2,16,1,2,1,2,1,8,1,1024,4,64,2,2048
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc1/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc1/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/6111163987505824791/trisc1/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"sdpa_flash_decode/6111163987505824791/\"" -DKERNEL_COMPILE_TIME_ARGS=32,8,8,1,2,8,2,1,1,1,1,2,8,1,1,1,1,32,64,16,1,1,0,0,8,0,1,1,1065353216,1024,4,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_scatter/16684496075060873011/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_scatter/16684496075060873011/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_scatter/16684496075060873011/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_scatter/16684496075060873011/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=147878080,147878336,147878400,179629696,0,2,1,3,128,8,8,128,256,16,16,256,4,2,256,2,64,2,64,2,256
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_scatter/9390528223466099277/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_scatter/9390528223466099277/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_scatter/9390528223466099277/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_scatter/9390528223466099277/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=147878080,147878336,147878400,179629696,0,2,1,3,128,8,8,128,256,16,16,256,4,2,256,2,64,2,64,2,256
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_unary_stick_layout_interleaved_start_id/8453032057633882633/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/kernel/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_unary_stick_layout_interleaved_start_id/8453032057633882633/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_unary_stick_layout_interleaved_start_id/8453032057633882633/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_unary_stick_layout_interleaved_start_id/8453032057633882633/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,1024,2,1024
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/embeddings/13153672980498403263/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/embeddings/13153672980498403263/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/embeddings/13153672980498403263/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"embeddings/13153672980498403263/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DGENERIC='1' -DROUTING_MODE='145' -DUINT32='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,1,2,4,1024,16,64,1024,1,1024,2,64,2,1024
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_update_cache_interleaved_start_id/7514747882800151859/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_update_cache_interleaved_start_id/7514747882800151859/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_update_cache_interleaved_start_id/7514747882800151859/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_update_cache_interleaved_start_id/7514747882800151859/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=0,1,1,2,64,16,0,64,1,1,128,4,1,0,4,3,4,0,0,2,2048,2,64,2,64
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_decode_all/15401927005544645989/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_decode_all/15401927005544645989/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/reader_decode_all/15401927005544645989/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_decode_all/15401927005544645989/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,1,4,16,16,2,16,1,16,64,64,1,1,4,1,1,16,1,1,1,0,0,8,0,0,1,16384,0,0,2048,0,128,2,0,0,1,0,1,2048,1,1,16,16,258,2,2048,2,2048,0,0,2,64,2,64,0,0
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc0/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc0/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc0/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"sdpa_flash_decode/11642969283406805781/\"" -DKERNEL_COMPILE_TIME_ARGS=4,16,16,1,2,16,2,1,1,1,1,2,8,1,1,2,1,16,64,16,1,1,0,0,8,0,1,1,1065353216,0,4,128
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:94,
+                 from /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp:11,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:707:5: note: in expansion of macro 'DO_PRAGMA'
+  707 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_decode_all/9712565303728199563/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_decode_all/9712565303728199563/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/writer_decode_all/9712565303728199563/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_decode_all/9712565303728199563/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,1,4,16,16,2,1065369472,0,1065353216,16,16,0,1,0,64,4,1,16,1,1,1,2,1,8,1,0,4,128,2,2048
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc2/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc2/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc2/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"sdpa_flash_decode/11642969283406805781/\"" -DKERNEL_COMPILE_TIME_ARGS=4,16,16,1,2,16,2,1,1,1,1,2,8,1,1,2,1,16,64,16,1,1,0,0,8,0,1,1,1065353216,0,4,128
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:69,
+                 from /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp:11,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:712:5: note: in expansion of macro 'DO_PRAGMA'
+  712 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc1/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc1/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/sdpa_flash_decode/11642969283406805781/trisc1/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"sdpa_flash_decode/11642969283406805781/\"" -DKERNEL_COMPILE_TIME_ARGS=4,16,16,1,2,16,2,1,1,1,1,2,8,1,1,2,1,16,64,16,1,1,0,0,8,0,1,1,1065353216,0,4,128
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_reader/7347993940076941665/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_reader/7347993940076941665/ncrisc/ncrisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_reader/7347993940076941665/ncrisc/ncrisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"fill_pad_reader/7347993940076941665/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_PAD_DATA_FMT='DataFormat::Float16_b' -DFILL_PAD_FILL_ARG='fill_bits' -DFILL_PAD_FILL_FN='fill_tile_bitcast' -DMASK_ELEM_UINT='uint16_t' -DMASK_VALUE='0x3F80u' -DROUTING_MODE='145' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2048,1,1,0,1,0,1,2,0,0,2,2048
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc2/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc2/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc2/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"fill_pad_compute/6752966593759520993/\"" -DKERNEL_COMPILE_TIME_ARGS=2048,1,0,1,2,0,0,1,2,16
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp:5,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:712:5: note: in expansion of macro 'DO_PRAGMA'
+  712 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc0/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc0/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc0/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"fill_pad_compute/6752966593759520993/\"" -DKERNEL_COMPILE_TIME_ARGS=2048,1,0,1,2,0,0,1,2,16
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp:5,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:707:5: note: in expansion of macro 'DO_PRAGMA'
+  707 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_writer/13071687744662803522/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_writer/13071687744662803522/brisc/brisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_writer/13071687744662803522/brisc/brisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"fill_pad_writer/13071687744662803522/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_PAD_DATA_FMT='DataFormat::Float16_b' -DFILL_PAD_FILL_ARG='fill_bits' -DFILL_PAD_FILL_FN='fill_tile_bitcast' -DMASK_ELEM_UINT='uint16_t' -DMASK_VALUE='0x3F80u' -DROUTING_MODE='145' -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2048,1,1,0,1,0,1,1,2,16,2,2048
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+cd /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc1/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/runtime/sfpi/include -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute -c -o /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc1/trisck.6470154435338003895.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/mvasiljevic/.cache/tt-metal-cache/8846000813376827529/kernels/fill_pad_compute/6752966593759520993/trisc1/trisck.6470154435338003895.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"fill_pad_compute/6752966593759520993/\"" -DKERNEL_COMPILE_TIME_ARGS=2048,1,0,1,2,0,0,1,2,16
+In file included from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-15 21:02:34.037 | INFO     | tracy:signpost:49 - FULL_MODEL_REDUCED_DECODE
+2026-08-15 21:02:34.043 | INFO     | tracy:signpost:49 - FULL_MODEL_REDUCED_DECODE_END
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /home/mvasiljevic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+6.71s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe[blackhole-mesh_device0-device_params0]
+6.16s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe[blackhole-mesh_device0-device_params0]
+1.70s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe[blackhole-mesh_device0-device_params0]
+======================== 1 passed, 3 warnings in 15.69s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 3 instances!
+ - leaked instance 0x7ea624efe268 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7ea602499fc8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7ea624fda388 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 39 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 321 functions!
+ - leaked function ""
+ - leaked function "__eq__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "deallocate_buffers"
+ - leaked function ""
+ - leaked function "get_tile"
+ - leaked function "__repr__"
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 21:02:44.495 | info     |    BuildKernels | JIT cache stats: 513/541 hits (94.8%) [513 cached, 266 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 21:02:44.495 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 21:02:44.538 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-15 21:02:44.539 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-15 21:02:45.062 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-15 21:02:45.063 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-15 21:02:45.063 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 22.38 s
+Zones: 2,397,726
+Elapsed time: 22.21 s
+Saving trace... done!
+Trace size 23.36 MB (19.52% ratio)
+2026-08-15 21:02:45.582 | INFO     | __main__:main:452 - Copying /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/test_full_model_contract_2026_08_15_21_02_45.tracy
+2026-08-15 21:02:45.593 | INFO     | __main__:main:455 - Copied /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/test_full_model_contract_2026_08_15_21_02_45.tracy
+2026-08-15 21:02:45.597 | INFO     | __main__:main:464 - embed.tracy -> traces/test_full_model_contract_2026_08_15_21_02_45.tracy
+2026-08-15 21:02:45.597 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-15 21:02:45.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-15 21:02:45.600 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-15 21:02:46.446 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw/.logs/tracy_ops_times.csv
+2026-08-15 21:02:46.490 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw/.logs/tracy_ops_data.csv
+2026-08-15 21:02:46.491 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/home/mvasiljevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-15 21:02:52.008 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-15 21:02:52.009 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-08-15 21:02:57.112 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-08-15 21:02:57.112 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-08-15 21:02:57.187 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-08-15 21:02:58.246 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw/reports/2026_08_15_21_02_57/ops_perf_results_2026_08_15_21_02_57.csv

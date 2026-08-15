@@ -1,0 +1,61 @@
+{
+  "hardware": "4x P300C Blackhole",
+  "mesh": [1, 4],
+  "fabric": "FABRIC_1D_RING",
+  "batch": 1,
+  "inherited_host_visible": {
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "ttft_ms": 320.840963,
+    "decode_tokens": 127,
+    "decode_t_s_u": 23.762909
+  },
+  "current_host_visible": {
+    "artifact": "autoregressive_perf_128/autoregressive_meta.json",
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "ttft_ms": 280.59801645576954,
+    "decode_tokens": 127,
+    "decode_elapsed_s": 4.844965842552483,
+    "decode_t_s_u": 26.212775100410685,
+    "trace_replays": 127,
+    "token_readbacks": 128,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 1
+  },
+  "no_host_boundary_token_out": {
+    "artifact": "no_host_boundary_token_out.json",
+    "warmups": 5,
+    "measured_replays": 128,
+    "command": "GEMMA4_FULL_MODEL_PROBE=1 GEMMA4_FULL_STACK_PROBE=1 GEMMA4_PROBE_PROMPT_LEN=128 GEMMA4_NO_HOST_TOKEN_OUT_BENCH=1 GEMMA4_NO_HOST_WARMUPS=5 GEMMA4_NO_HOST_ITERATIONS=128 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q -s models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe",
+    "raw_log": "no_host_boundary_token_out.log",
+    "max_seq_len": 512,
+    "elapsed_s": 4.568965043872595,
+    "ms_per_token": 35.69503940525465,
+    "decode_t_s_u": 28.01509724213361,
+    "final_position": 262,
+    "token_readbacks": 0,
+    "final_synchronizations": 1
+  },
+  "decoder_stack_lower_bound": {
+    "sliding_layers": 25,
+    "sliding_ms_per_layer": 1.070437,
+    "full_layers": 5,
+    "full_ms_per_layer": 1.113634,
+    "total_ms_per_token": 32.329095,
+    "token_out_overhead_ms": 3.36594440525465,
+    "token_out_overhead_percent": 10.4112
+  },
+  "teacher_forcing": {
+    "artifact": "aime24_teacher_forcing.log",
+    "ttft_ms": 417.80,
+    "decode_t_s_u": 25.43,
+    "top1": 0.98,
+    "top5": 1.0,
+    "top100": 1.0
+  },
+  "comparison_note": "The inherited/current host-visible difference is observational, not attributed to a retained stage optimization. Both model optimization candidates were reverted; final current numbers are the stage result."
+}

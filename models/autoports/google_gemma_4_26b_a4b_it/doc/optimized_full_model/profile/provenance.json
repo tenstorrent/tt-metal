@@ -1,0 +1,17 @@
+{
+  "command": "TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' GEMMA4_FULL_MODEL_PROBE=1 GEMMA4_FULL_MODEL_DEVICE_PROFILE=1 python -m tracy -r -p -v --check-exit-code --dump-device-data-mid-run --op-support-count=5000 -o models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/raw -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe",
+  "processing_command": "tt-perf-report <ops_perf_results.csv> --start-signpost FULL_MODEL_REDUCED_DECODE --end-signpost FULL_MODEL_REDUCED_DECODE_END --no-color --active-experts 4 --csv profile/full_model_reduced_decode.csv --summary-file profile/full_model_reduced_summary.csv",
+  "scope": "one traced replay: reduced sliding layer 0, full layer 5, final norm, TP4 LM head, split sampler and device position advance",
+  "mesh": "1x4 P300C FABRIC_1D_RING",
+  "fallback_exceptions": true,
+  "merged_device_op_sum_us": 5585.160,
+  "modeled_dram_roofline_percent": 15.1,
+  "raw_capture_retention": "removed after compact report extraction; raw capture size was 1.1 GiB",
+  "artifacts": [
+    "profile.log",
+    "full_model_reduced_decode.csv",
+    "full_model_reduced_summary.csv.csv",
+    "full_model_reduced_summary.csv.png",
+    "full_model_reduced_report.txt"
+  ]
+}

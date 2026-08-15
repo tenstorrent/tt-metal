@@ -1,0 +1,22 @@
+{
+  "hf_model_id": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "prompt_mode": "chat",
+  "rendering": "checkpoint processor chat_template.jinja via apply_chat_template(add_generation_prompt=true)",
+  "generation": {"greedy": true, "max_new_tokens": 64},
+  "prompt_source": "models/common/readiness_check/vllm_prompts.txt",
+  "entries": [
+    {"id": 0, "name": "haiku", "artifact": "shared_qualitative/00_haiku/autoregressive_meta.json", "verdict": "coherent haiku; clean turn termination"},
+    {"id": 1, "name": "explanation", "artifact": "shared_qualitative/01_explanation/autoregressive_meta.json", "verdict": "coherent supervised-learning explanation"},
+    {"id": 2, "name": "story", "artifact": "shared_qualitative/02_story/autoregressive_meta.json", "verdict": "coherent creative continuation"},
+    {"id": 3, "name": "thermodynamics", "artifact": "shared_qualitative/03_thermodynamics/autoregressive_meta.json", "verdict": "on-topic scientific explanation"},
+    {"id": 4, "name": "french", "artifact": "shared_qualitative/04_french/autoregressive_meta.json", "verdict": "correct formal and informal French translations; clean turn termination"},
+    {"id": 5, "name": "python", "artifact": "shared_qualitative/05_python/autoregressive_meta.json", "verdict": "coherent Python/Fibonacci guidance"}
+  ],
+  "rendered_prompts_and_token_ids": "stored in each autoregressive_meta.json",
+  "hf_controls": "stored beside each metadata file as hf_completion.txt",
+  "tt_outputs": "stored beside each metadata file as tt_completion.txt",
+  "degeneracy_report": "shared_qualitative_degeneracy.json",
+  "degeneracy_result": "clean",
+  "overall_verdict": "pass"
+}

@@ -1,0 +1,20 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/autoregressive_aime24/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 71,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0845
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/autoregressive_aime24/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 7,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

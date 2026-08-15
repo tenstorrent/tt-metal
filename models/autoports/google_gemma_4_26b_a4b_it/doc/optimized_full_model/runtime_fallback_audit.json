@@ -1,0 +1,30 @@
+{
+  "measured_path": "all 30 layers, final norm, tied TP4 vocabulary-sharded LM head, split Sampling1D, tt_out_tok feedback, persistent position/RoPE/cache/page-table state",
+  "runtime_policy": "TTNN_CONFIG_OVERRIDES={throw_exception_on_fallback:true}",
+  "fallback_raising_probes_passed": [
+    "reduced real-weight greedy plus sampled trace watcher",
+    "mixed 33/47 prompt, inactive-slot, changed-page-table probe",
+    "all-30-layer batch-32 fixed-slot probe"
+  ],
+  "host_boundaries_per_token_out_decode": {
+    "logits_readback": 0,
+    "host_argmax": 0,
+    "python_token_feedback": 0,
+    "token_readback": 0,
+    "token_refresh": 0,
+    "position_refresh": 0,
+    "rope_refresh": 0,
+    "page_table_refresh": 0,
+    "synchronization": 0
+  },
+  "trace": {
+    "model_trace": true,
+    "sampling_trace": true,
+    "nonblocking_replay": true,
+    "device_position_advance": true,
+    "changed_only_page_tables": true,
+    "greedy_and_sampled_modes_tested": true
+  },
+  "explicit_compatibility_boundary": "sampling_mode=host is eager test compatibility and excluded from optimized measurements",
+  "audit_result": "clean"
+}

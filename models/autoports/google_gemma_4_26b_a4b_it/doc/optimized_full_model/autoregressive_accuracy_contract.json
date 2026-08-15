@@ -1,0 +1,15 @@
+{
+  "goal_interpretation": "run_prefill_check and run_teacher_forcing own top-rank accuracy; free-running autoregression owns qualitative token-feedback evidence",
+  "shifted_left_rank_runner": "models/common/readiness_check/run_teacher_forcing.py",
+  "runner_behavior": "For every step, collect the traced greedy TT prediction for rank scoring, then return the HF ground-truth token as the next model input.",
+  "reference": "../full_model/readiness_aime24_chat.refpt",
+  "tokens": 100,
+  "trace_enabled": true,
+  "top1": 0.98,
+  "top5": 1.0,
+  "top100": 1.0,
+  "artifact": "aime24_teacher_forcing.log",
+  "free_running_artifact": "autoregressive_aime24/autoregressive_meta.json",
+  "free_running_role": "greedy device-token-feedback coherence and degeneracy, not HF-conditioned rank accuracy",
+  "free_running_verdict": "pass"
+}

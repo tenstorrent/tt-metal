@@ -1,0 +1,30 @@
+{
+  "candidate": "BF16 DRAM-width-sharded vocabulary-sharded LM head",
+  "hardware": "P300C 1x4 FABRIC_1D_RING",
+  "shape_per_device": [32, 2816, 65536],
+  "initial_single_matmul": {
+    "dram_cores": 8,
+    "in0_block_w": 11,
+    "per_core_N": 256,
+    "result": "failed",
+    "requested_static_circular_buffer_bytes": 19030784,
+    "available_l1_bytes": 1572864
+  },
+  "adapted_split_family": {
+    "local_chunks": 16,
+    "columns_per_local_chunk": 4096,
+    "in0_block_w": 11,
+    "per_core_N": 16,
+    "reduced_real_weight_fallback_raising_trace_probe": "pass",
+    "no_host_boundary_ms_per_token": 36.036015721037984,
+    "no_host_boundary_t_per_s_per_user": 27.750015643827005
+  },
+  "incumbent": {
+    "memory_layout": "DRAM interleaved BF16, one local 65536-column matmul",
+    "no_host_boundary_ms_per_token": 35.705952323041856,
+    "no_host_boundary_t_per_s_per_user": 28.00653490355661
+  },
+  "candidate_latency_change_percent": 0.9243932076365091,
+  "decision": "rejected and reverted",
+  "reason": "The legal split DRAM-sharded family is slower after counting sixteen launches, sixteen sharded-to-interleaved conversions, and concat."
+}

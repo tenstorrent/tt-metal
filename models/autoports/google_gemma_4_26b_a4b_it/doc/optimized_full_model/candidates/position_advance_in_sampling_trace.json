@@ -1,0 +1,35 @@
+{
+  "candidate": "capture current_pos and RoPE position plus_one operations in the sampling trace",
+  "hardware": "P300C 1x4 FABRIC_1D_RING",
+  "baseline": {
+    "source": "../full_model/autoregressive_perf_128_fixed/autoregressive_meta.json",
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "ttft_ms": 320.8409631624818,
+    "decode_tokens": 127,
+    "decode_elapsed_s": 5.344463414512575,
+    "decode_t_per_s_per_user": 23.762909416713192
+  },
+  "candidate_result": {
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "ttft_ms": 759.5197111368179,
+    "decode_tokens": 127,
+    "decode_elapsed_s": 6.202206329442561,
+    "decode_t_per_s_per_user": 20.476584178942407,
+    "trace_replays": 127,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0,
+    "setup_synchronizations": 1,
+    "scalar_token_readbacks": 128
+  },
+  "relative_decode_change_percent": -13.829641733429376,
+  "correctness": {
+    "reduced_real_weight_fallback_raising_probe": "pass",
+    "two_replay_position_progression": "pass"
+  },
+  "decision": "rejected and reverted",
+  "reason": "The fused sampling trace was materially slower; keeping device-side position increments as eager dispatches between nonblocking trace replays preserves overlap."
+}

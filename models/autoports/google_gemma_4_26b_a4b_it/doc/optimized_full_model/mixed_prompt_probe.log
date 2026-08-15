@@ -1,0 +1,174 @@
+2026-08-15 21:01:52.867 | DEBUG    | ttnn:<module>:76 - Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES
+2026-08-15 21:01:52.867 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_mixed_prompt_and_inactive_slot_probe[blackhole-mesh_device0-device_params0] 2026-08-15 21:01:54.779 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 21:01:54.779 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-15 21:01:54.779 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-15 21:01:54.779 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-15 21:01:54.780 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-08-15 21:01:54.780 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-15 21:01:54.784 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-15 21:01:55.006 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-15 21:01:55.006 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-15 21:01:55.006 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-08-15 21:01:55.006 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-15 21:01:55.008 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-15 21:01:55.243 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-15 21:01:55.384 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-15 21:01:55.384 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-15 21:01:55.384 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-15 21:01:55.384 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-15 21:01:55.384 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-15 21:01:55.384 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-15 21:01:55.390 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-15 21:01:55.390 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-15 21:01:55.390 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-15 21:01:55.390 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-15 21:01:55.424 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-15 21:01:55.452 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-15 21:01:55.452 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-15 21:01:55.453 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-15 21:01:55.454 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-15 21:01:55.454 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-15 21:01:55.454 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-15 21:01:55.494 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:01:55.494 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:01:55.494 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:01:55.494 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-08-15 21:01:56.074 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=587405461959 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:01:56.074 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=586853556652 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:01:56.074 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=588130108361 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:01:56.074 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349973 GHz, device_time_at_sync=588874403308 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-15 21:01:56.102 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-08-15 21:01:56.259 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/full_model/embedding_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 262144, 704])
+2026-08-15 21:01:56.996 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/full_model/lm_head_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 65536])
+2026-08-15 21:01:57.041 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/full_model/final_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.462 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/layer_scalar_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 1])
+2026-08-15 21:01:57.462 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/input_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.462 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_attn_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/pre_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_ff_ln_1_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/post_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/pre_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/q_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 256])
+2026-08-15 21:01:57.463 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/k_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 256])
+2026-08-15 21:01:57.466 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/qkv_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 2048])
+2026-08-15 21:01:57.476 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/o_proj_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 1024, 2816])
+2026-08-15 21:01:57.477 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/mlp_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:01:57.478 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/mlp_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:01:57.479 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/mlp_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 544, 2816])
+2026-08-15 21:01:57.479 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/router_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:57.480 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/router_proj_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 128])
+2026-08-15 21:01:57.480 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/router_per_expert_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 128])
+2026-08-15 21:01:57.510 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:01:57.540 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:01:57.570 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 192, 2816])
+2026-08-15 21:01:57.570 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/expert_prefill_sparsity_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 1, 128])
+2026-08-15 21:01:57.580 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_0/packed_mlp_gate_up_decode_bfp4_tp4_dtype_BFLOAT4_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 1088])
+2026-08-15 21:01:58.047 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/layer_scalar_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 1])
+2026-08-15 21:01:58.047 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/input_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.047 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_attn_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/pre_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_ff_ln_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_ff_ln_1_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/post_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/pre_ff_ln_2_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/q_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 512])
+2026-08-15 21:01:58.048 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/k_norm_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 1, 512])
+2026-08-15 21:01:58.055 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/qkv_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 3072])
+2026-08-15 21:01:58.075 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/o_proj_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 2816])
+2026-08-15 21:01:58.077 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/mlp_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:01:58.078 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/mlp_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 544])
+2026-08-15 21:01:58.079 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/mlp_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 544, 2816])
+2026-08-15 21:01:58.079 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/router_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 1, 2816])
+2026-08-15 21:01:58.080 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/router_proj_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 128])
+2026-08-15 21:01:58.080 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/router_per_expert_scale_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([1, 128])
+2026-08-15 21:01:58.111 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_gate_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:01:58.143 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_up_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 2816, 192])
+2026-08-15 21:01:58.174 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_down_tp4_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 128, 192, 2816])
+2026-08-15 21:01:58.175 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/expert_prefill_sparsity_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 1, 128])
+2026-08-15 21:01:58.181 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_full_model_probe_cache/multichip/layer_5/packed_mlp_gate_up_decode_bfp4_tp4_dtype_BFLOAT4_B_layout_TILE.tensorbin of shape Shape([1, 1, 2816, 1088])
+2026-08-15 21:01:58.182 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-08-15 21:01:58.185 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-08-15 21:01:58.186 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /home/mvasiljevic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.56s call     models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_mixed_prompt_and_inactive_slot_probe[blackhole-mesh_device0-device_params0]
+1.55s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_mixed_prompt_and_inactive_slot_probe[blackhole-mesh_device0-device_params0]
+0.14s teardown models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_mixed_prompt_and_inactive_slot_probe[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_mixed_prompt_and_inactive_slot_probe[blackhole-mesh_device0-device_params0]
+======================== 1 passed, 3 warnings in 5.20s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 3 instances!
+ - leaked instance 0x793b01dfa088 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x793b022c54e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x793b023d5878 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 39 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 321 functions!
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "to_list"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 21:02:00.709 | info     |    BuildKernels | JIT cache stats: 608/608 hits (100.0%) [608 cached, 381 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 21:02:00.709 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 21:02:00.723 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-15 21:02:00.723 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-15 21:02:01.262 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-15 21:02:01.263 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-15 21:02:01.263 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

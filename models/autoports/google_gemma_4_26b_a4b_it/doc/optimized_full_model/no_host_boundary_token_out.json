@@ -1,0 +1,33 @@
+{
+  "hardware": "P300C 1x4 FABRIC_1D_RING",
+  "scope": "all 30 decoder layers, final norm, vocabulary-sharded LM head, split Sampling1D force-argmax, tt_out_tok feedback, and device position/RoPE advance",
+  "command": "GEMMA4_FULL_MODEL_PROBE=1 GEMMA4_FULL_STACK_PROBE=1 GEMMA4_PROBE_PROMPT_LEN=128 GEMMA4_NO_HOST_TOKEN_OUT_BENCH=1 GEMMA4_NO_HOST_WARMUPS=5 GEMMA4_NO_HOST_ITERATIONS=128 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q -s models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe",
+  "raw_log": "no_host_boundary_token_out.log",
+  "prompt_tokens": 128,
+  "max_seq_len": 512,
+  "warmup_replays": 5,
+  "measured_replays": 128,
+  "elapsed_s": 4.568965043872595,
+  "ms_per_token": 35.69503940525465,
+  "decode_t_per_s_per_user": 28.01509724213361,
+  "final_position": 262,
+  "expected_final_position": 262,
+  "nonblocking_trace_replay": true,
+  "synchronization_policy": "one synchronization before and one after the measured window; neither occurs per token",
+  "counters": {
+    "trace_replays": 134,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0,
+    "token_readbacks": 0,
+    "generator_synchronizations": 0
+  },
+  "decoder_stack_lower_bound": {
+    "source": "../optimized_multichip_decoder/profile_accounting.md",
+    "ms_per_token": 32.329095,
+    "complete_path_overhead_ms_per_token": 3.36594440525465,
+    "complete_path_percent_over_decoder_only": 10.4112
+  },
+  "interpretation": "Primary reproducible no-host-boundary token-feedback metric. Host-visible autoregressive generation is reported separately because it reads scalar tokens for output and EOS handling."
+}
