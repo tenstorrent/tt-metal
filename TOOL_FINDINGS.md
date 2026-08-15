@@ -2811,6 +2811,14 @@ silently run a different model; F30 shows the tool can *prove* the template is g
 run, and proceed regardless. It is also F20's exact shape a third time: the knowledge exists and is
 wired to stdout instead of to control flow.
 
+**This is not only our mess.** The dangling Voxtral entry was ours (S7) and we removed it. The
+drift check still fails afterwards, with **26 mapped paths missing** — `XTTS-v2 (multilingual TTS)`
+→ `models/demos/xtts_v2`, `tt_dit/minimax_h3 (auto-upstream)`, and 24 more, all entering the
+registry through the tool's own commits (`589a4d121a`, `12bd4e4ef8`). So the shipped registry
+points at 26 paths that do not exist in the checkout it ships with, and the gate that knows this is
+the one guaranteed never to fire. Any of those 26 can be selected as a template exactly the way
+ours was.
+
 ### Fixes
 
 1. **Make hard drift on the *selected* backend fatal.** Global drift can stay advisory — 27 stale
