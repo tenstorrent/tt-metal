@@ -139,6 +139,12 @@ class MLP(LightweightModule):
         Llama-3.2-1B-Instruct); the multi-chip replicated -> 2D-sharded mesh
         projection is not inserted (a no-op on the 1x1 transfer case).
         """
+        assert self.args.num_devices == 1, (
+            f"MLP.update for num_devices > 1 is not yet implemented "
+            f"(got num_devices={self.args.num_devices}); w1/w2/w3 are "
+            "2D-sharded on a mesh and need a ttnn.mesh_partition into the "
+            "sharded layout before copy."
+        )
         assert self.args.hidden_dim == self.args.unpadded_hidden_dim, (
             f"MLP.update does not yet support hidden_dim padding "
             f"(hidden_dim={self.args.hidden_dim}, "
