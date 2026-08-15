@@ -3005,8 +3005,14 @@ def _clamp_threshold_c():
     return round(lo - _THERMAL_MARGIN_C, 2)
 
 
+_LAST_KNOWN_TEMP_C = None
+
+
 def _read_die_temp_c():
     """Hottest ASIC temperature across the chips this run can see, or None if unreadable.
+
+    Every successful reading is remembered in _LAST_KNOWN_TEMP_C so a later failure has something
+    better than a guess to fall back on -- see _wait_for_thermal_headroom.
 
     Delegates to agent.probes._read_asic_temp -- the tool already had this and a second copy would
     be one more place to fix. MAX is the right reduction on a mesh: a collective runs at the pace
@@ -3019,15 +3025,19 @@ def _read_die_temp_c():
     every chip on the host, deliberately: nothing says which chip the run will open, and
     over-waiting is the safe direction.
 
-    None means "cannot tell", and every caller treats that as permission to proceed: a board whose
-    telemetry we cannot read must not become a board we refuse to measure.
+    None means "cannot tell". A host that has never produced a reading has no telemetry to wait for
+    and still proceeds -- a missing sensor is not a hot board. But once a reading HAS been seen, an
+    unreadable sensor falls back to it instead of proceeding: see _wait_for_thermal_headroom.
     """
     try:
         from agent.probes import _read_asic_temp
 
-        return _read_asic_temp()
+        v = _read_asic_temp()
     except Exception:  # noqa: BLE001
         return None
+    if v is not None:
+        globals()["_LAST_KNOWN_TEMP_C"] = float(v)
+    return v
 
 
 def _wait_for_thermal_headroom():
@@ -3054,7 +3064,26 @@ def _wait_for_thermal_headroom():
     limit = _clamp_threshold_c()
     t0 = time.time()
     cur = _read_die_temp_c()
-    if cur is None or limit is None or cur <= limit:
+    if cur is None:
+        # UNKNOWN IS NOT COOL. This used to fall through with the cool boards, and the moment a read
+        # is most likely to fail is right after a heavy run -- exactly when the board is hottest. On
+        # 2026-08-15 that let a measurement start on a 93C board; it ran clamped at 800 MHz instead
+        # of 1350, took ~1.7x longer, blew its 1806 s budget, and the timeout's reset bricked the
+        # board. Both sources have to fail to get here, so this is rare and worth waiting out.
+        #
+        # The distinction that keeps it from hanging: a host that has NEVER produced a reading has no
+        # telemetry to wait for, and a missing sensor is still not a hot board -- that case proceeds
+        # exactly as before. Having read 93C a minute ago and being unable to read now is a different
+        # thing entirely, and the last known value is the best evidence available.
+        cur = _LAST_KNOWN_TEMP_C
+        if cur is None:
+            return True, None
+        print(
+            "  [thermal-gate] sensors unreadable; using the last known %.1fC rather than assuming cool" % cur,
+            file=sys.stderr,
+            flush=True,
+        )
+    if limit is None or cur <= limit:
         return True, cur
     print(
         "  [thermal-gate] die at %.1fC, this board has clamped at/above %.1fC; waiting (up to %.0fs)"

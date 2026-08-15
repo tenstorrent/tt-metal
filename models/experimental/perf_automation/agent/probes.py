@@ -183,6 +183,30 @@ def board_to_arch(board_type: str) -> str | None:
     return None
 
 
+def device_is_responsive(timeout_s: float = 20.0) -> bool:
+    """Does the board answer at all? The question a timeout must ask before resetting anything.
+
+    DELIBERATELY NOT tt_smi_probe. That one raises on an unrecognised board_type -- measured here,
+    it rejects this host's own `p300c` -- and a board that answers with a name the table lacks is
+    ALIVE. Conflating "did not answer" with "answered something unfamiliar" would reset healthy
+    hardware, which is the exact failure this check exists to prevent.
+
+    So the bar is only: did tt-smi return, and did it name any device. No arch mapping, no schema
+    beyond `device_info` being non-empty. Bounded well under tt-smi's own 120 s because what is being
+    established is whether the answer comes back PROMPTLY; a board that needs two minutes to say
+    hello is not one worth protecting from a reset.
+
+    Any failure returns False, which resets exactly as before: this only ever adds a reason NOT to
+    reset, never a reason to.
+    """
+    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    try:
+        proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=timeout_s)
+        return bool((json.loads(proc.stdout) or {}).get("device_info"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def tt_smi_probe() -> str:
     """Run `tt-smi -s`, normalize to the snapshot shape parse_env_snapshot expects.
 
@@ -769,15 +793,64 @@ def _max_asic_temp(data) -> float | None:
     return max(temps) if temps else None
 
 
-def _read_asic_temp():
-    """Max ASIC temperature (deg C) across chips from `tt-smi -s`, or None if unavailable. Only safe at a
-    run boundary (device idle) -- tt-smi contends with an active profiler run."""
+_SYSFS_HWMON = "/sys/class/hwmon"
+_TT_SMI_TEMP_TIMEOUT_S = float(os.environ.get("PERF_MCP_TT_SMI_TEMP_TIMEOUT_S", "15") or "15")
+
+
+def _sysfs_asic_temps() -> list:
+    """Per-chip die temperature straight from the driver, in degrees C.
+
+    THE KERNEL ALREADY PUBLISHES THIS. tt-smi shells out and OPENS THE DEVICE to answer a question the
+    tenstorrent driver exposes as a file; measured on this host, sysfs is 0.0003 s against tt-smi's
+    0.26 s, agrees to 0.2 C, and returns while a matmul is running (81.9 vs 82.1 C under load).
+
+    Matched on the DRIVER, not the hwmon `name`. The name is the arch ("blackhole"), so keying on it
+    would silently find zero chips on Wormhole and report no temperature at all -- the exact shape of
+    failure this function exists to remove.
+    """
+    out: list = []
+    try:
+        entries = sorted(Path(_SYSFS_HWMON).iterdir())
+    except OSError:
+        return out
+    for h in entries:
+        try:
+            if (h / "device" / "driver").resolve().name != "tenstorrent":
+                continue
+            out.append(int((h / "temp1_input").read_text().strip()) / 1000.0)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _tt_smi_asic_temp():
+    """The second opinion. Bounded, because tt-smi's failure mode is to HANG, not to answer."""
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
     try:
-        proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=30)
+        proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=_TT_SMI_TEMP_TIMEOUT_S)
         return _max_asic_temp(json.loads(proc.stdout))
     except Exception:  # noqa: BLE001
         return None
+
+
+def _read_asic_temp():
+    """Hottest die across the chips, from BOTH sources, or None when neither answers.
+
+    TWO SOURCES, AND THE HOTTER WINS. Either one can be unavailable -- sysfs needs a driver that
+    registers hwmon, tt-smi needs to not be contending with a running profile -- and they fail
+    independently, so asking both is how a reading survives either one being out. Taking the max is
+    the safe direction: a source that says hot is evidence, a source that says nothing is not evidence
+    of cool.
+
+    sysfs is tried first and usually settles it in under a millisecond; tt-smi is only consulted when
+    sysfs found no chips, so the common path costs nothing. None means NEITHER answered, and the
+    caller must treat that as unknown rather than as a cool board -- see _wait_for_thermal_headroom.
+    """
+    vals = [v for v in (max(_sysfs_asic_temps() or [0.0]) or None,) if v]
+    if not vals:
+        v = _tt_smi_asic_temp()
+        return float(v) if v else None
+    return max(vals)
 
 
 def _await_cool(read_temp=_read_asic_temp, sleeper=time.sleep) -> None:

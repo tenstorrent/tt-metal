@@ -253,11 +253,21 @@ def test_an_unknown_start_temperature_is_not_recorded(mcp):
 
 
 def _smi(mcp, monkeypatch, temps):
+    """Drive the TT-SMI parsing path with a scripted payload.
+
+    sysfs is stubbed empty because it is now tried FIRST, and on a host that has hwmon it answers in
+    0.3 ms -- the real board's temperature, not this payload. These tests are about the tt-smi
+    fallback, so the faster source has to be taken away for them to reach it.
+    """
     payload = {"device_info": [{"telemetry": {"asic_temperature": t}} for t in temps]}
 
     class R:
         stdout = __import__("json").dumps(payload)
 
+    from agent import probes as _pr
+
+    monkeypatch.setattr(_pr, "_sysfs_asic_temps", lambda: [])
+    monkeypatch.setattr(_pr.subprocess, "run", lambda *a, **k: R())
     monkeypatch.setattr(mcp._sp, "run", lambda *a, **k: R())
 
 
@@ -285,6 +295,10 @@ def test_unparseable_telemetry_reads_as_unknown(mcp, monkeypatch):
     class R:
         stdout = "Error: device 99 not found\n"
 
+    from agent import probes as _pr
+
+    monkeypatch.setattr(_pr, "_sysfs_asic_temps", lambda: [])  # sysfs answers first; take it away
+    monkeypatch.setattr(_pr.subprocess, "run", lambda *a, **k: R())
     monkeypatch.setattr(mcp._sp, "run", lambda *a, **k: R())
     assert mcp._read_die_temp_c() is None
 
@@ -295,6 +309,10 @@ def test_a_chip_with_no_temperature_does_not_break_the_read(mcp, monkeypatch):
     class R:
         stdout = __import__("json").dumps(payload)
 
+    from agent import probes as _pr
+
+    monkeypatch.setattr(_pr, "_sysfs_asic_temps", lambda: [])  # sysfs answers first; take it away
+    monkeypatch.setattr(_pr.subprocess, "run", lambda *a, **k: R())
     monkeypatch.setattr(mcp._sp, "run", lambda *a, **k: R())
     assert mcp._read_die_temp_c() == 71.0
 

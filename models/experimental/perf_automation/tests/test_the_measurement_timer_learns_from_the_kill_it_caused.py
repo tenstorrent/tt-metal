@@ -46,7 +46,9 @@ def test_it_records_on_the_timeout_path_too():
     measurement that would have corrected it."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
     i = src.index("def _run_device_proc(")
-    body = src[i : i + 9000]
+    # Scoped to the function, not a fixed character count: a 9000-char window silently stopped
+    # covering the recording as soon as the timeout handler grew.
+    body = src[i : src.index("\ndef ", i + 1)]
     rec = body.index("record_observed(observe_root, observe_op")
     fin = body.rindex("finally:", 0, rec)
     # the recording must sit inside a `finally`, so SIGKILL/TimeoutExpired still reaches it

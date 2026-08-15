@@ -2718,6 +2718,28 @@ _COOL_END = "PERF_MCP_COOLING_END"
 _COOL_HEARTBEAT_S = float(os.environ.get("PERF_MCP_COOL_HEARTBEAT_S", "90"))
 
 
+_LIVENESS_PROBE_S = float(os.environ.get("PERF_MCP_LIVENESS_PROBE_S", "20"))
+
+
+def _device_answers() -> bool:
+    """Is the board still talking? Used to decide whether a timeout deserves a reset.
+
+    Delegates to agent.probes.device_is_responsive, which asks only whether tt-smi came back naming
+    any device -- NOT the startup probe, which raises on an unrecognised board_type and would call
+    this host's own `p300c` dead.
+
+    Failure to answer returns False, which resets exactly as before -- this only ever ADDS a reason
+    not to reset, never a reason to.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.probes import device_is_responsive
+
+        return bool(device_is_responsive(_LIVENESS_PROBE_S))
+    except Exception:  # noqa: BLE001 -- no answer, a slow answer, or no probe at all: reset as before
+        return False
+
+
 def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
     """Let the board cool BEFORE any device subprocess, not just before a measurement.
 
@@ -2928,7 +2950,23 @@ def _run_device_proc(
             proc.communicate(timeout=30)
         except Exception:  # noqa: BLE001
             pass
-        tail = _reclaim_device(devices, error_text=out, after_kill=True) if reset_on_timeout else "process group killed"
+        # ASK THE BOARD BEFORE RESETTING IT. This used to reset unconditionally on every timeout, and
+        # the accompanying "likely a device wedge" was a fixed string, not a finding -- nothing looked
+        # at the device. On 2026-08-15 that reset four HEALTHY chips because an op ran long, and the
+        # reset is what produced `Failed to set initial power state: -22`, a fault no PCIe reset
+        # clears; the host needed a reboot. Runs 13, 17 and 20 all died that way.
+        #
+        # A timeout means SLOW. It does not mean wedged, and the difference is cheap to establish:
+        # measured on this host, a live board answers tt_smi_probe() in 0.24 s and a wedged one does
+        # not answer at all. Resetting a working board is not a neutral act, so it needs evidence.
+        if reset_on_timeout and _device_answers():
+            tail = "process group killed; device answered a liveness probe, so it was NOT reset"
+        else:
+            tail = (
+                _reclaim_device(devices, error_text=out, after_kill=True)
+                if reset_on_timeout
+                else "process group killed"
+            )
         _lim = int(getattr(_te, "timeout", None) or timeout_s)
         _why = "no-progress stall" if _lim < timeout_s else "hard limit"
         print(
