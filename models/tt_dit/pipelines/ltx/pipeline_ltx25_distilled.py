@@ -9,7 +9,8 @@ out of the 2.3 path. Reuses distilled schedules / ``generate`` / ``warmup_buffer
 
 Known gaps (not required for distilled T2V):
 - Video VAE: prefer ``*-video-vae-conv-bf16``; until HF access lands we fall back to the 2.3
-  monolith conv VAE (arch-identical). DiffVAE deferred.
+  monolith conv VAE (arch-identical). ``LTX25_DIFFVAE=1`` routes video decode through the
+  diffusion decoder the model card actually ships instead, split across the mesh.
 - Keyframes abs-pos / DFR / duration head / I2V CRF — out of scope for distilled T2V.
 """
 
@@ -33,6 +34,7 @@ from ...utils.ltx import (
     LTX25_DISTILLED_TRANSFORMER,
     LTX25_SPATIAL_UPSAMPLER,
     LTX25_TEXT_ENCODER,
+    LTX25_VIDEO_VAE_DIFF,
     SPATIAL_COMPRESSION,
     TEMPORAL_COMPRESSION,
     ceil_to,
@@ -195,6 +197,58 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             dit_parallel_config=self.parallel_config,
             traced=self._traced,
         )
+        self._build_diffvae()
+
+    def _build_diffvae(self) -> None:
+        """Optionally load the diffusion decoder alongside the conv one.
+
+        Off by default. The conv VAE stays loaded either way — the encoder is still needed for
+        i2v, and only video decode reroutes — so enabling this adds the DiffVAE's weights on top
+        rather than replacing anything.
+        """
+        self.diffvae = None
+        self.diffvae_shard = None
+        if os.environ.get("LTX25_DIFFVAE") not in ("1", "true", "True"):
+            return
+
+        from ...models.vae.diffvae_ltx import DiffVAEDecoder, MeshShardConfig, decoder_config
+
+        path = os.environ.get("LTX25_DIFFVAE_PATH") or default_ltx25_path(LTX25_VIDEO_VAE_DIFF)
+        assert path, f"LTX25_DIFFVAE=1 needs {LTX25_VIDEO_VAE_DIFF} under the 2.5 root, or LTX25_DIFFVAE_PATH"
+        logger.info(f"LTX-2.5 DiffVAE video decode enabled: {path}")
+        self.diffvae = DiffVAEDecoder(decoder_config(path), mesh_device=self.mesh_device)
+        self.diffvae.load_checkpoint(path)
+        self.diffvae_shard = MeshShardConfig(
+            ccl=self.vae_ccl_manager,
+            mesh=tuple(self.mesh_device.shape),
+            # Which stage the volume stops being replicated at. Bounded by divisibility, not
+            # memory: the latent grid is 34 wide at 1080p and a mesh of 4 does not divide it,
+            # but everything from the first upsample on does.
+            enter_stage=int(os.environ.get("LTX25_DIFFVAE_ENTER_STAGE", "1")),
+        )
+
+    def decode_latents(self, latent, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"):
+        """Route video decode through the DiffVAE when it is loaded, else the conv decoder."""
+        if self.diffvae is None:
+            return super().decode_latents(latent, latent_frames, latent_h, latent_w, output_type=output_type)
+
+        assert output_type != "yuv", (
+            "DiffVAE returns host pixels, so the conv decoder's on-device YUV path does not "
+            "apply; set LTX_YUV_EXPORT=0"
+        )
+        batch = latent.shape[0]
+        spatial = latent.reshape(batch, latent_frames, latent_h, latent_w, self.in_channels)
+        spatial = spatial.permute(0, 4, 1, 2, 3)
+
+        if dump_dir := os.environ.get("LTX_DUMP_LATENT"):
+            self._dump_decode_input(spatial, dump_dir)
+
+        # Stage 5 predicts x0 from noise, so the noise is an input. A fixed seed keeps a decode
+        # reproducible across runs; upstream draws a fresh one per call.
+        video = self.diffvae.decode(
+            spatial, seed=int(os.environ.get("LTX25_DIFFVAE_SEED", "0")), shard=self.diffvae_shard
+        )
+        return video if output_type == "float" else video.numpy()
 
     @classmethod
     def create_pipeline(

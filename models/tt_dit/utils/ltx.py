@@ -102,8 +102,10 @@ def default_ltx_gemma() -> str:
 # Relative paths under an LTX-2.5 split checkpoint root (HF hub layout).
 LTX25_TEXT_ENCODER = "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
 LTX25_DISTILLED_TRANSFORMER = "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"
-# Conv decoder (runnable with our VAE). The plain ``video-vae-bf16`` file is DiffVAE — deferred.
 LTX25_VIDEO_VAE_CONV = "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+# The diffusion decoder the 2.5 model card actually ships with. Different architecture from the
+# conv file above, not a drop-in: see models/vae/diffvae_ltx.py.
+LTX25_VIDEO_VAE_DIFF = "vae/ltx-2.5-video-vae-bf16.safetensors"
 LTX25_VIDEO_VAE = LTX25_VIDEO_VAE_CONV  # alias used by the distilled pipeline
 LTX25_AUDIO_VAE = "vae/ltx-2.5-audio-vae-bf16.safetensors"
 LTX25_SPATIAL_UPSAMPLER = "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
