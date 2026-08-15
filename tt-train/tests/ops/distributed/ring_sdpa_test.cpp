@@ -317,9 +317,9 @@ static void TestRingAttention(
     auto value_tt =
         core::from_xtensor<float, ttnn::DataType::BFLOAT16>(value_xt, device, ttnn::Layout::TILE, value_mapper.get());
 
-    auto query_tensor = autograd::create_tensor(query_tt);
-    auto key_tensor = autograd::create_tensor(key_tt);
-    auto value_tensor = autograd::create_tensor(value_tt);
+    auto query_tensor = autograd::create_tensor(query_tt, /* requires_grad */ true);
+    auto key_tensor = autograd::create_tensor(key_tt, /* requires_grad */ true);
+    auto value_tensor = autograd::create_tensor(value_tt, /* requires_grad */ true);
 
     // No explicit mask tensor: the op rejects one in CP mode; causal masking comes from
     // mask_type and is generated on device.
