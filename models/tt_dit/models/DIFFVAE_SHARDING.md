@@ -9,7 +9,7 @@ takes that decode from 43.6 s to 19.2 s.
 
 | | before | after |
 |---|---|---|
-| 145f @ 1088x1920 | OOM | **19.2 s** |
+| 145f @ 1088x1920 | OOM | **19.2 s** (same in-pipeline) |
 | stage-5 context per chip | 9.69 GB | 0.405 GB |
 | `context_and_x` per chip | 19.39 GB | 0.81 GB |
 | pcc vs upstream capture | 0.9987 (replicated, crop) | **0.9997** (split, crop) |
@@ -133,6 +133,59 @@ Two candidates, both unstarted:
 - `DEFAULT_SCORE_BUDGET` per stage — tile-aware work is minimised near 2^18 for stage 5 and 2^14
   for the deterministic stages, worth ~2.1x on the SDPA portion. Waste *rises* with the budget,
   and dispatch count is free (12 vs 120 groups differ by under 3% at fixed tile count).
+  **But the budget trades compute against memory, not for free**, and the memory side is the
+  steeper one. A group's gathered key tensor is `tiles x keys-per-tile x width` and carries no
+  query factor, so halving the tile size barely shrinks the key span — the `+k-1` halo dominates
+  it — while doubling the tile count. At the production stage-5 shard:
+
+  | budget | tile | tiles | keys | largest gathered buffer |
+  |---|---|---|---|---|
+  | 2^18 | (3,5,4) | 14994 | 2730 | **11.99 GB** |
+  | 2^22 | (5,9,8) | 3190 | 5130 | 3.47 GB |
+  | 2^26 | (10,17,15) | 540 | 13500 | **1.44 GB** |
+
+  `LTX25_DIFFVAE_SCORE_BUDGET` sets it. Lower it only for a decode that has to share the device —
+  and see below for why that is rarely the right lever.
+
+## In the pipeline
+
+Standalone the decode owns the mesh. In the pipeline it does not, and a 145-frame clip OOMed on
+the first four attempts. The score budget looks like the knob for that and is the wrong one: it
+buys headroom with arithmetic, and at 2^26 the same decode costs 392 s against 132 s at 2^22
+(both cold — the warm figure is below).
+
+The real cause was that the DiffVAE was absent from the co-resident exclusion graph.
+`_register_coresident_exclusions` is gated on `dynamic_load` and names the *conv* decoder as the
+thing that evicts the active transformer — "LTX-22B + LTX-VAE don't both fit on BH LB" is stated
+in that function. The DiffVAE needs the eviction more, since its attention buffers are gigabytes
+where the conv decoder's are megabytes, and it inherited none of it.
+
+`LTX25DistilledPipeline._prepare_vae` now pages the transformer, upsampler and Gemma out before
+the decode, which is where the conv path already does the same thing:
+
+```
+DiffVAE decode: evicted transformer[0], upsampler, gemma — DRAM 20.43 -> 4.20 GB per device
+```
+
+**16.2 GB per device**, against the 1.44 GB the decode had been failing to allocate. Everything
+reloads from the disk cache at the top of the next generation. It is skipped under tracing: a
+captured DiT trace holds pointers into those weight buffers.
+
+The conv decoder's weights are also never loaded when `LTX25_DIFFVAE=1` — 0.81 GB whose only
+forward is the `decode_latents` this pipeline overrides. The encoder is a separate reload and is
+left alone, so i2v conditioning is unaffected.
+
+With that, a 6.04 s clip at 1088x1920 (145 frames, T2V + audio) end to end:
+
+| phase | warm |
+|---|---|
+| stage 1 denoise | 16.1 s |
+| stage 2 denoise | 8.6 s |
+| **DiffVAE decode** | **19.2 s** |
+| total (compute) | **46.1 s** |
+
+The decode matches the 19.2 s it takes standalone, so nothing is lost to sharing the device. A
+cold decode is 132 s; the difference is JIT, and `RUN_WARMUP=1` moves it off the measured clip.
 
 ## Using it
 
@@ -141,6 +194,7 @@ LTX25_DIFFVAE=1                 route video decode through the DiffVAE
 LTX25_DIFFVAE_PATH=...          required where the 2.5 cache holds only the conv file
 LTX25_DIFFVAE_ENTER_STAGE=1     first stage that runs split (divisibility-bound)
 LTX25_DIFFVAE_SEED=0            stage 5 predicts x0 from noise, so the noise is an input
+LTX25_DIFFVAE_SCORE_BUDGET=...  NA3D tile size; trades dispatched work against peak memory
 LTX_YUV_EXPORT=0                required and asserted
 ```
 

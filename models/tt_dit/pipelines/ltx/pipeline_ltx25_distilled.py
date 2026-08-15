@@ -56,6 +56,15 @@ def _default_gemma3_path() -> str:
     return cands[0].rstrip("/")
 
 
+def _dram_allocated(mesh_device) -> int:
+    """Bytes of DRAM in use on one device, or 0 where the memory view is unavailable."""
+    try:
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        return view.total_bytes_allocated_per_bank * view.num_banks
+    except Exception:  # noqa: BLE001 - reporting only
+        return 0
+
+
 class LTX25DistilledPipeline(LTXDistilledPipeline):
     """Distilled 2-stage AV pipeline for LTX-2.5 split checkpoints + Gemma-4."""
 
@@ -199,18 +208,63 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         )
         self._build_diffvae()
 
-    def _build_diffvae(self) -> None:
-        """Optionally load the diffusion decoder alongside the conv one.
+    def _prepare_vae(self) -> None:
+        """Make room for the DiffVAE decode, the way the conv decoder makes room for its own.
 
-        Off by default. The conv VAE stays loaded either way — the encoder is still needed for
-        i2v, and only video decode reroutes — so enabling this adds the DiffVAE's weights on top
-        rather than replacing anything.
+        This runs immediately before ``decode_latents``, which is where the conv path pages the
+        active transformer out — a 22B DiT and a video VAE do not both fit on Blackhole. The
+        DiffVAE needs that eviction *more*: its attention buffers are gigabytes where the conv
+        decoder's are megabytes. But it gets it from nowhere, because the co-resident exclusion
+        graph is only wired under ``dynamic_load`` and lists the conv decoder, not this one.
+
+        The transformer is reloaded at the top of every generation, so paging it out here costs a
+        cache read on the next clip and nothing else. Traces are the exception: a captured DiT
+        trace holds pointers into those weight buffers, so freeing them would replay garbage.
+
+        The conv decoder's own weights are never loaded at all — its only forward is the
+        ``decode_latents`` this class overrides. The encoder reloads separately and is untouched,
+        so i2v conditioning still works.
+        """
+        if getattr(self, "diffvae", None) is None:
+            super()._prepare_vae()
+            return
+
+        if self._traced:
+            return
+
+        before = _dram_allocated(self.mesh_device)
+        freed = []
+        for idx, state in enumerate(self.transformer_states):
+            if state.model is not None and state.model.is_loaded():
+                state.model.deallocate_weights()
+                freed.append(f"transformer[{idx}]")
+        if self.upsampler is not None and self.upsampler.is_loaded():
+            self.upsampler.deallocate_weights()
+            freed.append("upsampler")
+        # Text encoding is finished by the time anything decodes, and ``ensure_loaded`` pages it
+        # back for the next prompt.
+        gemma = getattr(self.gemma_encoder_pair, "gemma_encoder", None)
+        if gemma is not None and gemma.is_loaded():
+            gemma.deallocate_weights()
+            freed.append("gemma")
+        after = _dram_allocated(self.mesh_device)
+        logger.info(
+            f"DiffVAE decode: evicted {', '.join(freed) or 'nothing'} — "
+            f"DRAM {before / 1e9:.2f} -> {after / 1e9:.2f} GB per device"
+        )
+
+    def _build_diffvae(self) -> None:
+        """Optionally load the diffusion decoder in place of the conv one.
+
+        Off by default. Only the conv *decoder* steps aside; its encoder stays, since i2v still
+        conditions on real pixels and nothing about that path changes.
         """
         self.diffvae = None
         self.diffvae_shard = None
         if os.environ.get("LTX25_DIFFVAE") not in ("1", "true", "True"):
             return
 
+        from ...layers.na3d import DEFAULT_SCORE_BUDGET
         from ...models.vae.diffvae_ltx import DiffVAEDecoder, MeshShardConfig, decoder_config
 
         path = os.environ.get("LTX25_DIFFVAE_PATH") or default_ltx25_path(LTX25_VIDEO_VAE_DIFF)
@@ -225,6 +279,12 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             # memory: the latent grid is 34 wide at 1080p and a mesh of 4 does not divide it,
             # but everything from the first upsample on does.
             enter_stage=int(os.environ.get("LTX25_DIFFVAE_ENTER_STAGE", "1")),
+            # The budget trades dispatched work against peak memory: the gathered key tensor is
+            # tiles x keys-per-tile with no query factor, so smaller tiles barely shrink the key
+            # span but multiply the tile count, and the biggest buffer runs from 1.4 GB at 2^26 to
+            # 12 GB at 2^18. Paging the DiT out leaves ~29 GB free, which is enough that the
+            # decode should be bought at the cheap end rather than the roomy one.
+            budget=int(os.environ.get("LTX25_DIFFVAE_SCORE_BUDGET", DEFAULT_SCORE_BUDGET)),
         )
 
     def release_traces(self) -> None:

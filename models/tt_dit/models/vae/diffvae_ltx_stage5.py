@@ -754,7 +754,7 @@ class DiffVAEStage5(Module):
                 for h in _even_shards(dims[1], shard.mesh[0])
                 for w in _even_shards(dims[2], shard.mesh[1])
             ]
-            plans = plan_na3d_mesh(axes, kernel, halo=halo)
+            plans = plan_na3d_mesh(axes, kernel, halo=halo, budget=shard.budget)
             buffer = Grid(batch=grid.batch, t=plans[0].dims[0], h=plans[0].dims[1], w=plans[0].dims[2])
             self._mesh_plan_cache[key] = (
                 build_mesh_device_plan(plans, mesh_device=self.mesh_device),

@@ -26,6 +26,7 @@ import ttnn
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList
 from ...layers.na3d import (
+    DEFAULT_SCORE_BUDGET,
     AxisShard,
     NA3DDevicePlan,
     build_device_plan,
@@ -306,6 +307,13 @@ class MeshShardConfig:
     ccl: object
     mesh: tuple[int, int]
     enter_stage: int = 1
+    # Score budget for the NA3D tiling. It sets tile size, which sets both the gathered buffer
+    # size and the dispatched work — and the two pull *opposite* ways. A group gathers
+    # tiles x keys-per-tile with no query factor, so shrinking tiles barely shrinks the key span
+    # (the k-1 halo dominates it) while multiplying the tile count: on the production stage-5
+    # shard the largest buffer runs 1.4 GB at 2^26 up to 12 GB at 2^18, where the tile-aware work
+    # is at its minimum. Lower it only for a decode that has to share the device.
+    budget: int = DEFAULT_SCORE_BUDGET
 
 
 def pad_from_neighbours(ccl, volume: ttnn.Tensor, *, dims, halo, padding_mode: str = "replicate") -> ttnn.Tensor:
@@ -494,7 +502,7 @@ class DeterministicStages(Module):
                 for h in _even_shards(dims[1], shard.mesh[0])
                 for w in _even_shards(dims[2], shard.mesh[1])
             ]
-            plans = plan_na3d_mesh(grid, kernel, halo=halo)
+            plans = plan_na3d_mesh(grid, kernel, halo=halo, budget=shard.budget)
             self._mesh_plan_cache[key] = (
                 build_mesh_device_plan(plans, mesh_device=self.mesh_device),
                 plans[0].dims,
