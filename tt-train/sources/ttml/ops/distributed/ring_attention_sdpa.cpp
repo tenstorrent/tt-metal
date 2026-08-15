@@ -22,6 +22,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -83,9 +84,18 @@ autograd::TensorPtr ring_attention_sdpa(
     ttnn::Tensor k_current = key->get_value();
     ttnn::Tensor v_current = value->get_value();
 
-    // Initialize accumulators for online softmax
-    // output_accum: weighted sum of outputs from all steps
-    ttnn::Tensor output_accum = ttnn::zeros_like(query_tensor);
+    // Initialize accumulators for online softmax.
+    // output_accum: weighted sum of outputs from all steps. Kept FP32: the online-softmax
+    // rescaling rewrites the whole accumulator every ring step, so a bf16 accumulator
+    // compounds ~ring_size rounding errors into the saved O. Backward consumes that O in
+    // u = rowsum(dO * O), where the error is amplified by the softmax-backward
+    // cancellation in (dP - u) — enough to push dK outside test tolerance.
+    ttnn::Tensor output_accum = ttnn::full(
+        ttnn::Shape{batch_num, heads, seq_len_local, dim},
+        0.0F,
+        ttnn::DataType::FLOAT32,
+        ttnn::Layout::TILE,
+        std::ref(*mesh_device));
 
     // global_lse: running logsumexp across all steps
     // lse = log(sum(exp(scale * score_i))) — the log of the softmax normalizer
@@ -154,8 +164,12 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Tensor old_weight = ttnn::exp(ttnn::subtract(global_lse, new_lse));
         ttnn::Tensor new_weight = ttnn::exp(ttnn::subtract(lse_chunk, new_lse));
 
-        // Weighted combination of accumulated output and this step's output
-        output_accum = ttnn::add(ttnn::multiply(output_accum, old_weight), ttnn::multiply(output_tensor, new_weight));
+        // Weighted combination of accumulated output and this step's output.
+        // The step output is upcast so the whole combine stays FP32; mixed-dtype
+        // binary ops would otherwise round the products back to bf16.
+        ttnn::Tensor step_output_fp32 = ttnn::typecast(output_tensor, ttnn::DataType::FLOAT32);
+        output_accum =
+            ttnn::add(ttnn::multiply(output_accum, old_weight), ttnn::multiply(step_output_fp32, new_weight));
 
         global_lse = new_lse;
 
@@ -167,7 +181,9 @@ autograd::TensorPtr ring_attention_sdpa(
         }
     }
 
-    auto out = autograd::create_tensor(output_accum);
+    // Single rounding to the input dtype; the graph (and the saved O used by backward)
+    // sees the same dtype as before.
+    auto out = autograd::create_tensor(ttnn::typecast(output_accum, query_tensor.dtype()));
     ttnn::Tensor final_lse = global_lse;
 
     autograd::GradFunction grad_fn = [query,
@@ -186,9 +202,16 @@ autograd::TensorPtr ring_attention_sdpa(
         const auto& attn_output = out->get_value();
         const auto& query_tensor = query->get_value();
 
-        ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor);
-        ttnn::Tensor grad_K_accum = ttnn::zeros_like(key->get_value());
-        ttnn::Tensor grad_V_accum = ttnn::zeros_like(value->get_value());
+        // FP32 host accumulators: each ring step contributes a bf16 kernel output, but
+        // summing them in bf16 rounds the full running magnitude every step. The
+        // accumulators are cast back to the input dtype once, after the loop.
+        auto make_fp32_zeros = [mesh_device](const ttnn::Tensor& like) {
+            return ttnn::full(
+                like.logical_shape(), 0.0F, ttnn::DataType::FLOAT32, ttnn::Layout::TILE, std::ref(*mesh_device));
+        };
+        ttnn::Tensor grad_Q_accum = make_fp32_zeros(query_tensor);
+        ttnn::Tensor grad_K_accum = make_fp32_zeros(key->get_value());
+        ttnn::Tensor grad_V_accum = make_fp32_zeros(value->get_value());
 
         ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
@@ -236,10 +259,10 @@ autograd::TensorPtr ring_attention_sdpa(
                 grad_V_step);
 
             // The results alias the preallocated step buffers; skipped devices keep the
-            // zeros written above.
-            grad_Q_accum = ttnn::add(grad_Q_accum, grad_Q_result);
-            grad_K_accum = ttnn::add(grad_K_accum, grad_K_result);
-            grad_V_accum = ttnn::add(grad_V_accum, grad_V_result);
+            // zeros written above. Upcast so the accumulation stays FP32.
+            grad_Q_accum = ttnn::add(grad_Q_accum, ttnn::typecast(grad_Q_result, ttnn::DataType::FLOAT32));
+            grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_result, ttnn::DataType::FLOAT32));
+            grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_result, ttnn::DataType::FLOAT32));
 
             // Ring shift K/V and grad accumulators in FORWARD direction
             // K/V: replays the forward pass in reverse (gets K/V for previous step)
@@ -259,10 +282,10 @@ autograd::TensorPtr ring_attention_sdpa(
             }
         }
 
-        // Apply gradients
-        query->add_grad(grad_Q_accum);
-        key->add_grad(grad_K_accum);
-        value->add_grad(grad_V_accum);
+        // Apply gradients, rounded once to the parameter dtype
+        query->add_grad(ttnn::typecast(grad_Q_accum, query_tensor.dtype()));
+        key->add_grad(ttnn::typecast(grad_K_accum, key->get_value().dtype()));
+        value->add_grad(ttnn::typecast(grad_V_accum, value->get_value().dtype()));
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));
