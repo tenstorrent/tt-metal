@@ -2381,6 +2381,51 @@ guessed.
 arguments**. Every automatic driver, capture and smoke test depends on that, and a model whose
 `forward` demands a specially-constructed input is undrivable no matter how correct it is.
 
+### ⚠ CORRECTION — `captured 7/7` does NOT mean the tests use the captured tensors
+
+I reported that reaching `captured 7/7` put every per-component gate on deployment tensors. **It does
+not.** The capture succeeded — 23 files on disk under `_captured/` — and **none of the seven tests
+read them**:
+
+```
+test_attention       captured-refs: 0   synth-refs: 5
+test_codec_decoder   captured-refs: 0   synth-refs: 5
+test_flow_matching   captured-refs: 0   synth-refs: 5
+    ... all seven identical
+```
+
+`captured N/M` counts **recordings made**, not recordings consumed. Two different things, and I
+conflated them.
+
+**There are three tiers of input quality here, not two:**
+
+| tier | what it is | where the run actually is |
+|---|---|---|
+| 1 | random tensors from name-guessing (`_make_arg_for`) | where it started — tests **crashed**: `cis` got `randn(1,64,3072)` where a COMPLEX rope table was required |
+| 2 | inputs built from the reference's OWN primitives (`rope_cis`, `causal_bias`) | **where all 7 component tests are** |
+| 3 | the recorded deployment activations | captured, on disk, **unused** |
+
+**And tier 3 is declined for a genuine reason**, which the agent-rewritten harness documents:
+
+> *`_captured/attention/args.pt` holds a real deployment step: `h=[1,1,3072]` with a 208-deep KV
+> cache. It is not usable as-is for a unit test. The cache dict is **MUTATED** by
+> `VoxtralAttention.forward`, and the harness hands the same object to the torch reference and then
+> to the ttnn stub*
+
+Feeding one mutable cache to the reference and then to the stub means the stub sees the reference's
+write — a comparison against contaminated state that would look correct. Declining the capture is
+the right call; **silently substituting tier 2 while the run reports `captured 7/7` is not.**
+
+**F26 — report what the gate MEASURED, not what was collected.** A line reading `captured 7/7`
+directly above per-component PCC results invites exactly the reading I gave it. The gate should
+state its input provenance per component — `real-capture` / `synthetic-from-reference` /
+`synthetic-guessed` — because those three carry very different confidence and §6.54 measured the
+difference at 29.5% vs 3.9% error on the same code.
+
+**What is unaffected:** the END-TO-END test genuinely uses the real prompt through the whole
+pipeline and compares waveform against waveform. That is the number that decides whether the audio
+is right, and it is honest.
+
 ---
 
 ## Corrections to this document
@@ -2616,6 +2661,51 @@ guessed.
 **Packaging lesson for anyone wrapping a model for this tool:** it must be runnable with **no
 arguments**. Every automatic driver, capture and smoke test depends on that, and a model whose
 `forward` demands a specially-constructed input is undrivable no matter how correct it is.
+
+### ⚠ CORRECTION — `captured 7/7` does NOT mean the tests use the captured tensors
+
+I reported that reaching `captured 7/7` put every per-component gate on deployment tensors. **It does
+not.** The capture succeeded — 23 files on disk under `_captured/` — and **none of the seven tests
+read them**:
+
+```
+test_attention       captured-refs: 0   synth-refs: 5
+test_codec_decoder   captured-refs: 0   synth-refs: 5
+test_flow_matching   captured-refs: 0   synth-refs: 5
+    ... all seven identical
+```
+
+`captured N/M` counts **recordings made**, not recordings consumed. Two different things, and I
+conflated them.
+
+**There are three tiers of input quality here, not two:**
+
+| tier | what it is | where the run actually is |
+|---|---|---|
+| 1 | random tensors from name-guessing (`_make_arg_for`) | where it started — tests **crashed**: `cis` got `randn(1,64,3072)` where a COMPLEX rope table was required |
+| 2 | inputs built from the reference's OWN primitives (`rope_cis`, `causal_bias`) | **where all 7 component tests are** |
+| 3 | the recorded deployment activations | captured, on disk, **unused** |
+
+**And tier 3 is declined for a genuine reason**, which the agent-rewritten harness documents:
+
+> *`_captured/attention/args.pt` holds a real deployment step: `h=[1,1,3072]` with a 208-deep KV
+> cache. It is not usable as-is for a unit test. The cache dict is **MUTATED** by
+> `VoxtralAttention.forward`, and the harness hands the same object to the torch reference and then
+> to the ttnn stub*
+
+Feeding one mutable cache to the reference and then to the stub means the stub sees the reference's
+write — a comparison against contaminated state that would look correct. Declining the capture is
+the right call; **silently substituting tier 2 while the run reports `captured 7/7` is not.**
+
+**F26 — report what the gate MEASURED, not what was collected.** A line reading `captured 7/7`
+directly above per-component PCC results invites exactly the reading I gave it. The gate should
+state its input provenance per component — `real-capture` / `synthetic-from-reference` /
+`synthetic-guessed` — because those three carry very different confidence and §6.54 measured the
+difference at 29.5% vs 3.9% error on the same code.
+
+**What is unaffected:** the END-TO-END test genuinely uses the real prompt through the whole
+pipeline and compares waveform against waveform. That is the number that decides whether the audio
+is right, and it is honest.
 
 ---
 
