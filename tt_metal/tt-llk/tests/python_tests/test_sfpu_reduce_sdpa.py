@@ -183,6 +183,6 @@ def test_sfpu_reduce_sdpa_device_profile(perf_report, reduce_impl, label):
     rows = perf_report.frame()
     rows = rows[rows["marker"] == "REDUCE_SDPA_BODY"]
     assert len(rows) >= 1, rows.to_string(index=False)
-    cycles = int(rows["mean(PACK_ISOLATE)"].sum())
+    cycles = float(rows["mean(PACK_ISOLATE)"].sum())
     assert cycles > 0
-    print(f"REDUCE_SDPA_DEVICE_PROFILE impl={label} body_cycles={cycles}")
+    print(f"REDUCE_SDPA_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
