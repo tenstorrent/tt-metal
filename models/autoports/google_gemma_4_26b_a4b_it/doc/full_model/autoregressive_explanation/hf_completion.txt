@@ -1,0 +1,4 @@
+Have you ever wondered why the sky looks like a giant blue ocean above your head, even though space is actually pitch black? It all comes down to a game of "pinball" played with sunlight and our atmosphere.
+
+### The Science: Rayleigh Scattering
+Even though sunlight looks white, it is actually made up of all the colors of the rainbow (red, orange, yellow, green, blue, indigo, and violet). Light travels as **waves**, and each color has a different wavelength.

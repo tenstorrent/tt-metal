@@ -1,0 +1,39 @@
+{
+  "optimized_model_path": {
+    "mesh": "hard-required 1x4 TP4",
+    "decoder": "MultichipDecoder for all 30 layers",
+    "inter_layer_residual": "replicated BF16 tile DRAM",
+    "host_ops_per_decode_token": [],
+    "logical_batch_compute": "fixed-32 token feedback is sliced to the active logical batch before decoder layers; logits alone are padded back to 32 for sampling",
+    "fallback_exceptions_tested": true
+  },
+  "cache_ownership": {
+    "owner": "FullModelState",
+    "page_tables": "one stable device table per layer because sliding/full block geometries differ",
+    "fixed_slots": 32,
+    "inactive_position_sentinel": -1,
+    "per_token_reallocation": false,
+    "per_token_page_table_rebuild": false
+  },
+  "sampling": {
+    "optimized": "Sampling1D force-argmax in a separate trace with tt_out_tok equal to the persistent model token input",
+    "host_argmax": false,
+    "full_logits_readback": false,
+    "python_token_feedback": false,
+    "sampled_serving": "top-k/top-p/temperature/seed tensors are explicit persistent trace inputs and their semantic values key distinct sampling traces",
+    "alternating_greedy_sampled_tested": true,
+    "compatibility_mode": "sampling_mode=host is explicit, eager, and may gather logits for tests; it is excluded from optimized measurements"
+  },
+  "positions": {
+    "current_pos": "persistent INT32 device tensor advanced with ttnn.plus_one",
+    "rope_position": "persistent UINT32 device tensor advanced with ttnn.plus_one",
+    "per_token_host_rebuild": false
+  },
+  "reset": {
+    "traces_released": true,
+    "trace_cache_cleared": true,
+    "new_cache_state_allocated": true,
+    "optimized_trace_reused_across_reset": false,
+    "reason": "Reset is an explicit sequence boundary; stable addresses are required within a sequence, not across released traces."
+  }
+}

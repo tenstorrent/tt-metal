@@ -1,0 +1,70 @@
+{
+  "reduced_real_weight_split_trace": {
+    "layers": [0, 5],
+    "replays": 2,
+    "positions_after_replays": [33, 34],
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0,
+    "log": "/tmp/gemma4_split_exact_warm.log"
+  },
+  "mixed_prompt_inactive_slot": {
+    "prompt_lengths": [33, 47],
+    "batch": 2,
+    "active_mask": [true, false],
+    "positions_after_replays": [[34, -1], [35, -1]],
+    "page_table_addresses_unchanged_for_two_replays": true,
+    "scheduler_boundary_changed_mapping_recaptured_once": true,
+    "changed_mapping_bound_by_identity": true,
+    "token_refreshes": 0,
+    "page_table_refreshes_after_change": 1,
+    "subsequent_changed_mapping_replay_refreshes": 0,
+    "log": "/tmp/gemma4_mixed_changed_table3.log"
+  },
+  "all_layer": {
+    "layers": 30,
+    "persistent_async_all_reduce_pool_shared_across_full_attention_layers": true,
+    "fallback_exceptions_enabled": true,
+    "result": "pass",
+    "wall_time_s": 40.84,
+    "log": "/tmp/gemma4_full_stack_shared.log"
+  },
+  "all_layer_batch32_profile": {
+    "max_seq_len": 262144,
+    "max_batch_size": 32,
+    "equal_full_attention_slot_capacity": 8192,
+    "sliding_ring_capacity_per_slot": 1024,
+    "prefill_scheduled_slots": 1,
+    "decode_fixed_slots": 32,
+    "replays": 2,
+    "result": "pass",
+    "wall_time_s": 23.93,
+    "log": "/tmp/gemma4_full_stack_batch32_rerun.log"
+  },
+  "sampled_split_trace": {
+    "layers": [0, 5],
+    "parameters": {"top_k": 8, "top_p": 0.95, "temperature": 0.8, "seed": 42},
+    "sequence": ["greedy", "sampled", "greedy"],
+    "distinct_semantic_trace_keys": 2,
+    "mode_transition_lifecycle": "release active trace before allocating and recapturing the next semantic configuration",
+    "final_greedy_safely_recaptured": true,
+    "active_trace_allocation_warning": false,
+    "sampled_parameter_tensors_retained_by_trace": true,
+    "sampled_output_aliases_persistent_token_input": true,
+    "host_token_feedback": false,
+    "result": "pass",
+    "log": "/tmp/gemma4_sampled_trace_probe_safe.log"
+  },
+  "public_long_context": {
+    "prompt_length": 262111,
+    "physical_alignment_boundary": 262112,
+    "layers": 30,
+    "public_entrypoint": "Gemma4Generator.prefill_forward",
+    "first_traced_decode": true,
+    "fallback_exceptions_enabled": true,
+    "result": "pass",
+    "wall_time_s": 341.29,
+    "log": "/tmp/gemma4_long_context_public_full_stack.log"
+  }
+}

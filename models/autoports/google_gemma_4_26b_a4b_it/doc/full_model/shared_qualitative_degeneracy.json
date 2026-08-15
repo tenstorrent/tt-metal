@@ -1,0 +1,21 @@
+{
+  "artifact": "shared_qualitative_suite.json",
+  "verdict": "clean",
+  "method": "lowercased word-token adjacent duplication and repeated-trigram fraction",
+  "thresholds": {
+    "critical_adjacent_duplication": 0.5,
+    "advisory_trigram_loop_fraction": 0.2
+  },
+  "entries": [
+    {"id": 0, "words": 14, "adjacent_duplication": 0.0, "trigram_loop_fraction": 0.0},
+    {"id": 1, "words": 49, "adjacent_duplication": 0.0, "trigram_loop_fraction": 0.0},
+    {"id": 2, "words": 52, "adjacent_duplication": 0.0, "trigram_loop_fraction": 0.0},
+    {"id": 3, "words": 46, "adjacent_duplication": 0.0, "trigram_loop_fraction": 0.0},
+    {"id": 4, "words": 36, "adjacent_duplication": 0.0, "trigram_loop_fraction": 0.0},
+    {"id": 5, "words": 50, "adjacent_duplication": 0.0, "trigram_loop_fraction": 0.0417}
+  ],
+  "duplicate_eos_audit": {
+    "consecutive_end_of_turn_tokens": false,
+    "visible_repeated_control_text": false
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "hardware": "P300X2 1x4 FABRIC_1D_RING",
+  "batch": 1,
+  "primary_token_out_128x128": {
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "ttft_ms": 320.8409631624818,
+    "decode_tokens": 127,
+    "decode_elapsed_s": 5.344463414512575,
+    "decode_t_per_s_per_user": 23.762909416713192,
+    "e2e_t_per_s_per_user": 22.593666900652742,
+    "trace_replays": 127,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0,
+    "setup_synchronizations": 1,
+    "scalar_token_readbacks": 128,
+    "artifact": "autoregressive_perf_128_fixed/autoregressive_meta.json",
+    "log": "/tmp/gemma4_autoreg_perf128_fixed.log"
+  },
+  "teacher_forcing": {
+    "reference": "readiness_aime24_chat.refpt",
+    "tokens": 100,
+    "ttft_ms": 2253.36,
+    "decode_t_per_s_per_user": 25.40,
+    "e2e_t_per_s_per_user": 16.26,
+    "log": "/tmp/gemma4_teacher_final_batchslice.log"
+  },
+  "token_out": {
+    "prompt": "explanation_prompt.txt rendered with the canonical processor chat template",
+    "tokens": 64,
+    "ttft_ms": 215.44546447694302,
+    "decode_tokens": 63,
+    "decode_elapsed_s": 25.151907647028565,
+    "decode_t_per_s_per_user": 2.504780189404154,
+    "e2e_t_per_s_per_user": 2.5229277851212797,
+    "log": "/tmp/gemma4_autoreg_perf.log",
+    "raw_metadata": "/tmp/gemma4_autoreg_perf/autoregressive_meta.json"
+  },
+  "decoder_stack_lower_bound": {
+    "source": "../optimized_multichip_decoder/profile_accounting.md",
+    "sliding_layers": 25,
+    "sliding_warmed_us": 1070.437,
+    "full_layers": 5,
+    "full_warmed_us": 1113.634,
+    "stack_only_ms": 32.329095,
+    "stack_only_t_per_s": 30.931816184115495,
+    "interpretation": "Per-layer trace timings are a lower bound and exclude the full-model trace scheduler, final norm, vocabulary LM head, canonical sampler, and scalar token-out boundary."
+  },
+  "batch_slice_repair": {
+    "root_cause": "The fixed 32-row sampler-feedback token tensor was embedded and executed through all decoder layers even for logical batch 1; inactive rows gated cache updates but not norm, MoE, or MLP compute.",
+    "fix": "Keep the fixed sampler feedback tensor address, slice hidden/position/page-table views to logical batch before decoder compute, then pad only local logits back to 32 rows at the sampling boundary.",
+    "before_decode_t_per_s_per_user": 2.6345290483540595,
+    "after_decode_t_per_s_per_user": 23.762909416713192,
+    "after_ms_per_token": 42.0823847580059,
+    "stack_lower_bound_ms_per_token": 32.329095,
+    "remaining_full_model_overhead_ms_per_token": 9.7532897580059,
+    "remaining_ratio_to_lower_bound": 1.3016880161513124,
+    "verdict": "resolved: full model is now like-for-like logical batch 1 and within 1.31x of the decoder-only lower bound including terminal, sampling, trace orchestration, and scalar output"
+  },
+  "reduced_device_profile": {
+    "scope": "one sliding layer, one full layer, final norm, sharded LM head, position advance, and canonical Sampling1D force-argmax",
+    "signposts": ["FULL_MODEL_REDUCED_DECODE", "FULL_MODEL_REDUCED_DECODE_END"],
+    "merged_device_op_sum_us": 24830.24,
+    "modeled_dram_roofline_percent": 9.7,
+    "modeled_dram_bandwidth_gb_s": 50,
+    "largest_groups": {
+      "sparse_matmul_us": 10880.64,
+      "transpose_us": 3114.9,
+      "unary_us": 2930.76,
+      "argmax_us": 1451.99,
+      "dram_matmul_us": 1163.59
+    },
+    "artifacts": ["profile_reduced_decode.csv", "profile_reduced_summary.csv.csv", "profile_reduced_report.txt"],
+    "note": "Four concurrently executing device rows are merged, so the op sum is diagnostic rather than wall time. Sampler argmax is 5.85% of the reduced op sum and does not dominate."
+  },
+  "scope": "Warmed full 30-layer model, final norm, vocab-sharded LM head, canonical split Sampling1D force-argmax, device token feedback, and host token-out readback."
+}

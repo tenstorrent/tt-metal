@@ -1,0 +1,5 @@
+To find the total time Aya spends, we first need to determine her walking speed $s$ and the time $t$ spent in the coffee shop.
+
+**Step 1: Set up equations based on the given information.**
+Let $d = 9$ km be the distance of the walk.
+The total time is the sum of the walking time and the coffee shop time $t$. Note that $t$ is given in minutes, so we must convert it to hours to match

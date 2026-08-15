@@ -34,11 +34,12 @@ import argparse
 import bz2
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 try:
     from tqdm.auto import tqdm
@@ -127,6 +128,10 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
             add_generation_prompt=True,
             tokenize=True,
         )
+        if isinstance(prompt_tokens, Mapping):
+            prompt_tokens = prompt_tokens["input_ids"]
+        if isinstance(prompt_tokens, torch.Tensor):
+            prompt_tokens = prompt_tokens.reshape(-1).tolist()
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
@@ -320,6 +325,15 @@ def generate_reference(
 
     print(f"Loading model {hf_model_id} on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
+    if chat_template and not getattr(tokenizer, "chat_template", None):
+        # Multimodal checkpoints such as Gemma 4 publish the canonical
+        # template through processor_config/chat_template.jinja rather than
+        # tokenizer_config.json. Preserve tokenizer-based tokenization while
+        # sourcing that exact model-owned template from AutoProcessor.
+        processor = AutoProcessor.from_pretrained(hf_model_id, trust_remote_code=True)
+        processor_template = getattr(processor, "chat_template", None)
+        if processor_template:
+            tokenizer.chat_template = processor_template
     model = AutoModelForCausalLM.from_pretrained(hf_model_id, trust_remote_code=True).eval().to(device)
 
     # Get token IDs

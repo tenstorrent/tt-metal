@@ -125,6 +125,7 @@ class MultichipDecoder(OptimizedDecoder):
         expert_weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         activation_dtype: ttnn.DataType = ttnn.bfloat16,
         tensor_cache_path: str | Path | None = None,
+        persistent_all_reduce_resources: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> "MultichipDecoder":
         import torch
@@ -421,8 +422,14 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.persistent_all_reduce_buffers = []
         decoder.persistent_all_reduce_semaphores = []
         decoder.persistent_all_reduce_index = 0
+        decoder.persistent_all_reduce_resources = persistent_all_reduce_resources
         persistent_default = "1" if kind.name == "full_attention" else "0"
-        if os.getenv("GEMMA4_MULTICHIP_PERSISTENT_ALL_REDUCE", persistent_default) == "1":
+        persistent_enabled = os.getenv("GEMMA4_MULTICHIP_PERSISTENT_ALL_REDUCE", persistent_default) == "1"
+        if persistent_enabled and persistent_all_reduce_resources is not None:
+            decoder.persistent_all_reduce_buffers = persistent_all_reduce_resources["buffers"]
+            decoder.persistent_all_reduce_semaphores = persistent_all_reduce_resources["semaphores"]
+            decoder.persistent_all_reduce_memory_config = persistent_all_reduce_resources["memory_config"]
+        elif persistent_enabled:
             ccl_grid = mesh_device.compute_with_storage_grid_size()
             ccl_cores = ttnn.num_cores_to_corerangeset(
                 ccl_grid.x * ccl_grid.y,
@@ -450,6 +457,12 @@ class MultichipDecoder(OptimizedDecoder):
                 )
                 decoder.persistent_all_reduce_semaphores.append(ttnn.create_global_semaphore(mesh_device, ccl_cores, 0))
             ttnn.synchronize_device(mesh_device)
+            decoder.persistent_all_reduce_resources = {
+                "buffers": decoder.persistent_all_reduce_buffers,
+                "semaphores": decoder.persistent_all_reduce_semaphores,
+                "memory_config": decoder.persistent_all_reduce_memory_config,
+                "index": 0,
+            }
         decoder.multichip_path_counters = {"all_reduce": 0, "attention_tp": 0, "dense_tp": 0, "expert_tp": 0}
         return decoder
 
@@ -464,8 +477,12 @@ class MultichipDecoder(OptimizedDecoder):
         if ccl_dtypes[ccl_dtype_name] != original_dtype:
             partial = ttnn.typecast(partial, ccl_dtypes[ccl_dtype_name], memory_config=partial.memory_config())
         if self.persistent_all_reduce_buffers and _matrix_rows(partial) <= TILE_SIZE:
-            index = self.persistent_all_reduce_index
-            self.persistent_all_reduce_index = (index + 1) % len(self.persistent_all_reduce_buffers)
+            if self.persistent_all_reduce_resources is not None:
+                index = self.persistent_all_reduce_resources["index"]
+                self.persistent_all_reduce_resources["index"] = (index + 1) % len(self.persistent_all_reduce_buffers)
+            else:
+                index = self.persistent_all_reduce_index
+                self.persistent_all_reduce_index = (index + 1) % len(self.persistent_all_reduce_buffers)
             l1_partial = ttnn.to_memory_config(
                 partial,
                 self.persistent_all_reduce_memory_config,

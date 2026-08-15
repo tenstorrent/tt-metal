@@ -149,5 +149,58 @@
       ]
     }
   },
-  "notes": "No context reduction: real-weight whole-layer prefill passed at aligned 262144 and non-aligned 262143 for both layer kinds. Traced batch-1 decode passed at current position 262143 using rolled page tables, nonzero cache baselines, and device-verified distinct history sentinels at logical positions 0, 131071, and 262142. Traced correctness, mutable-buffer replay, and current-source latency passed at serving batch 32."
+  "full_model": {
+    "validated_at_utc": "2026-08-15",
+    "implementation": {
+      "decoder": "tt/multichip_decoder.py::MultichipDecoder",
+      "layers": 30,
+      "layer_counts": {
+        "sliding_attention": 25,
+        "full_attention": 5
+      },
+      "mesh": [1, 4],
+      "inter_layer_residual_contract": "replicated BF16 tile-layout DRAM [1,1,M,2816]",
+      "embedding": "hidden-dimension TP4 BF16 ROW_MAJOR followed by one entry all-gather",
+      "lm_head": "tied BF16 vocabulary TP4; four 65536-token shards remain split for sampling",
+      "cache_dtype": "BF16 for both layer kinds; decode update tensors remain BF16",
+      "sliding_cache_tokens_per_layer": 1024,
+      "full_cache_tokens_per_layer": 262144
+    },
+    "memory_envelope": {
+      "calculation_basis": "serialized TTNN tensor-cache sizes from the real-weight [layer 0, layer 5] reduced probe; TP-sharded tensors divided by four, replicated tensors counted once per device",
+      "decoder_stack_bytes_per_device": 7216213640,
+      "decoder_stack_gib_per_device": 6.720622666180134,
+      "embedding_plus_lm_head_and_final_norm_bytes_per_device": 738378402,
+      "embedding_plus_lm_head_and_final_norm_gib_per_device": 0.6876684743911028,
+      "replicated_rope_cache_bytes_per_device": 805306368,
+      "replicated_rope_cache_gib_per_device": 0.75,
+      "single_user_full_context_kv_bytes_per_device": 2736783360,
+      "single_user_full_context_kv_gib_per_device": 2.548828125,
+      "persistent_weight_rope_kv_total_bytes_per_device": 11496681770,
+      "persistent_weight_rope_kv_total_gib_per_device": 10.707119265571237,
+      "decode_trace_reserve_gib_per_device": 0.0625,
+      "persistent_full_attention_ccl_buffers_gib_per_device": 0.00201416015625,
+      "conservative_activation_workspace_reserve_gib": 6.0,
+      "program_allocator_reserve_gib": 4.0,
+      "batch32_sliding_window_kv_gib_per_device": 1.5625,
+      "batch32_equal_slot_capacity_tokens": 8192,
+      "batch32_global_context_budget_tokens": 262144,
+      "conservative_total_gib_per_device": 22.285305300727487,
+      "physical_dram_gib_per_device": 32.0,
+      "remaining_margin_gib_per_device": 9.714694699272513,
+      "page_tables_and_sampler_note": "The five sequential full-attention layers share one three-buffer persistent async-all-reduce pool (2.0625 MiB/device); page tables, sampling parameters, and a one-token local-logit buffer are covered by trace/workspace reserves. State allocation enforces one global 262144-token full-cache budget across active slots; batch 32 therefore has 8192 full-attention tokens per equal slot while retaining an independent 1024-token sliding ring per slot. The conservative batch-32 profile adds 1.513671875 GiB over batch 1 for those sliding rings."
+    },
+    "context_capability_reduction": null,
+    "current_supported_context": 262144,
+    "evidence": {
+      "reduced_probe_layers": [0, 5],
+      "reduced_probe_command": "GEMMA4_FULL_MODEL_PROBE=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_full_model_contract.py::test_reduced_real_weight_full_model_probe",
+      "reduced_probe_result": "pass",
+      "all_layer_capacity_probe": "fallback-raising all-30-layer real-weight prefill plus canonical split traced decode passed in 40.84 seconds; /tmp/gemma4_full_stack_shared.log",
+      "batch32_allocator_and_trace_probe": "all-30-layer real-weight model at max_seq_len=262144/max_batch_size=32 allocated the budgeted state, prefetched one slot, and replayed canonical split decode twice across all 32 fixed slots; pass in 23.93 seconds; /tmp/gemma4_full_stack_batch32_rerun.log"
+      ,
+      "public_generator_long_non_aligned_probe": "logical prompt length 262111 (non-tile, non-page, non-8192 final attention chunk) passed through Gemma4Generator.prefill_forward, all 30 real-weight layers, exact sliding/full paged-cache fill, terminal head, and first canonical traced decode in 341.29 seconds with fallback exceptions enabled; /tmp/gemma4_long_context_public_full_stack.log"
+    }
+  },
+  "notes": "No context reduction: batch 1 retains 262144 tokens and the public generator passed an all-30-layer non-aligned 262111-token prefill plus first traced decode. The batch-32 serving profile divides the same 262144-token global full-attention cache budget into 8192 tokens per equal slot. The conservative worst validated profile is 22.285305300727487 GiB/device, leaving 9.714694699272513 GiB/device. The public generator additionally passed mixed non-aligned 33/47-token prompt handling with fixed slots, an inactive row, and both unchanged and scheduler-boundary changed page tables."
 }

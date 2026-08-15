@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 from models.common.readiness_check.contract import (
     BUILD_GENERATOR_FUNCTION_NAME,
@@ -122,6 +122,7 @@ def run_autoregressive(
     output_dir: Path,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     build_kwargs: Optional[Dict[str, Any]] = None,
+    chat_template: bool = False,
 ) -> Dict[str, Path]:
     """
     Programmatic entry point. Generates a completion from HF and from the TT
@@ -134,7 +135,18 @@ def run_autoregressive(
         raise ValueError(f"Prompt file {prompt_file} is empty")
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
-    prompt_token_ids: List[int] = tokenizer.encode(prompt_text, add_special_tokens=True)
+    if chat_template:
+        if not getattr(tokenizer, "chat_template", None):
+            processor = AutoProcessor.from_pretrained(hf_model_id, trust_remote_code=True)
+            tokenizer.chat_template = getattr(processor, "chat_template", None)
+        encoded = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt_text}], add_generation_prompt=True, tokenize=True
+        )
+        if hasattr(encoded, "keys"):
+            encoded = encoded["input_ids"]
+        prompt_token_ids = [int(token_id) for token_id in encoded]
+    else:
+        prompt_token_ids = tokenizer.encode(prompt_text, add_special_tokens=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Prompt ({len(prompt_token_ids)} tokens):\n{prompt_text}\n")
@@ -162,6 +174,7 @@ def run_autoregressive(
             max_new_tokens=max_new_tokens,
             next_input=None,
         )
+        tt_perf = dict(getattr(generator, "last_perf", {}))
     finally:
         teardown = getattr(generator, "teardown", None)
         if callable(teardown):
@@ -182,9 +195,11 @@ def run_autoregressive(
                 "prompt_file": str(prompt_file),
                 "prompt_text": prompt_text,
                 "prompt_token_ids": prompt_token_ids,
+                "chat_template": chat_template,
                 "max_new_tokens": max_new_tokens,
                 "hf": {"token_ids": list(hf_tokens), "num_tokens": len(hf_tokens)},
                 "tt": {"token_ids": list(tt_tokens), "num_tokens": len(tt_tokens)},
+                "tt_perf": tt_perf,
             },
             indent=2,
         ),
@@ -206,6 +221,7 @@ def _main() -> None:
         required=True,
         help="HuggingFace model id or local path used as the reference.",
     )
+    parser.add_argument("--chat-template", action="store_true", help="Render the prompt as one user chat turn.")
     parser.add_argument(
         "--prompt-file",
         type=Path,
@@ -239,6 +255,7 @@ def _main() -> None:
             mesh_device=mesh_device,
             output_dir=output_dir.resolve(),
             max_new_tokens=args.max_new_tokens,
+            chat_template=args.chat_template,
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)

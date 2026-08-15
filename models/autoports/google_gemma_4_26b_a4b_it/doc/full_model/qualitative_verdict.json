@@ -1,0 +1,36 @@
+{
+  "verdict": "pass",
+  "prompt_format": {
+    "hf_model": "google/gemma-4-26B-A4B-it",
+    "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "mode": "chat",
+    "template_owner": "AutoProcessor.chat_template",
+    "tokenizer_chat_template_present": false,
+    "processor_chat_template_present": true,
+    "generation": "greedy"
+  },
+  "shared_suite": {
+    "artifact": "shared_qualitative_suite.json",
+    "prompt_source": "models.common.readiness_check.vllm_prompts",
+    "prompts": 6,
+    "max_new_tokens": 64,
+    "assessment": [
+      "Haiku follows form and topic; the corrected EOS-aware rerun is autoregressive_haiku_fixed and terminates at model-config end-of-turn.",
+      "Supervised-versus-unsupervised explanation is coherent, simple, and tracks the HF fruit-teaching structure.",
+      "Story completion is fluent, creative, and continues the supplied sentence without early divergence.",
+      "Thermodynamics response is on-topic and correctly frames the three numbered laws plus the zeroth law.",
+      "French translation is correct in both formal and informal registers.",
+      "Fibonacci response is coherent Python-oriented exposition and follows the requested task."
+    ]
+  },
+  "failure_checks": {
+    "repetition_collapse": false,
+    "wrong_language_drift": false,
+    "early_semantic_divergence": false,
+    "stale_token_or_position_signature": false,
+    "mechanical_degeneracy": false,
+    "degeneracy_artifact": "degeneracy_report_final.json",
+    "shared_suite_degeneracy_artifact": "shared_qualitative_degeneracy.json"
+  },
+  "notes": "Shared-suite entry 0 was regenerated after model-config EOS handling: HF generates 18 tokens, TT 19 tokens, 14/18 prefix tokens agree, and both end at <turn|>. The other five shared-suite entries are the reviewed outputs."
+}
