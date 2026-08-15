@@ -132,7 +132,7 @@ static void get_tensor_properties(
     const ttnn::Tensor& tensor_return_value) {
     const uint32_t dim = operation_attributes.dim;
     TT_FATAL(
-        dim == softmax_output.logical_shape().rank() - 1 || dim == static_cast<uint32_t>(-1),
+        dim == softmax_output.logical_shape().rank() - 1,
         "Currently only supporting softmax_backward on last dimension");
     // Tile counts must come from the padded shape: physical_volume includes tile padding,
     // so dividing it by logical H/W overcounts rows and the kernels index past both input
