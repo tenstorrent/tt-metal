@@ -46,11 +46,9 @@ inline void _zero_paired_odd_tail_lane_()
         constexpr std::uint32_t tail_instance_mask = 1u << (k - 1);
 
         // Mark only the SFPU instance containing odd tail lane k.
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x0000);
         TTI_SFPCONFIG(all_instances_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x3F80);
         TTI_SFPCONFIG(tail_instance_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
 
         TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 2);
@@ -60,8 +58,7 @@ inline void _zero_paired_odd_tail_lane_()
         TTI_SFPENCC(0, 0, 0, 0);
 
         // Restore LREG11 to its hardware-default -1.0 value.
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xBF80);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0xBF80);
         TTI_SFPCONFIG(all_instances_mask, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
     }
 }
