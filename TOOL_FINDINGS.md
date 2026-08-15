@@ -2260,6 +2260,66 @@ every downstream PCC number inherits the quality of these inputs.
 
 ---
 
+## ★ F25 — decomposition children lose their parent's path prefix, and the plan is copied from another model
+
+**Status: found 2026-08-15, worked around; the real fix is one line** · severity: silently degrades
+per-component gates to synthetic inputs · reported: not yet
+
+Two independent defects that compound, both visible in the same log.
+
+### (a) The tool computes the correct path and then discards it
+
+```
+line 472  [recompose-link] `decoder_layer` (backbone.layers.0) -> 3 on-device child component(s)
+line 468  [reinject] re-added decomposition child `layers_0_input_layernorm`
+                     (layers.0.input_layernorm) of `decoder_layer`
+line 487  [capture] layers_0_input_layernorm: submodule not resolved; skipping.
+```
+
+The recompose-link step records the parent **fully qualified** — `backbone.layers.0`. The reinject
+step records the children **relative** — `layers.0.input_layernorm`. The capture hook uses the
+children's path, looks up `layers.0.input_layernorm` on a model whose stack lives at
+`backbone.layers.*`, finds nothing, and skips.
+
+**The correct path is four lines away in the same log.** Children should inherit the parent's
+qualified prefix.
+
+### (b) `decomposition_plan.json` is COPIED from the closest existing demo
+
+```
+line 202  A  models/demos/voxtral_tts_full/decomposition_plan.json
+line 203        copied from models/demos/voxtral_tts_backbone/decomposition_plan.json
+```
+
+and that file contains, correctly for **its own** model:
+
+```
+"layers.0.input_layernorm", "layers.0.mlp", "layers.0.self_attn"
+```
+
+`voxtral_tts_backbone` is a bare `MistralForCausalLM` whose stack genuinely is at top level. The
+three-block model's is not. So a plan describing one model's topology was applied to another's —
+**F19's template substitution, resurfacing in the decomposition plan rather than the demo.** The
+demo it copied from is itself a previous artifact of this same tool.
+
+### Consequence
+
+Three components could not be hooked, so they graduated against **synthetic** inputs while the run
+reported success — the §6.54 trap, reached without anyone making a mistake at the point of failure.
+
+### Fixes
+
+1. **Qualify child paths with the parent's prefix** at reinject time. The value is already computed.
+2. **Do not copy `decomposition_plan.json` across models.** Regenerate per model, or at minimum
+   validate every recorded path resolves against the model being ported and discard the plan if not.
+3. Cheap defence that catches both: **after building the hook list, assert each path resolves**, and
+   fail loudly rather than `skipping`. A skipped hook silently changes what the PCC gate measures.
+
+**Workaround used here:** the Block-1 demo was moved out of `models/demos/` so nothing could be
+copied from it, forcing the plan to regenerate against the model actually being ported.
+
+---
+
 ## Corrections to this document
 
 ---
@@ -2370,6 +2430,66 @@ I launched the run before committing the patch, then committed while it was in f
 sequencing error, but it is worth recording next to the finding: the tool's design made a routine
 mistake produce a result indistinguishable from a failed fix, and I only caught it because the error
 message was byte-identical to the previous run's — which is a weak signal to rely on.
+
+---
+
+## ★ F25 — decomposition children lose their parent's path prefix, and the plan is copied from another model
+
+**Status: found 2026-08-15, worked around; the real fix is one line** · severity: silently degrades
+per-component gates to synthetic inputs · reported: not yet
+
+Two independent defects that compound, both visible in the same log.
+
+### (a) The tool computes the correct path and then discards it
+
+```
+line 472  [recompose-link] `decoder_layer` (backbone.layers.0) -> 3 on-device child component(s)
+line 468  [reinject] re-added decomposition child `layers_0_input_layernorm`
+                     (layers.0.input_layernorm) of `decoder_layer`
+line 487  [capture] layers_0_input_layernorm: submodule not resolved; skipping.
+```
+
+The recompose-link step records the parent **fully qualified** — `backbone.layers.0`. The reinject
+step records the children **relative** — `layers.0.input_layernorm`. The capture hook uses the
+children's path, looks up `layers.0.input_layernorm` on a model whose stack lives at
+`backbone.layers.*`, finds nothing, and skips.
+
+**The correct path is four lines away in the same log.** Children should inherit the parent's
+qualified prefix.
+
+### (b) `decomposition_plan.json` is COPIED from the closest existing demo
+
+```
+line 202  A  models/demos/voxtral_tts_full/decomposition_plan.json
+line 203        copied from models/demos/voxtral_tts_backbone/decomposition_plan.json
+```
+
+and that file contains, correctly for **its own** model:
+
+```
+"layers.0.input_layernorm", "layers.0.mlp", "layers.0.self_attn"
+```
+
+`voxtral_tts_backbone` is a bare `MistralForCausalLM` whose stack genuinely is at top level. The
+three-block model's is not. So a plan describing one model's topology was applied to another's —
+**F19's template substitution, resurfacing in the decomposition plan rather than the demo.** The
+demo it copied from is itself a previous artifact of this same tool.
+
+### Consequence
+
+Three components could not be hooked, so they graduated against **synthetic** inputs while the run
+reported success — the §6.54 trap, reached without anyone making a mistake at the point of failure.
+
+### Fixes
+
+1. **Qualify child paths with the parent's prefix** at reinject time. The value is already computed.
+2. **Do not copy `decomposition_plan.json` across models.** Regenerate per model, or at minimum
+   validate every recorded path resolves against the model being ported and discard the plan if not.
+3. Cheap defence that catches both: **after building the hook list, assert each path resolves**, and
+   fail loudly rather than `skipping`. A skipped hook silently changes what the PCC gate measures.
+
+**Workaround used here:** the Block-1 demo was moved out of `models/demos/` so nothing could be
+copied from it, forcing the plan to regenerate against the model actually being ported.
 
 ---
 
