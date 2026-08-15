@@ -3533,6 +3533,30 @@ directory — and never leave a local absolute path in a shared registry.
 
 ## Observations (not defects — recorded for the comparison write-up)
 
+**O0 — the emitted e2e test is STRICTER than PCC, and it is right to be.** Credit, recorded on the
+2026-08-15 re-run. `test_e2e_pcc` asserts **exact equality of every emitted audio code** in addition
+to waveform PCC ≥ threshold:
+
+```
+frames: tt=(8, 37) ref=(8, 37) exact_match=True code_flips=0
+e2e PCC=0.9999834299087524
+```
+
+This is the criterion §6.31 of the hand-port arrived at only after measuring it — one flipped
+semantic code redirects an entire utterance, so waveform PCC alone is the wrong bar for a codec
+model. The tool got there from the model's structure, unprompted.
+
+It also has teeth. The optimize stage's own opening analysis reads:
+
+> *"exact_code_match_beyond_pcc: `test_e2e_pcc` asserts exact equality of all emitted audio codes in
+> addition to waveform PCC >= 0.99, and the accuracy notes show 67 code flips at plain-matmul
+> precision, so any precision relaxation for speed fails outright."*
+
+So the whole precision axis — the cheapest speed knob, and the one O1 notes the tool otherwise
+applies model-wide — is closed off by its own correctness gate before the first measurement. That
+is the exchange-rate O8 says the accept test lacks, supplied here by the test rather than by the
+optimizer.
+
 **O1 — whole-model dtype only.** `plan` recommends "N150 with bfp8_b weights", one dtype for the
 whole model. The hand-port's §6.16 measured per-weight precision as the deciding factor: BFP8 on
 FF and attention but **w2 in bf16**, because w2 alone is 77% of the accuracy cost for 15% of the
