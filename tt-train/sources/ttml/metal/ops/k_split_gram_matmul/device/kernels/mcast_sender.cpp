@@ -107,6 +107,12 @@ void kernel_main() {
 
     const uint32_t recv_cb_base = get_write_ptr(cb_id);
 
+    // Landing offsets into the receivers' CBs. Receivers push block_size per received
+    // block into a cb_size_tiles ring, so their write pointer advances across the whole
+    // run; these offsets must advance in the same modulus and never reset per pass.
+    uint32_t lower_recv_offset = 0;
+    uint32_t upper_recv_offset = 0;
+
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             // Even-parity consumers iterate column-major (m_sub = inner loop var, n_sub =
@@ -114,9 +120,6 @@ void kernel_main() {
             // rows, col sender (c_1) supplies n_sub's rows — pick per block parity.
             const uint32_t lower_row_base = ((cb_id == 0) ? n_sub : m_sub) * rows_per_block;
             const uint32_t upper_row_base = ((cb_id == 0) ? m_sub : n_sub) * rows_per_block;
-
-            uint32_t lower_recv_offset = 0;
-            uint32_t upper_recv_offset = 0;
 
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
                 bool is_lower_block = (blk % 2 == 0);
