@@ -638,16 +638,38 @@ class DiffVAEStage5(Module):
             self._rope_cache[grid] = tables
         return tables
 
-    def embed_x_t(self, x_t: torch.Tensor) -> ttnn.Tensor:
-        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it to ``(1, B, S, dim)``."""
+    def embed_x_t(self, x_t: torch.Tensor, *, shard: "MeshShardConfig | None" = None) -> ttnn.Tensor:
+        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it to ``(1, B, S, dim)``.
+
+        The noise is an input drawn on host, so a split run uploads it already split rather
+        than uploading the whole volume and discarding most of it on every device.
+        """
         cfg = self.config
         patched = patchify(x_t, cfg.patch_size)
         batch, _, t, h, w = patched.shape
-        flat = patched.permute(0, 2, 3, 4, 1).reshape(1, batch, t * h * w, cfg.patch_channels)
-        flat = torch.nn.functional.pad(flat, (0, self.padded_patch_channels - cfg.patch_channels))
-        return self.conv_in_x_t(
-            ttnn.from_torch(flat.contiguous(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
-        )
+        volume = patched.permute(0, 2, 3, 4, 1)
+        volume = torch.nn.functional.pad(volume, (0, self.padded_patch_channels - cfg.patch_channels)).contiguous()
+
+        if shard is None:
+            uploaded = ttnn.from_torch(
+                volume.reshape(1, batch, t * h * w, self.padded_patch_channels),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=self.dtype,
+            )
+        else:
+            local = self.shard_grid(Grid(batch=batch, t=t, h=h, w=w), shard)
+            uploaded = ttnn.from_torch(
+                volume,
+                device=self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=self.dtype,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=shard.mesh, dims=[2, 3]),
+            )
+            uploaded = ttnn.to_layout(
+                ttnn.reshape(uploaded, (1, batch, local.sites, self.padded_patch_channels)), ttnn.TILE_LAYOUT
+            )
+        return self.conv_in_x_t(uploaded)
 
     def forward_diff_step(
         self,
@@ -742,15 +764,28 @@ class DiffVAEStage5(Module):
         x_t: torch.Tensor,
         timestep: ttnn.Tensor,
         grid: Grid,
+        *,
+        shard: "MeshShardConfig | None" = None,
     ) -> torch.Tensor:
         """Return pixels. Valid as the whole decode only for ``model_output_type="x0"``
         with a single inference step, which is what the shipped 2.5 DiffVAE config asks for.
+
+        ``grid`` is the whole volume either way; with ``shard``, ``context`` holds this device's
+        share of it. The shards are gathered before ``unpatchify``, which is a host permutation
+        over the full pixel grid.
         """
         cfg = self.config
-        context_and_x = ttnn.concat([context, self.embed_x_t(x_t)], dim=-1)
-        out = self.forward_diff_step(context_and_x, timestep, grid)
+        context_and_x = ttnn.concat([context, self.embed_x_t(x_t, shard=shard)], dim=-1)
+        out = self.forward_diff_step(context_and_x, timestep, grid, shard=shard)
 
-        packed = ttnn.to_torch(out)[..., : cfg.patch_channels]
-        packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
-        packed = packed.permute(0, 4, 1, 2, 3)
+        if shard is None:
+            packed = ttnn.to_torch(out)
+        else:
+            local = self.shard_grid(grid, shard)
+            packed = ttnn.to_torch(
+                ttnn.reshape(out, (grid.batch, local.t, local.h, local.w, self.padded_patch_channels)),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[2, 3], mesh_shape=shard.mesh),
+            )
+        packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, self.padded_patch_channels)
+        packed = packed[..., : cfg.patch_channels].permute(0, 4, 1, 2, 3)
         return unpatchify(packed, cfg.patch_size)

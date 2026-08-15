@@ -685,8 +685,16 @@ class DiffVAEDecoder(Module):
         grown = self.time_scale * (padded - 1) + 1
         return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
 
-    def forward_context(self, latent: torch.Tensor) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
-        """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped."""
+    def forward_context(
+        self, latent: torch.Tensor, *, shard: MeshShardConfig | None = None
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped.
+
+        The returned dims are the whole context volume even when the tensor is one shard of it:
+        stage 5 plans against the global grid and derives its own share, so the whole extent is
+        the useful thing to hand back. The ghost crop is temporal and T is never split, so it
+        applies unchanged to a shard.
+        """
         batch, channels, t, h, w = latent.shape
         assert batch == 1, f"batched decode is not implemented; got batch={batch}"
         assert channels == self.in_channels, f"latent has {channels} channels, expected {self.in_channels}"
@@ -695,7 +703,7 @@ class DiffVAEDecoder(Module):
         tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
         x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
 
-        x, dims = self.stages(x, dims=(padded.shape[2], h, w))
+        x, dims = self.stages(x, dims=(padded.shape[2], h, w), shard=shard)
         keep = self.context_frames(t)
         if keep < dims[0]:
             channels_out = self.config["stage_channels"][-1]
@@ -703,6 +711,8 @@ class DiffVAEDecoder(Module):
             x = ttnn.slice(x, [0, 0, 0], [keep, dims[1] * dims[2], channels_out])
             x = ttnn.to_layout(ttnn.reshape(x, (keep * dims[1] * dims[2], channels_out)), ttnn.TILE_LAYOUT)
             dims = (keep, dims[1], dims[2])
+        if shard is not None:
+            dims = (dims[0], dims[1] * shard.mesh[0], dims[2] * shard.mesh[1])
         return x, dims
 
     def decode(
@@ -711,17 +721,23 @@ class DiffVAEDecoder(Module):
         *,
         noise: torch.Tensor | None = None,
         seed: int = 0,
+        shard: MeshShardConfig | None = None,
     ) -> torch.Tensor:
         """Normalized ``(B, C, T, H, W)`` latent to ``(B, 3, T', H', W')`` pixels.
 
         ``noise`` is an input, not an implementation detail: stage 5 predicts x0 from it in a
         single step. Pass it to compare against a reference that drew its own.
+
+        ``shard`` splits the volume over a 2D mesh from ``shard.enter_stage`` onward and returns
+        the same pixels, gathered. Whether a grid divides is checked stage by stage, so an entry
+        chosen too early fails at the split rather than silently rebalancing.
         """
         from .diffvae_ltx_stage5 import Grid
 
-        context, dims = self.forward_context(latent)
+        context, dims = self.forward_context(latent, shard=shard)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
-        context = ttnn.reshape(context, (1, 1, grid.sites, self.config["stage_channels"][-1]))
+        sites = grid.sites if shard is None else self.stage5.shard_grid(grid, shard).sites
+        context = ttnn.reshape(context, (1, 1, sites, self.config["stage_channels"][-1]))
 
         if noise is None:
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
@@ -731,7 +747,14 @@ class DiffVAEDecoder(Module):
         timestep = ttnn.from_torch(
             torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
-        return self.stage5.forward(context, noise, timestep, grid)
+        return self.stage5.forward(context, noise, timestep, grid, shard=shard)
 
-    def forward(self, latent: torch.Tensor, *, noise: torch.Tensor | None = None, seed: int = 0) -> torch.Tensor:
-        return self.decode(latent, noise=noise, seed=seed)
+    def forward(
+        self,
+        latent: torch.Tensor,
+        *,
+        noise: torch.Tensor | None = None,
+        seed: int = 0,
+        shard: MeshShardConfig | None = None,
+    ) -> torch.Tensor:
+        return self.decode(latent, noise=noise, seed=seed, shard=shard)
