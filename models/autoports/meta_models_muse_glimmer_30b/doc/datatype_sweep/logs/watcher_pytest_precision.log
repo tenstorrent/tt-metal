@@ -1,0 +1,157 @@
+2026-08-15 02:17:57.587 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1m============================= test session starts ==============================[0m
+[1mcollecting ... [0mcollected 4 items
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_shipped_artifact_is_the_policy_the_build_runs 2026-08-15 02:17:58.883 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 02:17:58.883 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 02:17:58.883 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 02:17:58.883 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 02:18:30.254 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-15 02:18:30.254 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 02:18:30.332 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 02:18:30.332 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 02:18:30.332 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 02:18:30.332 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 02:18:30.333 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 02:18:30.515 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 02:18:30.642 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 02:18:30.642 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 02:18:30.642 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 02:18:30.642 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 02:18:30.642 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 02:18:30.702 | info     |       LLRuntime | Watcher log file: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/watcher_precision/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-15 02:18:30.702 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:133)
+2026-08-15 02:18:30.702 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:133)
+2026-08-15 02:18:30.702 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:133)
+2026-08-15 02:18:30.702 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:133)
+2026-08-15 02:18:30.702 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:565)
+2026-08-15 02:18:30.702 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:30.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.705 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.705 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.706 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.706 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.707 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.708 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:30.708 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 02:18:30.708 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 02:18:30.717 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:30.722 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:30.746 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-15 02:18:30.747 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-15 02:18:30.749 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-15 02:18:30.749 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-15 02:18:30.749 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 02:18:30.749 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-15 02:18:40.836 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:40.842 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:40.847 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:40.853 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:48.201 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 02:18:48.314 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.4s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_readiness_factory_path_builds_the_selected_config 2026-08-15 02:18:50.868 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:50.874 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:50.880 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:18:50.885 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:00.899 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:00.906 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:00.912 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:00.918 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:05.078 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 02:19:05.189 | INFO     | _precision_test_readiness_generator:build_generator:1855 - MuseGlimmerModel built in 15.4s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_layer_exception_reaches_only_the_layers_it_names 2026-08-15 02:19:10.933 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:10.940 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:10.947 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:10.954 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:20.969 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:20.975 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:20.980 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:20.986 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:21.983 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 02:19:22.093 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.4s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role 2026-08-15 02:19:30.998 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:31.004 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:31.010 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:31.015 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-15 02:19:38.871 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 02:19:38.982 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.4s
+[32mPASSED[0m
+
+[33m=============================== warnings summary ===============================[0m
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+32.86s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_shipped_artifact_is_the_policy_the_build_runs
+16.75s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_shipped_artifact_is_the_policy_the_build_runs
+16.69s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_layer_exception_reaches_only_the_layers_it_names
+16.68s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role
+16.66s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_readiness_factory_path_builds_the_selected_config
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_layer_exception_reaches_only_the_layers_it_names
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_readiness_factory_path_builds_the_selected_config
+0.15s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+[36m[1m=========================== short test summary info ============================[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_the_shipped_artifact_is_the_policy_the_build_runs[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_the_readiness_factory_path_builds_the_selected_config[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_layer_exception_reaches_only_the_layers_it_names[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_per_role_fidelity_request_reaches_only_that_role[0m
+[33m================== [32m4 passed[0m, [33m[1m3 warnings[0m[33m in 101.07s (0:01:41)[0m[33m ===================[0m
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x72f50e105348 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x72f50e7355a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "is_allocated"
+ - leaked function "GetNumAvailableDevices"
+ - leaked function ""
+ - leaked function "size"
+ - leaked function "merge"
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function "sfpu_eps"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 02:19:41.024 | info     |    BuildKernels | JIT cache stats: 88/88 hits (100.0%) [88 cached, 29 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 02:19:41.024 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 02:19:41.025 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:613)
+2026-08-15 02:19:41.025 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:191)
+2026-08-15 02:19:41.025 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:191)
+2026-08-15 02:19:41.025 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:191)
+2026-08-15 02:19:41.025 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:191)
+2026-08-15 02:19:41.038 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 02:19:41.038 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 02:19:41.655 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 02:19:41.656 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 02:19:41.656 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

@@ -1,0 +1,38 @@
+SWEEP_DRIVER candidates: c16-decode-ccl-bfp4 c17-attn4-cclbfp4-kv8 c18-prefill-ccl-bfp4-unfractured-norm c19-prefill-ccl-bfp8-unfractured-norm (rounds=11)
+SWEEP_DRIVER ===== c16-decode-ccl-bfp4 started 2026-08-15T00:30:17-04:00 =====
+SWEEP_DRIVER ===== c16-decode-ccl-bfp4 FAILED (exit 1) 2026-08-15T00:33:04-04:00 =====
+SWEEP built c16-decode-ccl-bfp4 in 159.0s
+SWEEP c16-decode-ccl-bfp4 propagation OK (c16-decode-ccl-bfp4)
+SWEEP c16-decode-ccl-bfp4 ERROR RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c16-decode-ccl-bfp4.json
+RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SWEEP_DRIVER ===== c17-attn4-cclbfp4-kv8 started 2026-08-15T00:33:04-04:00 =====
+SWEEP_DRIVER ===== c17-attn4-cclbfp4-kv8 FAILED (exit 1) 2026-08-15T00:35:50-04:00 =====
+SWEEP built c17-attn4-cclbfp4-kv8 in 159.9s
+SWEEP c17-attn4-cclbfp4-kv8 propagation OK (c17-attn4-cclbfp4-kv8)
+SWEEP c17-attn4-cclbfp4-kv8 ERROR RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c17-attn4-cclbfp4-kv8.json
+RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SWEEP_DRIVER ===== c18-prefill-ccl-bfp4-unfractured-norm started 2026-08-15T00:35:50-04:00 =====
+SWEEP_DRIVER ===== c18-prefill-ccl-bfp4-unfractured-norm FAILED (exit 1) 2026-08-15T00:38:36-04:00 =====
+SWEEP built c18-prefill-ccl-bfp4-unfractured-norm in 159.5s
+SWEEP c18-prefill-ccl-bfp4-unfractured-norm propagation OK (c18-prefill-ccl-bfp4-unfractured-norm)
+SWEEP c18-prefill-ccl-bfp4-unfractured-norm ERROR RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c18-prefill-ccl-bfp4-unfractured-norm.json
+RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SWEEP_DRIVER ===== c19-prefill-ccl-bfp8-unfractured-norm started 2026-08-15T00:38:36-04:00 =====
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.11 t/s/u ttft=67.35 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.08 t/s/u ttft=65.77 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=37.99 t/s/u ttft=71.44 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.06 t/s/u ttft=65.49 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=69.17 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.12 t/s/u ttft=68.79 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.10 t/s/u ttft=68.23 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.02 t/s/u ttft=69.05 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.07 t/s/u ttft=67.89 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=38.13 t/s/u ttft=64.13 ms trace_replays=99
+SWEEP c19-prefill-ccl-bfp8-unfractured-norm traced logits-only 22.656 ms/token -> 44.14 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c19-prefill-ccl-bfp8-unfractured-norm.json
+SWEEP_DRIVER ===== c19-prefill-ccl-bfp8-unfractured-norm ok 2026-08-15T00:41:59-04:00 =====
+SWEEP_DRIVER failed candidates: c16-decode-ccl-bfp4 c17-attn4-cclbfp4-kv8 c18-prefill-ccl-bfp4-unfractured-norm
+SWEEP_DRIVER_DONE

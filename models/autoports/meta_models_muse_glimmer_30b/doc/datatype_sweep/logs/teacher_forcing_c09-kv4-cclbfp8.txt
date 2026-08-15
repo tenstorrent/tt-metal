@@ -1,0 +1,42 @@
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=154.93ms  decode=37.44 t/s/u  e2e=35.72 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=154.93ms  decode=37.44 t/s/u  e2e=35.72 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=71.40ms  decode=38.31 t/s/u  e2e=37.66 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=71.40ms  decode=38.31 t/s/u  e2e=37.66 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=72.40ms  decode=38.33 t/s/u  e2e=37.66 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=72.40ms  decode=38.33 t/s/u  e2e=37.66 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=69.79ms  decode=38.25 t/s/u  e2e=37.62 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=69.79ms  decode=38.25 t/s/u  e2e=37.62 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=62.19ms  decode=38.34 t/s/u  e2e=37.82 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=62.19ms  decode=38.34 t/s/u  e2e=37.82 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=67.10ms  decode=38.31 t/s/u  e2e=37.72 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=67.10ms  decode=38.31 t/s/u  e2e=37.72 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=67.75ms  decode=38.23 t/s/u  e2e=37.63 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=67.75ms  decode=38.23 t/s/u  e2e=37.63 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=69.19ms  decode=38.31 t/s/u  e2e=37.69 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=69.19ms  decode=38.31 t/s/u  e2e=37.69 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=68.28ms  decode=38.27 t/s/u  e2e=37.66 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=68.28ms  decode=38.27 t/s/u  e2e=37.66 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=68.40ms  decode=38.25 t/s/u  e2e=37.65 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=68.40ms  decode=38.25 t/s/u  e2e=37.65 t/s/u
+
+
+entry[0]             top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=66.10ms  decode=38.25 t/s/u  e2e=37.67 t/s/u
+AGGREGATE            top1=0.970 (97/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=66.10ms  decode=38.25 t/s/u  e2e=37.67 t/s/u

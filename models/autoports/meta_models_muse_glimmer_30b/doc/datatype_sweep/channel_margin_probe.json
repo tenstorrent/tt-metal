@@ -1,0 +1,316 @@
+{
+  "prompt_id": "p1",
+  "prompt_source": "doc/datatype_sweep/qualitative/qualitative_prompts.json (pinned to the HF control)",
+  "scored_position": 69,
+  "prefix_note": "the pinned prompt plus the HF control's own first generated token, so both arms' disagreement position is the one scored",
+  "hf_token_at_position": 19669,
+  "hf_token_text": "=self",
+  "tt_token_at_position": 76976,
+  "tt_token_text": "=user",
+  "configs": {
+    "c00-baseline-attn8-mlp4-kv8-lofi": {
+      "prefill": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 14.25
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 12.75
+          },
+          {
+            "rank": 2,
+            "token": 156600,
+            "text": "=params",
+            "logit": 3.375
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 1.796875
+          },
+          {
+            "rank": 4,
+            "token": 508,
+            "text": "=\"",
+            "logit": 0.470703125
+          }
+        ],
+        "top1_minus_top2": 1.5,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      },
+      "decode": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 14.625
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 12.875
+          },
+          {
+            "rank": 2,
+            "token": 156600,
+            "text": "=params",
+            "logit": 3.359375
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 1.8125
+          },
+          {
+            "rank": 4,
+            "token": 508,
+            "text": "=\"",
+            "logit": 0.5625
+          }
+        ],
+        "top1_minus_top2": 1.75,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      }
+    },
+    "c01-attn4-mlp4-kv8-lofi": {
+      "prefill": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 13.875
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 13.8125
+          },
+          {
+            "rank": 2,
+            "token": 508,
+            "text": "=\"",
+            "logit": 1.2578125
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 0.470703125
+          },
+          {
+            "rank": 4,
+            "token": 34564,
+            "text": "=s",
+            "logit": 0.26171875
+          }
+        ],
+        "top1_minus_top2": 0.0625,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      },
+      "decode": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 13.8125
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 13.8125
+          },
+          {
+            "rank": 2,
+            "token": 508,
+            "text": "=\"",
+            "logit": 1.109375
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 0.498046875
+          },
+          {
+            "rank": 4,
+            "token": 34564,
+            "text": "=s",
+            "logit": 0.390625
+          }
+        ],
+        "top1_minus_top2": 0.0,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      }
+    },
+    "c06-decode-ccl-bfp8": {
+      "prefill": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 14.25
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 12.75
+          },
+          {
+            "rank": 2,
+            "token": 156600,
+            "text": "=params",
+            "logit": 3.375
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 1.796875
+          },
+          {
+            "rank": 4,
+            "token": 508,
+            "text": "=\"",
+            "logit": 0.470703125
+          }
+        ],
+        "top1_minus_top2": 1.5,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      },
+      "decode": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 14.625
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 13.0625
+          },
+          {
+            "rank": 2,
+            "token": 156600,
+            "text": "=params",
+            "logit": 3.4375
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 1.84375
+          },
+          {
+            "rank": 4,
+            "token": 508,
+            "text": "=\"",
+            "logit": 0.5859375
+          }
+        ],
+        "top1_minus_top2": 1.5625,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      }
+    },
+    "c14-attn4-cclbfp8-kv8": {
+      "prefill": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 19669,
+            "text": "=self",
+            "logit": 13.875
+          },
+          {
+            "rank": 1,
+            "token": 76976,
+            "text": "=user",
+            "logit": 13.8125
+          },
+          {
+            "rank": 2,
+            "token": 508,
+            "text": "=\"",
+            "logit": 1.2578125
+          },
+          {
+            "rank": 3,
+            "token": 41,
+            "text": "=",
+            "logit": 0.470703125
+          },
+          {
+            "rank": 4,
+            "token": 34564,
+            "text": "=s",
+            "logit": 0.26171875
+          }
+        ],
+        "top1_minus_top2": 0.0625,
+        "argmax_token": 19669,
+        "argmax_text": "=self"
+      },
+      "decode": {
+        "top": [
+          {
+            "rank": 0,
+            "token": 76976,
+            "text": "=user",
+            "logit": 13.75
+          },
+          {
+            "rank": 1,
+            "token": 19669,
+            "text": "=self",
+            "logit": 13.625
+          },
+          {
+            "rank": 2,
+            "token": 508,
+            "text": "=\"",
+            "logit": 1.0234375
+          },
+          {
+            "rank": 3,
+            "token": 34564,
+            "text": "=s",
+            "logit": 0.421875
+          },
+          {
+            "rank": 4,
+            "token": 41,
+            "text": "=",
+            "logit": 0.3515625
+          }
+        ],
+        "top1_minus_top2": 0.125,
+        "argmax_token": 76976,
+        "argmax_text": "=user"
+      }
+    }
+  }
+}

@@ -827,7 +827,12 @@ class MuseGlimmerModel(LightweightModule):
                         page_block_size=page_block_size,
                         max_num_blocks=max_num_blocks,
                         prefill_chunk_size=prefill_chunk_size,
-                        precision=precision,
+                        # ``for_layer`` resolves the policy's layer exceptions --
+                        # e.g. "BFP4 attention weights everywhere but the first
+                        # and last layer".  It returns the policy unchanged when
+                        # no exception names this index, so the common case is
+                        # the same object every layer gets today.
+                        precision=precision.for_layer(layer_idx),
                         rope_cache=rope_cache,
                         **decoder_kwargs,
                     )
@@ -1589,6 +1594,58 @@ class MuseGlimmerModel(LightweightModule):
         return out
 
     # ---------------------------------------------------------------- report
+
+    def precision_report(self) -> dict[str, Any]:
+        """The whole model's realised precision policy, read off the build.
+
+        Every field is derived from a tensor or a compute-kernel config that is
+        already on the device, so this is what ``$datatype-sweep`` needs to prove
+        that a ``selected_precision_config.json`` field was consumed rather than
+        merely recorded.  Per-layer reports are folded to the distinct ones with
+        the layer indices that produced each, so a 52-layer stack with a
+        first/last-layer exception reports three groups rather than 52 copies.
+        """
+        groups: list[dict[str, Any]] = []
+        overrides: dict[str, Any] = {}
+        for layer in self.layers:
+            report = layer.precision_report()
+            layer_idx = report.pop("layer_idx")
+            # Companion settings are layer-uniform; hoist them so the model-level
+            # report carries them once rather than inside every layer group.
+            overrides = report.pop("decoder_overrides", None) or overrides
+            report.pop("layer_kind", None)
+            key = json.dumps(report, sort_keys=True)
+            for group in groups:
+                if group["_key"] == key:
+                    group["layers"].append(layer_idx)
+                    break
+            else:
+                groups.append({"_key": key, "layers": [layer_idx], "precision": report})
+        for group in groups:
+            del group["_key"]
+
+        head = self.lm_head
+        return {
+            "policy_name": self.precision.name,
+            "decoder_overrides": overrides or {},
+            "num_layers": len(self.layers),
+            "layer_groups": groups,
+            "embedding": {"weight_dtype": str(self.embed_weight.dtype)},
+            "lm_head": {
+                "weight_dtype": str(head.weight.dtype),
+                "fidelity": str(head.compute_kernel_config.math_fidelity),
+                "fp32_dest_acc_en": bool(head.compute_kernel_config.fp32_dest_acc_en),
+                "output_dtype": str(head.output_dtype),
+                "matmul": head.matmul,
+                "cores": head.cores,
+                "in0_block_w": head.in0_block_w,
+                "softcap_in_l1": bool(head.softcap_in_l1),
+            },
+            "terminal_norms": {
+                "embed_norm_weight_dtype": str(self.embed_norm.weight.dtype),
+                "final_norm_weight_dtype": str(self.final_norm.weight.dtype),
+            },
+        }
 
     def dram_report(self) -> dict[str, Any]:
         """Measured per-device DRAM footprint of everything long-lived.

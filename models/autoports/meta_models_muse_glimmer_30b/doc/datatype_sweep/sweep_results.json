@@ -1,0 +1,3501 @@
+{
+  "schema_version": 1,
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "stage": "datatype_sweep",
+  "thresholds": {
+    "top1_min": 0.9,
+    "top5_min": 0.98,
+    "top100_min": 1.0,
+    "source": "$datatype-sweep defaults (top-1 >= 90 %, top-5 >= 98 %); top-100 held at the readiness expectation the optimized full model already meets (1.000). No user override was given."
+  },
+  "ranking_metric": "trace-verified teacher-forcing decode t/s/u (median of the per-config rounds). Eager or untraced decode is not used anywhere in this stage.",
+  "selected": {
+    "config_id": "c14-attn4-cclbfp8-kv8",
+    "reason": "11 passing configs are not separated from the fastest (38.29 t/s/u) by the ranking metric -- within 0.5% of its median, or with an overlapping measured round range, or both: c08-attn4-kv4-cclbfp8=38.29, c09-kv4-cclbfp8=38.27, c15-attn4-except-first-last-cclbfp8=38.24, c14-attn4-cclbfp8-kv8=38.23, c01-attn4-mlp4-kv8-lofi=38.20, c20-attn4-cclbfp8-kv4-sliding-only=38.20, c07-attn4-except-first-last=38.16, c22-attn4-cclbfp8-kv4-full-attn-only=38.14, c06-decode-ccl-bfp8=38.14, c19-prefill-ccl-bfp8-unfractured-norm=38.10, c05-kv4=38.08. the traced logits-only cross-check separates 4 of the accuracy-neutral candidates from the best but not c14-attn4-cclbfp8-kv8 (44.578), c15-attn4-except-first-last-cclbfp8 (44.564), which agree to within its own measured resolution of 0.038%; among those the decision is the simplest policy: c14-attn4-cclbfp8-kv8. Faster-by-median but not separated, and rejected for a measured full-model top-1 regression to below 0.990: c08-attn4-kv4-cclbfp8 (38.293 t/s/u, top-1 0.970), c09-kv4-cclbfp8 (38.269 t/s/u, top-1 0.970), c20-attn4-cclbfp8-kv4-sliding-only (38.201 t/s/u, top-1 0.980), c22-attn4-cclbfp8-kv4-full-attn-only (38.145 t/s/u, top-1 0.970), c05-kv4 (38.081 t/s/u, top-1 0.970)",
+    "tie_rule": "candidates whose measured teacher-forcing round ranges overlap the fastest candidate's, or which are within the tolerance of its median, are not separated by the ranking metric. Within that set, in order: (1) prefer no regression in measured full-model top-1 -- the safer half of the skill's tie rule; (2) drop everything the traced logits-only cross-check separates from its best by more than that metric's own measured resolution, which is how well its two good rounds agree across all candidates rather than a fixed band; (3) among what remains -- genuinely indistinguishable on both metrics -- take the simplest policy, counted as departures from the carried-forward baseline.",
+    "tied_within_tolerance": [
+      "c08-attn4-kv4-cclbfp8",
+      "c09-kv4-cclbfp8",
+      "c15-attn4-except-first-last-cclbfp8",
+      "c14-attn4-cclbfp8-kv8",
+      "c01-attn4-mlp4-kv8-lofi",
+      "c20-attn4-cclbfp8-kv4-sliding-only",
+      "c07-attn4-except-first-last",
+      "c22-attn4-cclbfp8-kv4-full-attn-only",
+      "c06-decode-ccl-bfp8",
+      "c19-prefill-ccl-bfp8-unfractured-norm",
+      "c05-kv4"
+    ],
+    "tied_round_ranges": {
+      "c08-attn4-kv4-cclbfp8": [
+        38.186,
+        38.351
+      ],
+      "c09-kv4-cclbfp8": [
+        38.232,
+        38.342
+      ],
+      "c15-attn4-except-first-last-cclbfp8": [
+        38.173,
+        38.329
+      ],
+      "c14-attn4-cclbfp8-kv8": [
+        38.151,
+        38.303
+      ],
+      "c01-attn4-mlp4-kv8-lofi": [
+        38.145,
+        38.266
+      ],
+      "c20-attn4-cclbfp8-kv4-sliding-only": [
+        38.082,
+        38.268
+      ],
+      "c07-attn4-except-first-last": [
+        38.128,
+        38.272
+      ],
+      "c22-attn4-cclbfp8-kv4-full-attn-only": [
+        38.112,
+        38.196
+      ],
+      "c06-decode-ccl-bfp8": [
+        38.072,
+        38.234
+      ],
+      "c19-prefill-ccl-bfp8-unfractured-norm": [
+        37.992,
+        38.208
+      ],
+      "c05-kv4": [
+        37.917,
+        38.242
+      ]
+    },
+    "cross_check_metric": "traced logits-only decode t/s/u (decode-trace replay alone)",
+    "cross_check_resolution": 0.00037979959331324586,
+    "cross_check_indistinguishable_from_best": [
+      "c14-attn4-cclbfp8-kv8",
+      "c15-attn4-except-first-last-cclbfp8"
+    ],
+    "cross_check_tok_s_u": {
+      "c08-attn4-kv4-cclbfp8": 44.660531697884174,
+      "c09-kv4-cclbfp8": 44.42107769182304,
+      "c15-attn4-except-first-last-cclbfp8": 44.56351720391374,
+      "c14-attn4-cclbfp8-kv8": 44.578153116419315,
+      "c01-attn4-mlp4-kv8-lofi": 44.381544514239394,
+      "c20-attn4-cclbfp8-kv4-sliding-only": 44.6385921572044,
+      "c07-attn4-except-first-last": 44.37126488989425,
+      "c22-attn4-cclbfp8-kv4-full-attn-only": 44.598304444579576,
+      "c06-decode-ccl-bfp8": 44.34126260241259,
+      "c19-prefill-ccl-bfp8-unfractured-norm": 44.14140980452822,
+      "c05-kv4": 44.10341776754536
+    },
+    "tie_tolerance": 0.005,
+    "ranked": [
+      {
+        "config_id": "c08-attn4-kv4-cclbfp8",
+        "decode_tok_s_u_median": 38.29296116834563,
+        "decode_tok_s_u_rounds": [
+          37.432442777708836,
+          38.32568820612317,
+          38.2710456549688,
+          38.186215565850944,
+          38.298948148230444,
+          38.310082170610954,
+          38.34471908466597,
+          38.219430028621794,
+          38.21817869960787,
+          38.29296116834563,
+          38.35067062160356
+        ],
+        "traced_logits_only_tok_s_u": 44.660531697884174,
+        "top1": 0.97,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c09-kv4-cclbfp8",
+        "decode_tok_s_u_median": 38.26944999760827,
+        "decode_tok_s_u_rounds": [
+          37.43551969930533,
+          38.31104326194804,
+          38.32991214355782,
+          38.245463656958776,
+          38.34184961172939,
+          38.30972277508471,
+          38.231874776878115,
+          38.31349763745795,
+          38.26944999760827,
+          38.253819420024804,
+          38.25068118013024
+        ],
+        "traced_logits_only_tok_s_u": 44.42107769182304,
+        "top1": 0.97,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c15-attn4-except-first-last-cclbfp8",
+        "decode_tok_s_u_median": 38.24400226759236,
+        "decode_tok_s_u_rounds": [
+          37.1238558750527,
+          38.26105760931244,
+          38.21897641246144,
+          38.172742592661955,
+          38.272304605453584,
+          38.22205464417714,
+          38.23652655902974,
+          38.32919147130427,
+          38.27690283155563,
+          38.24400226759236,
+          38.25232101763271
+        ],
+        "traced_logits_only_tok_s_u": 44.56351720391374,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c14-attn4-cclbfp8-kv8",
+        "decode_tok_s_u_median": 38.22669495882399,
+        "decode_tok_s_u_rounds": [
+          37.35590418360565,
+          38.20381475555315,
+          38.302605238674104,
+          38.28890530098772,
+          38.2147240636805,
+          38.22669495882399,
+          38.285411409052735,
+          38.1510354991172,
+          38.218802708814074,
+          38.27074948246847,
+          38.258727180329096
+        ],
+        "traced_logits_only_tok_s_u": 44.578153116419315,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c01-attn4-mlp4-kv8-lofi",
+        "decode_tok_s_u_median": 38.20447847013202,
+        "decode_tok_s_u_rounds": [
+          37.40066184383286,
+          38.250899820964364,
+          38.20447847013202,
+          38.14520958900745,
+          38.265822796388946,
+          38.20518503887458,
+          38.17942140187507,
+          38.18837448168478,
+          38.244980213867564,
+          38.175106028639334,
+          38.25251635365851
+        ],
+        "traced_logits_only_tok_s_u": 44.381544514239394,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c20-attn4-cclbfp8-kv4-sliding-only",
+        "decode_tok_s_u_median": 38.20086140748629,
+        "decode_tok_s_u_rounds": [
+          37.3677392652795,
+          38.08248972621644,
+          38.267530053229315,
+          38.15973728061866,
+          38.20086140748629,
+          38.2175055976182,
+          38.25142670386502,
+          38.18244157603616,
+          38.117809807707665,
+          38.21736972062321,
+          38.20848510407044
+        ],
+        "traced_logits_only_tok_s_u": 44.6385921572044,
+        "top1": 0.98,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c07-attn4-except-first-last",
+        "decode_tok_s_u_median": 38.162737114270485,
+        "decode_tok_s_u_rounds": [
+          37.21570572792886,
+          38.13014506061874,
+          38.270425546353955,
+          38.148833686951,
+          38.272336312160846,
+          38.14990585738547,
+          38.24610455854727,
+          38.229073775576815,
+          38.12843570743366,
+          38.162737114270485,
+          38.25078395328676
+        ],
+        "traced_logits_only_tok_s_u": 44.37126488989425,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c22-attn4-cclbfp8-kv4-full-attn-only",
+        "decode_tok_s_u_median": 38.14460980654076,
+        "decode_tok_s_u_rounds": [
+          37.3959897684909,
+          38.12056683051099,
+          38.17991398285914,
+          38.15791477701363,
+          38.14161097011411,
+          38.14460980654076,
+          38.196320382203915,
+          38.148175887363436,
+          38.13159329529914,
+          38.17611247242986,
+          38.11246849525025
+        ],
+        "traced_logits_only_tok_s_u": 44.598304444579576,
+        "top1": 0.97,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c06-decode-ccl-bfp8",
+        "decode_tok_s_u_median": 38.140945000681576,
+        "decode_tok_s_u_rounds": [
+          37.30503418333115,
+          38.20492488698098,
+          38.18973238907967,
+          38.12947551069897,
+          38.140945000681576,
+          38.07204475978821,
+          38.223479836738164,
+          38.137835948254306,
+          38.194885071188196,
+          38.23406143695986,
+          38.09521096206513
+        ],
+        "traced_logits_only_tok_s_u": 44.34126260241259,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c19-prefill-ccl-bfp8-unfractured-norm",
+        "decode_tok_s_u_median": 38.09760524148164,
+        "decode_tok_s_u_rounds": [
+          37.25659472096625,
+          38.20798451726869,
+          38.06543390476446,
+          38.03452043828363,
+          38.09656667734727,
+          37.991865048308085,
+          38.09760524148164,
+          38.09849633596823,
+          38.130380183348976,
+          38.154164068821935,
+          38.13762491603643
+        ],
+        "traced_logits_only_tok_s_u": 44.14140980452822,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c05-kv4",
+        "decode_tok_s_u_median": 38.08120612874068,
+        "decode_tok_s_u_rounds": [
+          37.18243581535057,
+          38.02860334865399,
+          38.08120612874068,
+          38.242265290773695,
+          37.917356050182626,
+          38.04333226333378,
+          38.17640531219098,
+          38.14977119485027,
+          38.2164485527005,
+          38.08097333948984,
+          38.19429486466972
+        ],
+        "traced_logits_only_tok_s_u": 44.10341776754536,
+        "top1": 0.97,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c00-baseline-attn8-mlp4-kv8-lofi",
+        "decode_tok_s_u_median": 38.03665656550962,
+        "decode_tok_s_u_rounds": [
+          37.213345528907425,
+          38.07876803694925,
+          38.02333226140837,
+          38.00274063095543,
+          38.058072240928254,
+          38.04690825198449,
+          38.06422454461008,
+          38.03665656550962,
+          38.01473580821922,
+          38.15899937098599,
+          37.98586496925708
+        ],
+        "traced_logits_only_tok_s_u": 44.13915502925171,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c21-lm-head-bfp4-hifi2",
+        "decode_tok_s_u_median": 37.56518210759005,
+        "decode_tok_s_u_rounds": [
+          36.46591600470193,
+          37.5807378307713,
+          37.58596010110049,
+          37.500766762507126,
+          37.588515671916696,
+          37.45947657900552,
+          37.61361897395829,
+          37.530241726362554,
+          37.51931632271025,
+          37.56518210759005,
+          37.59302173906777
+        ],
+        "traced_logits_only_tok_s_u": 43.5759556156933,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c11-lm-head-bfp4-in0bw1",
+        "decode_tok_s_u_median": 37.46256370304912,
+        "decode_tok_s_u_rounds": [
+          36.67769316364112,
+          37.427634165476505,
+          37.425594713395064,
+          37.5467040612864,
+          37.45718076669629,
+          37.408520155926,
+          37.51464571727966,
+          37.50175052147416,
+          37.46256370304912,
+          37.483404918881774,
+          37.497741201552884
+        ],
+        "traced_logits_only_tok_s_u": 43.35492544363351,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c10-lm-head-bfp8",
+        "decode_tok_s_u_median": 37.42129533285418,
+        "decode_tok_s_u_rounds": [
+          36.60991789094984,
+          37.362961601250014,
+          37.447684960489376,
+          37.42129533285418,
+          37.28362621200546,
+          37.3851094976525,
+          37.4638199260298,
+          37.43902960466141,
+          37.42012580585925,
+          37.42529350026486,
+          37.514547516319624
+        ],
+        "traced_logits_only_tok_s_u": 43.30217495801236,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c02-attn4-mlp4-kv8-attn-hifi2",
+        "decode_tok_s_u_median": 36.0317732105584,
+        "decode_tok_s_u_rounds": [
+          35.17306043677935,
+          36.044748374935054,
+          36.0362366763687,
+          35.99754147301127,
+          36.024889832038966,
+          36.03315152138106,
+          36.083081807429245,
+          35.95691940028789,
+          36.037463341683306,
+          35.92637854103139,
+          36.0317732105584
+        ],
+        "traced_logits_only_tok_s_u": 41.393024362208635,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c03-attn8-hifi2-mlp4-lofi",
+        "decode_tok_s_u_median": 35.626039269731436,
+        "decode_tok_s_u_rounds": [
+          34.92746115102115,
+          35.69802979467726,
+          35.60645204918648,
+          35.59684389330886,
+          35.64138627302212,
+          35.65915089131496,
+          35.621422913529074,
+          35.626039269731436,
+          35.634027907907615,
+          35.629205587582284,
+          35.59935272908095
+        ],
+        "traced_logits_only_tok_s_u": 41.12391354978035,
+        "top1": 0.99,
+        "top5": 1.0
+      },
+      {
+        "config_id": "c04-mlp4-hifi2",
+        "decode_tok_s_u_median": 28.87859344288137,
+        "decode_tok_s_u_rounds": [
+          28.39106436751902,
+          28.866708734676084,
+          28.886639202977662,
+          28.86431792078511,
+          28.87859344288137,
+          28.885601528662807,
+          28.884523627948404,
+          28.87752095099496,
+          28.869712928194737,
+          28.884232859224046,
+          28.894098163371588
+        ],
+        "traced_logits_only_tok_s_u": 32.45280493281787,
+        "top1": 0.99,
+        "top5": 1.0
+      }
+    ],
+    "rejected": [
+      {
+        "config_id": "c12-activations-bfp8",
+        "status": "error",
+        "failed_gates": [
+          "top1",
+          "top5",
+          "top100",
+          "propagation",
+          "traced"
+        ],
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "decode_tok_s_u_median": null,
+        "traced_logits_only_tok_s_u": null,
+        "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16\ninfo:\nUnsupported data format\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x723a2b) [0x7ae968923a2b]\n --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x7ae967c6fbb3]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x7ae967c6ef18]\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e2835) [0x7ae9685e2835]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7ae968552bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7ae9aca2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7ae9aca2a28b]\n --- python(_start+0x29) [0x1795ced]\n"
+      },
+      {
+        "config_id": "c13-prefill-ccl-bfp4",
+        "status": "error",
+        "failed_gates": [
+          "top1",
+          "top5",
+          "top100",
+          "propagation",
+          "traced"
+        ],
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "decode_tok_s_u_median": null,
+        "traced_logits_only_tok_s_u": null,
+        "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp:44: input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::FLOAT32\ninfo:\nInput data format not supported.\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x723a2b) [0x7b20fdf23a2b]\n --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim36LayerNormPreAllGatherDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7b20fc1f4709]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim36LayerNormPreAllGatherDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x7b20fc1f2eeb]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim36LayerNormPreAllGatherDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2ee) [0x7b20fc1df9de]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim25layer_norm_pre_all_gatherERKNS_6TensorERKSt8optionalIS1_ES7_NS0_24LayerNormDistributedTypeERKS4_IN2tt8tt_metal8DataTypeEERKNS_19ComputeKernelConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKS4_IbEb+0x30b) [0x7b20fc1dc81b]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn23rms_norm_pre_all_gatherERKNS_6TensorEN2tt8tt_metal8DataTypeERKSt8optionalIS1_ES6_IKNS_19ComputeKernelConfigEERKS6_IKSt7variantIJNS_4prim29LayerNormDefaultProgramConfigENSE_38LayerNormShardedMultiCoreProgramConfigEEEERKS6_INS4_12MemoryConfigEERKS6_IbEb+0x2fd) [0x7b20fd669d9d]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76fdb3) [0x7b20fdf6fdb3]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7b20fdb52bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7b214222a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7b214222a28b]\n --- python(_start+0x29) [0x1795ced]\n"
+      },
+      {
+        "config_id": "c16-decode-ccl-bfp4",
+        "status": "error",
+        "failed_gates": [
+          "top1",
+          "top5",
+          "top100",
+          "propagation",
+          "traced"
+        ],
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "decode_tok_s_u_median": null,
+        "traced_logits_only_tok_s_u": null,
+        "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B\ninfo:\nInput tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x72b497e2442d]\n --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x72b496042453]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x72b49603a0bf]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x72b496037f3b]\n --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x72b497d6f6ae]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x72b497952bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x72b4dbc2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x72b4dbc2a28b]\n --- python(_start+0x29) [0x1795ced]\n"
+      },
+      {
+        "config_id": "c17-attn4-cclbfp4-kv8",
+        "status": "error",
+        "failed_gates": [
+          "top1",
+          "top5",
+          "top100",
+          "propagation",
+          "traced"
+        ],
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "decode_tok_s_u_median": null,
+        "traced_logits_only_tok_s_u": null,
+        "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B\ninfo:\nInput tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x72fd8862442d]\n --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x72fd86842453]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x72fd8683a0bf]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x72fd86837f3b]\n --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x72fd8856f6ae]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x72fd88152bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x72fdcc62a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x72fdcc62a28b]\n --- python(_start+0x29) [0x1795ced]\n"
+      },
+      {
+        "config_id": "c18-prefill-ccl-bfp4-unfractured-norm",
+        "status": "error",
+        "failed_gates": [
+          "top1",
+          "top5",
+          "top100",
+          "propagation",
+          "traced"
+        ],
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "decode_tok_s_u_median": null,
+        "traced_logits_only_tok_s_u": null,
+        "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B\ninfo:\nInput tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x7e6e2102442d]\n --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x7e6e1f242453]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x7e6e1f23a0bf]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x7e6e1f237f3b]\n --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x7e6e20f6f6ae]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7e6e20b52bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python() [0x1612849]\n --- python(_PyEval_EvalFrameDefault+0xe840) [0x16219c0]\n --- python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e6e6502a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e6e6502a28b]\n --- python(_start+0x29) [0x1795ced]\n"
+      }
+    ]
+  },
+  "configs": [
+    {
+      "config_id": "c00-baseline-attn8-mlp4-kv8-lofi",
+      "description": "Baseline: the optimized full model's shipped policy. BFP8 attention weights, BFP4 MLP weights, BFP8 KV cache, BF16 activations/residual, BFP8 prefill CCL payload, BF16 decode CCL payload, LoFi everywhere, BFP4/LoFi LM head.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c00-baseline-attn8-mlp4-kv8-lofi.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c00-baseline-attn8-mlp4-kv8-lofi.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.03665656550962,
+        "teacher_forcing_decode_tok_s_u_max": 38.15899937098599,
+        "teacher_forcing_decode_tok_s_u_min": 37.213345528907425,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.213345528907425,
+          38.07876803694925,
+          38.02333226140837,
+          38.00274063095543,
+          38.058072240928254,
+          38.04690825198449,
+          38.06422454461008,
+          38.03665656550962,
+          38.01473580821922,
+          38.15899937098599,
+          37.98586496925708
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 66.06268003815785,
+        "ttft_ms_median": 69.25729499198496,
+        "ttft_ms_rounds": [
+          157.26778900716454,
+          67.01804598560557,
+          69.68943099491298,
+          69.50386700918898,
+          66.5758810355328,
+          69.25729499198496,
+          70.40851505007595,
+          66.34245498571545,
+          69.14556201081723,
+          69.4617559784092,
+          66.06268003815785
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.13915502925171,
+        "traced_logits_only_rounds_ms": [
+          22.65562173397484,
+          22.66287245311105,
+          23.129637921556423
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c00-baseline-attn8-mlp4-kv8-lofi --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 155.7,
+      "_logits_only_rounds_ms": [
+        22.65562173397484,
+        22.66287245311105,
+        23.129637921556423
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c01-attn4-mlp4-kv8-lofi",
+      "description": "BFP4 attention weights (wqkv, attn_gate, o_proj) at LoFi, everything else baseline. The BFP4+LoFi candidate for the attention weight group.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c01-attn4-mlp4-kv8-lofi.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c01-attn4-mlp4-kv8-lofi.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.20447847013202,
+        "teacher_forcing_decode_tok_s_u_max": 38.265822796388946,
+        "teacher_forcing_decode_tok_s_u_min": 37.40066184383286,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.40066184383286,
+          38.250899820964364,
+          38.20447847013202,
+          38.14520958900745,
+          38.265822796388946,
+          38.20518503887458,
+          38.17942140187507,
+          38.18837448168478,
+          38.244980213867564,
+          38.175106028639334,
+          38.25251635365851
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 64.97540097916499,
+        "ttft_ms_median": 67.63575499644503,
+        "ttft_ms_rounds": [
+          157.65102696605027,
+          67.14965600986034,
+          67.63575499644503,
+          70.71408699266613,
+          64.97540097916499,
+          70.5420589656569,
+          68.98831896251068,
+          65.10356499347836,
+          65.30678400304168,
+          68.35030997171998,
+          66.05869997292757
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.381544514239394,
+        "traced_logits_only_rounds_ms": [
+          22.53188821941876,
+          22.539437327395717,
+          23.002922437626694
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6603027712,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c01-attn4-mlp4-kv8-lofi --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 156.3,
+      "_logits_only_rounds_ms": [
+        22.53188821941876,
+        22.539437327395717,
+        23.002922437626694
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c02-attn4-mlp4-kv8-attn-hifi2",
+      "description": "BFP4 attention weights at HiFi2, MLP left at BFP4+LoFi. The fidelity comparison for the BFP4 attention group.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c02-attn4-mlp4-kv8-attn-hifi2.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c02-attn4-mlp4-kv8-attn-hifi2.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi(attn_gate=HiFi2,o_proj=HiFi2,wqkv=HiFi2)",
+        "prefill_fidelity": "LoFi(attn_gate=HiFi2,o_proj=HiFi2,wqkv=HiFi2)",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 36.0317732105584,
+        "teacher_forcing_decode_tok_s_u_max": 36.083081807429245,
+        "teacher_forcing_decode_tok_s_u_min": 35.17306043677935,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          35.17306043677935,
+          36.044748374935054,
+          36.0362366763687,
+          35.99754147301127,
+          36.024889832038966,
+          36.03315152138106,
+          36.083081807429245,
+          35.95691940028789,
+          36.037463341683306,
+          35.92637854103139,
+          36.0317732105584
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 63.29397700028494,
+        "ttft_ms_median": 67.18382000690326,
+        "ttft_ms_rounds": [
+          154.2325519840233,
+          63.29397700028494,
+          65.24750997778028,
+          66.25577597878873,
+          65.29072200646624,
+          67.18382000690326,
+          64.02013398474082,
+          67.7115090074949,
+          68.35533899720758,
+          68.60861298628151,
+          69.39555698772892
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 41.393024362208635,
+        "traced_logits_only_rounds_ms": [
+          24.1586599531729,
+          24.16719735992956,
+          24.633969374917797
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6603027712,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c02-attn4-mlp4-kv8-attn-hifi2 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 157.6,
+      "_logits_only_rounds_ms": [
+        24.1586599531729,
+        24.16719735992956,
+        24.633969374917797
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c03-attn8-hifi2-mlp4-lofi",
+      "description": "Baseline dtypes with the BFP8 attention projections moved to HiFi2. The BFP8+HiFi2 arm of the BFP8+LoFi-vs-BFP8+HiFi2 comparison; the baseline is the BFP8+LoFi arm.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c03-attn8-hifi2-mlp4-lofi.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c03-attn8-hifi2-mlp4-lofi.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi(attn_gate=HiFi2,o_proj=HiFi2,wqkv=HiFi2)",
+        "prefill_fidelity": "LoFi(attn_gate=HiFi2,o_proj=HiFi2,wqkv=HiFi2)",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 35.626039269731436,
+        "teacher_forcing_decode_tok_s_u_max": 35.69802979467726,
+        "teacher_forcing_decode_tok_s_u_min": 34.92746115102115,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          34.92746115102115,
+          35.69802979467726,
+          35.60645204918648,
+          35.59684389330886,
+          35.64138627302212,
+          35.65915089131496,
+          35.621422913529074,
+          35.626039269731436,
+          35.634027907907615,
+          35.629205587582284,
+          35.59935272908095
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 64.93514101020992,
+        "ttft_ms_median": 68.99689399870113,
+        "ttft_ms_rounds": [
+          152.6830199873075,
+          66.43508799606934,
+          64.93514101020992,
+          68.30584397539496,
+          70.51271095406264,
+          68.99689399870113,
+          69.38012700993568,
+          68.00389604177326,
+          71.35803601704538,
+          70.25797397363931,
+          68.17302899435163
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 41.12391354978035,
+        "traced_logits_only_rounds_ms": [
+          24.316751828337146,
+          24.32489973398333,
+          24.790652437332028
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c03-attn8-hifi2-mlp4-lofi --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 157.4,
+      "_logits_only_rounds_ms": [
+        24.316751828337146,
+        24.32489973398333,
+        24.790652437332028
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c04-mlp4-hifi2",
+      "description": "Baseline dtypes with the BFP4 MLP projections moved to HiFi2. The BFP4+HiFi2 arm for the MLP weight group; the baseline is its BFP4+LoFi arm.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c04-mlp4-hifi2.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c04-mlp4-hifi2.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi(mlp_down=HiFi2,mlp_gate=HiFi2,mlp_up=HiFi2)",
+        "prefill_fidelity": "LoFi(mlp_down=HiFi2,mlp_gate=HiFi2,mlp_up=HiFi2)",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 28.87859344288137,
+        "teacher_forcing_decode_tok_s_u_max": 28.894098163371588,
+        "teacher_forcing_decode_tok_s_u_min": 28.39106436751902,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          28.39106436751902,
+          28.866708734676084,
+          28.886639202977662,
+          28.86431792078511,
+          28.87859344288137,
+          28.885601528662807,
+          28.884523627948404,
+          28.87752095099496,
+          28.869712928194737,
+          28.884232859224046,
+          28.894098163371588
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 65.1750840479508,
+        "ttft_ms_median": 69.12065204232931,
+        "ttft_ms_rounds": [
+          161.1237109755166,
+          69.12065204232931,
+          73.66976095363498,
+          68.36865597870201,
+          65.1750840479508,
+          69.40391403622925,
+          69.19786497019231,
+          71.02593703893945,
+          67.68846797058359,
+          66.61170197185129,
+          68.81897698622197
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 32.45280493281787,
+        "traced_logits_only_rounds_ms": [
+          30.813977468824305,
+          30.82275334327278,
+          31.288572344237764
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c04-mlp4-hifi2 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.5,
+      "_logits_only_rounds_ms": [
+        30.813977468824305,
+        30.82275334327278,
+        31.288572344237764
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c05-kv4",
+      "description": "Baseline weights and fidelity with the paged KV cache at BFP4. Halves cache bytes per token against BFP8, so it changes both decode SDPA bandwidth and the context contract.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c05-kv4.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c05-kv4.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat4_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.08120612874068,
+        "teacher_forcing_decode_tok_s_u_max": 38.242265290773695,
+        "teacher_forcing_decode_tok_s_u_min": 37.18243581535057,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.18243581535057,
+          38.02860334865399,
+          38.08120612874068,
+          38.242265290773695,
+          37.917356050182626,
+          38.04333226333378,
+          38.17640531219098,
+          38.14977119485027,
+          38.2164485527005,
+          38.08097333948984,
+          38.19429486466972
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 63.88308497844264,
+        "ttft_ms_median": 66.2743600551039,
+        "ttft_ms_rounds": [
+          155.28285602340475,
+          66.18898402666673,
+          65.84753497736529,
+          66.2743600551039,
+          68.08195397024974,
+          67.03417003154755,
+          69.91884700255468,
+          64.62340097641572,
+          65.47327199950814,
+          70.87361096637323,
+          63.88308497844264
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.10341776754536,
+        "traced_logits_only_rounds_ms": [
+          22.67397971900209,
+          22.679417077597464,
+          23.017294047349424
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 981467136,
+        "per_device_total_bytes": 6306542848,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c05-kv4 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 157.5,
+      "_logits_only_rounds_ms": [
+        22.67397971900209,
+        22.679417077597464,
+        23.017294047349424
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c06-decode-ccl-bfp8",
+      "description": "Baseline with the decode reduce-scatter/all-gather payload at BFP8 instead of the BF16 activation dtype. Costs no extra op: the row-parallel matmul is asked for the payload dtype directly.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c06-decode-ccl-bfp8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c06-decode-ccl-bfp8.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.140945000681576,
+        "teacher_forcing_decode_tok_s_u_max": 38.23406143695986,
+        "teacher_forcing_decode_tok_s_u_min": 37.30503418333115,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.30503418333115,
+          38.20492488698098,
+          38.18973238907967,
+          38.12947551069897,
+          38.140945000681576,
+          38.07204475978821,
+          38.223479836738164,
+          38.137835948254306,
+          38.194885071188196,
+          38.23406143695986,
+          38.09521096206513
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 64.75650396896526,
+        "ttft_ms_median": 66.55529502313584,
+        "ttft_ms_rounds": [
+          154.42344499751925,
+          65.66427001962438,
+          68.82852304261178,
+          66.8783460278064,
+          67.66289402730763,
+          69.32335102465004,
+          64.75650396896526,
+          66.55529502313584,
+          66.04782800422981,
+          65.85903000086546,
+          65.74678601464257
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.34126260241259,
+        "traced_logits_only_rounds_ms": [
+          22.552357359927555,
+          22.560251641152718,
+          23.028001437523926
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c06-decode-ccl-bfp8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 158.4,
+      "_logits_only_rounds_ms": [
+        22.552357359927555,
+        22.560251641152718,
+        23.028001437523926
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c07-attn4-except-first-last",
+      "description": "BFP4 attention weights at LoFi on the inner 50 layers, BFP8 on layers 0 and 51. The layer-exception arm of the BFP4 attention trial.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c07-attn4-except-first-last.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c07-attn4-except-first-last.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "[{\"layers\": [0, 51], \"weights\": {\"attn_projections\": \"bfloat8_b\"}}]",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.162737114270485,
+        "teacher_forcing_decode_tok_s_u_max": 38.272336312160846,
+        "teacher_forcing_decode_tok_s_u_min": 37.21570572792886,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.21570572792886,
+          38.13014506061874,
+          38.270425546353955,
+          38.148833686951,
+          38.272336312160846,
+          38.14990585738547,
+          38.24610455854727,
+          38.229073775576815,
+          38.12843570743366,
+          38.162737114270485,
+          38.25078395328676
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 63.380844017956406,
+        "ttft_ms_median": 65.76450099237263,
+        "ttft_ms_rounds": [
+          163.50786603288725,
+          63.44769702991471,
+          66.04764802614227,
+          67.85239995224401,
+          65.61959197279066,
+          69.78145200992003,
+          63.380844017956406,
+          64.17879596119747,
+          65.76450099237263,
+          66.76535098813474,
+          64.8838640190661
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.37126488989425,
+        "traced_logits_only_rounds_ms": [
+          22.53710824970767,
+          22.5439315317999,
+          23.007184234302258
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6625178880,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c07-attn4-except-first-last --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 161.0,
+      "_logits_only_rounds_ms": [
+        22.53710824970767,
+        22.5439315317999,
+        23.007184234302258
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c08-attn4-kv4-cclbfp8",
+      "description": "Everything the individual switches offer at once: BFP4 attention weights at LoFi, BFP4 KV cache, BFP8 decode CCL payload, BFP4 MLP at LoFi.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c08-attn4-kv4-cclbfp8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c08-attn4-kv4-cclbfp8.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat4_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.29296116834563,
+        "teacher_forcing_decode_tok_s_u_max": 38.35067062160356,
+        "teacher_forcing_decode_tok_s_u_min": 37.432442777708836,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.432442777708836,
+          38.32568820612317,
+          38.2710456549688,
+          38.186215565850944,
+          38.298948148230444,
+          38.310082170610954,
+          38.34471908466597,
+          38.219430028621794,
+          38.21817869960787,
+          38.29296116834563,
+          38.35067062160356
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 64.41421597264707,
+        "ttft_ms_median": 66.77088397555053,
+        "ttft_ms_rounds": [
+          155.42667597765103,
+          65.25625102221966,
+          65.41792902862653,
+          64.5321499905549,
+          66.26382400281727,
+          64.41421597264707,
+          67.4836229882203,
+          67.33729399275035,
+          66.77088397555053,
+          69.06142499065027,
+          67.96584400581196
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.660531697884174,
+        "traced_logits_only_rounds_ms": [
+          22.391135124962602,
+          22.397868984626257,
+          22.73459673506295
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 981467136,
+        "per_device_total_bytes": 5730612480,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c08-attn4-kv4-cclbfp8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 158.7,
+      "_logits_only_rounds_ms": [
+        22.391135124962602,
+        22.397868984626257,
+        22.73459673506295
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c09-kv4-cclbfp8",
+      "description": "BFP4 KV cache plus a BFP8 decode CCL payload, baseline weights. The stacked candidate that does not depend on the BFP4 attention trial.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c09-kv4-cclbfp8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c09-kv4-cclbfp8.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat4_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.26944999760827,
+        "teacher_forcing_decode_tok_s_u_max": 38.34184961172939,
+        "teacher_forcing_decode_tok_s_u_min": 37.43551969930533,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.43551969930533,
+          38.31104326194804,
+          38.32991214355782,
+          38.245463656958776,
+          38.34184961172939,
+          38.30972277508471,
+          38.231874776878115,
+          38.31349763745795,
+          38.26944999760827,
+          38.253819420024804,
+          38.25068118013024
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 62.18693300615996,
+        "ttft_ms_median": 68.39915103046224,
+        "ttft_ms_rounds": [
+          154.92889698361978,
+          71.39861199539155,
+          72.40106601966545,
+          69.79059398872778,
+          62.18693300615996,
+          67.10159400245175,
+          67.74667400168255,
+          69.18993999715894,
+          68.28447198495269,
+          68.39915103046224,
+          66.09564501559362
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.42107769182304,
+        "traced_logits_only_rounds_ms": [
+          22.5118356411258,
+          22.51844643797085,
+          22.85980423403089
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 981467136,
+        "per_device_total_bytes": 6306542848,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c09-kv4-cclbfp8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.3,
+      "_logits_only_rounds_ms": [
+        22.5118356411258,
+        22.51844643797085,
+        22.85980423403089
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c10-lm-head-bfp8",
+      "description": "Baseline with the LM head restored to BFP8 weights at LoFi, on the largest in0_block_w that fits L1 at that dtype. The higher-precision control for the terminal projection.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c10-lm-head-bfp8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c10-lm-head-bfp8.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat8_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw1",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 37.42129533285418,
+        "teacher_forcing_decode_tok_s_u_max": 37.514547516319624,
+        "teacher_forcing_decode_tok_s_u_min": 36.60991789094984,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          36.60991789094984,
+          37.362961601250014,
+          37.447684960489376,
+          37.42129533285418,
+          37.28362621200546,
+          37.3851094976525,
+          37.4638199260298,
+          37.43902960466141,
+          37.42012580585925,
+          37.42529350026486,
+          37.514547516319624
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 62.607773987110704,
+        "ttft_ms_median": 68.34161997539923,
+        "ttft_ms_rounds": [
+          156.84034302830696,
+          62.607773987110704,
+          66.28123804694042,
+          63.53896198561415,
+          68.34161997539923,
+          69.92751697544008,
+          66.04959501419216,
+          70.6892020534724,
+          69.64701198739931,
+          69.38110501505435,
+          68.33937700139359
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 43.30217495801236,
+        "traced_logits_only_rounds_ms": [
+          23.093528234312544,
+          23.100548874936067,
+          23.56681345281686
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7347647744,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c10-lm-head-bfp8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 158.3,
+      "_logits_only_rounds_ms": [
+        23.093528234312544,
+        23.100548874936067,
+        23.56681345281686
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c11-lm-head-bfp4-in0bw1",
+      "description": "Baseline dtypes with the BFP4 LM head moved to in0_block_w=1. The geometry control for c10, whose BFP8 head cannot use the shipped in0_block_w=2.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c11-lm-head-bfp4-in0bw1.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c11-lm-head-bfp4-in0bw1.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw1",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 37.46256370304912,
+        "teacher_forcing_decode_tok_s_u_max": 37.5467040612864,
+        "teacher_forcing_decode_tok_s_u_min": 36.67769316364112,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          36.67769316364112,
+          37.427634165476505,
+          37.425594713395064,
+          37.5467040612864,
+          37.45718076669629,
+          37.408520155926,
+          37.51464571727966,
+          37.50175052147416,
+          37.46256370304912,
+          37.483404918881774,
+          37.497741201552884
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 61.23660103185102,
+        "ttft_ms_median": 65.62330498127267,
+        "ttft_ms_rounds": [
+          155.00713599612936,
+          67.52932199742645,
+          65.16477797413245,
+          67.74664804106578,
+          67.15328496647999,
+          68.36990697775036,
+          64.13803895702586,
+          65.62330498127267,
+          61.23660103185102,
+          61.287438031286,
+          62.80585698550567
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 43.35492544363351,
+        "traced_logits_only_rounds_ms": [
+          23.065430046699475,
+          23.07317171835166,
+          23.540103453342454
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c11-lm-head-bfp4-in0bw1 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.5,
+      "_logits_only_rounds_ms": [
+        23.065430046699475,
+        23.07317171835166,
+        23.540103453342454
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c12-activations-bfp8",
+      "description": "Baseline weights with the activation and residual stream at BFP8. The decoder stage recorded this as blocked by nlp_create_qkv_heads_decode's dtype contract; re-run here so the blocker is reproduced under this stage's own evidence.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c12-activations-bfp8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c12-activations-bfp8.json",
+      "status": "error",
+      "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16\ninfo:\nUnsupported data format\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x723a2b) [0x7ae968923a2b]\n --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x7ae967c6fbb3]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x7ae967c6ef18]\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e2835) [0x7ae9685e2835]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7ae968552bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7ae9aca2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7ae9aca2a28b]\n --- python(_start+0x29) [0x1795ced]\n",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": false,
+      "accuracy": {
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "tokens": null,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": null
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over None generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 0 rounds",
+        "teacher_forcing_decode_tok_s_u_median": null,
+        "teacher_forcing_decode_tok_s_u_max": null,
+        "teacher_forcing_decode_tok_s_u_min": null,
+        "teacher_forcing_decode_tok_s_u_rounds": null,
+        "teacher_forcing_traced": null,
+        "trace_replays_per_round": null,
+        "ttft_ms_min": null,
+        "ttft_ms_median": null,
+        "ttft_ms_rounds": null,
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": null,
+        "traced_logits_only_rounds_ms": null,
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, None replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c12-activations-bfp8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 158.4,
+      "_logits_only_rounds_ms": null,
+      "gates": {
+        "top1": false,
+        "top5": false,
+        "top100": false,
+        "propagation": false,
+        "traced": false
+      },
+      "pass": false
+    },
+    {
+      "config_id": "c13-prefill-ccl-bfp4",
+      "description": "Baseline with the prefill reduce-scatter/all-gather payload at BFP4 instead of BFP8. A TTFT lever rather than a decode one: prefill dispatches 209 collectives.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c13-prefill-ccl-bfp4.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c13-prefill-ccl-bfp4.json",
+      "status": "error",
+      "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp:44: input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::FLOAT32\ninfo:\nInput data format not supported.\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x723a2b) [0x7b20fdf23a2b]\n --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim36LayerNormPreAllGatherDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7b20fc1f4709]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim36LayerNormPreAllGatherDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x7b20fc1f2eeb]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim36LayerNormPreAllGatherDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2ee) [0x7b20fc1df9de]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim25layer_norm_pre_all_gatherERKNS_6TensorERKSt8optionalIS1_ES7_NS0_24LayerNormDistributedTypeERKS4_IN2tt8tt_metal8DataTypeEERKNS_19ComputeKernelConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKS4_IbEb+0x30b) [0x7b20fc1dc81b]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn23rms_norm_pre_all_gatherERKNS_6TensorEN2tt8tt_metal8DataTypeERKSt8optionalIS1_ES6_IKNS_19ComputeKernelConfigEERKS6_IKSt7variantIJNS_4prim29LayerNormDefaultProgramConfigENSE_38LayerNormShardedMultiCoreProgramConfigEEEERKS6_INS4_12MemoryConfigEERKS6_IbEb+0x2fd) [0x7b20fd669d9d]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76fdb3) [0x7b20fdf6fdb3]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7b20fdb52bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7b214222a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7b214222a28b]\n --- python(_start+0x29) [0x1795ced]\n",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat4_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": false,
+      "accuracy": {
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "tokens": null,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": null,
+        "prefill_top5": null,
+        "prefill_top100": null,
+        "stable_across_rounds": null
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over None generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 0 rounds",
+        "teacher_forcing_decode_tok_s_u_median": null,
+        "teacher_forcing_decode_tok_s_u_max": null,
+        "teacher_forcing_decode_tok_s_u_min": null,
+        "teacher_forcing_decode_tok_s_u_rounds": null,
+        "teacher_forcing_traced": null,
+        "trace_replays_per_round": null,
+        "ttft_ms_min": null,
+        "ttft_ms_median": null,
+        "ttft_ms_rounds": null,
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": null,
+        "traced_logits_only_rounds_ms": null,
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, None replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c13-prefill-ccl-bfp4 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 161.2,
+      "_logits_only_rounds_ms": null,
+      "gates": {
+        "top1": false,
+        "top5": false,
+        "top100": false,
+        "propagation": false,
+        "traced": false
+      },
+      "pass": false
+    },
+    {
+      "config_id": "c14-attn4-cclbfp8-kv8",
+      "description": "BFP4 attention weights at LoFi plus a BFP8 decode CCL payload, with the BFP8 KV cache kept. The two accuracy-neutral switches from the first pass, stacked.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c14-attn4-cclbfp8-kv8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c14-attn4-cclbfp8-kv8.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.22669495882399,
+        "teacher_forcing_decode_tok_s_u_max": 38.302605238674104,
+        "teacher_forcing_decode_tok_s_u_min": 37.35590418360565,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.35590418360565,
+          38.20381475555315,
+          38.302605238674104,
+          38.28890530098772,
+          38.2147240636805,
+          38.22669495882399,
+          38.285411409052735,
+          38.1510354991172,
+          38.218802708814074,
+          38.27074948246847,
+          38.258727180329096
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 63.84901603450999,
+        "ttft_ms_median": 69.14522801525891,
+        "ttft_ms_rounds": [
+          152.36208500573412,
+          69.00047400267795,
+          63.84901603450999,
+          69.87979402765632,
+          70.30348398257047,
+          69.0097720362246,
+          69.14522801525891,
+          67.46762001421303,
+          65.60656195506454,
+          69.36299201333895,
+          70.76921901898459
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.578153116419315,
+        "traced_logits_only_rounds_ms": [
+          22.43251301570126,
+          22.44072546818643,
+          22.904668140654394
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6603027712,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c14-attn4-cclbfp8-kv8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 160.2,
+      "_logits_only_rounds_ms": [
+        22.43251301570126,
+        22.44072546818643,
+        22.904668140654394
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c15-attn4-except-first-last-cclbfp8",
+      "description": "c14 with layers 0 and 51 restored to BFP8 attention weights. The layer-exception rung between the fully-BFP4 attention stack and the baseline.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c15-attn4-except-first-last-cclbfp8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c15-attn4-except-first-last-cclbfp8.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "[{\"layers\": [0, 51], \"weights\": {\"attn_projections\": \"bfloat8_b\"}}]",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.24400226759236,
+        "teacher_forcing_decode_tok_s_u_max": 38.32919147130427,
+        "teacher_forcing_decode_tok_s_u_min": 37.1238558750527,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.1238558750527,
+          38.26105760931244,
+          38.21897641246144,
+          38.172742592661955,
+          38.272304605453584,
+          38.22205464417714,
+          38.23652655902974,
+          38.32919147130427,
+          38.27690283155563,
+          38.24400226759236,
+          38.25232101763271
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 63.35745198884979,
+        "ttft_ms_median": 67.14016298064962,
+        "ttft_ms_rounds": [
+          193.30003001959994,
+          63.42195998877287,
+          72.4006179952994,
+          68.50057397969067,
+          67.14016298064962,
+          68.30086099216715,
+          66.16539094829932,
+          67.59041297482327,
+          64.87138604279608,
+          65.63680898398161,
+          63.35745198884979
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.56351720391374,
+        "traced_logits_only_rounds_ms": [
+          22.439880483943853,
+          22.44762034388259,
+          22.913469374543638
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6625178880,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c15-attn4-except-first-last-cclbfp8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.9,
+      "_logits_only_rounds_ms": [
+        22.439880483943853,
+        22.44762034388259,
+        22.913469374543638
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c16-decode-ccl-bfp4",
+      "description": "Baseline with the decode reduce-scatter/all-gather payload at BFP4. The next rung below the BFP8 decode payload of c06.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c16-decode-ccl-bfp4.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c16-decode-ccl-bfp4.json",
+      "status": "error",
+      "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B\ninfo:\nInput tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x72b497e2442d]\n --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x72b496042453]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x72b49603a0bf]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x72b496037f3b]\n --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x72b497d6f6ae]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x72b497952bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x72b4dbc2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x72b4dbc2a28b]\n --- python(_start+0x29) [0x1795ced]\n",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat4_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": false,
+      "accuracy": {
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "tokens": null,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": null
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over None generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 0 rounds",
+        "teacher_forcing_decode_tok_s_u_median": null,
+        "teacher_forcing_decode_tok_s_u_max": null,
+        "teacher_forcing_decode_tok_s_u_min": null,
+        "teacher_forcing_decode_tok_s_u_rounds": null,
+        "teacher_forcing_traced": null,
+        "trace_replays_per_round": null,
+        "ttft_ms_min": null,
+        "ttft_ms_median": null,
+        "ttft_ms_rounds": null,
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": null,
+        "traced_logits_only_rounds_ms": null,
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, None replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c16-decode-ccl-bfp4 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.0,
+      "_logits_only_rounds_ms": null,
+      "gates": {
+        "top1": false,
+        "top5": false,
+        "top100": false,
+        "propagation": false,
+        "traced": false
+      },
+      "pass": false
+    },
+    {
+      "config_id": "c17-attn4-cclbfp4-kv8",
+      "description": "c14 with the decode CCL payload at BFP4 instead of BFP8, KV cache kept at BFP8.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c17-attn4-cclbfp4-kv8.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c17-attn4-cclbfp4-kv8.json",
+      "status": "error",
+      "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B\ninfo:\nInput tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x72fd8862442d]\n --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x72fd86842453]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x72fd8683a0bf]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x72fd86837f3b]\n --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x72fd8856f6ae]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x72fd88152bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x72fdcc62a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x72fdcc62a28b]\n --- python(_start+0x29) [0x1795ced]\n",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat4_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": false,
+      "accuracy": {
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "tokens": null,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": null
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over None generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 0 rounds",
+        "teacher_forcing_decode_tok_s_u_median": null,
+        "teacher_forcing_decode_tok_s_u_max": null,
+        "teacher_forcing_decode_tok_s_u_min": null,
+        "teacher_forcing_decode_tok_s_u_rounds": null,
+        "teacher_forcing_traced": null,
+        "trace_replays_per_round": null,
+        "ttft_ms_min": null,
+        "ttft_ms_median": null,
+        "ttft_ms_rounds": null,
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": null,
+        "traced_logits_only_rounds_ms": null,
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, None replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6603027712,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c17-attn4-cclbfp4-kv8 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.9,
+      "_logits_only_rounds_ms": null,
+      "gates": {
+        "top1": false,
+        "top5": false,
+        "top100": false,
+        "propagation": false,
+        "traced": false
+      },
+      "pass": false
+    },
+    {
+      "config_id": "c18-prefill-ccl-bfp4-unfractured-norm",
+      "description": "BFP4 prefill CCL payload with the fractured prefill norm disabled, which is the layout that makes the payload legal. The adapted retry for c13's op-contract failure.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c18-prefill-ccl-bfp4-unfractured-norm.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c18-prefill-ccl-bfp4-unfractured-norm.json",
+      "status": "error",
+      "error": "RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B\ninfo:\nInput tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B\nbacktrace:\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x7e6e2102442d]\n --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x7e6e1f242453]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x7e6e1f23a0bf]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x7e6e1f237f3b]\n --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x7e6e20f6f6ae]\n --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7e6e20b52bc5]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python() [0x1876122]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python() [0x1612849]\n --- python(_PyEval_EvalFrameDefault+0xe840) [0x16219c0]\n --- python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python() [0x17af1c4]\n --- python() [0x17af0d8]\n --- python(Py_RunMain+0x2e5) [0x171f33b]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e6e6502a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e6e6502a28b]\n --- python(_start+0x29) [0x1795ced]\n",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat4_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": "{\"prefill_fractured_norm\": false}"
+      },
+      "propagation_problems": [],
+      "propagation_verified": false,
+      "accuracy": {
+        "top1": null,
+        "top5": null,
+        "top100": null,
+        "tokens": null,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": null,
+        "prefill_top5": null,
+        "prefill_top100": null,
+        "stable_across_rounds": null
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over None generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 0 rounds",
+        "teacher_forcing_decode_tok_s_u_median": null,
+        "teacher_forcing_decode_tok_s_u_max": null,
+        "teacher_forcing_decode_tok_s_u_min": null,
+        "teacher_forcing_decode_tok_s_u_rounds": null,
+        "teacher_forcing_traced": null,
+        "trace_replays_per_round": null,
+        "ttft_ms_min": null,
+        "ttft_ms_median": null,
+        "ttft_ms_rounds": null,
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": null,
+        "traced_logits_only_rounds_ms": null,
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, None replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c18-prefill-ccl-bfp4-unfractured-norm --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 159.5,
+      "_logits_only_rounds_ms": null,
+      "gates": {
+        "top1": false,
+        "top5": false,
+        "top100": false,
+        "propagation": false,
+        "traced": false
+      },
+      "pass": false
+    },
+    {
+      "config_id": "c19-prefill-ccl-bfp8-unfractured-norm",
+      "description": "The shipped BFP8 prefill payload with the fractured prefill norm disabled. The layout control for c18.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c19-prefill-ccl-bfp8-unfractured-norm.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c19-prefill-ccl-bfp8-unfractured-norm.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat8_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": "{\"prefill_fractured_norm\": false}"
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.09760524148164,
+        "teacher_forcing_decode_tok_s_u_max": 38.20798451726869,
+        "teacher_forcing_decode_tok_s_u_min": 37.25659472096625,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.25659472096625,
+          38.20798451726869,
+          38.06543390476446,
+          38.03452043828363,
+          38.09656667734727,
+          37.991865048308085,
+          38.09760524148164,
+          38.09849633596823,
+          38.130380183348976,
+          38.154164068821935,
+          38.13762491603643
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 61.25041004270315,
+        "ttft_ms_median": 66.81013602064922,
+        "ttft_ms_rounds": [
+          152.51307195285335,
+          66.61122100194916,
+          63.84692701976746,
+          67.22154899034649,
+          67.28890200611204,
+          69.15797403780743,
+          65.59451803332195,
+          66.81013602064922,
+          64.960110001266,
+          68.42262001009658,
+          61.25041004270315
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.14140980452822,
+        "traced_logits_only_rounds_ms": [
+          22.654464468359947,
+          22.66306862475176,
+          23.127866468712455
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 7178958080,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c19-prefill-ccl-bfp8-unfractured-norm --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 156.5,
+      "_logits_only_rounds_ms": [
+        22.654464468359947,
+        22.66306862475176,
+        23.127866468712455
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c20-attn4-cclbfp8-kv4-sliding-only",
+      "description": "c14 with the KV cache at BFP4 on the 39 sliding-window layers and BFP8 on the 13 full-attention layers. Separates the cache's capacity saving (per layer, so mostly in the 39) from its decode win (only in the 13) and from its accuracy cost.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c20-attn4-cclbfp8-kv4-sliding-only.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c20-attn4-cclbfp8-kv4-sliding-only.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat4_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "[{\"layers\": [3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47, 51], \"kv_cache_dtype\": \"bfloat8_b\"}]",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.20086140748629,
+        "teacher_forcing_decode_tok_s_u_max": 38.267530053229315,
+        "teacher_forcing_decode_tok_s_u_min": 37.3677392652795,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.3677392652795,
+          38.08248972621644,
+          38.267530053229315,
+          38.15973728061866,
+          38.20086140748629,
+          38.2175055976182,
+          38.25142670386502,
+          38.18244157603616,
+          38.117809807707665,
+          38.21736972062321,
+          38.20848510407044
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 65.20931795239449,
+        "ttft_ms_median": 68.55959701351821,
+        "ttft_ms_rounds": [
+          161.4751199958846,
+          65.74979901779443,
+          68.34030599566177,
+          71.16714399307966,
+          65.20931795239449,
+          69.79847099864855,
+          67.45825300458819,
+          71.31932600168511,
+          71.38101395685226,
+          68.55959701351821,
+          67.81083799432963
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.6385921572044,
+        "traced_logits_only_rounds_ms": [
+          22.40214020366693,
+          22.40940692172444,
+          22.861434436890704
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1199570944,
+        "per_device_total_bytes": 5948716288,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c20-attn4-cclbfp8-kv4-sliding-only --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 157.3,
+      "_logits_only_rounds_ms": [
+        22.40214020366693,
+        22.40940692172444,
+        22.861434436890704
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c21-lm-head-bfp4-hifi2",
+      "description": "The selected policy with the BFP4 LM head at HiFi2 instead of LoFi. The BFP4+HiFi2 arm for the LM-head weight group; c14 is its BFP4+LoFi arm.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c21-lm-head-bfp4-hifi2.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c21-lm-head-bfp4-hifi2.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "HiFi2",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 37.56518210759005,
+        "teacher_forcing_decode_tok_s_u_max": 37.61361897395829,
+        "teacher_forcing_decode_tok_s_u_min": 36.46591600470193,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          36.46591600470193,
+          37.5807378307713,
+          37.58596010110049,
+          37.500766762507126,
+          37.588515671916696,
+          37.45947657900552,
+          37.61361897395829,
+          37.530241726362554,
+          37.51931632271025,
+          37.56518210759005,
+          37.59302173906777
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 63.91439400613308,
+        "ttft_ms_median": 66.01894897175953,
+        "ttft_ms_rounds": [
+          177.6624089688994,
+          63.91439400613308,
+          65.68923295708373,
+          66.01894897175953,
+          67.0019140234217,
+          70.71353896753863,
+          69.09150100545958,
+          65.40020601823926,
+          64.58304502302781,
+          68.84126795921475,
+          65.5162269831635
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 43.5759556156933,
+        "traced_logits_only_rounds_ms": [
+          22.948435344005702,
+          22.95631709330337,
+          23.42029646933952
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_total_bytes": 6603027712,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c21-lm-head-bfp4-hifi2 --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 154.8,
+      "_logits_only_rounds_ms": [
+        22.948435344005702,
+        22.95631709330337,
+        23.42029646933952
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    },
+    {
+      "config_id": "c22-attn4-cclbfp8-kv4-full-attn-only",
+      "description": "c14 with the KV cache at BFP4 on the 13 full-attention layers and BFP8 on the 39 sliding ones -- the converse of c20, and the half that carries the long-context decode win rather than the capacity saving.",
+      "precision_config_path": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/configs/c22-attn4-cclbfp8-kv4-full-attn-only.json",
+      "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c22-attn4-cclbfp8-kv4-full-attn-only.json",
+      "status": "ok",
+      "error": "",
+      "policy": {
+        "weight_attn": "bfloat4_b",
+        "weight_mlp_gate_up": "bfloat4_b",
+        "weight_mlp_down": "bfloat4_b",
+        "weight_lm_head": "bfloat4_b",
+        "lm_head_geometry": "dram_sharded/52/in0bw2",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "ccl_prefill_dtype": "bfloat8_b",
+        "ccl_decode_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "decode_fidelity": "LoFi",
+        "prefill_fidelity": "LoFi",
+        "lm_head_fidelity": "LoFi",
+        "lm_head_fp32_acc": false,
+        "layer_exceptions": "[{\"layers\": [3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47, 51], \"kv_cache_dtype\": \"bfloat4_b\"}]",
+        "decoder_overrides": ""
+      },
+      "propagation_problems": [],
+      "propagation_verified": true,
+      "accuracy": {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "tokens": 100,
+        "reference": "readiness_aime24_chat.refpt",
+        "prefill_top1": 0.99,
+        "prefill_top5": 1.0,
+        "prefill_top100": 1.0,
+        "stable_across_rounds": true
+      },
+      "performance": {
+        "measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+        "teacher_forcing_decode_tok_s_u_median": 38.14460980654076,
+        "teacher_forcing_decode_tok_s_u_max": 38.196320382203915,
+        "teacher_forcing_decode_tok_s_u_min": 37.3959897684909,
+        "teacher_forcing_decode_tok_s_u_rounds": [
+          37.3959897684909,
+          38.12056683051099,
+          38.17991398285914,
+          38.15791477701363,
+          38.14161097011411,
+          38.14460980654076,
+          38.196320382203915,
+          38.148175887363436,
+          38.13159329529914,
+          38.17611247242986,
+          38.11246849525025
+        ],
+        "teacher_forcing_traced": true,
+        "trace_replays_per_round": [
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99,
+          99
+        ],
+        "ttft_ms_min": 65.15516497893259,
+        "ttft_ms_median": 68.12552298652008,
+        "ttft_ms_rounds": [
+          173.6447360017337,
+          65.70523604750633,
+          71.9903860008344,
+          68.29999200999737,
+          67.7510509849526,
+          68.1804659543559,
+          68.26575804734603,
+          68.12552298652008,
+          65.37828897126019,
+          65.15516497893259,
+          67.65008199727163
+        ],
+        "ttft_regime": "readiness teacher-forcing prefill + first token, batch 1, prompt 204, eager prefill",
+        "traced_logits_only_tok_s_u": 44.598304444579576,
+        "traced_logits_only_rounds_ms": [
+          22.42237709378969,
+          22.428940390454954,
+          22.9426694841095
+        ],
+        "traced_logits_only_regime": "decode-trace replay alone, no sampling and no token readback, prompt 128, 64 replays x 3 rounds, min"
+      },
+      "memory": {
+        "per_device_kv_cache_bytes": 1635778560,
+        "per_device_total_bytes": 6384923904,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "per_device_kv_cache_bytes_per_block": null,
+        "supported_context": 131072
+      },
+      "command": "python doc/datatype_sweep/bench/sweep.py --config c22-attn4-cclbfp8-kv4-full-attn-only --rounds 11 --replays 64",
+      "environment": {
+        "branch": "agentic-research/hous/muse-glimmer-30b",
+        "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+        "dirty": true,
+        "host": "tt-quietbox",
+        "python": "3.12.12"
+      },
+      "hardware": {
+        "num_devices": 4,
+        "mesh_shape": [
+          1,
+          4
+        ],
+        "arch": "Arch.BLACKHOLE",
+        "compute_with_storage_grid_size": [
+          11,
+          10
+        ],
+        "per_device_dram_capacity_bytes": 33778699264
+      },
+      "build_seconds": 155.7,
+      "_logits_only_rounds_ms": [
+        22.42237709378969,
+        22.428940390454954,
+        22.9426694841095
+      ],
+      "gates": {
+        "top1": true,
+        "top5": true,
+        "top100": true,
+        "propagation": true,
+        "traced": true
+      },
+      "pass": true
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+<|start|>system<|message|>You are a helpful AI assistant.
+Knowledge cutoff: 2026-01-04.
+Current date: 2026-08-13.
+
+Reasoning strength: high.
+
+# Valid recipients: "self", "user".<|eot|><|start|>user<|message|>Explain the difference between supervised and unsupervised learning in simple terms.<|eot|><|start|>assistant

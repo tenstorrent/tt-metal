@@ -1,0 +1,63 @@
+{
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "stages": [
+    "perf"
+  ],
+  "max_seq_len": 131072,
+  "cache_slots": 1,
+  "layers": "all",
+  "build_kwargs": {},
+  "build_seconds": 153.3,
+  "performance": {
+    "workload": {
+      "prompt_len": 128,
+      "gen_len": 128,
+      "batch": 1
+    },
+    "ttft_ms": {
+      "min": 64.17221500305459,
+      "mean": 66.40411399227257,
+      "rounds": [
+        70.24800800718367,
+        64.79211896657944,
+        64.17221500305459
+      ]
+    },
+    "token_out_decode_ms_per_token": {
+      "min": 23.07825679542482,
+      "mean": 23.110447782385126,
+      "rounds": [
+        23.126952646219532,
+        23.12613390551103,
+        23.07825679542482
+      ]
+    },
+    "token_out_decode_tok_s_u": 43.330829051102604,
+    "traced_decode_logits_only_ms_per_token": {
+      "min": 22.433569061831804,
+      "mean": 22.43437132347026,
+      "replays_per_round": 32,
+      "rounds": [
+        22.433569061831804,
+        22.434924781919108,
+        22.434620126659865
+      ]
+    },
+    "traced_decode_logits_only_tok_s_u": 44.57605462794538,
+    "sampling_trace_ms_per_token": {
+      "min": 0.6323970937955892,
+      "mean": 0.6324128644337179
+    },
+    "layer_stack_lower_bound_ms_per_token": {
+      "sliding_layers": 39,
+      "full_layers": 13,
+      "sliding_ms_per_layer": 0.4473,
+      "full_ms_per_layer": 0.4164,
+      "total_ms": 22.857899999999997,
+      "tok_s_u": 43.74855082925379,
+      "measured_under_the_selected_policy": false,
+      "source": "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b --decode-context 2048 on the optimized-full-model stage's shipped policy (doc/optimized_full_model/logs/layer_ab_after.log), not re-measured by this run. The selected config's decoder-layer policy DIFFERS from the one the floor was measured under, so this figure is a comparator for the previous policy and not a bound on this one."
+    },
+    "precision_config_id": "c14-attn4-cclbfp8-kv8"
+  }
+}

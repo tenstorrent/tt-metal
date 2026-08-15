@@ -1,0 +1,213 @@
+SWEEP_DRIVER candidates: c00-baseline-attn8-mlp4-kv8-lofi c01-attn4-mlp4-kv8-lofi c02-attn4-mlp4-kv8-attn-hifi2 c03-attn8-hifi2-mlp4-lofi c04-mlp4-hifi2 c05-kv4 c06-decode-ccl-bfp8 c07-attn4-except-first-last c08-attn4-kv4-cclbfp8 c09-kv4-cclbfp8 c10-lm-head-bfp8 c11-lm-head-bfp4-in0bw1 c12-activations-bfp8 c13-prefill-ccl-bfp4 c14-attn4-cclbfp8-kv8 c15-attn4-except-first-last-cclbfp8 (rounds=11)
+SWEEP_DRIVER ===== c00-baseline-attn8-mlp4-kv8-lofi started 2026-08-14T23:35:14-04:00 =====
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.08 t/s/u ttft=67.02 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.02 t/s/u ttft=69.69 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=38.00 t/s/u ttft=69.50 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.06 t/s/u ttft=66.58 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.05 t/s/u ttft=69.26 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.06 t/s/u ttft=70.41 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.04 t/s/u ttft=66.34 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.01 t/s/u ttft=69.15 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.16 t/s/u ttft=69.46 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=37.99 t/s/u ttft=66.06 ms trace_replays=99
+SWEEP c00-baseline-attn8-mlp4-kv8-lofi traced logits-only 22.656 ms/token -> 44.14 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c00-baseline-attn8-mlp4-kv8-lofi.json
+SWEEP_DRIVER ===== c00-baseline-attn8-mlp4-kv8-lofi ok 2026-08-14T23:38:31-04:00 =====
+SWEEP_DRIVER ===== c01-attn4-mlp4-kv8-lofi started 2026-08-14T23:38:31-04:00 =====
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=67.15 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.20 t/s/u ttft=67.64 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=38.15 t/s/u ttft=70.71 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=64.98 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.21 t/s/u ttft=70.54 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.18 t/s/u ttft=68.99 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.19 t/s/u ttft=65.10 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.24 t/s/u ttft=65.31 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.18 t/s/u ttft=68.35 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=66.06 ms trace_replays=99
+SWEEP c01-attn4-mlp4-kv8-lofi traced logits-only 22.532 ms/token -> 44.38 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c01-attn4-mlp4-kv8-lofi.json
+SWEEP_DRIVER ===== c01-attn4-mlp4-kv8-lofi ok 2026-08-14T23:41:48-04:00 =====
+SWEEP_DRIVER ===== c02-attn4-mlp4-kv8-attn-hifi2 started 2026-08-14T23:41:48-04:00 =====
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=36.04 t/s/u ttft=63.29 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=36.04 t/s/u ttft=65.25 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=36.00 t/s/u ttft=66.26 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=36.02 t/s/u ttft=65.29 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=36.03 t/s/u ttft=67.18 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=36.08 t/s/u ttft=64.02 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=35.96 t/s/u ttft=67.71 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=36.04 t/s/u ttft=68.36 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=35.93 t/s/u ttft=68.61 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=36.03 t/s/u ttft=69.40 ms trace_replays=99
+SWEEP c02-attn4-mlp4-kv8-attn-hifi2 traced logits-only 24.159 ms/token -> 41.39 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c02-attn4-mlp4-kv8-attn-hifi2.json
+SWEEP_DRIVER ===== c02-attn4-mlp4-kv8-attn-hifi2 ok 2026-08-14T23:45:09-04:00 =====
+SWEEP_DRIVER ===== c03-attn8-hifi2-mlp4-lofi started 2026-08-14T23:45:09-04:00 =====
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=35.70 t/s/u ttft=66.44 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=35.61 t/s/u ttft=64.94 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=35.60 t/s/u ttft=68.31 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=35.64 t/s/u ttft=70.51 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=35.66 t/s/u ttft=69.00 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=35.62 t/s/u ttft=69.38 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=35.63 t/s/u ttft=68.00 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=35.63 t/s/u ttft=71.36 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=35.63 t/s/u ttft=70.26 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=35.60 t/s/u ttft=68.17 ms trace_replays=99
+SWEEP c03-attn8-hifi2-mlp4-lofi traced logits-only 24.317 ms/token -> 41.12 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c03-attn8-hifi2-mlp4-lofi.json
+SWEEP_DRIVER ===== c03-attn8-hifi2-mlp4-lofi ok 2026-08-14T23:48:30-04:00 =====
+SWEEP_DRIVER ===== c04-mlp4-hifi2 started 2026-08-14T23:48:30-04:00 =====
+SWEEP c04-mlp4-hifi2 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=28.87 t/s/u ttft=69.12 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=28.89 t/s/u ttft=73.67 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=28.86 t/s/u ttft=68.37 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=28.88 t/s/u ttft=65.18 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=28.89 t/s/u ttft=69.40 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=28.88 t/s/u ttft=69.20 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=28.88 t/s/u ttft=71.03 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=28.87 t/s/u ttft=67.69 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=28.88 t/s/u ttft=66.61 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=28.89 t/s/u ttft=68.82 ms trace_replays=99
+SWEEP c04-mlp4-hifi2 traced logits-only 30.814 ms/token -> 32.45 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c04-mlp4-hifi2.json
+SWEEP_DRIVER ===== c04-mlp4-hifi2 ok 2026-08-14T23:52:02-04:00 =====
+SWEEP_DRIVER ===== c05-kv4 started 2026-08-14T23:52:02-04:00 =====
+SWEEP c05-kv4 teacher round 1: top1=0.970 top5=1.000 top100=1.000 decode=38.03 t/s/u ttft=66.19 ms trace_replays=99
+SWEEP c05-kv4 teacher round 2: top1=0.970 top5=1.000 top100=1.000 decode=38.08 t/s/u ttft=65.85 ms trace_replays=99
+SWEEP c05-kv4 teacher round 3: top1=0.970 top5=1.000 top100=1.000 decode=38.24 t/s/u ttft=66.27 ms trace_replays=99
+SWEEP c05-kv4 teacher round 4: top1=0.970 top5=1.000 top100=1.000 decode=37.92 t/s/u ttft=68.08 ms trace_replays=99
+SWEEP c05-kv4 teacher round 5: top1=0.970 top5=1.000 top100=1.000 decode=38.04 t/s/u ttft=67.03 ms trace_replays=99
+SWEEP c05-kv4 teacher round 6: top1=0.970 top5=1.000 top100=1.000 decode=38.18 t/s/u ttft=69.92 ms trace_replays=99
+SWEEP c05-kv4 teacher round 7: top1=0.970 top5=1.000 top100=1.000 decode=38.15 t/s/u ttft=64.62 ms trace_replays=99
+SWEEP c05-kv4 teacher round 8: top1=0.970 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=65.47 ms trace_replays=99
+SWEEP c05-kv4 teacher round 9: top1=0.970 top5=1.000 top100=1.000 decode=38.08 t/s/u ttft=70.87 ms trace_replays=99
+SWEEP c05-kv4 teacher round 10: top1=0.970 top5=1.000 top100=1.000 decode=38.19 t/s/u ttft=63.88 ms trace_replays=99
+SWEEP c05-kv4 traced logits-only 22.674 ms/token -> 44.10 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c05-kv4.json
+SWEEP_DRIVER ===== c05-kv4 ok 2026-08-14T23:55:21-04:00 =====
+SWEEP_DRIVER ===== c06-decode-ccl-bfp8 started 2026-08-14T23:55:21-04:00 =====
+SWEEP c06-decode-ccl-bfp8 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.20 t/s/u ttft=65.66 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.19 t/s/u ttft=68.83 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=38.13 t/s/u ttft=66.88 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.14 t/s/u ttft=67.66 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.07 t/s/u ttft=69.32 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=64.76 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.14 t/s/u ttft=66.56 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.19 t/s/u ttft=66.05 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.23 t/s/u ttft=65.86 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=38.10 t/s/u ttft=65.75 ms trace_replays=99
+SWEEP c06-decode-ccl-bfp8 traced logits-only 22.552 ms/token -> 44.34 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c06-decode-ccl-bfp8.json
+SWEEP_DRIVER ===== c06-decode-ccl-bfp8 ok 2026-08-14T23:58:40-04:00 =====
+SWEEP_DRIVER ===== c07-attn4-except-first-last started 2026-08-14T23:58:40-04:00 =====
+SWEEP c07-attn4-except-first-last teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.13 t/s/u ttft=63.45 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=66.05 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=38.15 t/s/u ttft=67.85 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=65.62 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.15 t/s/u ttft=69.78 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=63.38 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.23 t/s/u ttft=64.18 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.13 t/s/u ttft=65.76 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.16 t/s/u ttft=66.77 ms trace_replays=99
+SWEEP c07-attn4-except-first-last teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=64.88 ms trace_replays=99
+SWEEP c07-attn4-except-first-last traced logits-only 22.537 ms/token -> 44.37 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c07-attn4-except-first-last.json
+SWEEP_DRIVER ===== c07-attn4-except-first-last ok 2026-08-15T00:02:03-04:00 =====
+SWEEP_DRIVER ===== c08-attn4-kv4-cclbfp8 started 2026-08-15T00:02:03-04:00 =====
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 1: top1=0.970 top5=1.000 top100=1.000 decode=38.33 t/s/u ttft=65.26 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 2: top1=0.970 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=65.42 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 3: top1=0.970 top5=1.000 top100=1.000 decode=38.19 t/s/u ttft=64.53 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 4: top1=0.970 top5=1.000 top100=1.000 decode=38.30 t/s/u ttft=66.26 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 5: top1=0.970 top5=1.000 top100=1.000 decode=38.31 t/s/u ttft=64.41 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 6: top1=0.970 top5=1.000 top100=1.000 decode=38.34 t/s/u ttft=67.48 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 7: top1=0.970 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=67.34 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 8: top1=0.970 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=66.77 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 9: top1=0.970 top5=1.000 top100=1.000 decode=38.29 t/s/u ttft=69.06 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 teacher round 10: top1=0.970 top5=1.000 top100=1.000 decode=38.35 t/s/u ttft=67.97 ms trace_replays=99
+SWEEP c08-attn4-kv4-cclbfp8 traced logits-only 22.391 ms/token -> 44.66 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c08-attn4-kv4-cclbfp8.json
+SWEEP_DRIVER ===== c08-attn4-kv4-cclbfp8 ok 2026-08-15T00:05:22-04:00 =====
+SWEEP_DRIVER ===== c09-kv4-cclbfp8 started 2026-08-15T00:05:22-04:00 =====
+SWEEP c09-kv4-cclbfp8 teacher round 1: top1=0.970 top5=1.000 top100=1.000 decode=38.31 t/s/u ttft=71.40 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 2: top1=0.970 top5=1.000 top100=1.000 decode=38.33 t/s/u ttft=72.40 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 3: top1=0.970 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=69.79 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 4: top1=0.970 top5=1.000 top100=1.000 decode=38.34 t/s/u ttft=62.19 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 5: top1=0.970 top5=1.000 top100=1.000 decode=38.31 t/s/u ttft=67.10 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 6: top1=0.970 top5=1.000 top100=1.000 decode=38.23 t/s/u ttft=67.75 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 7: top1=0.970 top5=1.000 top100=1.000 decode=38.31 t/s/u ttft=69.19 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 8: top1=0.970 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=68.28 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 9: top1=0.970 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=68.40 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 teacher round 10: top1=0.970 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=66.10 ms trace_replays=99
+SWEEP c09-kv4-cclbfp8 traced logits-only 22.512 ms/token -> 44.42 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c09-kv4-cclbfp8.json
+SWEEP_DRIVER ===== c09-kv4-cclbfp8 ok 2026-08-15T00:08:43-04:00 =====
+SWEEP_DRIVER ===== c10-lm-head-bfp8 started 2026-08-15T00:08:43-04:00 =====
+SWEEP c10-lm-head-bfp8 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=37.36 t/s/u ttft=62.61 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=37.45 t/s/u ttft=66.28 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=37.42 t/s/u ttft=63.54 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=37.28 t/s/u ttft=68.34 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=37.39 t/s/u ttft=69.93 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=37.46 t/s/u ttft=66.05 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=37.44 t/s/u ttft=70.69 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=37.42 t/s/u ttft=69.65 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=37.43 t/s/u ttft=69.38 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=37.51 t/s/u ttft=68.34 ms trace_replays=99
+SWEEP c10-lm-head-bfp8 traced logits-only 23.094 ms/token -> 43.30 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c10-lm-head-bfp8.json
+SWEEP_DRIVER ===== c10-lm-head-bfp8 ok 2026-08-15T00:12:03-04:00 =====
+SWEEP_DRIVER ===== c11-lm-head-bfp4-in0bw1 started 2026-08-15T00:12:03-04:00 =====
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=37.43 t/s/u ttft=67.53 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=37.43 t/s/u ttft=65.16 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=37.55 t/s/u ttft=67.75 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=37.46 t/s/u ttft=67.15 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=37.41 t/s/u ttft=68.37 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=37.51 t/s/u ttft=64.14 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=37.50 t/s/u ttft=65.62 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=37.46 t/s/u ttft=61.24 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=37.48 t/s/u ttft=61.29 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=37.50 t/s/u ttft=62.81 ms trace_replays=99
+SWEEP c11-lm-head-bfp4-in0bw1 traced logits-only 23.065 ms/token -> 43.35 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c11-lm-head-bfp4-in0bw1.json
+SWEEP_DRIVER ===== c11-lm-head-bfp4-in0bw1 ok 2026-08-15T00:15:24-04:00 =====
+SWEEP_DRIVER ===== c12-activations-bfp8 started 2026-08-15T00:15:24-04:00 =====
+SWEEP_DRIVER ===== c12-activations-bfp8 FAILED (exit 1) 2026-08-15T00:18:18-04:00 =====
+SWEEP built c12-activations-bfp8 in 158.4s
+SWEEP c12-activations-bfp8 propagation OK (c12-activations-bfp8)
+SWEEP c12-activations-bfp8 ERROR RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c12-activations-bfp8.json
+RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16
+SWEEP_DRIVER ===== c13-prefill-ccl-bfp4 started 2026-08-15T00:18:18-04:00 =====
+SWEEP_DRIVER ===== c13-prefill-ccl-bfp4 FAILED (exit 1) 2026-08-15T00:21:06-04:00 =====
+SWEEP built c13-prefill-ccl-bfp4 in 161.2s
+SWEEP c13-prefill-ccl-bfp4 propagation OK (c13-prefill-ccl-bfp4)
+SWEEP c13-prefill-ccl-bfp4 ERROR RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp:44: input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::FLOAT32
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c13-prefill-ccl-bfp4.json
+RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp:44: input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::FLOAT32
+SWEEP_DRIVER ===== c14-attn4-cclbfp8-kv8 started 2026-08-15T00:21:06-04:00 =====
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.20 t/s/u ttft=69.00 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.30 t/s/u ttft=63.85 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=38.29 t/s/u ttft=69.88 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.21 t/s/u ttft=70.30 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.23 t/s/u ttft=69.01 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.29 t/s/u ttft=69.15 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.15 t/s/u ttft=67.47 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=65.61 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=69.36 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=38.26 t/s/u ttft=70.77 ms trace_replays=99
+SWEEP c14-attn4-cclbfp8-kv8 traced logits-only 22.433 ms/token -> 44.58 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c14-attn4-cclbfp8-kv8.json
+SWEEP_DRIVER ===== c14-attn4-cclbfp8-kv8 ok 2026-08-15T00:24:28-04:00 =====
+SWEEP_DRIVER ===== c15-attn4-except-first-last-cclbfp8 started 2026-08-15T00:24:28-04:00 =====
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 1: top1=0.990 top5=1.000 top100=1.000 decode=38.26 t/s/u ttft=63.42 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 2: top1=0.990 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=72.40 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 3: top1=0.990 top5=1.000 top100=1.000 decode=38.17 t/s/u ttft=68.50 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 4: top1=0.990 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=67.14 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 5: top1=0.990 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=68.30 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 6: top1=0.990 top5=1.000 top100=1.000 decode=38.24 t/s/u ttft=66.17 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 7: top1=0.990 top5=1.000 top100=1.000 decode=38.33 t/s/u ttft=67.59 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 8: top1=0.990 top5=1.000 top100=1.000 decode=38.28 t/s/u ttft=64.87 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 9: top1=0.990 top5=1.000 top100=1.000 decode=38.24 t/s/u ttft=65.64 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 teacher round 10: top1=0.990 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=63.36 ms trace_replays=99
+SWEEP c15-attn4-except-first-last-cclbfp8 traced logits-only 22.440 ms/token -> 44.56 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c15-attn4-except-first-last-cclbfp8.json
+SWEEP_DRIVER ===== c15-attn4-except-first-last-cclbfp8 ok 2026-08-15T00:27:49-04:00 =====
+SWEEP_DRIVER failed candidates: c12-activations-bfp8 c13-prefill-ccl-bfp4
+SWEEP_DRIVER_DONE

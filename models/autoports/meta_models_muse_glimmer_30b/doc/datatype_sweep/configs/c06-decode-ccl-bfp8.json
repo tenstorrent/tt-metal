@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "config_id": "c06-decode-ccl-bfp8",
+  "description": "Baseline with the decode reduce-scatter/all-gather payload at BFP8 instead of the BF16 activation dtype. Costs no extra op: the row-parallel matmul is asked for the payload dtype directly.",
+  "weights": {
+    "attn_projections": {
+      "dtype": "bfloat8_b",
+      "roles": [
+        "wqkv",
+        "attn_gate",
+        "o_proj"
+      ]
+    },
+    "mlp_gate_up": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_gate",
+        "mlp_up"
+      ]
+    },
+    "mlp_down": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_down"
+      ]
+    },
+    "lm_head": {
+      "dtype": "bfloat4_b",
+      "output_dtype": "bfloat16",
+      "matmul": "dram_sharded",
+      "cores": 52,
+      "in0_block_w": 2
+    },
+    "embedding": {
+      "dtype": "bfloat16",
+      "note": "structural: ttnn.embedding needs a ROW_MAJOR BF16 table"
+    },
+    "norms": {
+      "dtype": "bfloat16",
+      "note": "structural: every RMSNorm weight is packed BF16"
+    }
+  },
+  "layer_exceptions": [],
+  "compute_fidelity": {
+    "decode": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "prefill": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "lm_head": {
+      "fidelity": "LoFi",
+      "fp32_dest_acc_en": false
+    }
+  },
+  "activations": {
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16"
+  },
+  "ccl": {
+    "prefill_dtype": "bfloat8_b",
+    "decode_dtype": "bfloat8_b",
+    "decode_dtype_note": "null means the collective carries the activation dtype"
+  },
+  "kv_cache": {
+    "dtype": "bfloat8_b"
+  },
+  "decoder_overrides": {},
+  "logits": {
+    "lm_head_output_dtype": "bfloat16",
+    "sampling_input_dtype": "bfloat16",
+    "sampling_implementation": "models.common.sampling.SamplingGenerator"
+  }
+}

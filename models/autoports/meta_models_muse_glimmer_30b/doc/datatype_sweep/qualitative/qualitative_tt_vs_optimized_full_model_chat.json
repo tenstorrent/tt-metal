@@ -1,0 +1,68 @@
+[
+  {
+    "id": "p0",
+    "identical_text": false,
+    "identical_tokens": false,
+    "first_char_divergence": 172,
+    "first_token_divergence": 46,
+    "prev_len": 406,
+    "new_len": 392,
+    "prev_snippet": " to=self<|message|>Write a haiku about machine learning.\n\nHaiku is 5-7-5 syllables.\n\nWrite a haiku about machine learning.\n\nProbably simple.\n\nWe need 5-7-5.\n\nLe",
+    "new_snippet": " to=self<|message|>Write a haiku about machine learning.\n\nHaiku is 5-7-5 syllables.\n\nWrite a haiku about machine learning.\n\nProbably simple.\n\nWe need 5-7-5.\n\nLe"
+  },
+  {
+    "id": "p1",
+    "identical_text": false,
+    "identical_tokens": false,
+    "first_char_divergence": 4,
+    "first_token_divergence": 1,
+    "prev_len": 716,
+    "new_len": 570,
+    "prev_snippet": " to=self<|message|>Explain the difference between supervised and unsupervised learning in simple terms.\n\nExplain difference between supervised and unsupervised ",
+    "new_snippet": " to=user<|message|>Sure! Here's a simple breakdown:\n\n### **Supervised Learning**\n\n* **What it is:** The model learns from **labeled data** (input + correct outp"
+  },
+  {
+    "id": "p2",
+    "identical_text": false,
+    "identical_tokens": false,
+    "first_char_divergence": 173,
+    "first_token_divergence": 34,
+    "prev_len": 638,
+    "new_len": 639,
+    "prev_snippet": " to=self<|message|>Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\n\nComplete this story. Probab",
+    "new_snippet": " to=self<|message|>Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\n\nComplete this story. Probab"
+  },
+  {
+    "id": "p3",
+    "identical_text": false,
+    "identical_tokens": false,
+    "first_char_divergence": 201,
+    "first_token_divergence": 43,
+    "prev_len": 609,
+    "new_len": 611,
+    "prev_snippet": " to=self<|message|>What are the three laws of thermodynamics?\n\nWhat are the three laws of thermodynamics?\n\nWe need answer. Three laws. Some say zeroeth, first, ",
+    "new_snippet": " to=self<|message|>What are the three laws of thermodynamics?\n\nWhat are the three laws of thermodynamics?\n\nWe need answer. Three laws. Some say zeroeth, first, "
+  },
+  {
+    "id": "p4",
+    "identical_text": false,
+    "identical_tokens": false,
+    "first_char_divergence": 105,
+    "first_token_divergence": 22,
+    "prev_len": 556,
+    "new_len": 572,
+    "prev_snippet": " to=self<|message|>Translate the following to French: \"Hello, how are you today?\"\n\nTranslate to French.\n\nHello, how are you today?\n\nBonjour, comment allez-vous ",
+    "new_snippet": " to=self<|message|>Translate the following to French: \"Hello, how are you today?\"\n\nTranslate to French.\n\n\"Hello, how are you today?\" -> \"Bonjour, comment allez-"
+  },
+  {
+    "id": "p5",
+    "identical_text": false,
+    "identical_tokens": false,
+    "first_char_divergence": 115,
+    "first_token_divergence": 20,
+    "prev_len": 682,
+    "new_len": 714,
+    "prev_snippet": " to=self<|message|>Write a Python function to calculate the Fibonacci sequence.\n\nWe need to write a Python function. Probably simple. Provide code. Maybe multip",
+    "new_snippet": " to=self<|message|>Write a Python function to calculate the Fibonacci sequence.\n\nWe need to write a Python function to calculate Fibonacci sequence. Probably si"
+  }
+]

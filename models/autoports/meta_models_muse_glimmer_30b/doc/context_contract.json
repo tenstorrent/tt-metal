@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "hf_model": "meta-models/Muse-Glimmer-30B",
-  "stage": "optimized_full_model",
+  "stage": "datatype_sweep",
   "hf_advertised_context": 131072,
   "hf_advertised_context_source": "config.json text_config.max_position_embeddings (README: \"Context length 131,072+\")",
   "current_supported_context": 131072,
@@ -65,24 +65,11 @@
     "prefill_chunk_size": 8192,
     "rope_tables": "one shared set for all 39 sliding layers (uniform layer_rope_theta = 500000.0)",
     "kv_cache_dtype": "BFLOAT8_B (carried forward unchanged from the optimized multichip decoder)",
-    "residual_layout": "decode: WIDTH_SHARDED L1 on 16 cores, [32, 416] shards, replicated, across every layer boundary and into the terminal norm; prefill: DRAM-interleaved replicated",
-    "optimized_full_model_allocations": {
-      "prefill_trace_default": false,
-      "prefill_trace_retained_dram_bytes_per_device_at_128_rows": 3280896,
-      "prefill_trace_retained_dram_source": "doc/optimized_full_model/prefill_trace_probe.json (measured with the decode and sampling traces already captured)",
-      "prefill_trace_max_entries_default": 1,
-      "prefill_trace_bound": "one entry per 32-row padded-length bucket. Retained DRAM is nearly length-independent -- the trace's persistent output is one 32-row logits tile at any prompt length -- and is measured at both ends of the supported range: 3.3 MB at 128 rows and 4.6 MB at 8192 (prefill_trace_probe.json, prefill_trace_probe_8192.json). The binding resource is the mesh's fixed trace_region_size, not DRAM, and a capture that exceeds it falls back to the eager prefill for that request. The speedup is short-prompt only: 1.33x at 128 rows and 1.00x at 8192, where host dispatch is a rounding error against device work. An earlier revision of this field extrapolated the 128-row DRAM figure to ~210 MB at 8192; that was wrong by ~45x and is withdrawn.",
-      "prefill_trace_retained_dram_bytes_at_8192_rows": 4571136,
-      "prefill_trace_speedup_at_8192_rows": 0.995,
-      "decode_peak_l1_delta_bytes_per_bank": 126976,
-      "decode_peak_l1_free_per_bank_at_that_peak": 1238144,
-      "l1_bytes_per_bank": 1455232,
-      "decode_peak_l1_source": "doc/optimized_full_model/l1_highwater_probe.json (the LM-head softcap moved onto the matmul's own width-sharded L1 output; measured on an otherwise-idle device, so it is the terminal path's own peak rather than the step's)"
-    }
+    "residual_layout": "decode: WIDTH_SHARDED L1 on 16 cores, [32, 416] shards, replicated, across every layer boundary and into the terminal norm; prefill: DRAM-interleaved replicated"
   },
   "byte_budget_at_full_context": {
-    "measured_from": "doc/optimized_full_model/evidence_accuracy.json (capability_report over the built model)",
-    "per_device_layer_weight_bytes": 4327784448,
+    "measured_from": "doc/datatype_sweep/evidence_accuracy.json (capability_report over the built model)",
+    "per_device_layer_weight_bytes": 3751854080,
     "per_device_terminal_weight_bytes": 863073536,
     "per_device_terminal_weight_formula": "embed_tokens (202049 x 1664 x 2 B BF16 ROW_MAJOR) = 672,419,072 + lm_head (6656 x 50688 x 0.5625 B BFLOAT4_B) = 189,760,512 + two terminal norms",
     "per_device_rope_table_bytes": 134217728,
@@ -90,12 +77,12 @@
     "per_device_kv_cache_bytes": 1853882368,
     "per_device_kv_cache_formula": "52 layers x 2 (K,V) x 1 local KV head x 128 head_dim x 131072 tokens x 1.0625 B (BFLOAT8_B: 1024 mantissa + 64 exponent bytes per 32x32 tile)",
     "per_device_kv_cache_bytes_per_block": 905216.0,
-    "per_device_total_bytes": 7178958080,
+    "per_device_total_bytes": 6603027712,
     "per_device_dram_capacity_bytes": 33778699264,
     "per_device_dram_capacity_source": "ttnn.get_memory_view(mesh, BufferType.DRAM): total_bytes_per_bank x num_banks, read from the allocator rather than a data sheet",
-    "per_device_free_after_long_lived_bytes": 26599741184,
+    "per_device_free_after_long_lived_bytes": 27175671552,
     "trace_region_bytes": 400000000,
-    "note": "The advertised 131072-token context needs 7.18 GB/device of long-lived DRAM out of 31.46 GiB, so no capability reduction is required and none is taken. The full-context KV cache is 1.854 GB/device, so the free space after weights holds ~14 more full-length sequences; the batch contract below is what that buys."
+    "note": "The advertised 131072-token context needs 6.60 GB/device of long-lived DRAM out of 31.46 GiB, so no capability reduction is required and none is taken. The full-context KV cache is 1.854 GB/device, so the free space after weights holds ~14 more full-length sequences; the batch contract below is what that buys."
   },
   "batch_contract": {
     "primary": "batch 1 at the full 131072-token context (the single-user latency target)",
@@ -106,31 +93,38 @@
     "device_op_ceiling_source": "nlp_create_qkv_heads_decode_device_operation.cpp:45-51 hard-caps num_users at 32",
     "full_context_sequences_that_fit": 15
   },
-  "notes": "The optimized-full-model stage takes no capability reduction. The advertised 131072-token context is supported and exercised end to end (52-layer paged prefill fill plus paged traced decode) at batch 1, and prompt lengths that are not divisible by the tile, the 64-token page or the 8192-token prefill chunk are ordinary inputs: the generator pads the token ids with a zero-embedding pad id, the layer stack sees an aligned prompt, and the logits are sliced back to the logical last position. Earlier stages keep their own blocks below; the previous top level is now the 'full_model' block.",
+  "notes": "The datatype-sweep stage takes no capability reduction. The advertised 131072-token context is supported and exercised end to end (52-layer paged prefill fill plus paged traced decode) at batch 1, and prompt lengths that are not divisible by the tile, the 64-token page or the 8192-token prefill chunk are ordinary inputs: the generator pads the token ids with a zero-embedding pad id, the layer stack sees an aligned prompt, and the logits are sliced back to the logical last position. Earlier stages keep their own blocks below; the previous top level is now the 'optimized_full_model' block. The selected precision policy is a required build input (doc/datatype_sweep/selected_precision_config.json), and the KV-cache dtype -- the one precision choice that moves memory capacity -- is priced per dtype in kv_cache_dtype_capacity from the sweep's own capability reports.",
   "performance": {
     "workload": {
       "prompt_len": 128,
       "gen_len": 128,
       "batch": 1
     },
-    "ttft_ms": 63.679240993224084,
-    "token_out_decode_ms_per_token": 23.298420512033115,
-    "token_out_decode_tok_s_u": 42.92136453986322,
-    "traced_decode_logits_only_ms_per_token": 22.656403937617142,
-    "traced_decode_logits_only_tok_s_u": 44.137631141880746,
-    "sampling_trace_ms_per_token": 0.632158875305322,
-    "layer_stack_lower_bound_ms_per_token": 22.857899999999997,
-    "source": "doc/optimized_full_model/evidence_perf.json"
+    "ttft_ms": 64.17221500305459,
+    "token_out_decode_ms_per_token": 23.07825679542482,
+    "token_out_decode_tok_s_u": 43.330829051102604,
+    "traced_decode_logits_only_ms_per_token": 22.433569061831804,
+    "traced_decode_logits_only_tok_s_u": 44.57605462794538,
+    "sampling_trace_ms_per_token": 0.6323970937955892,
+    "layer_stack_lower_bound_ms_per_token": null,
+    "source": "doc/datatype_sweep/evidence_perf.json",
+    "layer_stack_lower_bound_note": "withheld: the inherited figure (22.857899999999997 ms/token) was measured under the previous stage's precision policy, which the selection changed. The selected policy's own per-layer floor is 39 x 0.4345 + 13 x 0.4032 = 22.187 ms/token at decode context 256 (doc/datatype_sweep/logs/layer_ab.log, layer_ab.py --candidates baseline,selected), against the previous policy's 22.421 ms at the same context, and the measured decode trace of 22.434 ms sits 1.11 % above it.",
+    "measurement_regime": "warmed token-out, batch 1, prompt 128 / generate 128, end to end through the public generator with device-side token feedback and one 32-uint32 token readback per step -- the same benchmark the optimized full model reported, re-run on the selected precision config through the default construction path"
   },
   "tested": {
     "commands": [
-      "python doc/optimized_full_model/bench/evidence.py --stages capacity,prefill,teacher,sampling,shapes,fallback",
-      "python doc/optimized_full_model/bench/evidence.py --stages autoregress",
-      "python doc/optimized_full_model/bench/evidence.py --stages perf",
-      "python doc/full_model/bench/qualitative.py --arm hf (run by the previous stage; this stage reuses its output rather than re-running it, via the wrapper's --reuse-hf-control)",
-      "python doc/optimized_full_model/bench/qualitative.py --arm tt --reuse-hf-control",
-      "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py",
-      "python doc/optimized_full_model/bench/qualitative.py --arm compare --reuse-hf-control"
+      "python doc/datatype_sweep/bench/candidates.py",
+      "python doc/datatype_sweep/bench/smoketest.py",
+      "bash doc/datatype_sweep/bench/run_sweep.sh",
+      "python doc/datatype_sweep/bench/analyse.py",
+      "python doc/datatype_sweep/bench/evidence.py --stages capacity,prefill,teacher,shapes,sampling,fallback --out evidence_accuracy.json",
+      "python doc/datatype_sweep/bench/evidence.py --stages perf --out evidence_perf.json",
+      "python doc/full_model/bench/qualitative.py --arm hf (run by the full-model stage; this stage reuses its output via --reuse-hf-control)",
+      "python doc/datatype_sweep/bench/qualitative.py --arm tt --reuse-hf-control",
+      "python doc/datatype_sweep/bench/qualitative.py --arm compare",
+      "python doc/datatype_sweep/bench/qualitative.py --vs-optimized-full-model",
+      "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py",
+      "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py"
     ],
     "prompt_shapes": {
       "lengths": [
@@ -169,15 +163,15 @@
       "top100": 1.0,
       "total": 100,
       "k": 100,
-      "ttft_ms": 181.43052799860016,
-      "decode_tok_s_u": 37.06641578360152
+      "ttft_ms": 166.1900439648889,
+      "decode_tok_s_u": 37.42672571476573
     },
     "prefill_misses": {
       "non_top1_positions": 1,
       "outside_top_k_positions": 0,
       "k": 100,
       "gen_len": 100,
-      "note": "per-position detail in doc/optimized_full_model/evidence_misses.json"
+      "note": "not re-collected by this stage; the selected config's prefill top-1/top-5/top-100 are in doc/datatype_sweep/evidence_accuracy.json and its per-candidate values in doc/datatype_sweep/sweep_results.json"
     },
     "split_sampling": {
       "deterministic_across_calls": true,
@@ -198,10 +192,10 @@
           45116
         ],
         "token_after_step1": [
-          25
+          45116
         ],
         "token_after_step2": [
-          1102
+          45116
         ],
         "pos_before": [
           128
@@ -213,10 +207,10 @@
           130
         ],
         "sampled_step1": [
-          25
+          45116
         ],
         "sampled_step2": [
-          1102
+          45116
         ],
         "token_feedback_is_device_side": true,
         "position_advanced_on_device": true,
@@ -234,13 +228,13 @@
       },
       "top_k_top_p_tokens": [
         5211,
-        43,
-        87,
-        1234,
-        43,
         220,
         30,
-        26
+        95,
+        260,
+        200007,
+        200022,
+        198
       ],
       "top_k_top_p_differs_from_greedy": true,
       "greedy_after_sampled_matches": true
@@ -273,6 +267,285 @@
         "position": 0.0,
         "page_table": 0.03125,
         "synchronizations": 0.0
+      }
+    }
+  },
+  "optimized_full_model": {
+    "schema_version": 1,
+    "hf_model": "meta-models/Muse-Glimmer-30B",
+    "stage": "optimized_full_model",
+    "hf_advertised_context": 131072,
+    "hf_advertised_context_source": "config.json text_config.max_position_embeddings (README: \"Context length 131,072+\")",
+    "current_supported_context": 131072,
+    "capability_reduction": "none",
+    "limiting_reason": null,
+    "device": {
+      "arch": "blackhole",
+      "cluster_type": "P300_X2",
+      "cluster_type_source": "tt_metal/llrt/tt_cluster.cpp:195-201 (P300 board type, 4 chips)",
+      "num_devices": 4,
+      "mesh_shape": [
+        1,
+        4
+      ],
+      "mesh_shape_rationale": "The four dies form a ring (auto-discovery intra-mesh degree histogram {2:4}). A 1x4 view is a Hamiltonian path around it whose ends are adjacent, so ttnn.Topology.Ring is legal; on the 2x2 view every collective is demoted to Linear for any axis of extent 2 (ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:98-123), which measures 19% slower at the decode payload.",
+      "fabric_config": "FABRIC_1D_RING",
+      "ccl_topology": "Ring",
+      "num_links": 2,
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "dram_grid_size": [
+        8,
+        1
+      ],
+      "visible_devices": 4,
+      "fabric_packet_payload_bytes": 8192,
+      "fabric_packet_payload_note": "The runtime's advice on this knob is per dispatch and cannot be satisfied: at 8192 B it asks for 4352 (the 1088 B BFP8 prefill pages), at 4352 B it asks for 8192 (the 2048 B BF16 decode pages). Measured both ways. Isolated: 8192 wins the decode collective (35.80 -> 34.82 us per sublayer) and loses the shipped BFP8 prefill all-reduce by 1.1% (1563.7 -> 1581.1 us). Whole-layer, one process per value: 8192 gives traced decode 0.4573/0.4260 ms/token against 4352's 0.4589/0.4281, i.e. 0.35%/0.49% faster on sliding/full, while the prefill difference (18.97/19.11 against 19.02/18.72 ms) is inside the 1.3-4.1% same-build prefill spread. 8192 ships: the op-level prefill regression does not reach the layer, and decode is the per-token metric.",
+      "l1_small_size": 6144,
+      "l1_small_note": "Holds the per-program CCL global semaphores (256 B each, released only by clear_program_cache()). The decode step leaves 7,296 B of L1 to give away. Measured ladder: 32768 fails the first 256-row prefill, 8192 is 896 B over the decode budget, 7168 passes with 128 B of margin, 6144 passes with 1,152 B, 4096 passes but makes the region itself the constraint, and 2048 fills the region mid-suite (\"Out of Memory: Not enough space to allocate 1760 B L1_SMALL buffer across 110 banks\"). 6144 ships: 24 distinct CCL programs with 1,152 B of margin. A stacked model needs two CCL shapes per layer kind, so 24 is not a bound it can reach.",
+      "known_teardown_fault": "Closing the 1x4 FABRIC_1D_RING mesh has three times timed out returning ethernet core 29-25 to base firmware (\"Timed out while waiting for active ethernet core 29-25 to become active again\"), aborting the process after all work completed and wedging the next process until tt-smi -r. Seen only on watcher-instrumented runs; the 100-test acceptance suite, the A/B runs and the eight Tracy captures have not produced it. Recoverable with one bounded reset; see doc/multichip_decoder/work_log.md sections 9.2 and 9.4. Recovery is exercised end to end on the third occurrence: doc/multichip_decoder/logs/watcher_run.log (31 passed, all watcher counters 0, then SIGABRT at close) followed by one tt-smi -r and a passing doc/multichip_decoder/logs/smoke_after_reset.log."
+    },
+    "implementation": {
+      "model": "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+      "generator": "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+      "layer_stack": "tt/multichip_decoder.py, unchanged (one additive optional kwarg: rope_cache)",
+      "num_layers": 52,
+      "layer_kind_counts": {
+        "sliding": 39,
+        "full": 13
+      },
+      "embedding": "column-parallel on the hidden dim + one async all_gather; bf16 ROW_MAJOR table",
+      "embedding_pad_row": "one extra zero row at index vocab_size, so a non-tile-aligned prompt pads with an id whose embedding is exactly zero rather than leaving uninitialised tile rows",
+      "final_norm": "MuseGlimmerRMSNorm(with_scale=True): multiplies by w, not by 1+w",
+      "lm_head": "column-parallel on the vocab dim; no logits gather on the token-out path",
+      "lm_head_dtype": "DataType.BFLOAT4_B",
+      "lm_head_matmul": "dram_sharded",
+      "lm_head_geometry": {
+        "cores": 52,
+        "in0_block_w": 2
+      },
+      "logit_softcap": "T * tanh(h @ W * m / T), m/T folded into the weight at setup; T = 20.0",
+      "vocab_size": 202048,
+      "padded_vocab_size": 202752,
+      "padded_vocab_reason": "202048/4 = 50512 is not tile-aligned, and the DRAM-sharded matmul additionally needs one weight shard per DRAM bank (per-device width a multiple of 256); the sampler masks the 704 padded ids, because it is given the real vocab size alongside the padded one",
+      "sampling": "models.common.sampling.SamplingGenerator",
+      "force_argmax": false,
+      "decode_rows": 32,
+      "page_block_size": 64,
+      "prefill_chunk_size": 8192,
+      "rope_tables": "one shared set for all 39 sliding layers (uniform layer_rope_theta = 500000.0)",
+      "kv_cache_dtype": "BFLOAT8_B (carried forward unchanged from the optimized multichip decoder)",
+      "residual_layout": "decode: WIDTH_SHARDED L1 on 16 cores, [32, 416] shards, replicated, across every layer boundary and into the terminal norm; prefill: DRAM-interleaved replicated",
+      "optimized_full_model_allocations": {
+        "prefill_trace_default": false,
+        "prefill_trace_retained_dram_bytes_per_device_at_128_rows": 3280896,
+        "prefill_trace_retained_dram_source": "doc/optimized_full_model/prefill_trace_probe.json (measured with the decode and sampling traces already captured)",
+        "prefill_trace_max_entries_default": 1,
+        "prefill_trace_bound": "one entry per 32-row padded-length bucket. Retained DRAM is nearly length-independent -- the trace's persistent output is one 32-row logits tile at any prompt length -- and is measured at both ends of the supported range: 3.3 MB at 128 rows and 4.6 MB at 8192 (prefill_trace_probe.json, prefill_trace_probe_8192.json). The binding resource is the mesh's fixed trace_region_size, not DRAM, and a capture that exceeds it falls back to the eager prefill for that request. The speedup is short-prompt only: 1.33x at 128 rows and 1.00x at 8192, where host dispatch is a rounding error against device work. An earlier revision of this field extrapolated the 128-row DRAM figure to ~210 MB at 8192; that was wrong by ~45x and is withdrawn.",
+        "prefill_trace_retained_dram_bytes_at_8192_rows": 4571136,
+        "prefill_trace_speedup_at_8192_rows": 0.995,
+        "decode_peak_l1_delta_bytes_per_bank": 126976,
+        "decode_peak_l1_free_per_bank_at_that_peak": 1238144,
+        "l1_bytes_per_bank": 1455232,
+        "decode_peak_l1_source": "doc/optimized_full_model/l1_highwater_probe.json (the LM-head softcap moved onto the matmul's own width-sharded L1 output; measured on an otherwise-idle device, so it is the terminal path's own peak rather than the step's)"
+      }
+    },
+    "byte_budget_at_full_context": {
+      "measured_from": "doc/optimized_full_model/evidence_accuracy.json (capability_report over the built model)",
+      "per_device_layer_weight_bytes": 4327784448,
+      "per_device_terminal_weight_bytes": 863073536,
+      "per_device_terminal_weight_formula": "embed_tokens (202049 x 1664 x 2 B BF16 ROW_MAJOR) = 672,419,072 + lm_head (6656 x 50688 x 0.5625 B BFLOAT4_B) = 189,760,512 + two terminal norms",
+      "per_device_rope_table_bytes": 134217728,
+      "per_device_rope_table_formula": "4 tables (cos/sin x ROW_MAJOR/TILE) x 131072 positions x 128 head_dim x 2 B BF16, shared by all 39 sliding layers",
+      "per_device_kv_cache_bytes": 1853882368,
+      "per_device_kv_cache_formula": "52 layers x 2 (K,V) x 1 local KV head x 128 head_dim x 131072 tokens x 1.0625 B (BFLOAT8_B: 1024 mantissa + 64 exponent bytes per 32x32 tile)",
+      "per_device_kv_cache_bytes_per_block": 905216.0,
+      "per_device_total_bytes": 7178958080,
+      "per_device_dram_capacity_bytes": 33778699264,
+      "per_device_dram_capacity_source": "ttnn.get_memory_view(mesh, BufferType.DRAM): total_bytes_per_bank x num_banks, read from the allocator rather than a data sheet",
+      "per_device_free_after_long_lived_bytes": 26599741184,
+      "trace_region_bytes": 400000000,
+      "note": "The advertised 131072-token context needs 7.18 GB/device of long-lived DRAM out of 31.46 GiB, so no capability reduction is required and none is taken. The full-context KV cache is 1.854 GB/device, so the free space after weights holds ~14 more full-length sequences; the batch contract below is what that buys."
+    },
+    "batch_contract": {
+      "primary": "batch 1 at the full 131072-token context (the single-user latency target)",
+      "decode_rows": 32,
+      "decode_rows_note": "every decode tensor is 32 rows wide regardless of batch -- the activation is tile-padded and nlp_create_qkv_heads_decode caps num_users at 32 -- and inactive rows carry current_pos = -1, the sentinel the paged attention ops skip",
+      "cache_slots_are_a_separate_knob": "max_batch_size sizes the paged pool (max_num_blocks = max_batch_size x blocks_per_seq); context and batch trade against each other inside the same byte budget",
+      "device_op_ceiling": 32,
+      "device_op_ceiling_source": "nlp_create_qkv_heads_decode_device_operation.cpp:45-51 hard-caps num_users at 32",
+      "full_context_sequences_that_fit": 15
+    },
+    "notes": "The optimized-full-model stage takes no capability reduction. The advertised 131072-token context is supported and exercised end to end (52-layer paged prefill fill plus paged traced decode) at batch 1, and prompt lengths that are not divisible by the tile, the 64-token page or the 8192-token prefill chunk are ordinary inputs: the generator pads the token ids with a zero-embedding pad id, the layer stack sees an aligned prompt, and the logits are sliced back to the logical last position. Earlier stages keep their own blocks below; the previous top level is now the 'full_model' block.",
+    "performance": {
+      "workload": {
+        "prompt_len": 128,
+        "gen_len": 128,
+        "batch": 1
+      },
+      "ttft_ms": 63.679240993224084,
+      "token_out_decode_ms_per_token": 23.298420512033115,
+      "token_out_decode_tok_s_u": 42.92136453986322,
+      "traced_decode_logits_only_ms_per_token": 22.656403937617142,
+      "traced_decode_logits_only_tok_s_u": 44.137631141880746,
+      "sampling_trace_ms_per_token": 0.632158875305322,
+      "layer_stack_lower_bound_ms_per_token": 22.857899999999997,
+      "source": "doc/optimized_full_model/evidence_perf.json"
+    },
+    "tested": {
+      "commands": [
+        "python doc/optimized_full_model/bench/evidence.py --stages capacity,prefill,teacher,sampling,shapes,fallback",
+        "python doc/optimized_full_model/bench/evidence.py --stages autoregress",
+        "python doc/optimized_full_model/bench/evidence.py --stages perf",
+        "python doc/full_model/bench/qualitative.py --arm hf (run by the previous stage; this stage reuses its output rather than re-running it, via the wrapper's --reuse-hf-control)",
+        "python doc/optimized_full_model/bench/qualitative.py --arm tt --reuse-hf-control",
+        "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py",
+        "python doc/optimized_full_model/bench/qualitative.py --arm compare --reuse-hf-control"
+      ],
+      "prompt_shapes": {
+        "lengths": [
+          1,
+          37,
+          127,
+          129,
+          2049,
+          4097,
+          8193,
+          12345
+        ],
+        "non_aligned_lengths": [
+          1,
+          37,
+          127,
+          129,
+          2049,
+          4097,
+          8193,
+          12345
+        ],
+        "largest_tested": 12345,
+        "note": "each length runs the public generator end to end (embed -> 52 layers -> terminal path -> traced decode); 'aligned' records tile/page/chunk divisibility per length"
+      },
+      "prefill_check": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "total": 100,
+        "k": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "total": 100,
+        "k": 100,
+        "ttft_ms": 181.43052799860016,
+        "decode_tok_s_u": 37.06641578360152
+      },
+      "prefill_misses": {
+        "non_top1_positions": 1,
+        "outside_top_k_positions": 0,
+        "k": 100,
+        "gen_len": 100,
+        "note": "per-position detail in doc/optimized_full_model/evidence_misses.json"
+      },
+      "split_sampling": {
+        "deterministic_across_calls": true,
+        "steady_state_counters": {
+          "trace_replays": 7,
+          "token_refreshes": 1,
+          "position_refreshes": 1,
+          "page_table_refreshes": 1,
+          "synchronizations": 0,
+          "readbacks": 8,
+          "device_position_advances": 0
+        },
+        "sampling_trace_captured": true,
+        "tt_out_tok_is_decode_token_input": true,
+        "sampling_trace_logits_is_decode_trace_output": true,
+        "two_step_replay": {
+          "token_before": [
+            45116
+          ],
+          "token_after_step1": [
+            25
+          ],
+          "token_after_step2": [
+            1102
+          ],
+          "pos_before": [
+            128
+          ],
+          "pos_after_step1": [
+            129
+          ],
+          "pos_after_step2": [
+            130
+          ],
+          "sampled_step1": [
+            25
+          ],
+          "sampled_step2": [
+            1102
+          ],
+          "token_feedback_is_device_side": true,
+          "position_advanced_on_device": true,
+          "host_staging_between_replays": {
+            "token_refreshes": 0,
+            "position_refreshes": 0,
+            "page_table_refreshes": 0
+          }
+        },
+        "force_argmax_enabled": false,
+        "sampling_params_greedy": {
+          "top_k": 1,
+          "top_p": 0.0,
+          "temperature_reciprocal": 1.0
+        },
+        "top_k_top_p_tokens": [
+          5211,
+          43,
+          87,
+          1234,
+          43,
+          220,
+          30,
+          26
+        ],
+        "top_k_top_p_differs_from_greedy": true,
+        "greedy_after_sampled_matches": true
+      },
+      "fallback_audit": {
+        "decode_trace_captured": true,
+        "sampling_trace_captured": true,
+        "force_argmax": false,
+        "kv_cache_owner": "model layers (generator.model.kv_cache exposes them; set_kv_cache() binds external ones)",
+        "host_logit_boundaries": [
+          "prefill_forward(): logits are read to host by contract (the readiness prefill check needs them)",
+          "generate(host_sampling=True): explicit compatibility mode, gathers logits and argmaxes on host",
+          "decode_forward(sample_on_device=False): returns host logits, for callers that sample themselves"
+        ],
+        "token_out_path_host_work_per_token": [
+          "one 32-uint32 readback of the sampled token, which the caller asked for"
+        ],
+        "reset_behaviour": "zeroes the paged cache, drops the page-table memo and the staging state; keeps weights and traces",
+        "counters_for_33_tokens": {
+          "trace_replays": 32,
+          "token_refreshes": 1,
+          "position_refreshes": 1,
+          "page_table_refreshes": 1,
+          "synchronizations": 0,
+          "readbacks": 33,
+          "device_position_advances": 0
+        },
+        "per_token_host_refreshes": {
+          "token": 0.0,
+          "position": 0.0,
+          "page_table": 0.03125,
+          "synchronizations": 0.0
+        }
       }
     }
   },
@@ -1626,5 +1899,99 @@
     "stage": "multichip_decoder",
     "evidence_root": "doc/multichip_decoder/",
     "note": "The stage this one optimizes in place. Its implementation description and performance figures are the *before* side of doc/optimized_multichip_decoder/README.md; they are kept here so a reader can see what moved, and they are no longer the current path."
+  },
+  "precision_policy": {
+    "selected_config_id": "c14-attn4-cclbfp8-kv8",
+    "artifact": "doc/datatype_sweep/selected_precision_config.json",
+    "artifact_is_required_by_the_build": "tt/generator.py::build_generator reads it on every build; a missing or malformed file raises rather than falling back to a module constant",
+    "realised_policy_source": "doc/datatype_sweep/evidence_accuracy.json:capacity.precision_policy",
+    "sweep_results": "doc/datatype_sweep/sweep_results.json"
+  },
+  "kv_cache_dtype_capacity": {
+    "note": "Every KV-cache dtype the sweep evaluated and that built, with the per-device bytes read off each built model's capability_report rather than a formula. The advertised 131072-token context is supported at every one of them: a lower cache dtype buys headroom (more concurrent full-context sequences), it does not buy context this model was not already advertising, and no candidate reduced it. BFP4 was measured and rejected on full-model top-1, not on capacity -- and the loss is concentrated in the 13 full-attention layers rather than spread evenly: 0.990 with BFP8 everywhere, 0.980 with BFP4 on the 39 sliding layers only (c20), 0.970 with BFP4 on the 13 full-attention layers only (c22), and 0.970 with BFP4 on all 52 (c05/c08/c09). The capacity saving runs the other way, being per layer: c20 holds 1.200 GB/device against c22's 1.636 GB, so c20 is the efficient trade for a serving stage that wants cache headroom.",
+    "advertised_context": 131072,
+    "selected_config_id": "c14-attn4-cclbfp8-kv8",
+    "selected": {
+      "kv_cache_dtype": "bfloat8_b",
+      "per_device_kv_cache_bytes": 1853882368,
+      "per_device_kv_cache_bytes_per_block": 905216.0,
+      "per_device_total_long_lived_bytes": 6603027712,
+      "per_device_free_after_long_lived_bytes": 27175671552,
+      "full_context_sequences_that_fit": 15,
+      "supported_context": 131072,
+      "source": "doc/datatype_sweep/evidence_accuracy.json:capacity"
+    },
+    "by_dtype": {
+      "bfloat8_b": {
+        "per_device_kv_cache_bytes": 1853882368,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "supported_context": 131072,
+        "measured_on_configs": [
+          "c00-baseline-attn8-mlp4-kv8-lofi",
+          "c01-attn4-mlp4-kv8-lofi",
+          "c02-attn4-mlp4-kv8-attn-hifi2",
+          "c03-attn8-hifi2-mlp4-lofi",
+          "c04-mlp4-hifi2",
+          "c06-decode-ccl-bfp8",
+          "c07-attn4-except-first-last",
+          "c10-lm-head-bfp8",
+          "c11-lm-head-bfp4-in0bw1",
+          "c14-attn4-cclbfp8-kv8",
+          "c15-attn4-except-first-last-cclbfp8",
+          "c19-prefill-ccl-bfp8-unfractured-norm",
+          "c21-lm-head-bfp4-hifi2"
+        ],
+        "selected": true,
+        "per_device_total_long_lived_bytes_min": 6603027712,
+        "per_device_total_long_lived_bytes_max": 7347647744,
+        "full_model_top1_min": 0.99,
+        "full_model_top1_max": 0.99,
+        "full_context_sequences_that_fit": 15
+      },
+      "bfloat4_b": {
+        "per_device_kv_cache_bytes": 981467136,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "supported_context": 131072,
+        "measured_on_configs": [
+          "c05-kv4",
+          "c08-attn4-kv4-cclbfp8",
+          "c09-kv4-cclbfp8"
+        ],
+        "selected": false,
+        "per_device_total_long_lived_bytes_min": 5730612480,
+        "per_device_total_long_lived_bytes_max": 6306542848,
+        "full_model_top1_min": 0.97,
+        "full_model_top1_max": 0.97,
+        "full_context_sequences_that_fit": 28
+      },
+      "bfloat4_b-with-bfloat8_b-exceptions": {
+        "per_device_kv_cache_bytes": 1199570944,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "supported_context": 131072,
+        "measured_on_configs": [
+          "c20-attn4-cclbfp8-kv4-sliding-only"
+        ],
+        "selected": false,
+        "per_device_total_long_lived_bytes_min": 5948716288,
+        "per_device_total_long_lived_bytes_max": 5948716288,
+        "full_model_top1_min": 0.98,
+        "full_model_top1_max": 0.98,
+        "full_context_sequences_that_fit": 24
+      },
+      "bfloat8_b-with-bfloat4_b-exceptions": {
+        "per_device_kv_cache_bytes": 1635778560,
+        "per_device_dram_capacity_bytes": 33778699264,
+        "supported_context": 131072,
+        "measured_on_configs": [
+          "c22-attn4-cclbfp8-kv4-full-attn-only"
+        ],
+        "selected": false,
+        "per_device_total_long_lived_bytes_min": 6384923904,
+        "per_device_total_long_lived_bytes_max": 6384923904,
+        "full_model_top1_min": 0.97,
+        "full_model_top1_max": 0.97,
+        "full_context_sequences_that_fit": 17
+      }
+    }
   }
 }

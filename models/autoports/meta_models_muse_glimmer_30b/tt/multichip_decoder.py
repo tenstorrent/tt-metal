@@ -1325,6 +1325,37 @@ class MultichipDecoder(OptimizedDecoder):
             **({} if decode_fused_activation is None else {"decode_fused_activation": decode_fused_activation}),
         )
 
+    # ------------------------------------------------------- precision readback
+
+    def precision_report(self) -> dict[str, Any]:
+        """The single-chip report plus the collective payload dtypes.
+
+        ``_row_parallel_dtype`` is called rather than restated, so the reported
+        payload is the one the two row-parallel matmuls are actually asked for.
+        """
+        report = super().precision_report()
+        report["ccl"] = {
+            "prefill_payload_dtype": str(self._row_parallel_dtype("mlp_down", prefill=True)),
+            "decode_payload_dtype": str(self._row_parallel_dtype("mlp_down", prefill=False)),
+            "prefill_ccl_dtype_requested": str(self.prefill_ccl_dtype),
+            "decode_ccl_dtype_requested": str(self.decode_ccl_dtype),
+            "prefill_ccl_impl": self.prefill_ccl_impl,
+            "decode_ccl_impl": self.decode_ccl_impl,
+            "prefill_ccl_mode": self.prefill_ccl_mode,
+            "decode_ccl_mode": self.decode_ccl_mode,
+        }
+        # The companion settings a precision artifact may carry
+        # (``ALLOWED_DECODER_OVERRIDES``), read off the built layer so the
+        # propagation check can see whether they landed.
+        report["decoder_overrides"] = {
+            "prefill_fractured_norm": self.prefill_fractured_norm,
+            "prefill_ccl_mode": self.prefill_ccl_mode,
+            "decode_ccl_mode": self.decode_ccl_mode,
+            "prefill_ccl_impl": self.prefill_ccl_impl,
+            "decode_ccl_impl": self.decode_ccl_impl,
+        }
+        return report
+
     # ------------------------------------------------------------- collectives
 
     def _row_parallel_dtype(self, role: str, *, prefill: bool) -> ttnn.DataType:
@@ -1613,7 +1644,7 @@ class MultichipDecoder(OptimizedDecoder):
             dtype=self._row_parallel_dtype(role, prefill=False),
             memory_config=self._sharded_memcfg(rows, n, cores),
             program_config=program_config,
-            compute_kernel_config=self.decode_compute_kernel_config,
+            compute_kernel_config=self.decode_compute_kernel_config_by_role[role],
         )
         if role not in ROW_PARALLEL_ROLES:
             return out
@@ -1655,7 +1686,7 @@ class MultichipDecoder(OptimizedDecoder):
                 weight,
                 dtype=self._row_parallel_dtype(role, prefill=True),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.dense_compute_kernel_config,
+                compute_kernel_config=self.prefill_compute_kernel_config_by_role[role],
                 program_config=prefill_mcast2d_program_config(
                     rows, int(weight.shape[-1]), grid_y, in0_block_w, self.dram_banks
                 ),
@@ -1681,7 +1712,7 @@ class MultichipDecoder(OptimizedDecoder):
                 weight,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self._row_parallel_dtype(role, prefill=True),
-                compute_kernel_config=self.dense_compute_kernel_config,
+                compute_kernel_config=self.prefill_compute_kernel_config_by_role[role],
                 config=config,
             )
         if role not in ROW_PARALLEL_ROLES:

@@ -1,0 +1,53 @@
+===== c20 sweep =====
+SWEEP_DRIVER candidates: c20-attn4-cclbfp8-kv4-sliding-only (rounds=11)
+SWEEP_DRIVER ===== c20-attn4-cclbfp8-kv4-sliding-only started 2026-08-15T01:51:07-04:00 =====
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 1: top1=0.980 top5=1.000 top100=1.000 decode=38.08 t/s/u ttft=65.75 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 2: top1=0.980 top5=1.000 top100=1.000 decode=38.27 t/s/u ttft=68.34 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 3: top1=0.980 top5=1.000 top100=1.000 decode=38.16 t/s/u ttft=71.17 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 4: top1=0.980 top5=1.000 top100=1.000 decode=38.20 t/s/u ttft=65.21 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 5: top1=0.980 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=69.80 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 6: top1=0.980 top5=1.000 top100=1.000 decode=38.25 t/s/u ttft=67.46 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 7: top1=0.980 top5=1.000 top100=1.000 decode=38.18 t/s/u ttft=71.32 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 8: top1=0.980 top5=1.000 top100=1.000 decode=38.12 t/s/u ttft=71.38 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 9: top1=0.980 top5=1.000 top100=1.000 decode=38.22 t/s/u ttft=68.56 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only teacher round 10: top1=0.980 top5=1.000 top100=1.000 decode=38.21 t/s/u ttft=67.81 ms trace_replays=99
+SWEEP c20-attn4-cclbfp8-kv4-sliding-only traced logits-only 22.402 ms/token -> 44.64 t/s/u
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c20-attn4-cclbfp8-kv4-sliding-only.json
+SWEEP_DRIVER ===== c20-attn4-cclbfp8-kv4-sliding-only ok 2026-08-15T01:54:52-04:00 =====
+SWEEP_DRIVER all candidates completed
+SWEEP_DRIVER_DONE
+===== c20 exit 0 =====
+RESET_DONE failures=0
+===== smoketest over the full 21-candidate matrix =====
+===== smoketest exit 0 =====
+SMOKE ===== c07-attn4-except-first-last =====
+SMOKE c07-attn4-except-first-last propagation_problems=0 pcc=0.9947401881217957 tokens=[173748, 70848, 119080, 134040, 193263, 75083]
+SMOKE ===== c08-attn4-kv4-cclbfp8 =====
+SMOKE c08-attn4-kv4-cclbfp8 propagation_problems=0 pcc=0.9939069747924805 tokens=[173748, 70848, 119080, 67054, 127326, 138891]
+SMOKE ===== c09-kv4-cclbfp8 =====
+SMOKE c09-kv4-cclbfp8 propagation_problems=0 pcc=1.0000019073486328 tokens=[173748, 70848, 115721, 57029, 7335, 5784]
+SMOKE ===== c10-lm-head-bfp8 =====
+SMOKE c10-lm-head-bfp8 propagation_problems=0 pcc=0.9930505752563477 tokens=[173748, 70848, 119080, 67054, 127326, 34552]
+SMOKE ===== c11-lm-head-bfp4-in0bw1 =====
+SMOKE c11-lm-head-bfp4-in0bw1 propagation_problems=0 pcc=0.9997587203979492 tokens=[50943, 73503, 40050, 22698, 91277, 25026]
+SMOKE ===== c12-activations-bfp8 =====
+SMOKE c12-activations-bfp8 FAILED: RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16
+SMOKE ===== c13-prefill-ccl-bfp4 =====
+SMOKE c13-prefill-ccl-bfp4 FAILED: RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SMOKE ===== c14-attn4-cclbfp8-kv8 =====
+SMOKE c14-attn4-cclbfp8-kv8 propagation_problems=0 pcc=0.9939069747924805 tokens=[173748, 70848, 119080, 81679, 65256, 115889]
+SMOKE ===== c15-attn4-except-first-last-cclbfp8 =====
+SMOKE c15-attn4-except-first-last-cclbfp8 propagation_problems=0 pcc=0.9947401881217957 tokens=[173748, 70848, 115721, 57029, 7335, 5784]
+SMOKE ===== c16-decode-ccl-bfp4 =====
+SMOKE c16-decode-ccl-bfp4 FAILED: RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SMOKE ===== c17-attn4-cclbfp4-kv8 =====
+SMOKE c17-attn4-cclbfp4-kv8 FAILED: RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SMOKE ===== c18-prefill-ccl-bfp4-unfractured-norm =====
+SMOKE c18-prefill-ccl-bfp4-unfractured-norm FAILED: RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+SMOKE ===== c19-prefill-ccl-bfp8-unfractured-norm =====
+SMOKE c19-prefill-ccl-bfp8-unfractured-norm propagation_problems=0 pcc=1.0000019073486328 tokens=[173748, 70848, 119080, 134040, 193263, 75083]
+SMOKE ===== c20-attn4-cclbfp8-kv4-sliding-only =====
+SMOKE c20-attn4-cclbfp8-kv4-sliding-only propagation_problems=0 pcc=0.9939069747924805 tokens=[173748, 70848, 119080, 134040, 193263, 75083]
+SMOKE summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/smoketest.json
+SMOKE_OK
+REVIEW_FIX_RUNS_DONE

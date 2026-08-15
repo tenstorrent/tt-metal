@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "config_id": "c14-attn4-cclbfp8-kv8",
+  "description": "BFP4 attention weights at LoFi plus a BFP8 decode CCL payload, with the BFP8 KV cache kept. The two accuracy-neutral switches from the first pass, stacked.",
+  "weights": {
+    "attn_projections": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "wqkv",
+        "attn_gate",
+        "o_proj"
+      ]
+    },
+    "mlp_gate_up": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_gate",
+        "mlp_up"
+      ]
+    },
+    "mlp_down": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_down"
+      ]
+    },
+    "lm_head": {
+      "dtype": "bfloat4_b",
+      "output_dtype": "bfloat16",
+      "matmul": "dram_sharded",
+      "cores": 52,
+      "in0_block_w": 2
+    },
+    "embedding": {
+      "dtype": "bfloat16",
+      "note": "structural: ttnn.embedding needs a ROW_MAJOR BF16 table"
+    },
+    "norms": {
+      "dtype": "bfloat16",
+      "note": "structural: every RMSNorm weight is packed BF16"
+    }
+  },
+  "layer_exceptions": [],
+  "compute_fidelity": {
+    "decode": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "prefill": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "lm_head": {
+      "fidelity": "LoFi",
+      "fp32_dest_acc_en": false
+    }
+  },
+  "activations": {
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16"
+  },
+  "ccl": {
+    "prefill_dtype": "bfloat8_b",
+    "decode_dtype": "bfloat8_b",
+    "decode_dtype_note": "null means the collective carries the activation dtype"
+  },
+  "kv_cache": {
+    "dtype": "bfloat8_b"
+  },
+  "decoder_overrides": {},
+  "logits": {
+    "lm_head_output_dtype": "bfloat16",
+    "sampling_input_dtype": "bfloat16",
+    "sampling_implementation": "models.common.sampling.SamplingGenerator"
+  },
+  "selected": true,
+  "provenance": {
+    "stage": "datatype_sweep",
+    "selected_by": "doc/datatype_sweep/bench/analyse.py",
+    "selection_reason": "11 passing configs are not separated from the fastest (38.29 t/s/u) by the ranking metric -- within 0.5% of its median, or with an overlapping measured round range, or both: c08-attn4-kv4-cclbfp8=38.29, c09-kv4-cclbfp8=38.27, c15-attn4-except-first-last-cclbfp8=38.24, c14-attn4-cclbfp8-kv8=38.23, c01-attn4-mlp4-kv8-lofi=38.20, c20-attn4-cclbfp8-kv4-sliding-only=38.20, c07-attn4-except-first-last=38.16, c22-attn4-cclbfp8-kv4-full-attn-only=38.14, c06-decode-ccl-bfp8=38.14, c19-prefill-ccl-bfp8-unfractured-norm=38.10, c05-kv4=38.08. the traced logits-only cross-check separates 4 of the accuracy-neutral candidates from the best but not c14-attn4-cclbfp8-kv8 (44.578), c15-attn4-except-first-last-cclbfp8 (44.564), which agree to within its own measured resolution of 0.038%; among those the decision is the simplest policy: c14-attn4-cclbfp8-kv8. Faster-by-median but not separated, and rejected for a measured full-model top-1 regression to below 0.990: c08-attn4-kv4-cclbfp8 (38.293 t/s/u, top-1 0.970), c09-kv4-cclbfp8 (38.269 t/s/u, top-1 0.970), c20-attn4-cclbfp8-kv4-sliding-only (38.201 t/s/u, top-1 0.980), c22-attn4-cclbfp8-kv4-full-attn-only (38.145 t/s/u, top-1 0.970), c05-kv4 (38.081 t/s/u, top-1 0.970)",
+    "tie_rule": "candidates whose measured teacher-forcing round ranges overlap the fastest candidate's, or which are within the tolerance of its median, are not separated by the ranking metric. Within that set, in order: (1) prefer no regression in measured full-model top-1 -- the safer half of the skill's tie rule; (2) drop everything the traced logits-only cross-check separates from its best by more than that metric's own measured resolution, which is how well its two good rounds agree across all candidates rather than a fixed band; (3) among what remains -- genuinely indistinguishable on both metrics -- take the simplest policy, counted as departures from the carried-forward baseline.",
+    "tied_within_tolerance": [
+      "c08-attn4-kv4-cclbfp8",
+      "c09-kv4-cclbfp8",
+      "c15-attn4-except-first-last-cclbfp8",
+      "c14-attn4-cclbfp8-kv8",
+      "c01-attn4-mlp4-kv8-lofi",
+      "c20-attn4-cclbfp8-kv4-sliding-only",
+      "c07-attn4-except-first-last",
+      "c22-attn4-cclbfp8-kv4-full-attn-only",
+      "c06-decode-ccl-bfp8",
+      "c19-prefill-ccl-bfp8-unfractured-norm",
+      "c05-kv4"
+    ],
+    "sweep_results": "doc/datatype_sweep/sweep_results.json",
+    "run_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c14-attn4-cclbfp8-kv8.json",
+    "command": "python doc/datatype_sweep/bench/sweep.py --config c14-attn4-cclbfp8-kv8 --rounds 11 --replays 64",
+    "thresholds": {
+      "top1_min": 0.9,
+      "top5_min": 0.98,
+      "top100_min": 1.0,
+      "source": "$datatype-sweep defaults (top-1 >= 90 %, top-5 >= 98 %); top-100 held at the readiness expectation the optimized full model already meets (1.000). No user override was given."
+    },
+    "accuracy": {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "tokens": 100,
+      "reference": "readiness_aime24_chat.refpt",
+      "prefill_top1": 0.99,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "stable_across_rounds": true
+    },
+    "teacher_forcing_decode_tok_s_u_median": 38.22669495882399,
+    "teacher_forcing_measurement_regime": "teacher-forcing decode, readiness run_teacher_forcing over 100 generated tokens of readiness_aime24_chat.refpt, batch 1, prompt 204, traced decode (enable_trace=True), token restaged per step; median of 11 rounds",
+    "traced_logits_only_tok_s_u": 44.578153116419315,
+    "hardware": {
+      "num_devices": 4,
+      "mesh_shape": [
+        1,
+        4
+      ],
+      "arch": "Arch.BLACKHOLE",
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "per_device_dram_capacity_bytes": 33778699264
+    },
+    "environment": {
+      "branch": "agentic-research/hous/muse-glimmer-30b",
+      "commit": "c593334a898be7323cf8f43f2eca3988f8f19644",
+      "dirty": true,
+      "host": "tt-quietbox",
+      "python": "3.12.12"
+    },
+    "baseline_config_id": "c00-baseline-attn8-mlp4-kv8-lofi",
+    "note": "This file is a required input to tt/generator.py::build_generator. To return to the carried-forward optimized-full-model policy, copy doc/datatype_sweep/configs/c00-baseline-attn8-mlp4-kv8-lofi.json over it; nothing else has to change. The post-selection token-out numbers are in doc/datatype_sweep/evidence_perf.json and are the ones later reports and vLLM comparisons should use."
+  }
+}

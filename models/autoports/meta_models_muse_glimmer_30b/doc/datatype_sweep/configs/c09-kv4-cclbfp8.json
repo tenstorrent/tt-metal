@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "config_id": "c09-kv4-cclbfp8",
+  "description": "BFP4 KV cache plus a BFP8 decode CCL payload, baseline weights. The stacked candidate that does not depend on the BFP4 attention trial.",
+  "weights": {
+    "attn_projections": {
+      "dtype": "bfloat8_b",
+      "roles": [
+        "wqkv",
+        "attn_gate",
+        "o_proj"
+      ]
+    },
+    "mlp_gate_up": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_gate",
+        "mlp_up"
+      ]
+    },
+    "mlp_down": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_down"
+      ]
+    },
+    "lm_head": {
+      "dtype": "bfloat4_b",
+      "output_dtype": "bfloat16",
+      "matmul": "dram_sharded",
+      "cores": 52,
+      "in0_block_w": 2
+    },
+    "embedding": {
+      "dtype": "bfloat16",
+      "note": "structural: ttnn.embedding needs a ROW_MAJOR BF16 table"
+    },
+    "norms": {
+      "dtype": "bfloat16",
+      "note": "structural: every RMSNorm weight is packed BF16"
+    }
+  },
+  "layer_exceptions": [],
+  "compute_fidelity": {
+    "decode": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "prefill": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "lm_head": {
+      "fidelity": "LoFi",
+      "fp32_dest_acc_en": false
+    }
+  },
+  "activations": {
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16"
+  },
+  "ccl": {
+    "prefill_dtype": "bfloat8_b",
+    "decode_dtype": "bfloat8_b",
+    "decode_dtype_note": "null means the collective carries the activation dtype"
+  },
+  "kv_cache": {
+    "dtype": "bfloat4_b"
+  },
+  "decoder_overrides": {},
+  "logits": {
+    "lm_head_output_dtype": "bfloat16",
+    "sampling_input_dtype": "bfloat16",
+    "sampling_implementation": "models.common.sampling.SamplingGenerator"
+  }
+}

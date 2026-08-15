@@ -150,6 +150,7 @@ __all__ = [
     "PREFILL_MINIMAL_BLOCKS",
     "PREFILL_NORM_SHARD_CORES",
     "PREFILL_NORM_SHARD_MAX_ROWS",
+    "PROJECTION_ROLES",
     "core_rectangle",
     "rect_width_sharded_l1",
     "PrecisionPolicy",
@@ -162,6 +163,10 @@ __all__ = [
 
 
 # --------------------------------------------------------------- precision policy
+
+#: The six weighted projections in a decoder layer, in the order a forward pass
+#: reaches them.  The precision policy is keyed by these names.
+PROJECTION_ROLES = ("wqkv", "attn_gate", "o_proj", "mlp_gate", "mlp_up", "mlp_down")
 
 
 @dataclass(frozen=True)
@@ -186,10 +191,24 @@ class PrecisionPolicy:
     kv_cache_dtype: ttnn.DataType
     #: Activations, residual stream and norm outputs.
     activation_dtype: ttnn.DataType
-    #: Math fidelity for the decode (DRAM-sharded) projections.
+    #: Math fidelity for the decode (DRAM-sharded) projections.  The *default*
+    #: for every role; :attr:`decode_math_fidelity_by_role` overrides it per
+    #: group, which is what ``$datatype-sweep`` needs to compare BFP8+LoFi
+    #: against BFP8+HiFi2 on the attention projections **without** moving the
+    #: MLP off the BFP4+LoFi pairing at the same time.
     decode_math_fidelity: ttnn.MathFidelity
     #: Math fidelity for the prefill ``minimal_matmul`` projections.
     prefill_math_fidelity: ttnn.MathFidelity
+    #: ``((role, fidelity), ...)`` decode overrides.  A tuple rather than a dict
+    #: because the dataclass is frozen *and* hashed into the generator cache key.
+    decode_math_fidelity_by_role: tuple[tuple[str, ttnn.MathFidelity], ...] = ()
+    #: The same, for the prefill kernels.
+    prefill_math_fidelity_by_role: tuple[tuple[str, ttnn.MathFidelity], ...] = ()
+    #: Layer exceptions: ``((layer_indices, ((field, value), ...)), ...)``.  Each
+    #: entry replaces those fields on the policy handed to the listed layers, so
+    #: a policy can keep the first and last decoder layer at a higher precision
+    #: than the inner stack.  :meth:`for_layer` resolves it.
+    layer_exceptions: tuple[tuple[tuple[int, ...], tuple[tuple[str, Any], ...]], ...] = ()
 
     def weight_dtype(self, role: str) -> ttnn.DataType:
         if role in ("wqkv", "attn_gate", "o_proj"):
@@ -199,6 +218,38 @@ class PrecisionPolicy:
         if role == "mlp_down":
             return self.mlp_down_weight_dtype
         raise KeyError(f"unknown projection role {role!r}")
+
+    def decode_fidelity(self, role: str) -> ttnn.MathFidelity:
+        """Decode math fidelity for one projection role."""
+        self.weight_dtype(role)  # rejects an unknown role with the same message
+        return dict(self.decode_math_fidelity_by_role).get(role, self.decode_math_fidelity)
+
+    def prefill_fidelity(self, role: str) -> ttnn.MathFidelity:
+        """Prefill math fidelity for one projection role."""
+        self.weight_dtype(role)
+        return dict(self.prefill_math_fidelity_by_role).get(role, self.prefill_math_fidelity)
+
+    def for_layer(self, layer_idx: int) -> "PrecisionPolicy":
+        """This policy as the layer at ``layer_idx`` should see it.
+
+        Returns ``self`` when no exception lists that index, so the common case
+        allocates nothing and the generator cache key is unchanged.
+        """
+        from dataclasses import replace
+
+        changes: dict[str, Any] = {}
+        matched = False
+        for indices, fields in self.layer_exceptions:
+            if layer_idx in indices:
+                matched = True
+                changes.update(dict(fields))
+        if not matched:
+            return self
+        changes["name"] = f"{self.name}@layer{layer_idx}"
+        # ``layer_exceptions`` must not survive into the per-layer policy: it has
+        # already been applied, and leaving it would re-apply on a second call.
+        changes["layer_exceptions"] = ()
+        return replace(self, **changes)
 
 
 #: Shipped policy.  BF16 activations/residuals/norms, BFP8 attention weights,
@@ -1019,20 +1070,29 @@ class OptimizedDecoder(FusedDecoder):
         self._prefill_norm_cache: dict[int, tuple] = {}
         self._memcfg_cache: dict[tuple[int, int, int], ttnn.MemoryConfig] = {}
 
-        self.decode_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=precision.decode_math_fidelity,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        self.dense_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=precision.prefill_math_fidelity,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        def _ck(fidelity: ttnn.MathFidelity):
+            return ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+
+        self.decode_compute_kernel_config = _ck(precision.decode_math_fidelity)
+        self.dense_compute_kernel_config = _ck(precision.prefill_math_fidelity)
+        #: ``role -> compute kernel config``, so a policy can put the attention
+        #: projections on a different math fidelity from the MLP ones.  Built by
+        #: role rather than by fidelity value so a reader of the built layer can
+        #: see exactly what each projection runs at
+        #: (``fidelity_report()``), which is what proves the selected policy is
+        #: the one the measured matmuls used.
+        self.decode_compute_kernel_config_by_role = {
+            role: _ck(precision.decode_fidelity(role)) for role in PROJECTION_ROLES
+        }
+        self.prefill_compute_kernel_config_by_role = {
+            role: _ck(precision.prefill_fidelity(role)) for role in PROJECTION_ROLES
+        }
         # Attention decode SDPA (OPT-002).  The fused stage inherited the whole
         # 11x10 grid with ``q_chunk=32, k_chunk=64``; this stage measured the
         # ``(8, 8) / q_chunk=0 / k_chunk=0`` candidate the skill names and it is
@@ -1050,6 +1110,50 @@ class OptimizedDecoder(FusedDecoder):
         )
         if isinstance(self.mlp, _OptimizedMLP):
             self.mlp.owner = self
+
+    # ------------------------------------------------------- precision readback
+
+    #: ``role -> attribute path on the built layer`` for the six projection
+    #: weights.  Used only by :meth:`precision_report`.
+    _ROLE_WEIGHT_ATTRS = {
+        "wqkv": ("wqkv",),
+        "attn_gate": ("w_attn_gate",),
+        "o_proj": ("wo",),
+        "mlp_gate": ("mlp", "gate"),
+        "mlp_up": ("mlp", "up"),
+        "mlp_down": ("mlp", "down"),
+    }
+
+    def precision_report(self) -> dict[str, Any]:
+        """What this **built** layer runs at, read off the device tensors.
+
+        The dtype comes from the packed weight tensor and the fidelity from the
+        compute-kernel config the projection's ``ttnn.linear`` is handed, so a
+        policy field that the constructor silently ignored cannot appear here.
+        That is the propagation evidence ``$datatype-sweep`` asks for: a JSON
+        field is a request, this is what the matmuls actually got.
+        """
+        roles: dict[str, dict[str, str]] = {}
+        for role, path in self._ROLE_WEIGHT_ATTRS.items():
+            weight: Any = self
+            for name in path:
+                weight = getattr(weight, name)
+            roles[role] = {
+                "weight_dtype": str(weight.dtype),
+                "decode_fidelity": str(self.decode_compute_kernel_config_by_role[role].math_fidelity),
+                "prefill_fidelity": str(self.prefill_compute_kernel_config_by_role[role].math_fidelity),
+                "decode_cores": self.decode_matmul[role][0],
+                "decode_in0_block_w": self.decode_matmul[role][1],
+            }
+        return {
+            "policy_name": self.precision.name,
+            "layer_idx": self.config.layer_idx,
+            "layer_kind": self.config.layer_kind,
+            "activation_dtype": str(self.activation_dtype),
+            "kv_cache_dtype": str(self.k_cache.dtype),
+            "kv_cache_dtype_requested": str(self.kv_cache_dtype),
+            "roles": roles,
+        }
 
     # ------------------------------------------------------------------ setup
 
@@ -1328,7 +1432,7 @@ class OptimizedDecoder(FusedDecoder):
             dtype=self.activation_dtype,
             memory_config=self._sharded_memcfg(rows, n, cores),
             program_config=program_config,
-            compute_kernel_config=self.decode_compute_kernel_config,
+            compute_kernel_config=self.decode_compute_kernel_config_by_role[role],
         )
 
     def _prefill_projection(self, x: ttnn.Tensor, weight: ttnn.Tensor, *, role: str) -> ttnn.Tensor:
@@ -1371,7 +1475,7 @@ class OptimizedDecoder(FusedDecoder):
                 weight,
                 dtype=self.activation_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.dense_compute_kernel_config,
+                compute_kernel_config=self.prefill_compute_kernel_config_by_role[role],
                 program_config=prefill_mcast2d_program_config(
                     rows, int(weight.shape[-1]), grid_y, in0_block_w, self.dram_banks
                 ),
@@ -1394,7 +1498,7 @@ class OptimizedDecoder(FusedDecoder):
             weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.activation_dtype,
-            compute_kernel_config=self.dense_compute_kernel_config,
+            compute_kernel_config=self.prefill_compute_kernel_config_by_role[role],
             config=config,
         )
 

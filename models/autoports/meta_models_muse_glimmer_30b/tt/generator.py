@@ -193,6 +193,12 @@ class GeneratorConfig:
     #: retained intermediates mid-request is a bigger hazard than a slower prefill.
     prefill_trace_max_entries: int = 1
     decoder_kwargs: dict = field(default_factory=dict)
+    #: ``config_id`` of the precision artifact this generator was built from,
+    #: suffixed ``+override(<fields>)`` when a caller passed its own precision
+    #: knobs.  ``build_generator`` fills it in; a directly-constructed config
+    #: leaves it empty.  :meth:`MuseGlimmerGenerator.capability_report` reports
+    #: it, so an evidence file always records which policy produced it.
+    precision_config_id: str = ""
 
 
 class _SamplingArgs:
@@ -1653,6 +1659,22 @@ class MuseGlimmerGenerator(Generator):
             "decode_matmul_o_proj": list(layer.decode_matmul["o_proj"]),
             "max_cores_per_head_batch": layer.max_cores_per_head_batch,
         }
+        # The realised precision policy, read off the built model.  This is the
+        # artifact ``$datatype-sweep`` compares against
+        # ``doc/datatype_sweep/selected_precision_config.json``: every field here
+        # comes from a device tensor or a compute-kernel config, so a requested
+        # value the constructor ignored shows up as a mismatch rather than as a
+        # matching pair of JSON files.
+        precision_report = self.model.precision_report()
+        precision_report["logits"] = {
+            # The LM head's output dtype *is* the logits dtype, and the sampler
+            # consumes that tensor with no conversion in between.
+            "logits_dtype": precision_report["lm_head"]["output_dtype"],
+            "sampling_input_dtype": precision_report["lm_head"]["output_dtype"],
+            "sampling_implementation": type(self.sampling).__module__ + "." + type(self.sampling).__name__,
+        }
+        precision_report["selected_config_id"] = self.gen_config.precision_config_id
+        report["precision_policy"] = precision_report
         report.update(self.model.dram_report())
         report["per_device_dram_capacity_bytes"] = dram_capacity_bytes(self.mesh_device)
         return report
@@ -1723,6 +1745,10 @@ def _cache_key(mesh_device: ttnn.MeshDevice, gen_config: GeneratorConfig) -> tup
         gen_config.prefill_trace,
         gen_config.prefill_trace_max_entries,
         tuple(sorted((str(k), str(v)) for k, v in gen_config.decoder_kwargs.items())),
+        # Two artifacts can encode the same policy, in which case the cached
+        # build is the right one to return -- but it must not then report the
+        # other artifact's id, so the id is part of the key.
+        gen_config.precision_config_id,
     )
 
 
@@ -1736,7 +1762,36 @@ def build_generator(model_dir: str | Path, mesh_device: ttnn.MeshDevice, **kwarg
     ``model_dir`` is accepted for the convention's sake; the weights come from the
     HF cache (``model_id``), which is what every earlier stage of this port also
     reads.  Everything else is a knob on :class:`GeneratorConfig`.
+
+    **The precision policy is a file, not a default argument.**
+    ``doc/datatype_sweep/selected_precision_config.json`` is read on every build
+    and supplies the weight dtypes, layer exceptions, per-role decode/prefill math
+    fidelity, activation dtype, KV-cache dtype, CCL payload dtypes and the LM
+    head's dtype / fidelity / accumulation / output dtype.  A caller that passes
+    one of those knobs explicitly overrides that field only, and the generator
+    records ``precision_config_id`` so an evidence file always says which policy
+    it measured.  ``precision_config=<path>`` points at a different artifact,
+    which is how the sweep driver evaluates a candidate through the same
+    construction path the shipped default uses.
     """
+    from models.autoports.meta_models_muse_glimmer_30b.tt.precision_config import selected_build_kwargs
+
+    config_id, selected = selected_build_kwargs(kwargs.pop("precision_config", None))
+    selected_decoder_kwargs = selected.pop("decoder_kwargs")
+    caller_decoder_kwargs = dict(kwargs.pop("decoder_kwargs", {}))
+    # ``weight_dtype`` / ``activation_dtype`` / ``kv_cache_dtype`` are the earlier
+    # stages' flat decoder overrides: they are applied *on top of* ``precision``
+    # by ``OptimizedDecoder.from_state_dict``, so they change the realised policy
+    # without appearing in ``selected_decoder_kwargs``.  They count as overrides.
+    flat_precision_overrides = ("weight_dtype", "activation_dtype", "kv_cache_dtype")
+    overridden = sorted(
+        [key for key in selected if key in kwargs]
+        + [key for key in (*selected_decoder_kwargs, *flat_precision_overrides) if key in caller_decoder_kwargs]
+    )
+    if overridden:
+        logger.info(f"MuseGlimmerGenerator: caller overrides the selected precision config for {overridden}")
+        config_id = f"{config_id}+override({','.join(overridden)})"
+    merged_decoder_kwargs = {**selected_decoder_kwargs, **caller_decoder_kwargs}
     gen_config = GeneratorConfig(
         model_id=kwargs.pop("model_id", HF_MODEL_ID),
         max_batch_size=int(kwargs.pop("max_batch_size", 1)),
@@ -1744,20 +1799,21 @@ def build_generator(model_dir: str | Path, mesh_device: ttnn.MeshDevice, **kwarg
         page_block_size=int(kwargs.pop("page_block_size", 64)),
         prefill_chunk_size=kwargs.pop("prefill_chunk_size", None),
         layer_indices=kwargs.pop("layer_indices", None),
-        lm_head_dtype=kwargs.pop("lm_head_dtype", LM_HEAD_DTYPE),
-        lm_head_matmul=str(kwargs.pop("lm_head_matmul", LM_HEAD_MATMUL)),
-        lm_head_cores=int(kwargs.pop("lm_head_cores", LM_HEAD_CORES)),
-        lm_head_in0_block_w=int(kwargs.pop("lm_head_in0_block_w", LM_HEAD_IN0_BLOCK_W)),
-        lm_head_fidelity=kwargs.pop("lm_head_fidelity", LM_HEAD_FIDELITY),
-        lm_head_fp32_acc=bool(kwargs.pop("lm_head_fp32_acc", LM_HEAD_FP32_ACC)),
-        lm_head_output_dtype=kwargs.pop("lm_head_output_dtype", LM_HEAD_OUTPUT_DTYPE),
+        lm_head_dtype=kwargs.pop("lm_head_dtype", selected["lm_head_dtype"]),
+        lm_head_matmul=str(kwargs.pop("lm_head_matmul", selected["lm_head_matmul"])),
+        lm_head_cores=int(kwargs.pop("lm_head_cores", selected["lm_head_cores"])),
+        lm_head_in0_block_w=int(kwargs.pop("lm_head_in0_block_w", selected["lm_head_in0_block_w"])),
+        lm_head_fidelity=kwargs.pop("lm_head_fidelity", selected["lm_head_fidelity"]),
+        lm_head_fp32_acc=bool(kwargs.pop("lm_head_fp32_acc", selected["lm_head_fp32_acc"])),
+        lm_head_output_dtype=kwargs.pop("lm_head_output_dtype", selected["lm_head_output_dtype"]),
         allow_force_argmax=bool(kwargs.pop("allow_force_argmax", False)),
         max_top_k=int(kwargs.pop("max_top_k", 32)),
         pad_logits_to_power_of_2=bool(kwargs.pop("pad_logits_to_power_of_2", False)),
         topk_split_to_power_of_2=bool(kwargs.pop("topk_split_to_power_of_2", True)),
         prefill_trace=bool(kwargs.pop("prefill_trace", False)),
         prefill_trace_max_entries=int(kwargs.pop("prefill_trace_max_entries", 1)),
-        decoder_kwargs=dict(kwargs.pop("decoder_kwargs", {})),
+        decoder_kwargs=merged_decoder_kwargs,
+        precision_config_id=config_id,
     )
     reuse = bool(kwargs.pop("reuse", True))
     key = _cache_key(mesh_device, gen_config)

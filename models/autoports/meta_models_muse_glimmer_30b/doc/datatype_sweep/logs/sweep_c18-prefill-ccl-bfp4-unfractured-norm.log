@@ -1,0 +1,201 @@
+2026-08-15 00:35:52.158 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 00:35:53.486 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 00:35:53.486 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 00:35:53.486 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 00:35:53.486 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 00:35:53.498 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-15 00:35:53.498 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 00:35:53.577 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 00:35:53.577 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 00:35:53.577 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 00:35:53.577 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 00:35:53.578 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 00:35:53.788 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 00:35:53.923 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 00:35:53.923 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 00:35:53.923 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 00:35:53.923 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 00:35:53.923 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 00:35:53.964 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.964 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.965 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.965 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.966 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.966 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.967 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.967 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 00:35:53.968 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 00:35:53.992 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-15 00:35:53.993 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-15 00:35:53.996 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-15 00:35:53.996 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-15 00:35:53.996 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 00:35:53.996 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-15 00:36:28.583 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 8/52 layers
+2026-08-15 00:36:51.249 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 16/52 layers
+2026-08-15 00:37:14.022 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 24/52 layers
+2026-08-15 00:37:36.738 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 32/52 layers
+2026-08-15 00:37:59.391 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 40/52 layers
+2026-08-15 00:38:22.029 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 48/52 layers
+2026-08-15 00:38:33.360 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 52/52 layers
+2026-08-15 00:38:33.981 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 158.1s
+SWEEP built c18-prefill-ccl-bfp4-unfractured-norm in 159.5s
+SWEEP c18-prefill-ccl-bfp4-unfractured-norm propagation OK (c18-prefill-ccl-bfp4-unfractured-norm)
+2026-08-15 00:38:34.140 | INFO     | _readiness_generator_meta_models_muse_glimmer_30b:build_generator:1822 - MuseGlimmerGenerator: reusing the generator already built for this mesh and config
+2026-08-15 00:38:35.236 | critical |          Always | TT_FATAL: Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B (assert.hpp:104)
+SWEEP c18-prefill-ccl-bfp4-unfractured-norm ERROR RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+info:
+Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x7e6e2102442d]
+ --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x7e6e1f242453]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x7e6e1f23a0bf]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x7e6e1f237f3b]
+ --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x7e6e20f6f6ae]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7e6e20b52bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python() [0x1612849]
+ --- python(_PyEval_EvalFrameDefault+0xe840) [0x16219c0]
+ --- python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e6e6502a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e6e6502a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+SWEEP summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/runs/c18-prefill-ccl-bfp4-unfractured-norm.json
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/bench/sweep.py", line 318, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/bench/sweep.py", line 212, in main
+    stats, text = capture_stdout(
+                  ^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/bench/sweep.py", line 78, in capture_stdout
+    value = fn(*args, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/run_prefill_check.py", line 222, in run_prefill_check
+    stats = _run_one_entry_prefill(generator=generator, entry=entry, reference=reference)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/run_prefill_check.py", line 131, in _run_one_entry_prefill
+    logits = generator.prefill_forward(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/generator.py", line 1162, in prefill_forward
+    rows = self._prefill_user(ids, user_id=user, page_table=table, return_all_logits=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/generator.py", line 547, in _prefill_user
+    hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=user_id)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/model.py", line 1287, in prefill_forward
+    result = layer.prefill_forward(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py", line 1050, in prefill_forward
+    out, sliding_tail = self._prefill_chunk(
+                        ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1686, in _prefill_chunk
+    attn = self._prefill_norm(self.post_attention_layernorm, attn)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 1758, in _prefill_norm
+    return super()._prefill_norm(norm, x)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1650, in _prefill_norm
+    return norm(x)
+           ^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/common/lightweightmodule.py", line 12, in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/fused_decoder.py", line 513, in forward
+    return ttnn.rms_norm(
+           ^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_device_operation.cpp:52: a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B
+info:
+Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: DataType::BFLOAT4_B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x82442d) [0x7e6e2102442d]
+ --- ttnn::prim::LayerNormDeviceOperation::validate_on_program_cache_miss(ttnn::prim::LayerNormParams const&, ttnn::prim::LayerNormInputs const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x7e6e1f242453]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x31f) [0x7e6e1f23a0bf]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x36b) [0x7e6e1f237f3b]
+ --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x76f6ae) [0x7e6e20f6f6ae]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7e6e20b52bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python() [0x1612849]
+ --- python(_PyEval_EvalFrameDefault+0xe840) [0x16219c0]
+ --- python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e6e6502a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e6e6502a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+nanobind: leaked 1 instances!
+ - leaked instance 0x7e6dcd358888 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "get_fabric_node_id"
+ - leaked function ""
+ - leaked function "GetNumPCIeDevices"
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "sfpu_inf"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 00:38:36.102 | info     |    BuildKernels | JIT cache stats: 175/183 hits (95.6%) [175 cached, 74 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 00:38:36.102 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 00:38:36.117 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 00:38:36.117 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 00:38:36.652 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 00:38:36.652 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 00:38:36.652 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

@@ -1,0 +1,173 @@
+2026-08-15 03:04:30.024 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1m============================= test session starts ==============================[0m
+[1mcollecting ... [0mcollected 22 items
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_selected_artifact_exists_and_loads [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_every_candidate_artifact_round_trips [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_artifact_round_trips_through_the_policy [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_for_layer_is_idempotent_and_drops_its_exceptions [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_an_unlisted_layer_gets_the_same_policy_object [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_per_role_fidelity_defaults_to_the_scalar_and_rejects_unknown_roles [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-schema_version] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-kv_cache] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown dtype] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown math fidelity] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown role] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-residual_dtype] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-embedding] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-norms] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-sampling_input_dtype] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_missing_artifact_names_itself_as_required [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_check_propagation_catches_a_field_the_build_ignored [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_shipped_artifact_is_the_policy_the_build_runs 2026-08-15 03:04:34.776 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 03:04:34.776 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 03:04:34.776 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 03:04:34.776 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 03:04:34.788 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-15 03:04:34.788 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 03:04:34.866 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 03:04:34.866 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 03:04:34.866 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 03:04:34.866 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 03:04:34.867 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 03:04:35.077 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 03:04:35.204 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 03:04:35.204 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 03:04:35.204 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 03:04:35.205 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 03:04:35.205 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 03:04:35.246 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.246 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.247 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.247 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.248 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.248 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.249 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.249 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 03:04:35.250 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 03:04:35.277 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-15 03:04:35.278 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-15 03:04:35.279 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-15 03:04:35.280 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-15 03:04:35.280 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 03:04:35.280 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-15 03:04:52.351 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 03:04:52.462 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.2s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role 2026-08-15 03:05:09.016 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 03:05:09.126 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.2s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_layer_exception_reaches_only_the_layers_it_names 2026-08-15 03:05:25.714 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 03:05:25.825 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.2s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_readiness_factory_path_builds_the_selected_config 2026-08-15 03:05:42.365 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 03:05:42.478 | INFO     | _precision_test_readiness_generator:build_generator:1855 - MuseGlimmerModel built in 15.2s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_caller_override_is_recorded_rather_than_silently_applied 2026-08-15 03:05:42.850 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1792 - MuseGlimmerGenerator: caller overrides the selected precision config for ['kv_cache_dtype']
+2026-08-15 03:05:59.059 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 03:05:59.169 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1855 - MuseGlimmerModel built in 15.2s
+[32mPASSED[0m
+
+[33m=============================== warnings summary ===============================[0m
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/test_results_precision_config.xml -
+============================= slowest 25 durations =============================
+16.49s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_shipped_artifact_is_the_policy_the_build_runs
+16.49s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_layer_exception_reaches_only_the_layers_it_names
+16.49s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_caller_override_is_recorded_rather_than_silently_applied
+16.45s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role
+16.45s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_readiness_factory_path_builds_the_selected_config
+1.37s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_shipped_artifact_is_the_policy_the_build_runs
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_per_role_fidelity_request_reaches_only_that_role
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_caller_override_is_recorded_rather_than_silently_applied
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_selected_artifact_exists_and_loads
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_layer_exception_reaches_only_the_layers_it_names
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_readiness_factory_path_builds_the_selected_config
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_for_layer_is_idempotent_and_drops_its_exceptions
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_check_propagation_catches_a_field_the_build_ignored
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown math fidelity]
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_the_artifact_round_trips_through_the_policy
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_an_unlisted_layer_gets_the_same_policy_object
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-norms]
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-residual_dtype]
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_per_role_fidelity_defaults_to_the_scalar_and_rejects_unknown_roles
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown dtype]
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-embedding]
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_every_candidate_artifact_round_trips
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown role]
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_missing_artifact_names_itself_as_required
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::test_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-kv_cache]
+[36m[1m=========================== short test summary info ============================[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_the_selected_artifact_exists_and_loads[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_every_candidate_artifact_round_trips[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_the_artifact_round_trips_through_the_policy[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_for_layer_is_idempotent_and_drops_its_exceptions[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_an_unlisted_layer_gets_the_same_policy_object[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_per_role_fidelity_defaults_to_the_scalar_and_rejects_unknown_roles[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-schema_version][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-kv_cache][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown dtype][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown math fidelity][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-unknown role][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-residual_dtype][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-embedding][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-norms][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_malformed_artifact_is_rejected_rather_than_defaulted[<lambda>-sampling_input_dtype][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_missing_artifact_names_itself_as_required[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_check_propagation_catches_a_field_the_build_ignored[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_the_shipped_artifact_is_the_policy_the_build_runs[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_per_role_fidelity_request_reaches_only_that_role[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_layer_exception_reaches_only_the_layers_it_names[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_the_readiness_factory_path_builds_the_selected_config[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_precision_config.py::[1mtest_a_caller_override_is_recorded_rather_than_silently_applied[0m
+[33m================== [32m22 passed[0m, [33m[1m3 warnings[0m[33m in 88.80s (0:01:28)[0m[33m ===================[0m
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x73431def5348 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x73431e521518 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "to"
+ - leaked function "from_json"
+ - leaked function "volume"
+ - leaked function "__repr__"
+ - leaked function "__init__"
+ - leaked function "__init__"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "CloseDevices"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 03:06:01.133 | info     |    BuildKernels | JIT cache stats: 88/88 hits (100.0%) [88 cached, 29 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 03:06:01.133 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 03:06:01.148 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 03:06:01.148 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 03:06:01.729 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 03:06:01.729 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 03:06:01.730 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+===== precision tests exit 0 =====
+FINAL_TESTS_DONE
