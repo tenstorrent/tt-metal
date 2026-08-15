@@ -125,9 +125,10 @@ Use `--require-changed-binary` only for a row expected to exercise the pass.
 Byte identity is the correct result for ineligible fallback fixtures and can
 be archived without that gate.
 
-Current evidence seeds the program honestly: Welford, Reduce-SDPA, and the
-accurate-BF16 Reciprocal lane are scoped body wins, binary broadcast is exact
-cycle parity, Where and MulInt32 are macro-dependent losses, and TopK requires typed multi-result architectural
+Current evidence seeds the program honestly: Welford, Reduce-SDPA, accurate-BF16
+Reciprocal, and typed Signbit with compiler-formed SFPLOADMACRO are scoped wins;
+binary broadcast is exact cycle parity, Where and MulInt32 are macro-dependent
+losses, and TopK requires typed multi-result architectural
 modeling before a performance claim.  `SEMANTIC_CPP_CI_PLAN.md` defines the
 presubmit/nightly artifact and promotion policy.
 

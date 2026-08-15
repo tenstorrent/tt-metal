@@ -20,3 +20,9 @@ metal__ckernel_sfpu_exp	bh	device_cycles	MATH_ISOLATE	production	579.7421875	mea
 metal__ckernel_sfpu_exp	bh	device_cycles	MATH_ISOLATE	fresh_cpp	989.75	measured	EXP_SEMANTIC_SILICON_AB.md; three identical fresh samples
 metal__ckernel_sfpu_recip	bh	device_cycles	RECIPROCAL_BODY	production	467	measured	RECIPROCAL_SEMANTIC_SILICON_AB.md; accurate Float16_b; three fresh samples
 metal__ckernel_sfpu_recip	bh	device_cycles	RECIPROCAL_BODY	semantic	459	measured	RECIPROCAL_SEMANTIC_SILICON_AB.md; accurate Float16_b; three fresh samples
+metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	production	23246	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 1/3
+metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	production	23246	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 2/3
+metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	production	23246	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 3/3
+metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	generated_loadmacro	21508	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 1/3; SFPI-GCC 476abbd2e
+metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	generated_loadmacro	21508	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 2/3; SFPI-GCC 476abbd2e
+metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	generated_loadmacro	21508	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 3/3; SFPI-GCC 476abbd2e
