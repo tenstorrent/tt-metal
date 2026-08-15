@@ -80,6 +80,9 @@ public:
     uint64_t num_records_on_uncertified_chords() const;
     // Clock probes rejected as implausible (garbage PCIe reads); each costs one probe cycle.
     uint64_t num_rejected_probes() const;
+    // Held-back records published early because the pending ring was full (probe outage deeper
+    // than a FIFO fill). Published with fallback-quality bounds, never dropped.
+    uint64_t num_holdback_evictions() const { return num_holdback_evictions_.load(std::memory_order_relaxed); }
     // Worst full receiver-loop iteration and iteration count since the previous call; reading
     // clears them. The loop period is what FIFO occupancy scales with.
     std::array<uint64_t, 2> take_loop_stats() {
@@ -142,9 +145,11 @@ private:
 
     std::atomic<uint64_t> num_inverted_timestamp_records_{0};
     std::atomic<uint64_t> num_unmappable_records_{0};
+    std::atomic<uint64_t> num_holdback_evictions_{0};
 
     std::chrono::steady_clock::time_point last_inverted_timestamp_warn_;
     std::chrono::steady_clock::time_point last_unmappable_warn_;
+    std::chrono::steady_clock::time_point last_eviction_warn_;
 
     std::vector<ProgramRealtimeRecord> publish_batch_;
 };

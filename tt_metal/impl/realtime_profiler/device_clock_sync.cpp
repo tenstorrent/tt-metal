@@ -227,6 +227,19 @@ void ClockSyncMapping::finalize_chord(uint64_t close_index) {
     }
 }
 
+int64_t ClockSyncMapping::forward_overhang_error_ns(const Chord& chord, uint64_t device_timestamp) const {
+    if (device_timestamp <= chord.close_device_timestamp || !(smoothed_frequency_min_ > 0.0) ||
+        !(chord.frequency > 0.0)) {
+        return 0;
+    }
+    const double overhang_cycles = static_cast<double>(device_timestamp - chord.close_device_timestamp);
+    // The chord's own secant may sit off-center in (or outside) the band; the max covers every
+    // band rate from wherever the extrapolation slope actually is.
+    const double per_cycle = std::max(
+        1.0 / smoothed_frequency_min_ - 1.0 / chord.frequency, 1.0 / chord.frequency - 1.0 / smoothed_frequency_max_);
+    return per_cycle > 0.0 ? static_cast<int64_t>(overhang_cycles * per_cycle) + 1 : 0;
+}
+
 int64_t ClockSyncMapping::error_ns_on(const Chord& chord, uint64_t device_timestamp) {
     if (device_timestamp < chord.open_device_timestamp || device_timestamp > chord.close_device_timestamp) {
         return chord.probe_error_ns + chord.nonlinearity_ns;
@@ -389,7 +402,8 @@ std::optional<ClockSyncMapping::RecordMapping> ClockSyncMapping::map_record(
         }
         const Chord& end_chord = chord_at(*end_index);
         const double end_host_ns = host_ns_on(end_chord, end_device_timestamp);
-        const int64_t end_error_ns = error_ns_on(end_chord, end_device_timestamp);
+        const int64_t end_error_ns =
+            error_ns_on(end_chord, end_device_timestamp) + forward_overhang_error_ns(end_chord, end_device_timestamp);
         // Ride back from the oldest retained probe at the mature smoothed-frequency spread (a few
         // ppm on a stable clock), so a long program claims microseconds of start error rather
         // than a per-chord noise band's milliseconds.
@@ -424,8 +438,9 @@ std::optional<ClockSyncMapping::RecordMapping> ClockSyncMapping::map_record(
         const double end_host_ns = host_ns_on(end_chord, end_device_timestamp);
         const double secant =
             static_cast<double>(end_device_timestamp - start_device_timestamp) / (end_host_ns - start_host_ns);
-        const int64_t placement_error_ns =
-            std::max(error_ns_on(start_chord, start_device_timestamp), error_ns_on(end_chord, end_device_timestamp));
+        const int64_t placement_error_ns = std::max(
+            error_ns_on(start_chord, start_device_timestamp),
+            error_ns_on(end_chord, end_device_timestamp) + forward_overhang_error_ns(end_chord, end_device_timestamp));
         // Publish the smoothed frequency with the skew priced, like the in-chord path — unless
         // the skew rivals the placement error, which only happens when a transition sits inside
         // the span and the record's own secant is the exact mapping.

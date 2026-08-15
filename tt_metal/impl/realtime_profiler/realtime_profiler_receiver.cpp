@@ -50,6 +50,12 @@ static_assert(
 
 constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 
+// Cap on matured held-back records published per publish_pages call. A deep holdback backlog
+// (a probe outage's worth) then flushes across several passes instead of one unbounded pass
+// that would starve every other device's drain and acks; the worst full pass stays bounded by
+// kMaxPendingFlushPerPass + kMaxSocketPagesPerRead records per device.
+constexpr size_t kMaxPendingFlushPerPass = 4096;
+
 // The ack is a posted-class store through the per-worker-core static TLB window — the
 // receiver's only chip MMIO, ~0.3 us each. Batching trades apparent FIFO headroom (the device
 // sees up to this many consumed-but-unacked pages) against ack traffic; 512 keeps the headroom
@@ -118,13 +124,15 @@ size_t RealtimeProfilerReceiver::publish_pages(
     };
 
     // Held-back records first: they predate anything decoded below.
-    auto pending_split = dev_state.pending_records.begin();
-    for (; pending_split != dev_state.pending_records.end() && pending_split->end_timestamp <= finalized;
-         ++pending_split) {
-        map_into_batch(pending_split->runtime_id, pending_split->start_timestamp, pending_split->end_timestamp);
+    size_t flushed = 0;
+    while (!dev_state.pending_records.empty() && flushed < kMaxPendingFlushPerPass &&
+           dev_state.pending_records.front().end_timestamp <= finalized) {
+        const PendingRealtimeRecord r = dev_state.pending_records.pop_front();
+        map_into_batch(r.runtime_id, r.start_timestamp, r.end_timestamp);
+        ++flushed;
     }
-    dev_state.pending_records.erase(dev_state.pending_records.begin(), pending_split);
 
+    uint64_t evicted = 0;
     for (size_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = pages.data() + page * RealtimeProfilerRuntimeSizes::page_words;
         const uint64_t start_timestamp = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
@@ -133,13 +141,33 @@ size_t RealtimeProfilerReceiver::publish_pages(
             ++inverted;
             continue;
         }
-        if (end_timestamp > finalized) {
-            TT_ASSERT(dev_state.pending_records.size() < dev_state.pending_records.capacity());
+        // A fresh matured record may bypass the ring only when the ring is empty: after a capped
+        // flush the ring can still hold matured records older than this one, and publication must
+        // stay oldest-first (the batch contract).
+        if (end_timestamp > finalized || !dev_state.pending_records.empty()) {
+            if (dev_state.pending_records.full()) {
+                const PendingRealtimeRecord oldest = dev_state.pending_records.pop_front();
+                map_into_batch(oldest.runtime_id, oldest.start_timestamp, oldest.end_timestamp);
+                ++evicted;
+            }
             dev_state.pending_records.push_back(PendingRealtimeRecord{
                 .start_timestamp = start_timestamp, .end_timestamp = end_timestamp, .runtime_id = rp[2]});
             continue;
         }
         map_into_batch(rp[2], start_timestamp, end_timestamp);
+    }
+    if (evicted != 0) {
+        const uint64_t total = num_holdback_evictions_.fetch_add(evicted, std::memory_order_relaxed) + evicted;
+        if (const auto now = std::chrono::steady_clock::now(); now - last_eviction_warn_ >= kWarnInterval) {
+            last_eviction_warn_ = now;
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} published {} held-back record(s) early with fallback-quality bounds; "
+                "the holdback ring filled during a clock-probe outage ({} in total)",
+                dev_state.chip_id,
+                evicted,
+                total);
+        }
     }
 
     if (inverted != 0) {
@@ -200,12 +228,11 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, max_batch_records() * kRingHeadroomBatches)) {
-    // A batch can carry a full drain of fresh records plus a full drain of held-back ones.
-    publish_batch_.resize(2 * kMaxSocketPagesPerRead);
+    // Structural batch bound: a capped pending flush plus one drain's worth of fresh records
+    // (each fresh record contributes one publish — direct, or an eviction it forced). Sized and
+    // touched here so publish_pages can never reach the allocator.
+    publish_batch_.resize(kMaxPendingFlushPerPass + kMaxSocketPagesPerRead);
     publish_batch_.clear();
-    for (RealtimeProfilerDevice& dev_state : devices_) {
-        dev_state.pending_records.reserve(kMaxSocketPagesPerRead);
-    }
     // Warm-up here, not at device construction: any earlier leaves a multi-hundred-ms probe gap
     // while the remaining devices initialize, and startup records pick up fallback-tier bounds.
     constexpr int kWarmUpRounds = 4;
@@ -472,7 +499,7 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
         num_pages_drained += num_pages;
         bool outstanding = false;
         for (const RealtimeProfilerDevice& dev_state : devices_) {
-            outstanding = outstanding || dev_state.socket->pages_available() != 0;
+            outstanding = outstanding || dev_state.socket->pages_available() != 0 || !dev_state.pending_records.empty();
         }
         if (num_pages != 0 || outstanding) {
             quiet_rounds = 0;

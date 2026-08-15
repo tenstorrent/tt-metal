@@ -185,6 +185,12 @@ private:
     // Integer math; rounds up, never down.
     [[nodiscard]] static int64_t error_ns_on(const Chord& chord, uint64_t device_timestamp);
 
+    // Extra bound for a timestamp past the chord's close (extrapolation beyond the newest probe:
+    // holdback-evicted records during a deep probe outage). Mirrors the pre-history ride's
+    // pricing: the gap between the extrapolation slope and any rate in the practical band grows
+    // linearly with the overhang. Zero for in-chord timestamps and before a band exists.
+    [[nodiscard]] int64_t forward_overhang_error_ns(const Chord& chord, uint64_t device_timestamp) const;
+
     void set_fallback_step_bound(Chord& chord, double span_ns) const;
 
     // Upgrades chord close_index from its fallback bound once both neighbors exist: evaluates the

@@ -63,7 +63,7 @@ public:
      * @param capacity Requested slot count; gets rounded up to the next power of two.
      */
     explicit BroadcastRing(size_t capacity) :
-        capacity_(capacity ? std::bit_ceil(capacity) : 1),
+        capacity_(std::bit_ceil(capacity)),
         slots_(std::make_unique<Slot[]>(capacity_)),
         writer_(&shared_state_, view()) {}
 

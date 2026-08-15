@@ -14,6 +14,7 @@
 
 #include "context/context_types.hpp"
 #include "tt_metal/common/broadcast_ring.hpp"
+#include "tt_metal/common/ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
 
@@ -61,10 +62,10 @@ struct RealtimeProfilerDevice {
     std::unique_ptr<Program> realtime_profiler_program;
     RealtimeProfilerCoreL1Addrs core_l1;
     std::unique_ptr<DeviceClockSync> clock_sync;
-    // Capacity reserved once by the receiver; a probe precedes every publish, so the flush covers
-    // the whole vector each time, occupancy never exceeds one drain batch, and the vector never
-    // reallocates. Ends are monotone (dispatch_s stamps serially).
-    std::vector<PendingRealtimeRecord> pending_records;
+    // Sized to a full FIFO of records: overflow then means holdback exceeded an entire FIFO of
+    // past-watermark records — a probe outage longer than a FIFO fill — where the evicted records
+    // earn fallback pricing anyway. Ends are monotone (dispatch_s stamps serially).
+    RingBuffer<PendingRealtimeRecord> pending_records{RealtimeProfilerRuntimeSizes::fifo_pages};
     // Pages consumed but not yet acked to the device (see the receiver's kAckBatchPages).
     uint32_t unacked_pages = 0;
     bool fifo_capacity_warned = false;
