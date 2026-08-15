@@ -4,17 +4,34 @@
 //
 // Explicit-sync reader for the BFD datacopy POC. Streams three DRAM inputs into
 // three single-producer DFBs (in0/in1/in2) with reserve_back/async_read/barrier/
-// push_back (same pattern as reader_binary_2_0.cpp). One tile per input per
-// iteration, so the compute's round-robin (in0, in1, in2, ...) consumer stays fed
-// and each input DFB sees its tiles in order 0..num_tiles-1.
+// push_back. Sequential per input (all of in0, then in1, then in2) to match the
+// compute kernel, which processes one input's block fully before switching operands.
 
-#include <stdint.h>
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
+
+namespace {
+void read_block(
+    Noc& noc,
+    AllocatorBank<AllocatorBankType::DRAM>& src,
+    DataflowBuffer& dfb,
+    std::uint32_t addr,
+    std::uint32_t bank_id,
+    std::uint32_t n_tiles) {
+    const std::uint32_t sz = dfb.get_entry_size();
+    for (std::uint32_t t = 0; t < n_tiles; ++t) {
+        dfb.reserve_back(1);
+        noc.async_read(src, dfb, sz, {.bank_id = bank_id, .addr = addr}, {});
+        noc.async_read_barrier();
+        dfb.push_back(1);
+        addr += sz;
+    }
+}
+}  // namespace
 
 void kernel_main() {
     std::uint32_t src0_addr = get_arg(args::src0_addr);
@@ -25,33 +42,12 @@ void kernel_main() {
 
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> dram_src;
-    constexpr std::uint32_t ublock = 1;
 
     DataflowBuffer dfb0(dfb::in0);
     DataflowBuffer dfb1(dfb::in1);
     DataflowBuffer dfb2(dfb::in2);
-    const std::uint32_t sz0 = dfb0.get_entry_size() * ublock;
-    const std::uint32_t sz1 = dfb1.get_entry_size() * ublock;
-    const std::uint32_t sz2 = dfb2.get_entry_size() * ublock;
 
-    for (std::uint32_t i = 0; i < num_tiles; ++i) {
-        dfb0.reserve_back(ublock);
-        noc.async_read(dram_src, dfb0, sz0, {.bank_id = bank_id, .addr = src0_addr}, {});
-        noc.async_read_barrier();
-        dfb0.push_back(ublock);
-
-        dfb1.reserve_back(ublock);
-        noc.async_read(dram_src, dfb1, sz1, {.bank_id = bank_id, .addr = src1_addr}, {});
-        noc.async_read_barrier();
-        dfb1.push_back(ublock);
-
-        dfb2.reserve_back(ublock);
-        noc.async_read(dram_src, dfb2, sz2, {.bank_id = bank_id, .addr = src2_addr}, {});
-        noc.async_read_barrier();
-        dfb2.push_back(ublock);
-
-        src0_addr += sz0;
-        src1_addr += sz1;
-        src2_addr += sz2;
-    }
+    read_block(noc, dram_src, dfb0, src0_addr, bank_id, num_tiles);
+    read_block(noc, dram_src, dfb1, src1_addr, bank_id, num_tiles);
+    read_block(noc, dram_src, dfb2, src2_addr, bank_id, num_tiles);
 }

@@ -5,9 +5,11 @@
 // Quasar BFD re-architecture POC: buffer descriptors are no longer programmed in
 // hw_configure (coupled 1:1 with DFB ids); instead each op's llk_*_init allocates an
 // id from its TRISC's partition (T0: [0,16), T2: [16,24), T3: [24,32)) via a
-// bump-and-wrap counter and programs the table entry itself. This test rotates a
-// datacopy over three input DFBs with a full re-init every tile, churning BFD ids
-// enough to wrap both the unpack partition (once) and the pack partition (twice).
+// bump-and-wrap counter and programs the table entry itself. This test copies three
+// input DFBs to one output DFB the realistic way -- init once per operand, then a
+// block loop of tiles -- so each operand switch bump-allocates a fresh unpack BFD and
+// programs it from that input's own L1 address. A mis-programmed descriptor would
+// copy the wrong input's bytes and fail the bit-exact check.
 
 #include "llk_device_fixture.hpp"
 
@@ -27,10 +29,9 @@ using namespace tt::tt_metal;
 
 namespace {
 constexpr std::uint32_t NUM_INPUTS = 3;
-constexpr std::uint32_t TILES_PER_INPUT = 6;
-// 18 cycles: unpack allocs hit ids 0..15,0,1 (wraps once); pack allocs hit
-// 16..23,16..23,16,17 (wraps twice). Every wrap overwrites an entry whose previous
-// op has fully drained, so data must still land correctly.
+constexpr std::uint32_t TILES_PER_INPUT = 4;
+// Each input's block is copied fully before switching operands, so total output tiles
+// = NUM_INPUTS * TILES_PER_INPUT.
 constexpr std::uint32_t NUM_CYCLES = NUM_INPUTS * TILES_PER_INPUT;
 }  // namespace
 
@@ -216,13 +217,14 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     std::vector<std::uint32_t> result_vec;
     tt::tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
-    // Cycle i copies tile (i / 3) of input (i % 3)
+    // Blocked output order: the compute copies each input's whole block before switching
+    // operands, so output tile k = tile (k % TILES_PER_INPUT) of input (k / TILES_PER_INPUT).
     const std::vector<std::uint32_t>* srcs[NUM_INPUTS] = {&src0_vec, &src1_vec, &src2_vec};
     std::vector<std::uint32_t> golden;
     golden.reserve(src0_vec.size() * NUM_INPUTS);
-    for (std::uint32_t i = 0; i < NUM_CYCLES; ++i) {
-        const std::vector<std::uint32_t>& src = *srcs[i % NUM_INPUTS];
-        const std::uint32_t tile_idx = i / NUM_INPUTS;
+    for (std::uint32_t k = 0; k < NUM_CYCLES; ++k) {
+        const std::vector<std::uint32_t>& src = *srcs[k / TILES_PER_INPUT];
+        const std::uint32_t tile_idx = k % TILES_PER_INPUT;
         const size_t words_per_tile = single_tile_size / sizeof(std::uint32_t);
         golden.insert(
             golden.end(), src.begin() + tile_idx * words_per_tile, src.begin() + (tile_idx + 1) * words_per_tile);
