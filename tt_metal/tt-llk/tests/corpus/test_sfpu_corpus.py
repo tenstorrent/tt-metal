@@ -23,4 +23,15 @@ class CorpusTest(unittest.TestCase):
             c=pathlib.Path(d)/"c.json"; c.write_text(json.dumps({"results":[current]}))
             self.assertNotEqual(subprocess.run([sys.executable,str(P),"--compare-results",str(c),"--baseline",str(p),"--max-regression-pct","2"],stdout=subprocess.DEVNULL).returncode,0)
 
+    def test_checked_in_tsv_baseline(self):
+        rows=M.load_baseline(M.DEVICE_BASELINE)
+        ids={r["id"] for r in M.inventory()}
+        self.assertTrue(rows)
+        self.assertTrue({r["id"] for r in rows} <= ids)
+        current={"id":"legacy__ckernel_sfpu_welfords","arch":"bh","metric":"device_cycles",
+                 "scope":"WELFORD_BODY","selector":"generated","cycles":324}
+        result=M.compare_baseline([current],M.DEVICE_BASELINE,0)[0]
+        self.assertEqual(result["status"],"REGRESSION")
+        self.assertAlmostEqual(result["delta_pct"],100.0/323.0)
+
 if __name__=="__main__": unittest.main()

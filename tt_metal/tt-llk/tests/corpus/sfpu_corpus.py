@@ -8,6 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 HERE = pathlib.Path(__file__).resolve().parent
 LLK = ROOT / "tt_metal/tt-llk"
 MANIFEST = HERE / "sfpu_corpus_v1.tsv"
+DEVICE_BASELINE = HERE / "sfpu_device_baseline_v1.tsv"
 EXPECTED = {"logical":164,"bh":152,"wh":138,"qsr":42,"physical_paths":332,"basename_union":143,"legacy_bh":41,"legacy_wh":32,"legacy_qsr":14,"raw":51,"typed":151,"replay":13,"mop":3}
 FIELDS = ["version","id","surface","arches","header_bh","header_wh","header_qsr","raw_tti","typed_sfpi","replay","mop",
           "functional_modules","perf_modules","mapping_state","notes"]
@@ -102,12 +103,23 @@ def emit_summary(run, records, provenance):
     lines += [f"| {r['id']} | {r['arch']} | {r['status']} | {r['reason']} |" for r in records]
     (run/"summary.md").write_text("\n".join(lines)+"\n")
 
+def load_baseline(path):
+    if path.suffix == ".json":
+        return json.loads(path.read_text()).get("results", [])
+    with path.open() as f:
+        return list(csv.DictReader((line for line in f if not line.startswith("#")), delimiter="\t"))
+
 def compare_baseline(records, baseline, threshold):
-    old=json.loads(baseline.read_text()).get("results",[])
+    old=load_baseline(baseline)
     key=lambda r:(r.get("id"),r.get("arch"),r.get("metric"),r.get("scope"),r.get("selector"))
-    index={key(r):r for r in old}; compared=[]
+    samples={}
+    for row in old:
+        try: cycles=float(row.get("cycles", ""))
+        except (TypeError, ValueError): continue
+        samples.setdefault(key(row), []).append(cycles)
+    index={k:min(v) for k,v in samples.items()}; compared=[]
     for r in records:
-        prior=index.get(key(r)); now=r.get("cycles"); before=prior and prior.get("cycles")
+        before=index.get(key(r)); now=r.get("cycles")
         if not isinstance(now,(int,float)) or not isinstance(before,(int,float)) or before==0:
             compared.append({"id":r["id"],"status":"SKIP_NO_DEVICE_CYCLES","reason":"both runs need numeric device cycles"}); continue
         delta=100.0*(now-before)/before

@@ -50,6 +50,19 @@ CRAQ modeled cycles are a functional and optimization discriminator, not a
 substitute for physical device cycles.  Only serialized silicon runs may update
 the device-cycle baseline or make a performance acceptance claim.
 
+Compare a captured `results.json` against the checked-in scoped silicon baseline:
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
+  --compare-results /path/to/results.json \
+  --baseline tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_v1.tsv \
+  --max-regression-pct 0
+```
+
+Repeated baseline samples with the same operation, architecture, metric, scope,
+and selector use their minimum, matching the established three-process device
+profiling convention.  Missing or non-device-cycle values are explicit skips.
+
 ## Reproduce a baseline
 
 Build the simulator libraries, provision the normal tt-llk test virtualenv,
