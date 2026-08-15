@@ -86,6 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "sfpu_operations.h"
 
 // ckernel_sfpu_sdpa_exp_unclamped.h reads a bare DST_ACCUM_MODE (it is written
 // against the metal SFPU macro environment), so define it before including it.
@@ -106,7 +107,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    if constexpr (SDPA_EXP_IMPL == 0)
+    {
+        test_utils::call_unary_sfpu_operation_init<
+            SfpuType::exponential,
+            false /* APPROX_MODE */,
+            is_fp32_dest_acc_en,
+            8 /* ITERATIONS */,
+            false /* FAST_MODE */,
+            false /* STABLE_SORT */,
+            true /* CLAMP_NEGATIVE */>();
+    }
+    else
+    {
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    }
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
@@ -117,7 +132,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         {
             START_PERF_MEASURE("SDPA_EXP_UNCLAMPED_BODY")
-            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sdpa_exp_unclamped, (SFPU_SCALE_EN), 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
+            if constexpr (SDPA_EXP_IMPL == 0)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    calculate_exponential,
+                    (false /* APPROX_MODE */, is_fp32_dest_acc_en, true /* SCALE_EN */, 8 /* ITERATIONS */, true /* CLAMP_NEGATIVE */),
+                    0 /* dst_index */,
+                    VectorMode::RC,
+                    SFPU_UNARY_SCALAR);
+            }
+            else
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sdpa_exp_unclamped, (SFPU_SCALE_EN), 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
+            }
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

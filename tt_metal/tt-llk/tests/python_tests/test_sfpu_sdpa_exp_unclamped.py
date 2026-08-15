@@ -43,6 +43,8 @@ value is already bf16-exact and the golden models that. The Float32 output arm o
 skips a second, no-op conversion in the packer.
 """
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from conftest import skip_for_wormhole
@@ -61,6 +63,7 @@ from helpers.test_variant_parameters import (
     SFPU_SCALE_EN,
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
+    TemplateParameter,
 )
 from helpers.utils import passed_test
 
@@ -79,6 +82,14 @@ BF16_HALF = 0x3F00
 # Exercised as (low, high) input ranges. All stay far below the removed upper clamp
 # (val << 88.7); the last one reaches past the surviving lower clamp -- see docstring.
 INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0), (-400.0, 0.0)]
+
+
+@dataclass
+class SdpaExpImplTemplate(TemplateParameter):
+    value: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_EXP_IMPL = {self.value}u;"
 
 
 @skip_for_wormhole
@@ -114,6 +125,7 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tile
         "sources/sfpu_sdpa_exp_unclamped_test.cpp",
         formats,
         templates=[
+            SdpaExpImplTemplate(1),
             SFPU_SCALE_EN(scale_en=scale_en),
             SFPU_UNARY_SCALAR(value_bits=scale),
         ],
@@ -143,7 +155,10 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tile
     ), "upper-unclamped exp does not match exp() over the swept domain"
 
 
-def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report):
+@pytest.mark.parametrize(
+    "sdpa_exp_impl,label", [(0, "handwritten_production"), (1, "semantic_unclamped")]
+)
+def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report, sdpa_exp_impl, label):
     """Measure only the exact one-tile SFPU body from the correctness node.
 
     Each silicon sample is launched in a fresh pytest process with a unique
@@ -162,6 +177,7 @@ def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report):
         formats,
         run_types=[PerfRunType.MATH_ISOLATE],
         templates=[
+            SdpaExpImplTemplate(sdpa_exp_impl),
             SFPU_SCALE_EN(scale_en=True),
             SFPU_UNARY_SCALAR(value_bits=BF16_ONE),
         ],
@@ -186,4 +202,6 @@ def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report):
     assert len(rows) == 1, frame.to_string(index=False)
     cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
     assert cycles > 0
-    print(f"SDPA_EXP_UNCLAMPED_DEVICE_PROFILE body_cycles={cycles:.2f}")
+    print(
+        f"SDPA_EXP_UNCLAMPED_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}"
+    )
