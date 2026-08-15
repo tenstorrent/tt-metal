@@ -51,6 +51,11 @@ class GateComputeMode(Enum):
     GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
+# Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
+# drive. Entries in mm_configs keyed at this depth override the any-depth (None) entries there.
+GATE_PRODUCTION_SP_DIM = 640
+
+
 @dataclass
 class TtMoEGateConfig:
     # gate_params
@@ -68,10 +73,20 @@ class TtMoEGateConfig:
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
-            # The seq-len element below is a placeholder — __post_init__ rewrites it to the actual
-            # per-chip sequence length (self.sp_dim) so the lookup tracks the real workload.
+            # sp_dim None means "any depth": __post_init__ re-keys it to the depth in use. An entry
+            # authored at a real depth overrides the None entry at that depth (see __post_init__).
             # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
-            (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+            #
+            # per_core_M is not free. It must equal max(1, ceil(sp_dim / (32 * num_cores))): below
+            # that the 1D matmul needs more blocks than the grid has cores ("num_blocks_total <=
+            # num_cores"), and for a height-sharded in0 it must also equal shard_shape[0] / 32. Both
+            # rules give 1 up to 3520 tokens/chip and 2 at 4096. out_block_h follows it.
+            #
+            # The None entries below were tuned at 4096 and carry per_core_M=2, which is why 640 --
+            # the production depth -- needs its own entries: at 640 per_core_M=2 splits 20 M-tiles
+            # over 10 cores instead of 20. K3's per_core_M was already 1 (MAX_GATE_SEQ_LEN_PER_CHIP
+            # keeps it under 3520), so its 640 entry exists only for out_block_w.
+            (None, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
@@ -85,7 +100,7 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            (4096, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+            (None, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
@@ -99,17 +114,55 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            # per_core_M is not free: for a height-sharded in0 the matmul asserts
-            # per_core_M == roundup32(ceil(sp_dim / num_cores)) / 32, which is 1 at K3's depths and 2
-            # at the other models' 4096. out_block_h follows it.
-            (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+            # 640 tokens/chip: 20 M-tiles, so per_core_M=1 spreads them over 20 cores rather than 10.
+            #
+            # out_block_w and out_subblock_w are swept, not inherited: out_block_w wants to be the
+            # widest divisor of per_core_N that still builds (12 fails L1 allocation for 384 experts,
+            # 14 and 28 for 896), and out_subblock_w wants to be NARROW, not the widest the dest
+            # registers allow. Measured per call on a Blackhole Galaxy at 640 tokens/chip, medians of
+            # 7 rounds visited in rotated order (a single-pass sweep drifts enough to invert the
+            # ranking), every candidate at PCC 0.999999. Best three per model plus the alternatives:
+            #     256 experts  (8,1) 51.2  (8,2) 51.2  (8,4) 51.7 | default 54.7 | (4,1) 57.1 | shipped 89.3
+            #     384 experts  (6,1) 77.9  (6,2) 78.2  (6,3) 78.5 | (4,1) 84.2 | shipped 130.0 | default 436.5
+            #     896 experts  (7,1) 177.6 | (4,1) 194.3 | shipped 198.8 | default 437.6
+            # Do not "fix" out_subblock_w back up to 4 to match TTNN's own area-first heuristic
+            # (SUBBLOCK_HW_CHOICES): it is the slowest legal choice at every width measured.
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
                     out_subblock_h=1,
-                    out_subblock_w=4,
+                    out_subblock_w=1,
                     out_block_h=1,
-                    out_block_w=4,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=6,
+                    per_core_M=1,
+                    per_core_N=12,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=7,
                     per_core_M=1,
                     per_core_N=28,
                     fuse_batch=True,
@@ -155,14 +208,20 @@ class TtMoEGateConfig:
                 f"experts/32 and will fail L1 allocation above it. Raise the ceiling only alongside "
                 f"the op-side CB work that makes it true."
             )
-        # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
-        # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
-        # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
-        # silently falling back to TTNN's default tiling.
-        self.mm_configs = {
-            ((self.sp_dim, *key[1:]) if isinstance(key, tuple) else key): value
-            for key, value in self.mm_configs.items()
-        }
+        # Resolve mm_configs against the depth actually in use, so _device_matmul's lookup
+        # (sp_dim, per_device_emb_dim, n_routed_experts) hits a tuned entry instead of silently
+        # falling back to TTNN's default tiling. Two passes, because the any-depth entries must be
+        # laid down first for the depth-specific ones to override them:
+        #   sp_dim None -> applies at whatever depth is in use (the old placeholder behaviour)
+        #   sp_dim int  -> applies only at that depth, and wins there over the any-depth entry
+        resolved = {key: value for key, value in self.mm_configs.items() if not isinstance(key, tuple)}
+        for key, value in self.mm_configs.items():
+            if isinstance(key, tuple) and key[0] is None:
+                resolved[(self.sp_dim, *key[1:])] = value
+        for key, value in self.mm_configs.items():
+            if isinstance(key, tuple) and key[0] == self.sp_dim:
+                resolved[key] = value
+        self.mm_configs = resolved
 
     @property
     def num_cores(self):
