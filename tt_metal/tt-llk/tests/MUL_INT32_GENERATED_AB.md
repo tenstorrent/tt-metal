@@ -15,6 +15,14 @@ the handwritten SFPLOADMACRO implementation.
 The three samples are fresh independent profiler invocations. These are scoped
 device-profiler cycles from `TILE_LOOP`, not pytest wall time.
 
+The negative result is structurally expected, not a register-allocation loss:
+the handwritten BH body drives four preconfigured SFPLOADMACRO sequences and
+retires one visible `sfpmul24`/`sfpiadd` pair per unrolled row. The generated
+body emits five explicit `sfpmul24`, four shifts, and four integer adds for the
+same row. Closing this target therefore requires general compiler formation of
+load-macro templates (including delayed multi-pipeline operations and the
+scheduled store), not Welford- or MulInt-specific peepholes.
+
 ## Correctness and formulation
 
 - WH CRAQ: PASS.
@@ -54,4 +62,3 @@ perf route. The manifest should split or rename the UInt16 and Int32 targets.
 
 The archive contains the six raw/post CSV pairs, correctness and profiler
 logs, ELFs, and disassemblies. No production LLK file is modified.
-
