@@ -35,8 +35,7 @@
 // Wrap hazard contract: an entry handed out more than `partition size` allocations ago may be
 // overwritten, so an op must be re-initialised (not just re-executed) once newer inits may have
 // lapped its id. Metal's existing discipline (op re-init before re-execute, and CB wait/pop plus
-// dest semaphore handoffs draining TDMA between ops) satisfies this; `generation` is a debug
-// breadcrumb for spotting lapses in waveforms/dumps.
+// dest semaphore handoffs draining TDMA between ops) satisfies this.
 //
 // This header is compute-TRISC only: it keys off COMPILE_FOR_TRISC (via ckernel_trisc_id.h) and
 // must not be included from data-movement translation units.
@@ -56,7 +55,10 @@ enum class BfdResource : std::uint8_t
     Count
 };
 
-constexpr std::uint8_t BFD_TABLE_NUM_ENTRIES = 32;
+// Sentinel for "no id allocated yet" in current[]. Real ids are 0..31, so 128 is safely out of
+// range and fits uint8_t. current[] is bss zero-init on device (0 is a valid id), so it must be
+// set to this sentinel inside the lazy-init block, not via a static initializer.
+constexpr std::uint8_t BFD_ID_INVALID = 128;
 
 constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::uint32_t trisc)
 {
@@ -109,9 +111,7 @@ constexpr std::uint8_t bfd_partition_size(const std::uint32_t trisc)
 struct BfdAllocatorState
 {
     std::uint8_t next;                                                   // next id to hand out; valid only when initialized
-    std::uint8_t current[static_cast<std::uint8_t>(BfdResource::Count)]; // most recent id per engine
-    bool valid[static_cast<std::uint8_t>(BfdResource::Count)];           // set on first alloc per engine; bss zero-init
-    std::uint32_t generation;                                            // wrap count (debug breadcrumb)
+    std::uint8_t current[static_cast<std::uint8_t>(BfdResource::Count)]; // most recent id per engine; BFD_ID_INVALID until first alloc
     bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
 };
 
@@ -135,16 +135,18 @@ inline std::uint8_t bfd_alloc()
 
     if (!bfd_state.initialized)
     {
-        bfd_state.next        = base;
+        bfd_state.next = base;
+        for (std::uint8_t i = 0; i < static_cast<std::uint8_t>(BfdResource::Count); ++i)
+        {
+            bfd_state.current[i] = BFD_ID_INVALID;
+        }
         bfd_state.initialized = true;
     }
 
     const std::uint8_t id                           = bfd_state.next;
     bfd_state.current[static_cast<std::uint8_t>(E)] = id;
-    bfd_state.valid[static_cast<std::uint8_t>(E)]   = true;
     const std::uint8_t next                         = id + 1;
     bfd_state.next                                  = (next >= end) ? base : next;
-    bfd_state.generation += (next >= end) ? 1 : 0;
     return id;
 }
 
@@ -158,7 +160,7 @@ inline std::uint8_t bfd_current()
     static_assert(ckernel::TRISC_ID != 1, "math TRISC owns no buffer descriptors");
     static_assert(E < BfdResource::Count, "invalid BFD engine");
     static_assert(bfd_engine_owned_by_trisc(E, ckernel::TRISC_ID), "BFD engine not owned by compiling TRISC");
-    LLK_ASSERT(bfd_state.valid[static_cast<std::uint8_t>(E)], "bfd_current before first bfd_alloc");
+    LLK_ASSERT(bfd_state.current[static_cast<std::uint8_t>(E)] != BFD_ID_INVALID, "bfd_current before first bfd_alloc");
     return bfd_state.current[static_cast<std::uint8_t>(E)];
 }
 

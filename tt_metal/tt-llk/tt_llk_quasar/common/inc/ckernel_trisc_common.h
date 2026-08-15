@@ -76,6 +76,8 @@ constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) -
 std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
 // Points to the buffer table
 buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* const)(cfg + BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32);
+// Number of entries in the buffer descriptor table (physically partitioned per TRISC; ids are 0..31).
+constexpr std::uint32_t BD_TABLE_NUM_ENTRIES = 32;
 
 constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
 
@@ -158,6 +160,8 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
 {
+    // Guards the invalid sentinel (BFD_ID_INVALID) and any OOB id from a wild write into cfg space.
+    LLK_ASSERT(buf_desc_id < BD_TABLE_NUM_ENTRIES, "buf_desc_id out of range");
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {
         bd_table[buf_desc_id].words[i] = buf_desc.words[i];
