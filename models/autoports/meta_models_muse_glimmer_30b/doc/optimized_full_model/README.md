@@ -323,9 +323,13 @@ op-to-op gap** — **21.6 %** of the window — and
 **is** a `ttnn.execute_trace` replay, with a footer of `55 device ops … 1,123 μs
 [device] 358 μs [gap]`.
 
-It is **not** a first-op window boundary: the report is sorted by `HOST START TS`, and id
-3145 is row **29 of 55**, preceded by 27 ops whose gaps are 0.475–0.688 µs and immediately
-by `PlusOneDeviceOperation` (id 3143) at 0.645 µs. It is the **inter-replay boundary**
+It is a real per-device inter-op latency rather than a report-ordering artifact, and the
+support for that is per device, not per row: **all four devices independently record
+310.9–314.7 µs on their own embedding row** (`tracy/decode_sliding_ops.csv.xz`). Round 19 of
+the stage review was right that the earlier support here did not hold — it claimed the report
+is sorted by `HOST START TS` and that id 3145 is row 29 of 55, but the committed report has no
+such column, it is sorted by `ID`, and in host time id 3145 *is* the window's first op, which
+is the reading that sentence was written to rebut. It is the **inter-replay boundary**
 inside the signposted window — `run_tracy.sh` captures one replay, and the embedding is
 the first op of the graph, so its "previous operation" is the last op of the *warm-up*
 replay that ran before the signpost, across a profiler flush.
@@ -382,7 +386,7 @@ Both arms report identical PCC — prefill 0.993700, decode 0.993488 (sliding) a
 
 * the model decode trace is **22.656 ms**, i.e. **-0.9 %** against the 22.858 ms
   context-2048 floor;
-* token-out is **23.298 ms**, i.e. **+1.9 %** on that floor and **-3.7 %** on
+* token-out is **23.298 ms**, i.e. **+1.9 %** on that floor and **-3.6 %** on
   floor-plus-terminal (22.858 + 0.686 device terminal + 0.632 sampling = 24.176).
 
 The gate is 10–15 % over floor-plus-terminal, and on those numbers there is no gap to

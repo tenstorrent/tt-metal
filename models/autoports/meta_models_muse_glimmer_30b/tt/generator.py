@@ -940,6 +940,13 @@ class MuseGlimmerGenerator(Generator):
                 # before clearing ``_prefill_trace_cache_sig``, so the next capture on another
                 # bucket re-stamped the signature to the *new* cache and the stale entry could
                 # never be invalidated again.  Moving it out of the dict removes both.
+                # Out of the bucket dict *here*, not at the post-loop assignment.  Round 19
+                # pointed out the asymmetry with the success branch, which round 9 restructured
+                # precisely so an unguarded ``synchronize_device`` raise cannot leave a released
+                # bucket replayable: with ``prefill_trace_max_entries > 1``, an orphan followed
+                # by a release whose drain raises skipped the post-loop clear entirely, leaving
+                # a replayable entry whose buffers the orphan retry would later free.
+                del self._prefill_traces[padded_len]
                 self._orphaned_traces.append(
                     {
                         "what": f"prefill[{padded_len}]",
@@ -1515,24 +1522,27 @@ class MuseGlimmerGenerator(Generator):
         ttnn.synchronize_device(self.mesh_device)
         self.counters["synchronizations"] += 1
         try:
-            self._release_prefill_traces()
+            try:
+                self._release_prefill_traces()
+            finally:
+                self._release_decode_trace()
         finally:
-            self._release_decode_trace()
-        # Last chance for anything a previous release could not free.  Both release calls
-        # above may themselves have orphaned something, so this runs after them.
-        still_held = self._retry_orphaned_traces()
-        if still_held:
-            logger.warning(
-                f"MuseGlimmerGenerator: teardown() leaves {still_held} trace(s) unreleased after a "
-                "retry. Any decode or prefill trace among them holds KV-cache addresses, so that "
-                "cache must not be freed while this device stays open; a sampling trace among them "
-                "holds none, but does hold this generator's logits."
-            )
-        if self._deferred_frees:
-            logger.warning(
-                f"MuseGlimmerGenerator: teardown() leaves {len(self._deferred_frees)} tensor(s) "
-                "unfreed because an unreleased sampling trace still reads them."
-            )
+            # Last chance for anything a previous release could not free.  Both release calls
+            # above may themselves have orphaned something, so this runs after them -- and it
+            # runs even if one of them raised, which round 19 pointed out it did not.
+            still_held = self._retry_orphaned_traces()
+            if still_held:
+                logger.warning(
+                    f"MuseGlimmerGenerator: teardown() leaves {still_held} trace(s) unreleased after "
+                    "a retry. Any decode or prefill trace among them holds KV-cache addresses, so "
+                    "that cache must not be freed while this device stays open; a sampling trace "
+                    "among them holds none, but does hold this generator's logits."
+                )
+            if self._deferred_frees:
+                logger.warning(
+                    f"MuseGlimmerGenerator: teardown() leaves {len(self._deferred_frees)} tensor(s) "
+                    "unfreed because an unreleased sampling trace still reads them."
+                )
 
     # ------------------------------------------------------------- reporting
 

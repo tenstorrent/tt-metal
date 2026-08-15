@@ -47,7 +47,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 1136
+ADVERTISED_CHECKS = 1139
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -1382,8 +1382,18 @@ def main() -> int:
     same(
         "the two release calls are sequenced so one cannot skip the other",
         generator_src.count("finally:\n            if stale_decode:") == 1
-        and "try:\n            self._release_prefill_traces()\n        finally:\n            self._release_decode_trace()"
+        and "try:\n                self._release_prefill_traces()\n            finally:\n                self._release_decode_trace()"
         in generator_src,
+        True,
+    )
+    same(
+        "a prefill orphan leaves the bucket dict in the branch that orphans it",
+        "del self._prefill_traces[padded_len]\n                self._orphaned_traces.append(" in generator_src,
+        True,
+    )
+    same(
+        "teardown's last-chance retry runs even if a release raised",
+        "finally:\n            # Last chance for anything a previous release could not free." in generator_src,
         True,
     )
     same(
@@ -3317,18 +3327,28 @@ def main() -> int:
     # failed at the commit that introduced it.  What actually matters is not which commit last
     # touched an artifact but whether its content is consistent with the tree it describes, so
     # that is what is checked -- each "at HEAD" artifact against the thing it must agree with.
+    # Round 19: the first attempt at these was two duplicates and a tautology (the junit count
+    # compared against itself).  What has to be tied is the artifact to the *tree*, so: the
+    # junit's case **names** against the test functions defined in the suite file, and the
+    # watcher verdict re-derived here from the compressed log it names rather than read off the
+    # console file that reports it.
+    junit_names = {tc.get("name").split("[")[0] for tc in ET.parse(_record(D / "test_results.xml")).iter("testcase")}
+    defined = set(re.findall(r"^def (test_\w+)\(", tests_src, re.M))
+    same("every test the junit records is defined in the suite file", sorted(junit_names - defined), [])
+    same("...and every test the suite file defines is in the junit", sorted(defined - junit_names), [])
+    watcher_log = text(D / "watcher/watcher.log.gz")
     same(
-        "the mutation log agrees with the current mutation table",
-        logged_digests == {harness.digest(mutation) for mutation in harness.MUTATIONS},
-        True,
+        "the watcher verdict re-derives from the compressed log it names",
+        [
+            len(re.findall(r"Dump", watcher_log)) >= 2,
+            len(re.findall(r"detach", watcher_log, re.I)) >= 1,
+            bool(re.search(r"tripped assert", watcher_log, re.I)),
+            bool(re.search(r"\bfatal\b", watcher_log, re.I)),
+        ],
+        [True, True, False, False],
     )
     same(
-        "the junit artifact agrees with the suite size the documents state",
-        len(list(ET.parse(_record(D / "test_results.xml")).iter("testcase"))),
-        suite_cases,
-    )
-    same(
-        "the watcher verdict agrees with the log it is re-derived from",
+        "...and the console verdict agrees with it",
         "WATCHER_CLEAN" in text(D / "logs/check_watcher.log"),
         True,
     )

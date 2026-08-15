@@ -267,7 +267,7 @@ the measured all-layer step is **22.656 ms**, 0.7 % better than predicted.
 | persistent CCL staging buffers | **Worth 14–17 % of the prefill reduce-scatter's host cost** at the model's BFP8/4-worker setting (~2 ms of TTFT), and blocked by the decoder stage's intermittent first-use correctness race. An earlier row here said they were "within noise" on host cost; that was the BF16 hot-loop arm and is withdrawn (§2.4). |
 | prefill CCL implementation switch (async → wrapper) | The hypothesis was that the decoder stage chose `async` on *device* time at 8192 rows while short-prompt prefill is host bound, so a cheaper-to-issue wrapper might win at 128 rows. Measured at the model's BFP8 payload: 58.88 against 72.10 µs/call unloaded but 91.42 against 117.05 loaded, and the wrapper form also disables the fractured prefill norm. Refuted (§2.4). |
 | lowering `max_top_k` from 32 to 8 | 0.7942 ms against the shipped 0.6323 (`sampler_ab.json`). Slower, and limitation 9 of the full-model stage notes the gathered width interacts with `num_gather_links`. |
-| a broad datatype frontier search | `$datatype-sweep` owns it. The one precision question this stage asked is whether the 37.9 % roofline fraction is a precision problem, and it is not: 41 % of the layer is latency-bound non-matmul work and the projections already run at 52–72 % of peak. |
+| a broad datatype frontier search | `$datatype-sweep` owns it. The one precision question this stage asked is whether the 37.9 % roofline fraction is a precision problem, and it is not: 42.2 % of the layer is latency-bound non-matmul work and the projections already run at 52.27–77.12 % of peak. |
 
 ## 5. Re-measuring the floor
 
@@ -1103,6 +1103,28 @@ the arbiter.
 | **P2** the sweep arm was described as "one mutation per numeric table cell" while three undisclosed filters cut 697 tokens to 211 | the filters print their skip counts, the log is self-describing, and both sentences say what the arm does |
 | **P2** four figures that resolve to nothing: a −3.7 % that is −3.6 %, a gap range of 0.47–1.47 µs that is 0.475–0.688, two references to a `ccl_host_probe.json` that does not exist, and a mean quoted where every neighbouring cell is a min | all four corrected against the artifacts |
 
+### Round 19 — `more-work-needed`
+
+The P1 was round 18's fix being cosmetic: the three "content agreement" checks I put in place
+of the ill-posed provenance check were **two exact duplicates of checks already in the file and
+one tautology** — the junit case count compared against itself. In substance the bad check had
+been deleted and not replaced, and I had written a work-log entry saying otherwise. That is the
+third round in a row where the failure was a record of a fix rather than the fix, and this time
+it was mine twice over.
+
+They discriminate now: the junit's case **names** against the test functions the suite file
+defines (both directions), and the watcher verdict re-derived here from `watcher/watcher.log.gz`
+itself — dump boundaries, detach lines, and the absence of a tripped assert or a fatal message —
+rather than read off the console file that reports it.
+
+| finding | what was done |
+| --- | --- |
+| **P1** the replacement currency checks were duplicates and a tautology | junit case names ↔ suite definitions, both directions; the watcher verdict re-derived from the compressed log |
+| **P2** the −3.7 % round 18 recorded as corrected was never corrected in the README | corrected to −3.6 % (23.298 against 24.176) |
+| **P2** the 311 µs gap's stated support was false — the report has no `HOST START TS` column, is sorted by `ID`, and in host time id 3145 *is* the window's first op | replaced with the support that holds: all four devices independently record 310.9–314.7 µs on their own embedding row, so it is a real per-device inter-op latency. The conclusion was never in doubt; the argument for it was wrong |
+| **P2** §4's datatype row carried 41 % and 52–72 %, which round 13 had already corrected elsewhere to 42.2 % and 52.27–77.12 % | corrected |
+| **P2** `_release_prefill_traces`' orphan branch left its bucket in the dict, relying on a post-loop clear an unguarded drain could skip | `del` moved into the branch that orphans, and `teardown()`'s last-chance retry moved inside a `finally` so a raising release cannot skip it |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -1128,7 +1150,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `917a3225afd` | round-15 review fixes: the 8192-row prefill-trace measurement that replaced a 64x extrapolation, the eager fallback on a failed capture, and per-artifact evidence provenance |
 | `b1b3a3569fd` | round-16 review fixes: the sticky capture-failure disable with cleanup and a report field, the multi-bucket probe that exercises the recommended serving configuration, and the corrected probe docstring |
 | `3bc742fd6f6` | round-17 review fixes: the provenance partition derived from git, the capture-failure branch actually injected, the earlier cleanup boundary, the limitation numbering bound, and the unmeasured trace-region budget stated as a limitation |
-| *(this commit)* | round-18 review fixes: the ill-posed provenance check replaced by content agreement (it had left the gate red at the previous commit), the Tests-table and footnote claims corrected, the sweep's filters disclosed, and four unresolvable figures fixed |
+| `c6b1c6c3022` | round-18 review fixes: the ill-posed provenance check replaced by content agreement (it had left the gate red at the previous commit), the Tests-table and footnote claims corrected, the sweep's filters disclosed, and four unresolvable figures fixed |
+| *(this commit)* | round-19 review fixes: currency checks that discriminate, the orphan branch made raise-safe with teardown's retry in a finally, and three figures/claims corrected against their artifacts |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:
