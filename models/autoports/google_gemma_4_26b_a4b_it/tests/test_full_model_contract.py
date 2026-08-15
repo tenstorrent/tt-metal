@@ -158,6 +158,10 @@ def test_reduced_real_weight_full_model_probe(mesh_device):
         layer_indices=None if full_stack else [0, 5],
         tensor_cache_path=("/tmp/gemma4_full_model_cache" if full_stack else "/tmp/gemma4_full_model_probe_cache"),
     )
+    if os.environ.get("GEMMA4_PRINT_PRECISION_SUMMARY") == "1":
+        import json
+
+        print("PRECISION_SUMMARY=" + json.dumps(model.precision_summary(), sort_keys=True))
     probe_batch = 32 if batch32 else 1
     # Prefill is intentionally scheduled one slot at a time; the public
     # generator owns mixed-prompt iteration.  Decode then exercises all 32

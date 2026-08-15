@@ -1,0 +1,5 @@
+{
+  "extends": "baseline.json",
+  "config_id": "kv_bfp8",
+  "overrides": {"kv_cache": {"dtype": "BFP8_B", "decode_update_dtype": "BF16"}}
+}

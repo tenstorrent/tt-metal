@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+  "selected": true,
+  "weight_groups": {
+    "norms": "BF16",
+    "attention_qkv_o": "BFP8_B",
+    "dense_gate_up": "BFP8_B",
+    "dense_down": "BFP8_B",
+    "experts_gate_up_down": "BFP8_B",
+    "prefill_experts": "BFP8_B",
+    "router_and_routing": "FP32",
+    "embedding_lm_head": "BF16"
+  },
+  "decode_weight_groups": {"packed_mlp_gate_up": "BFP4_B"},
+  "layer_exceptions": [],
+  "compute_fidelities": {
+    "sliding_attention": "HIFI2",
+    "full_attention": "LOFI",
+    "dense_mlp": "LOFI",
+    "expert_gate_up": "LOFI",
+    "expert_down": "LOFI"
+  },
+  "activation_residual": {"activation_dtype": "BF16", "residual_dtype": "BF16"},
+  "ccl": {"dtype": "BF16"},
+  "kv_cache": {"dtype": "BF16", "decode_update_dtype": "BF16"},
+  "logits_sampling": {
+    "logits_dtype": "BF16",
+    "sampling_parameter_dtype": "BF16",
+    "token_dtype": "UINT32",
+    "greedy": "force_argmax_on_sharded_logits"
+  },
+  "loader": {
+    "default_path": "doc/datatype_sweep/selected_precision_config.json",
+    "override_environment": "GEMMA4_PRECISION_CONFIG",
+    "constructor_override": "precision_config_path"
+  }
+}

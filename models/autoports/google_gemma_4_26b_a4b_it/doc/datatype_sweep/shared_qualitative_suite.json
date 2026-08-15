@@ -1,0 +1,19 @@
+{
+  "hf_model_id": "google/gemma-4-26B-A4B-it",
+  "prompt_mode": "chat",
+  "rendering": "checkpoint chat template via apply_chat_template(add_generation_prompt=true)",
+  "generation": {"greedy": true, "max_new_tokens": 64},
+  "prompt_source": "doc/optimized_full_model/qualitative_prompts",
+  "entries": [
+    {"id": "00_haiku", "artifact": "shared_qualitative/00_haiku/autoregressive_meta.json", "verdict": "coherent haiku"},
+    {"id": "01_explanation", "artifact": "shared_qualitative/01_explanation/autoregressive_meta.json", "verdict": "coherent supervised-learning explanation"},
+    {"id": "02_story", "artifact": "shared_qualitative/02_story/autoregressive_meta.json", "verdict": "coherent creative continuation"},
+    {"id": "03_thermodynamics", "artifact": "shared_qualitative/03_thermodynamics/autoregressive_meta.json", "verdict": "on-topic scientific explanation"},
+    {"id": "04_french", "artifact": "shared_qualitative/04_french/autoregressive_meta.json", "verdict": "correct formal and informal French"},
+    {"id": "05_python", "artifact": "shared_qualitative/05_python/autoregressive_meta.json", "verdict": "coherent Fibonacci guidance"}
+  ],
+  "rendered_prompts_and_token_ids": "stored in each autoregressive_meta.json",
+  "hf_controls": "stored beside each metadata file as hf_completion.txt",
+  "degeneracy_report": "shared_qualitative_degeneracy.json",
+  "overall_verdict": "pass"
+}

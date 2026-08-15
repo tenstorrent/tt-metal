@@ -1,0 +1,3 @@
+Strictly speaking, there are **three** laws of thermodynamics (plus a "Zeroth Law"). While they are often numbered 1, 2, and 3, they are best understood as a set of rules governing how energy moves and changes form.
+
+Here is a breakdown of the three main laws:

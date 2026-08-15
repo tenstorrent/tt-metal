@@ -1,0 +1,9 @@
+{
+  "extends": "baseline.json",
+  "config_id": "expert_bfp4_lofi",
+  "overrides": {
+    "weight_groups": {"experts_gate_up_down": "BFP4_B"},
+    "compute_fidelities": {"expert_gate_up": "LOFI", "expert_down": "LOFI"},
+    "layer_exceptions": [{"layers": [0, 29], "overrides": {"weight_groups": {"experts_gate_up_down": "BFP8_B"}}}]
+  }
+}

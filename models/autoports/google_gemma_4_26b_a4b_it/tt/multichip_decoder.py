@@ -124,6 +124,9 @@ class MultichipDecoder(OptimizedDecoder):
         prefill_expert_weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         expert_weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         activation_dtype: ttnn.DataType = ttnn.bfloat16,
+        router_weight_dtype: ttnn.DataType = ttnn.float32,
+        ccl_dtype: ttnn.DataType = ttnn.bfloat16,
+        decode_weight_dtypes: dict[str, ttnn.DataType] | None = None,
         tensor_cache_path: str | Path | None = None,
         persistent_all_reduce_resources: dict[str, Any] | None = None,
         **kwargs: Any,
@@ -291,14 +294,16 @@ class MultichipDecoder(OptimizedDecoder):
             mlp_down=upload(
                 "mlp_down_tp4", mlp_down.unsqueeze(0).unsqueeze(0), dtype=mlp_down_weight_dtype, mapper=shard_k
             ),
-            router_scale=replicated("router_scale", get("router.scale").reshape(1, 1, 1, HIDDEN_SIZE), ttnn.float32),
+            router_scale=replicated(
+                "router_scale", get("router.scale").reshape(1, 1, 1, HIDDEN_SIZE), router_weight_dtype
+            ),
             router_proj=replicated(
                 "router_proj",
                 get("router.proj.weight").transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0),
-                ttnn.float32,
+                router_weight_dtype,
             ),
             router_per_expert_scale=replicated(
-                "router_per_expert_scale", get("router.per_expert_scale").reshape(1, NUM_EXPERTS), ttnn.float32
+                "router_per_expert_scale", get("router.per_expert_scale").reshape(1, NUM_EXPERTS), router_weight_dtype
             ),
             expert_gate=upload("expert_gate_tp4", expert_gate.unsqueeze(0), dtype=expert_weight_dtype, mapper=shard_n),
             expert_up=upload("expert_up_tp4", expert_up.unsqueeze(0), dtype=expert_weight_dtype, mapper=shard_n),
@@ -326,6 +331,7 @@ class MultichipDecoder(OptimizedDecoder):
             residual_shard_cores=0,
             **kwargs,
         )
+        decoder.ccl_dtype = ccl_dtype
         decoder.expert_weights = ExpertWeights(
             gate_proj=weights.expert_gate,
             up_proj=weights.expert_up,
@@ -373,12 +379,16 @@ class MultichipDecoder(OptimizedDecoder):
             "packed_mlp_gate_up": "GEMMA4_MULTICHIP_DECODE_MLP_GATE_UP_WEIGHT_DTYPE",
             "mlp_down": "GEMMA4_MULTICHIP_DECODE_MLP_DOWN_WEIGHT_DTYPE",
         }
+        decode_weight_dtypes = decode_weight_dtypes or {}
         for role in candidate_roles:
             default_block_w = {"qkv": "11", "o_proj": "4", "packed_mlp_gate_up": "11", "mlp_down": "17"}.get(role)
             role_block_w = os.getenv(f"GEMMA4_MULTICHIP_DRAM_BLOCK_W_{role.upper()}", default_block_w)
             candidate_weight = dram_candidates[role]
+            policy_decode_dtype = decode_weight_dtypes.get(role)
             decode_dtype_default = "bfp4" if role == "packed_mlp_gate_up" else None
             decode_dtype_name = os.getenv(decode_dtype_env[role], decode_dtype_default)
+            if policy_decode_dtype is not None and os.getenv(decode_dtype_env[role]) is None:
+                decode_dtype_name = next(name for name, dtype in dtype_names.items() if dtype == policy_decode_dtype)
             if decode_dtype_name is not None:
                 if decode_dtype_name.lower() not in dtype_names:
                     raise ValueError(
@@ -448,7 +458,7 @@ class MultichipDecoder(OptimizedDecoder):
                 decoder.persistent_all_reduce_buffers.append(
                     ttnn.from_torch(
                         torch.zeros((1, 1, TILE_SIZE, HIDDEN_SIZE * TP_SIZE), dtype=torch.bfloat16),
-                        dtype=ttnn.bfloat16,
+                        dtype=ccl_dtype,
                         layout=ttnn.TILE_LAYOUT,
                         device=mesh_device,
                         memory_config=persistent_buffer_memory_config,
@@ -469,13 +479,16 @@ class MultichipDecoder(OptimizedDecoder):
     def _all_reduce_hidden(self, partial: ttnn.Tensor) -> ttnn.Tensor:
         self.multichip_path_counters["all_reduce"] += 1
         num_links = int(os.getenv("GEMMA4_MULTICHIP_ALL_REDUCE_NUM_LINKS", "2"))
-        ccl_dtype_name = os.getenv("GEMMA4_MULTICHIP_CCL_DTYPE", "bf16").lower()
+        ccl_dtype_name = os.getenv("GEMMA4_MULTICHIP_CCL_DTYPE")
         ccl_dtypes = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}
-        if ccl_dtype_name not in ccl_dtypes:
-            raise ValueError(f"GEMMA4_MULTICHIP_CCL_DTYPE={ccl_dtype_name!r}; choose from {sorted(ccl_dtypes)}")
+        ccl_dtype = self.ccl_dtype
+        if ccl_dtype_name is not None:
+            if ccl_dtype_name.lower() not in ccl_dtypes:
+                raise ValueError(f"GEMMA4_MULTICHIP_CCL_DTYPE={ccl_dtype_name!r}; choose from {sorted(ccl_dtypes)}")
+            ccl_dtype = ccl_dtypes[ccl_dtype_name.lower()]
         original_dtype = partial.dtype
-        if ccl_dtypes[ccl_dtype_name] != original_dtype:
-            partial = ttnn.typecast(partial, ccl_dtypes[ccl_dtype_name], memory_config=partial.memory_config())
+        if ccl_dtype != original_dtype:
+            partial = ttnn.typecast(partial, ccl_dtype, memory_config=partial.memory_config())
         if self.persistent_all_reduce_buffers and _matrix_rows(partial) <= TILE_SIZE:
             if self.persistent_all_reduce_resources is not None:
                 index = self.persistent_all_reduce_resources["index"]
@@ -622,6 +635,10 @@ class MultichipDecoder(OptimizedDecoder):
         for position in tail_positions:
             k_token = ttnn.slice(k_heads, [0, 0, position, 0], [1, local_kv_heads, position + 1, k_heads.shape[3]])
             v_token = ttnn.slice(v_heads, [0, 0, position, 0], [1, local_kv_heads, position + 1, v_heads.shape[3]])
+            if k_token.dtype != ttnn.bfloat16:
+                k_token = ttnn.typecast(k_token, ttnn.bfloat16, memory_config=k_token.memory_config())
+            if v_token.dtype != ttnn.bfloat16:
+                v_token = ttnn.typecast(v_token, ttnn.bfloat16, memory_config=v_token.memory_config())
             k_token = ttnn.to_memory_config(ttnn.transpose(k_token, 1, 2), update_mem, dtype=k_token.dtype)
             v_token = ttnn.to_memory_config(ttnn.transpose(v_token, 1, 2), update_mem, dtype=v_token.dtype)
             position_tensor = ttnn.full(

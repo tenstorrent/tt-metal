@@ -1,0 +1,5 @@
+{
+  "extends": "baseline.json",
+  "config_id": "activation_residual_bfp8",
+  "overrides": {"activation_residual": {"activation_dtype": "BFP8_B", "residual_dtype": "BFP8_B"}}
+}

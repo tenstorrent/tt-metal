@@ -1,0 +1,6 @@
+There are several ways to implement a Fibonacci function depending on whether you want a single number, a list of numbers, or an efficient generator.
+
+Here are the three most common approaches:
+
+### 1. Return a List (The most common requirement)
+If you want a function that returns a list of the first

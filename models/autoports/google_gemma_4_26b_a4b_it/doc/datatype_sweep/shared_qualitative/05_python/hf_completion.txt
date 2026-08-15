@@ -1,0 +1,6 @@
+There are several ways to calculate the Fibonacci sequence depending on whether you want a single number, a list of numbers, or an efficient way to handle large calculations.
+
+Here are the three most common approaches:
+
+### 1. Returning a List (Most Common)
+If your goal is to get the sequence up to

@@ -651,6 +651,7 @@ def build_generator(model_dir: str | Path, mesh_device: Any, **kwargs: Any) -> G
     num_layers = kwargs.pop("num_layers", None)
     layer_indices = kwargs.pop("layer_indices", None)
     sampling_mode = kwargs.pop("sampling_mode", "device")
+    precision_config_path = kwargs.pop("precision_config_path", None)
     tensor_cache_path = Path(
         kwargs.pop("tensor_cache_path", os.environ.get("GEMMA4_TENSOR_CACHE_PATH", "/tmp/gemma4_full_model_cache"))
     )
@@ -671,6 +672,7 @@ def build_generator(model_dir: str | Path, mesh_device: Any, **kwargs: Any) -> G
         num_layers=num_layers,
         layer_indices=layer_indices,
         tensor_cache_path=tensor_cache_path,
+        precision_config_path=precision_config_path,
     )
     return Gemma4Generator(model, tokenizer, sampling_mode=sampling_mode)
 

@@ -1,0 +1,4 @@
+To understand the difference, imagine you are teaching a child how to identify different types of fruit.
+
+### 1. Supervised Learning (The Teacher Method)
+In supervised learning, you act as a teacher. You show the child a picture of an apple and say, **"This is an apple."** Then

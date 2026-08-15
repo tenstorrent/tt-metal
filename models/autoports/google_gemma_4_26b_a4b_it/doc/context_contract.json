@@ -228,5 +228,29 @@
       "runtime_audit": "optimized_full_model/runtime_fallback_audit.json"
     }
   },
+  "datatype_sweep": {
+    "validated_at_utc": "2026-08-15",
+    "selected_config": "datatype_sweep/selected_precision_config.json",
+    "selected_kv_cache_dtype": "BF16",
+    "current_supported_context": 262144,
+    "capability_reduction": null,
+    "kv_candidates": {
+      "BF16": {
+        "bytes_per_element": 2,
+        "single_user_total_kv_gib_per_device": 2.548828125,
+        "conservative_total_gib_per_device": 22.285305300727487,
+        "remaining_margin_gib_per_device": 9.714694699272513
+      },
+      "BFP8_B": {
+        "bytes_per_element": 1,
+        "single_user_total_kv_gib_per_device": 1.2744140625,
+        "conservative_total_gib_per_device": 21.010891238227487,
+        "remaining_margin_gib_per_device": 10.989108761772513,
+        "non_aligned_prompt_lengths_tested": [33, 47],
+        "non_aligned_artifact": "datatype_sweep/artifacts/kv_bfp8/nonaligned_mixed_prompt.log"
+      }
+    },
+    "calculation": "The BFP8_B candidate halves only the 2.548828125 GiB/device BF16 KV term; all other conservative full-model terms are unchanged. Both candidates retain the 262144-token contract, so no advertised capability is reduced."
+  },
   "notes": "No context reduction: batch 1 retains 262144 tokens and the public generator passed an all-30-layer non-aligned 262111-token prefill plus first traced decode. The batch-32 serving profile divides the same 262144-token global full-attention cache budget into 8192 tokens per equal slot. The conservative worst validated profile is 22.285305300727487 GiB/device, leaving 9.714694699272513 GiB/device. The optimized full-model stage freshly passed mixed non-aligned 33/47-token prompt handling with fixed slots, an inactive row, changed-only page tables, and full-stack batch 32."
 }

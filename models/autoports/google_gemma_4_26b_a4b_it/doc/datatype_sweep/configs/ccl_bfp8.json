@@ -1,0 +1,5 @@
+{
+  "extends": "baseline.json",
+  "config_id": "ccl_bfp8",
+  "overrides": {"ccl": {"dtype": "BFP8_B"}}
+}

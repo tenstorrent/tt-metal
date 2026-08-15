@@ -1,0 +1,5 @@
+{
+  "extends": "baseline.json",
+  "config_id": "attention_bfp8_lofi",
+  "overrides": {"compute_fidelities": {"sliding_attention": "LOFI", "full_attention": "LOFI"}}
+}

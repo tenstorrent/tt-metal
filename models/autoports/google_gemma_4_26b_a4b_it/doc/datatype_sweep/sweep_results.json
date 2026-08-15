@@ -1,0 +1,713 @@
+[
+  {
+    "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+    "precision_config": "doc/datatype_sweep/configs/baseline.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.98,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 382.99,
+    "teacher_forcing_decode_t_s_u": 25.51,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/baseline.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/baseline/policy_path_teacher_forcing.log"
+  },
+  {
+    "config_id": "kv_bfp8",
+    "precision_config": "doc/datatype_sweep/configs/kv_bfp8.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BFP8_B",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.96,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 1087.93,
+    "teacher_forcing_decode_t_s_u": 17.08,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/kv_bfp8.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/kv_bfp8/teacher_forcing.log"
+  },
+  {
+    "config_id": "ccl_bfp8",
+    "precision_config": "doc/datatype_sweep/configs/ccl_bfp8.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BFP8_B"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.98,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 2854.48,
+    "teacher_forcing_decode_t_s_u": 18.23,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/ccl_bfp8.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/ccl_bfp8/teacher_forcing.log"
+  },
+  {
+    "config_id": "attention_bfp8_lofi",
+    "precision_config": "doc/datatype_sweep/configs/attention_bfp8_lofi.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "sliding_attention": "LOFI",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "LOFI",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.94,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 696.77,
+    "teacher_forcing_decode_t_s_u": 25.47,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/attention_bfp8_lofi.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/attention_bfp8_lofi/teacher_forcing.log"
+  },
+  {
+    "config_id": "expert_bfp4_lofi",
+    "precision_config": "doc/datatype_sweep/configs/expert_bfp4_lofi.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP4_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [
+        {
+          "layers": [
+            0,
+            29
+          ],
+          "overrides": {
+            "weight_groups": {
+              "experts_gate_up_down": "BFP8_B"
+            }
+          }
+        }
+      ],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.95,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 775.84,
+    "teacher_forcing_decode_t_s_u": 23.53,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/expert_bfp4_lofi.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/expert_bfp4_lofi/teacher_forcing.log"
+  },
+  {
+    "config_id": "expert_bfp4_hifi2",
+    "precision_config": "doc/datatype_sweep/configs/expert_bfp4_hifi2.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP4_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [
+        {
+          "layers": [
+            0,
+            29
+          ],
+          "overrides": {
+            "weight_groups": {
+              "experts_gate_up_down": "BFP8_B"
+            }
+          }
+        }
+      ],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "HIFI2",
+        "expert_down": "HIFI2"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "HIFI2",
+      "expert_down": "HIFI2"
+    },
+    "top1": 0.94,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 1802.9,
+    "teacher_forcing_decode_t_s_u": 18.92,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/expert_bfp4_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/expert_bfp4_hifi2/teacher_forcing.log"
+  },
+  {
+    "config_id": "dense_down_bfp4_lofi",
+    "precision_config": "doc/datatype_sweep/configs/dense_down_bfp4_lofi.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP4_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [
+        {
+          "layers": [
+            0,
+            29
+          ],
+          "overrides": {
+            "weight_groups": {
+              "dense_down": "BFP8_B"
+            }
+          }
+        }
+      ],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.95,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 985.2,
+    "teacher_forcing_decode_t_s_u": 22.1,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/dense_down_bfp4_lofi.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/dense_down_bfp4_lofi/teacher_forcing.log"
+  },
+  {
+    "config_id": "activation_residual_bfp8",
+    "precision_config": "doc/datatype_sweep/configs/activation_bfp8.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "LOFI",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BFP8_B",
+        "residual_dtype": "BFP8_B"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "LOFI",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.0,
+    "top5": 0.01,
+    "top100": 0.18,
+    "token_count": 100,
+    "ttft_ms": 4867.71,
+    "teacher_forcing_decode_t_s_u": 13.44,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/activation_bfp8.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": false,
+    "status": "fail_accuracy",
+    "evidence_log": "doc/datatype_sweep/artifacts/activation_bfp8/teacher_forcing.log"
+  },
+  {
+    "config_id": "decode_dense_gate_up_bfp4_hifi2",
+    "precision_config": "doc/datatype_sweep/configs/dense_bfp4_hifi2.json",
+    "dtype_policy": {
+      "schema_version": 1,
+      "config_id": "baseline_bfp8_hifi2_bf16_cache_ccl",
+      "weight_groups": {
+        "norms": "BF16",
+        "attention_qkv_o": "BFP8_B",
+        "dense_gate_up": "BFP8_B",
+        "dense_down": "BFP8_B",
+        "experts_gate_up_down": "BFP8_B",
+        "prefill_experts": "BFP8_B",
+        "router_and_routing": "FP32",
+        "embedding_lm_head": "BF16"
+      },
+      "decode_weight_groups": {
+        "packed_mlp_gate_up": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "sliding_attention": "HIFI2",
+        "full_attention": "LOFI",
+        "dense_mlp": "HIFI2",
+        "expert_gate_up": "LOFI",
+        "expert_down": "LOFI"
+      },
+      "activation_residual": {
+        "activation_dtype": "BF16",
+        "residual_dtype": "BF16"
+      },
+      "ccl": {
+        "dtype": "BF16"
+      },
+      "kv_cache": {
+        "dtype": "BF16",
+        "decode_update_dtype": "BF16"
+      },
+      "logits_sampling": {
+        "logits_dtype": "BF16",
+        "sampling_parameter_dtype": "BF16",
+        "token_dtype": "UINT32",
+        "greedy": "force_argmax_on_sharded_logits"
+      }
+    },
+    "compute_fidelity_policy": {
+      "sliding_attention": "HIFI2",
+      "full_attention": "LOFI",
+      "dense_mlp": "HIFI2",
+      "expert_gate_up": "LOFI",
+      "expert_down": "LOFI"
+    },
+    "top1": 0.96,
+    "top5": 1.0,
+    "top100": 1.0,
+    "token_count": 100,
+    "ttft_ms": 1598.67,
+    "teacher_forcing_decode_t_s_u": 18.16,
+    "trace_verified": true,
+    "measurement_regime": "AIME24 chat-template, 100-token shifted-left teacher forcing, traced decode, batch 1, warmed per-run program cache state as logged",
+    "command": "GEMMA4_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/configs/dense_bfp4_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_26b_a4b_it --reference models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+    "hardware": "4x P300C Blackhole",
+    "mesh": [
+      1,
+      4
+    ],
+    "branch": "mvasiljevic/fmf/google-gemma-4-26b-a4b-it",
+    "measured_base_commit": "bcb21b8d026464190a3ffceae72e420e2e026c56",
+    "source_state": "live datatype-sweep worktree applied over measured_base_commit; exact stage diff is captured by the post-review checkpoint",
+    "environment_notes": "Python 3.12.13; repo-built TTNN; firmware 19.8.0; KMD 2.8.0; TTNN fallback exceptions enabled; FABRIC_1D_RING; serialized device runs; tensor/program caches may be warm and TTFT is not ranked",
+    "reference": "doc/full_model/readiness_aime24_chat.refpt",
+    "pass": true,
+    "status": "pass",
+    "evidence_log": "doc/datatype_sweep/artifacts/dense_bfp4_hifi2/teacher_forcing.log"
+  }
+]

@@ -1,0 +1,5 @@
+{
+  "extends": "baseline.json",
+  "config_id": "decode_dense_gate_up_bfp4_hifi2",
+  "overrides": {"compute_fidelities": {"dense_mlp": "HIFI2"}}
+}

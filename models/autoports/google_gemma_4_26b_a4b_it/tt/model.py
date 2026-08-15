@@ -28,6 +28,14 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import (
     _validate_text_config,
 )
 from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import TP_SIZE, MultichipDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import (
+    decoder_kwargs,
+    dtype_from_policy,
+    dtype_name,
+    fidelity_name,
+    load_precision_policy,
+    weight_dtype_from_policy,
+)
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager, ccl_allgather
 
@@ -102,6 +110,7 @@ class Gemma4FullModel:
         layer_indices: Sequence[int] | None = None,
         tensor_cache_path: str | Path | None = None,
         create_kv_cache: bool = True,
+        precision_config_path: str | Path | None = None,
     ) -> None:
         _require_tp4(mesh_device)
         generation_eos = getattr(hf_config, "eos_token_id", None)
@@ -133,6 +142,31 @@ class Gemma4FullModel:
         self.embed_scale = text_config.hidden_size**0.5
         self.final_logit_softcapping = text_config.final_logit_softcapping
         self.tensor_cache_path = Path(tensor_cache_path) if tensor_cache_path is not None else None
+        self.precision_policy, self.precision_config_path = load_precision_policy(precision_config_path)
+        self.activation_dtype = dtype_from_policy(
+            self.precision_policy, "activation_residual", "activation_dtype", ttnn.bfloat16
+        )
+        self.residual_dtype = dtype_from_policy(
+            self.precision_policy, "activation_residual", "residual_dtype", ttnn.bfloat16
+        )
+        self.kv_cache_dtype = dtype_from_policy(self.precision_policy, "kv_cache", "dtype", ttnn.bfloat16)
+        self.logits_dtype = dtype_from_policy(self.precision_policy, "logits_sampling", "logits_dtype", ttnn.bfloat16)
+        self.terminal_weight_dtype = weight_dtype_from_policy(self.precision_policy, "embedding_lm_head", ttnn.bfloat16)
+        self.ccl_dtype = dtype_from_policy(self.precision_policy, "ccl", "dtype", ttnn.bfloat16)
+        if self.activation_dtype != self.residual_dtype:
+            raise ValueError("Gemma-4 currently requires activation_dtype == residual_dtype at layer boundaries")
+        sampling_policy = self.precision_policy.get("logits_sampling", {})
+        supported_sampling = {
+            "sampling_parameter_dtype": "BF16",
+            "token_dtype": "UINT32",
+            "greedy": "force_argmax_on_sharded_logits",
+        }
+        for field, expected in supported_sampling.items():
+            if sampling_policy.get(field, expected) != expected:
+                raise ValueError(f"unsupported Gemma-4 {field}: {sampling_policy[field]!r}")
+        update_dtype = self.precision_policy.get("kv_cache", {}).get("decode_update_dtype", "BF16")
+        if update_dtype not in ("BF16", "FP32"):
+            raise ValueError("Gemma-4 paged cache decode updates require BF16 or FP32")
         self.mesh_config = MeshConfig((1, TP_SIZE), decode=ModeConfig(tp=TP_SIZE))
         self.ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
         self._replicate = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -160,7 +194,7 @@ class Gemma4FullModel:
         norm_cache = str(cache_root / "final_norm") if cache_root is not None else None
         self.embedding_weight = ttnn.as_tensor(
             embed_weight.unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
+            dtype=self.terminal_weight_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
             cache_file_name=embed_cache,
@@ -168,7 +202,7 @@ class Gemma4FullModel:
         )
         self.lm_head_weight = ttnn.as_tensor(
             embed_weight.transpose(0, 1).contiguous().unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
+            dtype=self.terminal_weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
             cache_file_name=lm_cache,
@@ -193,6 +227,8 @@ class Gemma4FullModel:
                 mesh_device=mesh_device,
                 tensor_cache_path=self.tensor_cache_path,
                 persistent_all_reduce_resources=persistent_all_reduce_resources,
+                ccl_dtype=self.ccl_dtype,
+                **decoder_kwargs(self.precision_policy, layer_idx),
             )
             self.layers.append(layer)
             if layer.persistent_all_reduce_resources is not None:
@@ -237,6 +273,7 @@ class Gemma4FullModel:
                     local_kv_heads=1 if kind is FULL_KIND else 2,
                     head_dim=kind.head_dim,
                     capacity_tokens_per_slot=self.max_seq_len if kind is FULL_KIND else SLIDING_CACHE_TOKENS,
+                    cache_dtype=getattr(self, "kv_cache_dtype", ttnn.bfloat16),
                 )
             )
         return specs
@@ -311,11 +348,43 @@ class Gemma4FullModel:
     def embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         if len(tokens.shape) == 4:
             tokens = ttnn.reshape(tokens, (tokens.shape[-2], tokens.shape[-1]))
-        hidden = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        hidden = ttnn.embedding(tokens, self.embedding_weight, dtype=self.residual_dtype, layout=ttnn.TILE_LAYOUT)
         hidden = ttnn.mul(hidden, self.embed_scale)
         hidden = ttnn.unsqueeze_to_4D(hidden) if len(hidden.shape) == 3 else hidden
         hidden = ccl_allgather(hidden, self.mesh_config, self.ccl_manager, dim=3)
-        return ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
+        return hidden if hidden.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
+
+    def precision_summary(self) -> dict[str, Any]:
+        layers = []
+        for layer_idx, layer in zip(self.layer_indices, self.layers):
+            layers.append(
+                {
+                    "layer": layer_idx,
+                    "attention_weight": dtype_name(layer.weights.qkv.dtype),
+                    "dense_gate_up_weight": dtype_name(layer.weights.mlp_gate.dtype),
+                    "dense_down_weight": dtype_name(layer.weights.mlp_down.dtype),
+                    "expert_weight": dtype_name(layer.weights.expert_gate.dtype),
+                    "router_weight": dtype_name(layer.weights.router_proj.dtype),
+                    "activation": dtype_name(layer.activation_dtype),
+                    "attention_fidelity": fidelity_name(layer.attention_compute_config.math_fidelity),
+                    "dense_mlp_fidelity": fidelity_name(layer.mlp_compute_config.math_fidelity),
+                    "expert_gate_fidelity": fidelity_name(layer.expert_gate_compute_config.math_fidelity),
+                    "expert_down_fidelity": fidelity_name(layer.expert_compute_config.math_fidelity),
+                }
+            )
+        return {
+            "precision_config_path": str(self.precision_config_path) if self.precision_config_path else None,
+            "activation_dtype": dtype_name(self.activation_dtype),
+            "residual_dtype": dtype_name(self.residual_dtype),
+            "kv_cache_dtype": dtype_name(self.kv_cache_dtype),
+            "ccl_dtype": self.precision_policy.get("ccl", {}).get("dtype", "BF16"),
+            "logits_dtype": dtype_name(self.logits_dtype),
+            "embedding_weight_dtype": dtype_name(self.embedding_weight.dtype),
+            "lm_head_weight_dtype": dtype_name(self.lm_head_weight.dtype),
+            "kv_decode_update_dtype": self.precision_policy.get("kv_cache", {}).get("decode_update_dtype", "BF16"),
+            "sampling": self.precision_policy.get("logits_sampling", {}),
+            "layers": layers,
+        }
 
     def _rope_rows(
         self, layer_type: str, positions: ttnn.Tensor, *, decode: bool = False
@@ -349,7 +418,9 @@ class Gemma4FullModel:
             epsilon=self.hf_config.rms_norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        logits = ttnn.linear(hidden, self.lm_head_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = ttnn.linear(
+            hidden, self.lm_head_weight, dtype=self.logits_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         if self.final_logit_softcapping:
             logits = ttnn.mul(logits, 1.0 / self.final_logit_softcapping)
             logits = ttnn.tanh(logits)

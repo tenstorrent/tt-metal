@@ -1,0 +1,9 @@
+{
+  "extends": "baseline.json",
+  "config_id": "dense_down_bfp4_lofi",
+  "overrides": {
+    "weight_groups": {"dense_down": "BFP4_B"},
+    "compute_fidelities": {"dense_mlp": "LOFI"},
+    "layer_exceptions": [{"layers": [0, 29], "overrides": {"weight_groups": {"dense_down": "BFP8_B"}}}]
+  }
+}
