@@ -2561,6 +2561,66 @@ we validated.)*
 
 ---
 
+## ★★★ F29 — the threshold does not just GATE quality, it SETS it. And the two defaults disagree.
+
+The single cleanest experiment in this document, and the most actionable finding for the PR.
+
+### The two defaults
+
+```
+cli.py:10986      pe2e.add_argument("--pcc-target", type=float, default=0.95,
+                     help="PCC threshold for the final HF-vs-TT comparison (default: 0.95)")
+
+e2e_mcp.py:20     E2E_MCP_PCC   required e2e PCC threshold (default 0.99)
+e2e_mcp.py:43     _PCC = float(os.environ.get("E2E_MCP_PCC", "0.99"))
+```
+
+The gate engine documents **0.99** as *"required"*. The CLI passes **0.95** and overrides it. A user
+who never touches the flag gets the loose one, and nothing says a stricter default exists.
+
+### What that costs, measured
+
+Same port, same model, same machine. Only the threshold changed:
+
+| threshold | measured e2e PCC | rounds the fix-loop needed |
+|---|---|---|
+| `0.95` (CLI default) | **0.9586** | `rounds=1 can_stop=True` — passed immediately, loop never worked |
+| `0.99` (engine default) | **0.9986** | round 1, 45+ tool calls of actual repair |
+
+**The 0.9586 was not a ceiling.** It was not a precision limit either — the test's own
+device-precision bound reads `1.0000 at N=4`, and the comparison ran at N=4 (waveform 7680 samples
+at `SAMPLES_PER_FRAME=1920`). It was simply **where the loop stopped, because the gate let it.**
+
+Given a target it could not trivially clear, the same tool on the same code found another four
+points of accuracy.
+
+### Why this is the important version of O8
+
+O8 recorded that the accept test has no exchange rate — it keeps any change that is faster and above
+the floor. This is the mirror image and it is worse: **the threshold is not a floor, it is the
+target.** Quality delivered ≈ quality demanded. A default set four points below the engine's own
+documented requirement therefore does not merely permit worse ports — it *produces* them.
+
+For a model where `§6.31` records that one flipped semantic code redirects an entire utterance, and
+where the same port at 0.95 shipped `code exact-match: all codebooks 0.8649` — one acoustic code in
+seven differing, against the hand-port's measured `codes_real_pct 5.2` — that gap is not academic.
+
+### Fixes
+
+1. **Make the CLI inherit the engine's default rather than override it.** One line. If 0.99 is
+   documented as *required*, the CLI should not silently ask for less.
+2. **Print the threshold's provenance in the report** — `pcc>=0.95 (CLI default; engine default is
+   0.99)`. The banner currently states the number with no indication that it was lowered.
+3. **Derive the floor from the measured precision bound.** The test already computes it
+   (`1.0000 at N=4, 0.9458 at the 8-frame cap`). A fixed constant is either unreachable or too
+   generous depending on the horizon; the bound is neither.
+
+*(Recommendation 3 matters because 0.99 is NOT universally safe: at the 8-frame horizon this model's
+own reference is only reproducible to 0.9458, so a hard 0.99 would be unsatisfiable there. The right
+target is a function of the measured bound, not a constant.)*
+
+---
+
 ## Corrections to this document
 
 ---
@@ -2972,6 +3032,66 @@ Batch-5 is untested here, not structurally blocked.
 
 *(Proposed, deliberately NOT implemented here — this is a design suggestion for the PR, not a change
 we validated.)*
+
+---
+
+## ★★★ F29 — the threshold does not just GATE quality, it SETS it. And the two defaults disagree.
+
+The single cleanest experiment in this document, and the most actionable finding for the PR.
+
+### The two defaults
+
+```
+cli.py:10986      pe2e.add_argument("--pcc-target", type=float, default=0.95,
+                     help="PCC threshold for the final HF-vs-TT comparison (default: 0.95)")
+
+e2e_mcp.py:20     E2E_MCP_PCC   required e2e PCC threshold (default 0.99)
+e2e_mcp.py:43     _PCC = float(os.environ.get("E2E_MCP_PCC", "0.99"))
+```
+
+The gate engine documents **0.99** as *"required"*. The CLI passes **0.95** and overrides it. A user
+who never touches the flag gets the loose one, and nothing says a stricter default exists.
+
+### What that costs, measured
+
+Same port, same model, same machine. Only the threshold changed:
+
+| threshold | measured e2e PCC | rounds the fix-loop needed |
+|---|---|---|
+| `0.95` (CLI default) | **0.9586** | `rounds=1 can_stop=True` — passed immediately, loop never worked |
+| `0.99` (engine default) | **0.9986** | round 1, 45+ tool calls of actual repair |
+
+**The 0.9586 was not a ceiling.** It was not a precision limit either — the test's own
+device-precision bound reads `1.0000 at N=4`, and the comparison ran at N=4 (waveform 7680 samples
+at `SAMPLES_PER_FRAME=1920`). It was simply **where the loop stopped, because the gate let it.**
+
+Given a target it could not trivially clear, the same tool on the same code found another four
+points of accuracy.
+
+### Why this is the important version of O8
+
+O8 recorded that the accept test has no exchange rate — it keeps any change that is faster and above
+the floor. This is the mirror image and it is worse: **the threshold is not a floor, it is the
+target.** Quality delivered ≈ quality demanded. A default set four points below the engine's own
+documented requirement therefore does not merely permit worse ports — it *produces* them.
+
+For a model where `§6.31` records that one flipped semantic code redirects an entire utterance, and
+where the same port at 0.95 shipped `code exact-match: all codebooks 0.8649` — one acoustic code in
+seven differing, against the hand-port's measured `codes_real_pct 5.2` — that gap is not academic.
+
+### Fixes
+
+1. **Make the CLI inherit the engine's default rather than override it.** One line. If 0.99 is
+   documented as *required*, the CLI should not silently ask for less.
+2. **Print the threshold's provenance in the report** — `pcc>=0.95 (CLI default; engine default is
+   0.99)`. The banner currently states the number with no indication that it was lowered.
+3. **Derive the floor from the measured precision bound.** The test already computes it
+   (`1.0000 at N=4, 0.9458 at the 8-frame cap`). A fixed constant is either unreachable or too
+   generous depending on the horizon; the bound is neither.
+
+*(Recommendation 3 matters because 0.99 is NOT universally safe: at the 8-frame horizon this model's
+own reference is only reproducible to 0.9458, so a hard 0.99 would be unsatisfiable there. The right
+target is a function of the measured bound, not a constant.)*
 
 ---
 
