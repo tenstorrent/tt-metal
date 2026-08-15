@@ -63,11 +63,12 @@ def l1_accumulation_config(
 def pack_dest_init(
     config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
+    code = ""
+    if operation.stage_id == 1:
+        code += f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
     if config.quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    elif operation.stage_id != 1:
-        return ""
-    return f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
+        code += "_llk_dest_dvalid_configure_<dest_dvalid::client::PACK, dest_dvalid::client::PACK>();\n"
+    return code
 
 
 def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
@@ -82,7 +83,10 @@ def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
     if config.quasar_use_dvalid:
-        return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
+        return (
+            "_llk_dest_dvalid_signal_<dest_dvalid::client::PACK, "
+            f"{dest_sync}, {dest_acc}>();\n"
+        )
     return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
 
 

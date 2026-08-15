@@ -123,11 +123,17 @@ class FuserConfigSchema(BaseModel):
     dest_acc: DestAccumulation = DestAccumulation.No
     loop_factor: Annotated[int, Field(ge=1)] = 16
     quasar_use_dvalid: bool = False
+    quasar_isolate_sfpu: bool = False
     operands: List[OperandDefinition] = Field(..., min_length=1)
     operations: List[OperationSchema] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     def validate_config(self) -> "FuserConfigSchema":
+        if self.quasar_use_dvalid and not self.quasar_isolate_sfpu:
+            raise ValueError(
+                "quasar_use_dvalid requires quasar_isolate_sfpu to be true"
+            )
+
         formats = {op_def.name: op_def.format for op_def in self.operands}
         seen_operands: set[str] = set()
 
@@ -211,6 +217,7 @@ class FuserConfigSchema(BaseModel):
                 test_name=test_name,
                 loop_factor=self.loop_factor,
                 quasar_use_dvalid=self.quasar_use_dvalid,
+                quasar_isolate_sfpu=self.quasar_isolate_sfpu,
             ),
             operand_registry=operands,
         )

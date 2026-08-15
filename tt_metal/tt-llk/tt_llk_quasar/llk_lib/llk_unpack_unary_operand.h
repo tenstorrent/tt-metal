@@ -378,7 +378,7 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, runs the UNPACK_MATH/MATH_PACK semaphore handshake for unpack-to-DEST; requires UNP_SEL == UNP_DEST, values = <true/false>
+ * @tparam unpack_to_dest: When true, unpacks straight into DEST; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @tparam DEST_SYNC_MODE: In the unpack-to-DEST path, SyncHalf flips the DEST section base to the other bank after each tile, values = <SyncFull/SyncHalf>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
@@ -395,25 +395,11 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // The math thread is the middleman with two single-counting semaphores (max=N each).
-        // Without an extra wait on MATH_PACK, unpack could race 2N iterations ahead of pack
-        // and overwrite a bank that pack has not read yet. Waiting on both keeps unpack
-        // within N iterations of pack.
-        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
-
         // UNP_DEST is driven off the UNP_A bank's counters.
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
 
-        // Drain UNPACK0 before posting "filled" so the post does not race the writes math reads.
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-
-        // Unpack owns the DEST section base, so it flips to the other bank for the next iteration
-        if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
-        {
-            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
-        }
         return;
     }
 

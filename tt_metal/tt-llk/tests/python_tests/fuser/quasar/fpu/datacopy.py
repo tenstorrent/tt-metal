@@ -67,10 +67,7 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         if compute_unit.unpack_to_dest.value:
-            return (
-                "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-                "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
-            )
+            return ""
 
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
 

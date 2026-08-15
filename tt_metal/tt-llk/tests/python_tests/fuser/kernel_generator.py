@@ -225,11 +225,12 @@ class FusedKernelGenerator:
                 self.config.global_config.dest_acc.value
             )
 
-        quasar_include = (
-            '#include "llk_sync.h"\n'
-            if self.config.global_config.architecture == ChipArchitecture.QUASAR
-            else '#include "operand.h"\n'
-        )
+        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            quasar_include = '#include "llk_sync.h"\n'
+            if self.config.global_config.quasar_use_dvalid:
+                quasar_include += '#include "llk_dest_dvalid.h"\n'
+        else:
+            quasar_include = '#include "operand.h"\n'
 
         combined = (
             f"#define FUSED_TEST\n"

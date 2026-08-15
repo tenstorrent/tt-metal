@@ -128,7 +128,11 @@ def configure_unpack(
     return code
 
 
-def dvalid_init(**kwargs) -> str:
+def dvalid_init(*args, **kwargs) -> str:
+    return ""
+
+
+def dvalid_signal(*args, **kwargs) -> str:
     return ""
 
 

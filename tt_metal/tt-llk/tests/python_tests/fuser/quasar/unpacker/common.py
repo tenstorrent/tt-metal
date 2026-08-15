@@ -5,6 +5,7 @@
 from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
+from fuser.quasar.fpu.common import math_writes_dest, unpack_writes_dest
 from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
 
@@ -87,10 +88,29 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
-def dvalid_init(quasar_use_dvalid: bool = False) -> str:
-    if quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    return ""
+def dvalid_init(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if not config.quasar_use_dvalid:
+        return ""
+    if not unpack_writes_dest(operation):
+        return "_llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();\n"
+    successor = "FPU" if math_writes_dest(operation) else "PACK"
+    return (
+        "_llk_dest_dvalid_configure_<dest_dvalid::client::UNPACK, "
+        f"dest_dvalid::client::{successor}, true>();\n"
+    )
+
+
+def dvalid_signal(
+    config: "GlobalConfig", operation: "L1Operation", compute_node: FpuNode
+) -> str:
+    if not config.quasar_use_dvalid or not compute_node.unpack_to_dest.value:
+        return ""
+    dest_sync = operation.dest_sync.cpp_enum_value
+    dest_acc = config.dest_acc.cpp_enum_value
+    return (
+        "_llk_dest_dvalid_signal_<dest_dvalid::client::UNPACK, "
+        f"{dest_sync}, {dest_acc}>();\n"
+    )
 
 
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:

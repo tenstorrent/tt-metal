@@ -215,9 +215,7 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
         init_code = ""
-        init_code += unpack_common.dvalid_init(
-            quasar_use_dvalid=config.quasar_use_dvalid
-        )
+        init_code += unpack_common.dvalid_init(config, operation)
         init_code += config.sentinel.hw_configure_unpack(config, operation)
         if hoist_reconfig and unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(
@@ -251,6 +249,7 @@ class ComputePipeline:
                 if not hoist:
                     body += cu.unpack_init(operation, config, block)
                 body += cu.unpack_run(operation, config, block)
+                body += unpack_common.dvalid_signal(config, operation, cu)
                 if not hoist:
                     body += cu.unpack_uninit(operation, config, block)
             return body
