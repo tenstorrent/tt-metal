@@ -227,6 +227,11 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             enter_stage=int(os.environ.get("LTX25_DIFFVAE_ENTER_STAGE", "1")),
         )
 
+    def release_traces(self) -> None:
+        super().release_traces()
+        if getattr(self, "diffvae", None) is not None:
+            self.diffvae.release_traces()
+
     def decode_latents(self, latent, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"):
         """Route video decode through the DiffVAE when it is loaded, else the conv decoder."""
         if self.diffvae is None:
@@ -236,6 +241,11 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             "DiffVAE returns host pixels, so the conv decoder's on-device YUV path does not "
             "apply; set LTX_YUV_EXPORT=0"
         )
+        # Follows LTX_TRACED unless overridden. The override exists because DiffVAE's capture is
+        # the only traced region carrying fabric CCL, so it is the one worth turning off on its
+        # own when a traced run misbehaves.
+        override = os.environ.get("LTX25_DIFFVAE_TRACED")
+        self.diffvae._traced = bool(self._traced) if override is None else override in ("1", "true", "True")
         batch = latent.shape[0]
         spatial = latent.reshape(batch, latent_frames, latent_h, latent_w, self.in_channels)
         spatial = spatial.permute(0, 4, 1, 2, 3)

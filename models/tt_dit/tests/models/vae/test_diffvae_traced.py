@@ -103,6 +103,11 @@ def test_decode_device_traces_and_replays(*, mesh_device, latent_frames, latent_
             shard=shard,
         )
 
+    # Compile first and time second. Tracer runs its own warm prep before capturing, so timing a
+    # cold eager call against a warm replay would report the JIT as a speedup.
+    eager = device_half(latent_tt, noise_tt, timestep)
+    ttnn.synchronize_device(mesh_device)
+
     start = time.perf_counter()
     eager = device_half(latent_tt, noise_tt, timestep)
     ttnn.synchronize_device(mesh_device)

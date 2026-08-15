@@ -36,6 +36,7 @@ from ...layers.na3d import (
     uniform_halo,
 )
 from ...layers.normalization import RMSNorm
+from ...utils.tracing import Tracer
 
 ROPE_BASE = 10000.0
 
@@ -675,6 +676,10 @@ class DiffVAEDecoder(Module):
             dtype=dtype,
         )
         self.dtype = dtype
+        # Set by the pipeline once every program is compiled, mirroring the conv decoder's
+        # _vae_traced: capturing on cold state would bake compilation into the trace.
+        self._traced = False
+        self._tracers: dict[tuple, Tracer] = {}
 
     def load_checkpoint(self, path) -> None:
         """Load both halves from one LTX-2.5 video-VAE safetensors file."""
@@ -784,10 +789,33 @@ class DiffVAEDecoder(Module):
         timestep = ttnn.from_torch(
             torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
-        out = self.decode_device(
+        out = self._decode_device_maybe_traced(
             latent_tt, noise_tt, timestep, grid, padded_dims=padded_dims, latent_frames=latent.shape[2], shard=shard
         )
         return self.stage5.unpack_pixels(out, grid, shard=shard)
+
+    def _decode_device_maybe_traced(self, latent, noise, timestep, grid, **geometry) -> ttnn.Tensor:
+        """Replay the captured device half when tracing is on, else run it eagerly.
+
+        The trace is keyed on geometry because a capture bakes shapes in; a decode at a new size
+        captures its own. Replay reuses the captured input buffers, so the fresh uploads are
+        copied into them rather than passed.
+        """
+        if not self._traced:
+            return self.decode_device(latent, noise, timestep, grid, **geometry)
+
+        key = (grid, geometry["padded_dims"], geometry["latent_frames"], geometry["shard"] is not None)
+        tracer = self._tracers.get(key)
+        if tracer is None:
+            tracer = Tracer(lambda a, b, c: self.decode_device(a, b, c, grid, **geometry), device=self.mesh_device)
+            self._tracers[key] = tracer
+        return tracer(latent, noise, timestep)
+
+    def release_traces(self) -> None:
+        """Drop captured traces so their device memory returns to the allocator."""
+        for tracer in self._tracers.values():
+            tracer.release_trace()
+        self._tracers.clear()
 
     def decode_device(
         self,
