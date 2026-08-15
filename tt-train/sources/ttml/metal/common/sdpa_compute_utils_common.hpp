@@ -9,6 +9,17 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/exp.h"
 
+// FP32 bits → BF16 bits with round-to-nearest-even. A plain `>> 16` truncation
+// can be off by a full BF16 ulp (~2^-8 relative), which matters here because the
+// WH exp path applies the BF16 scale to P while the LSE and the backward pass use
+// the full FP32 scale — the rounding error would become a systematic fw/bw
+// mismatch instead of noise. RTN halves the worst-case error; carrying full FP32
+// through the WH SFPU scale multiply would remove it entirely but needs LLK work.
+inline constexpr uint16_t sdpa_fp32_bits_to_bf16_rne(uint32_t fp32_bits) {
+    const uint32_t rounding_bias = 0x7FFFU + ((fp32_bits >> 16) & 1U);
+    return static_cast<uint16_t>((fp32_bits + rounding_bias) >> 16);
+}
+
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
 
@@ -171,7 +182,7 @@ inline void sdpa_exp_tile_init() {
 template <uint32_t scaler_fp32>
 inline void sdpa_exp_tile_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
+    constexpr uint16_t scaler_bf16 = sdpa_fp32_bits_to_bf16_rne(scaler_fp32);
 #ifdef TRISC_MATH
     _llk_math_eltwise_unary_sfpu_params_(
         _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, scaler_bf16>, idst, VectorMode::RC);
@@ -186,7 +197,7 @@ inline void sdpa_exp_tile_scaled(uint32_t idst) {
 template <uint32_t scaler_fp32>
 inline void sdpa_exp_tile_first_column_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
+    constexpr uint16_t scaler_bf16 = sdpa_fp32_bits_to_bf16_rne(scaler_fp32);
 #ifdef TRISC_MATH
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr int DST_STRIDE = 2;
