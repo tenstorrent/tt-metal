@@ -158,13 +158,22 @@ inline void generate_windowed_mask_for_q_chunk(
             k_num_chunks,
             tt::constants::TILE_HEIGHT);
         const auto box = neighborhood_box(
-            q_chunk, Sq_chunk_t, valid_Sqt, q_tok_offset, nb_T, nb_H, nb_W, nb_kt, nb_kh, tt::constants::TILE_HEIGHT);
-        const uint32_t HW = nb_H * nb_W;
-        const uint32_t sites = nb_T * HW;
+            q_chunk,
+            Sq_chunk_t,
+            valid_Sqt,
+            q_tok_offset,
+            nb_T,
+            nb_H,
+            nb_W,
+            nb_kt,
+            nb_kh,
+            nb_kw,
+            tt::constants::TILE_HEIGHT);
+        const uint32_t sites = nb_T * nb_H * nb_W;
         const uint32_t chunk_toks = Sk_chunk_t * tt::constants::TILE_HEIGHT;
         CircularBuffer cb_mask(cb_mask_in);
         for (uint32_t k_chunk = nbr_range.k_lo; k_chunk < nbr_range.k_hi; ++k_chunk) {
-            if (!neighborhood_chunk_active(k_chunk, chunk_toks, HW, nb_W, sites, box)) {
+            if (!neighborhood_chunk_active(k_chunk, chunk_toks, nb_W, nb_H, sites, box)) {
                 continue;
             }
             const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);

@@ -178,6 +178,8 @@ struct NeighborhoodBox {
     uint32_t t1;
     uint32_t h_lo;
     uint32_t h_hi;
+    uint32_t w_lo;
+    uint32_t w_hi;
 };
 
 inline uint32_t nbr_shift_start(uint32_t q, uint32_t len, uint32_t ker) {
@@ -203,13 +205,14 @@ inline NeighborhoodBox neighborhood_box(
     uint32_t W,
     uint32_t kt,
     uint32_t kh,
+    uint32_t kw,
     uint32_t tile_height) {
     const uint32_t HW = H * W;
     const uint32_t sites = T * HW;
     const uint32_t q_row_start_tile = q_chunk * Sq_chunk_t < valid_Sqt ? q_chunk * Sq_chunk_t : valid_Sqt;
     const uint32_t q_lo = q_tok_offset + q_row_start_tile * tile_height;
     if (q_lo >= sites) {
-        return {0, 1, 0, H};  // padded-tail chunk: degenerate box (its rows are never written)
+        return {0, 1, 0, H, 0, W};  // padded-tail chunk: degenerate box (its rows are never written)
     }
     uint32_t q_hi = q_lo + Sq_chunk_t * tile_height;
     if (q_hi > sites) {
@@ -233,14 +236,27 @@ inline NeighborhoodBox neighborhood_box(
     const uint32_t ker_h = kh > H ? H : kh;
     const uint32_t h_lo = nbr_shift_start(qh_min, H, kh);
     const uint32_t h_hi = nbr_shift_start(qh_max, H, kh) + ker_h;
-    return {t0, t1, h_lo, h_hi};
+
+    // W band: only when the whole chunk lies in ONE (t, h) row (row index = token / W); otherwise the
+    // w coordinate wraps and can't be cheaply bounded, so keep the whole W axis (falls back to 5a).
+    uint32_t w_lo = 0;
+    uint32_t w_hi = W;
+    if (q_lo / W == (q_hi - 1) / W) {
+        const uint32_t qw_min = q_lo % W;
+        const uint32_t qw_max = (q_hi - 1) % W;
+        const uint32_t ker_w = kw > W ? W : kw;
+        w_lo = nbr_shift_start(qw_min, W, kw);
+        w_hi = nbr_shift_start(qw_max, W, kw) + ker_w;
+    }
+    return {t0, t1, h_lo, h_hi, w_lo, w_hi};
 }
 
 // A K chunk (flattened tokens [c*chunk_toks, c*chunk_toks + chunk_toks)) is active iff it overlaps
-// the box's H band in some in-band frame: union over t in [t0,t1) of [t*HW + h_lo*W, t*HW + h_hi*W).
-// A chunk touches at most a couple of frames (chunk_toks << HW), so this is O(1) in practice.
+// the box in some (t, h) row it touches: within row r = (t*H + h), the in-window K is [r*W + w_lo,
+// r*W + w_hi). A chunk spans at most a couple of rows (chunk_toks << W typically), so this is O(1).
+// With w_lo=0, w_hi=W this reduces to the 5a whole-row (H-band) test.
 inline bool neighborhood_chunk_active(
-    uint32_t c, uint32_t chunk_toks, uint32_t HW, uint32_t W, uint32_t sites, const NeighborhoodBox& box) {
+    uint32_t c, uint32_t chunk_toks, uint32_t W, uint32_t H, uint32_t sites, const NeighborhoodBox& box) {
     const uint32_t lo = c * chunk_toks;
     if (lo >= sites) {
         return false;
@@ -249,14 +265,16 @@ inline bool neighborhood_chunk_active(
     if (hi > sites) {
         hi = sites;
     }
-    const uint32_t f0 = lo / HW;
-    const uint32_t f1 = (hi - 1) / HW;
-    for (uint32_t t = f0; t <= f1; ++t) {
-        if (t < box.t0 || t >= box.t1) {
+    const uint32_t r0 = lo / W;
+    const uint32_t r1 = (hi - 1) / W;
+    for (uint32_t r = r0; r <= r1; ++r) {
+        const uint32_t t = r / H;
+        const uint32_t h = r % H;
+        if (t < box.t0 || t >= box.t1 || h < box.h_lo || h >= box.h_hi) {
             continue;
         }
-        const uint32_t band_lo = t * HW + box.h_lo * W;
-        const uint32_t band_hi = t * HW + box.h_hi * W;
+        const uint32_t band_lo = r * W + box.w_lo;
+        const uint32_t band_hi = r * W + box.w_hi;
         if (lo < band_hi && hi > band_lo) {
             return true;
         }

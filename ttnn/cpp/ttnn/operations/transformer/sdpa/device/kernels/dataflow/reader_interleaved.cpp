@@ -198,6 +198,7 @@ void kernel_main() {
     uint32_t nb_W = 0;
     uint32_t nb_kt = 0;
     uint32_t nb_kh = 0;
+    uint32_t nb_kw = 0;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
@@ -208,7 +209,7 @@ void kernel_main() {
         nb_W = get_arg_val<uint32_t>(argidx++);   // 16: W
         nb_kt = get_arg_val<uint32_t>(argidx++);  // 17: kt
         nb_kh = get_arg_val<uint32_t>(argidx++);  // 18: kh
-        (void)get_arg_val<uint32_t>(argidx++);    // 19: kw (W band is step 5b; not needed yet)
+        nb_kw = get_arg_val<uint32_t>(argidx++);  // 19: kw
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -461,13 +462,13 @@ void kernel_main() {
                         nb_W,
                         nb_kt,
                         nb_kh,
+                        nb_kw,
                         tt::constants::TILE_HEIGHT);
-                    const uint32_t HW = nb_H * nb_W;
-                    const uint32_t sites = nb_T * HW;
+                    const uint32_t sites = nb_T * nb_H * nb_W;
                     const uint32_t chunk_toks = Sk_chunk_t * tt::constants::TILE_HEIGHT;
                     uint32_t n_active = 0;
                     for (uint32_t c = windowed_k_lo; c < windowed_k_hi; ++c) {
-                        if (neighborhood_chunk_active(c, chunk_toks, HW, nb_W, sites, nbr_box)) {
+                        if (neighborhood_chunk_active(c, chunk_toks, nb_W, nb_H, sites, nbr_box)) {
                             ++n_active;
                         }
                     }
@@ -549,13 +550,9 @@ void kernel_main() {
                 // 3D-neighborhood packs only the active chunks (the H band is scattered across the T
                 // band); skipping an inactive chunk here must match the writer's mask skip and the
                 // packed count pushed to the ctrl CB above. Block-diagonal (nb_T == 0) streams all.
-                if (nb_T != 0 && !neighborhood_chunk_active(
-                                     k_chunk,
-                                     Sk_chunk_t * tt::constants::TILE_HEIGHT,
-                                     nb_H * nb_W,
-                                     nb_W,
-                                     nb_T * nb_H * nb_W,
-                                     nbr_box)) {
+                if (nb_T != 0 &&
+                    !neighborhood_chunk_active(
+                        k_chunk, Sk_chunk_t * tt::constants::TILE_HEIGHT, nb_W, nb_H, nb_T * nb_H * nb_W, nbr_box)) {
                     continue;
                 }
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
