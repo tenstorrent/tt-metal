@@ -87,6 +87,24 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     }
+
+    // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
+    // smaller companion tensor would be read or written past its allocation.
+    auto check_shape = [&param](const ttnn::Tensor& tensor, const std::string& name) {
+        TT_FATAL(
+            tensor.padded_shape() == param.padded_shape(),
+            "Tensor '{}' must match the parameter's padded shape. Parameter: {}, '{}': {}",
+            name,
+            param.padded_shape(),
+            name,
+            tensor.padded_shape());
+    };
+    check_shape(grad, "Gradient");
+    check_shape(exp_avg, "Exponential Average Buffer");
+    check_shape(exp_avg_sq, "Exponential Average Squared Buffer");
+    if (max_exp_avg_sq.has_value()) {
+        check_shape(max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer");
+    }
 }
 
 AdamWDeviceOperation::spec_return_value_t AdamWDeviceOperation::compute_output_specs(
