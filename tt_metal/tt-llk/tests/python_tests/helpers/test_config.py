@@ -456,16 +456,6 @@ class TestConfig:
             f"{debug_flag}-{opt_level} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
-            # The backend replay pass records repeated Tensix sequences into
-            # the replay buffer, but it does not exclude MOP: the Replay
-            # Expander sits after the MOP Expander, which is the sole unit
-            # that handles MOP, so a MOP replayed out of the buffer is never
-            # expanded and the unpacker/packer hang waiting for instructions
-            # that never arrive.  Harmless while most instructions were opaque
-            # MMIO stores; routing TT_*/TTI_* through intrinsics made the pass
-            # visible to FPU/sync sequences and it started recording MOPs.
-            # Re-enable once the pass refuses to record MOP/MOP_CFG.
-            "-mno-tt-tensix-optimize-replay "
             f"{os.environ.get('TT_LLK_EXTRA_CFLAGS', '')} "
         )
         TestConfig.WITH_COVERAGE = with_coverage
