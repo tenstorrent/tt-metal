@@ -5,6 +5,7 @@
 #include "select_target_logit_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <limits>
 
 #include "select_target_logit_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -49,6 +50,15 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
         tensor_args.logit.logical_shape().rank() == 4U,
         "SelectTargetLogit: logit must be rank 4, got rank {}",
         tensor_args.logit.logical_shape().rank());
+
+    // The reader sizes its target-page reads from the target's inner dim, but the program cache
+    // is keyed on the logit shape alone; this tie keeps a cached program valid for the target
+    // tensor it runs with.
+    TT_FATAL(
+        tensor_args.target.logical_shape()[-1] == tensor_args.logit.logical_shape()[-2],
+        "SelectTargetLogit: target inner dim ({}) must equal logit sequence dim ({})",
+        tensor_args.target.logical_shape()[-1],
+        tensor_args.logit.logical_shape()[-2]);
 
     TT_FATAL(args.local_V > 0U, "SelectTargetLogit: local_V must be > 0");
 
@@ -107,11 +117,17 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
 }
 
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v / local_V / cluster_axis only affect runtime args (they're patched by
-    // override_runtime_arguments per coord); they don't change the compiled kernel binary.
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // first_v / local_V only affect runtime args (they're patched by override_runtime_arguments
+    // per coord). cluster_axis, however, determines the mesh-workload structure (one program per
+    // TP slab when set vs one per coordinate when unset) and the program-to-coordinate mapping,
+    // so it must be part of the hash. value_or keeps nullopt distinct from axis 0 (an optional
+    // hashes its payload directly, so nullopt and 0 would otherwise collide); the sentinel can
+    // never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SelectTargetLogitDeviceOperation>(
-        tensor_args.logit.dtype(), tensor_args.logit.logical_shape());
+        args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
+        tensor_args.logit.dtype(),
+        tensor_args.logit.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::select_target_logit::device

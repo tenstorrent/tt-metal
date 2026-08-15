@@ -51,6 +51,16 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+
+    // The reader sizes its target-page reads from the target's inner dim, but the program cache
+    // is keyed on the input shape alone; this tie keeps a cached program valid for the target
+    // tensor it runs with.
+    TT_FATAL(
+        target_tensor.logical_shape()[-1] == input_tensor.logical_shape()[-2],
+        "CrossEntropyBackward: target inner dim ({}) must equal input sequence dim ({})",
+        target_tensor.logical_shape()[-1],
+        input_tensor.logical_shape()[-2]);
+
     if (preallocated_output_tensor.has_value()) {
         check_tensor(
             preallocated_output_tensor.value(),
