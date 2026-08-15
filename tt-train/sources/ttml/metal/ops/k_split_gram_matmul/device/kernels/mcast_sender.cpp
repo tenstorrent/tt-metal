@@ -226,8 +226,8 @@ void kernel_main() {
 #ifdef SENDER_REDUCE_SEND
             {
                 // This core's compute iterates column-major ((m_sub, n_sub) swapped vs
-                // this loop); the tile-count product is the same either way, and the
-                // credit handshake matches the helper's row-major consume order.
+                // this loop), but M_block == N_block makes the edge-block extents
+                // symmetric in the two indices, so block_tiles is correct either way.
                 const uint32_t M_start = m_sub * rows_per_block;
                 const uint32_t current_M_block = std::min(rows_per_block, Mpc - M_start);
                 const uint32_t N_start = n_sub * rows_per_block;

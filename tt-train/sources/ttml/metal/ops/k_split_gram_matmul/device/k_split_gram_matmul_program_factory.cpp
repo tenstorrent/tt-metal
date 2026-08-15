@@ -469,7 +469,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                  block_sz,
                  (uint32_t)tt::CBIndex::c_5,
                  reduce_sem,
-                 Mpc,
                  num_m_blocks,
                  M_block,
                  num_n_blocks,
@@ -510,26 +509,16 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             .defines = defines};
     };
 
-    // Lower off-diagonal: REDUCE_SENDER_TRANSPOSE
+    // Lower triangle + diagonal: REDUCE_SENDER_TRANSPOSE. Diagonal cores send transposed
+    // too — their even-K partial is symmetric, so the transposed send matches the helper's
+    // row-major consume order under the senders' column-major iteration.
     std::vector<tt::tt_metal::CoreCoord> sender_transpose_cores;
-    for (uint32_t y = 1; y < grid_dim; y++)
-        for (uint32_t x = 0; x < y; x++) sender_transpose_cores.push_back({x, y});
+    for (uint32_t y = 0; y < grid_dim; y++)
+        for (uint32_t x = 0; x <= y; x++) sender_transpose_cores.push_back({x, y});
     CreateKernel(
         program,
         compute_matmul_path,
         make_core_range_set(sender_transpose_cores),
-        compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
-
-    // Diagonal: REDUCE_SENDER_TRANSPOSE — the even-K partial of a diagonal block is
-    // symmetric, so the transposed send matches the helper's row-major consume order
-    // under the senders' column-major iteration.
-    std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
-    sender_diag_cores.reserve(grid_dim);
-    for (uint32_t d = 0; d < grid_dim; d++) sender_diag_cores.push_back({d, d});
-    CreateKernel(
-        program,
-        compute_matmul_path,
-        make_core_range_set(sender_diag_cores),
         compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR
