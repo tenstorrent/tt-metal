@@ -79,6 +79,24 @@ using namespace ckernel::sfpu;
 
 constexpr int iterations = 8;
 
+// Fresh semantic-C++ discriminator for UInt16 -> Float16_b.  It deliberately
+// names no physical LREG, raw instruction, replay range, or load-macro
+// schedule.  The typed Dst layout is the architectural boundary; allocation,
+// conversion scheduling, and any future macro formation belong to GCC.
+template <int ITERATIONS>
+inline void calculate_typecast_uint16_to_fp16b_semantic()
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        sfpi::vUInt16 input = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
+        sfpi::vFloat fp32 = sfpi::convert<sfpi::vFloat>(input, sfpi::RoundMode::Nearest);
+        sfpi::vFloat16b fp16b = sfpi::convert<sfpi::vFloat16b>(fp32, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::F16b>() = fp16b;
+        sfpi::dst_reg++;
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -122,7 +140,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 block_tile, formats.math, formats.math);
 
             // In-place numeric typecast of the tile sitting in Dest.
-            test_utils::call_unary_sfpu_operation<
+            if constexpr (TYPECAST_IMPL == 1)
+            {
+                // The semantic body describes one 8-row face.  Keep tile
+                // addressing and face traversal at the existing typed LLK
+                // boundary rather than baking physical offsets into the body.
+                _llk_math_eltwise_unary_sfpu_params_(
+                    calculate_typecast_uint16_to_fp16b_semantic<iterations>,
+                    block_tile,
+                    VectorMode::RC);
+            }
+            else
+            {
+                test_utils::call_unary_sfpu_operation<
                 DST_SYNC,
                 is_fp32_dest_acc_en,
                 SFPU_UNARY_OPERATION,
@@ -134,6 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 false /* CLAMP_NEGATIVE */,
                 TYPECAST_IN_FORMAT,
                 TYPECAST_OUT_FORMAT>(block_tile);
+            }
         }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

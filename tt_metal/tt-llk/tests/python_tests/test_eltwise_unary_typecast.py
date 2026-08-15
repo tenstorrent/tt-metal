@@ -47,6 +47,7 @@ from helpers.test_variant_parameters import (
     TYPECAST_FORMATS,
     DestSync,
     generate_input_dim,
+    TemplateParameter,
 )
 from helpers.utils import passed_test
 
@@ -90,6 +91,27 @@ TYPECAST_PAIRS = [
     and in_fmt in _ARCH_SUPPORTED_FORMATS
     and out_fmt in _ARCH_SUPPORTED_FORMATS
 ]
+
+
+class TypecastImpl(TemplateParameter):
+    """Select production or fresh semantic C++ for the audited 16-bit pair."""
+
+    def __init__(self, value: int):
+        self.value = value
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int TYPECAST_IMPL = {self.value};"
+
+
+def _typecast_impls(formats: InputOutputFormat) -> list[int]:
+    # Keep the full production matrix unchanged.  The generated selector is
+    # intentionally narrow until this first audited pair clears every gate.
+    if (
+        formats.input_format == DataFormat.UInt16
+        and formats.output_format == DataFormat.Float16_b
+    ):
+        return [0, 1]
+    return [0]
 
 
 def _is_block_float(fmt: DataFormat) -> bool:
@@ -148,6 +170,7 @@ def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
 
 @parametrize(
     formats=TYPECAST_PAIRS,
+    typecast_impl=_typecast_impls,
     dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
     input_dimensions=[
@@ -156,6 +179,7 @@ def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
 )
 def test_eltwise_unary_typecast(
     formats: InputOutputFormat,
+    typecast_impl: int,
     dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
@@ -227,6 +251,7 @@ def test_eltwise_unary_typecast(
             # (input, output) pair that selects the concrete typecast kernel.
             MATH_OP(mathop=MathOperation.Typecast),
             TYPECAST_FORMATS(formats.input_format, formats.output_format),
+            TypecastImpl(typecast_impl),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
