@@ -23,7 +23,7 @@ the parity test holds against upstream), and the ttnn executor consumes the same
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -98,6 +98,12 @@ class TileGroup:
     key_slices: tuple[tuple[slice, slice, slice], ...]
     n_queries: int
     n_keys: int
+    real_tiles: int | None = None
+    """Leading tiles that carry output. The rest are padding a mesh needs to agree on shape."""
+
+    @property
+    def kept_tiles(self) -> int:
+        return len(self.query_slices) if self.real_tiles is None else self.real_tiles
 
 
 @dataclass(frozen=True)
@@ -381,7 +387,9 @@ def na3d_torch(
     out = v.new_empty((batch, *plan.output_dims, heads, head_dim))
     for group in plan.groups:
         mask = group_mask(group, dtype=q.dtype, device=q.device)
-        for q_slice, k_slice in zip(group.query_slices, group.key_slices):
+        # Padding tiles exist so a mesh agrees on shape; on host there is no dispatch to keep
+        # uniform, so they are skipped rather than computed and discarded.
+        for q_slice, k_slice in zip(group.query_slices[: group.kept_tiles], group.key_slices[: group.kept_tiles]):
             # (B, tq, th, tw, NH, HD) -> (B, NH, Nq, HD): attention wants heads ahead of seq.
             q_tile = q[:, q_slice[0], q_slice[1], q_slice[2]]
             tile_shape = q_tile.shape[1:4]
@@ -443,12 +451,18 @@ def build_device_plan(
     call sharing one mask.
     """
     query_indices, key_indices, masks, tiles_per_group = [], [], [], []
-    plan_order = []
+    kept_rows, kept_positions, cursor = [], [], 0
 
     for group in plan.groups:
         q_rows = torch.cat([_flat_indices(plan.dims, block) for block in group.query_slices])
         k_rows = torch.cat([_flat_indices(plan.dims, block) for block in group.key_slices])
-        plan_order.append(q_rows)
+        # Padding tiles are gathered and attended like any other — they exist only so every
+        # device dispatches the same shapes — but they must not reach the output, so the
+        # restore below indexes around them.
+        keep = group.kept_tiles * group.n_queries
+        kept_rows.append(q_rows[:keep])
+        kept_positions.append(torch.arange(cursor, cursor + keep))
+        cursor += q_rows.numel()
         tiles_per_group.append(len(group.query_slices))
 
         query_indices.append(
@@ -474,12 +488,12 @@ def build_device_plan(
 
     # Query tiles partition the volume, so concatenating groups visits every voxel exactly
     # once — just in plan order. argsort maps that back to volume order in one final gather.
-    order = torch.cat(plan_order)
+    order = torch.cat(kept_rows)
     expected = math.prod(plan.output_dims)
     assert order.numel() == expected, f"plan covers {order.numel()} of {expected} voxels"
     # Sorting by buffer-flat index is row-major order over the query box, halo'd or not, so
     # the same argsort restores a sharded plan's output.
-    restore = torch.argsort(order)
+    restore = torch.cat(kept_positions)[torch.argsort(order)]
 
     return NA3DDevicePlan(
         plan=plan,
@@ -494,6 +508,76 @@ def build_device_plan(
             layout=ttnn.ROW_MAJOR_LAYOUT,
         ),
     )
+
+
+def plan_na3d_mesh(
+    grid: list[tuple[AxisShard, AxisShard, AxisShard]],
+    kernel_size: tuple[int, int, int],
+    *,
+    halo: tuple[int, int, int] | None = None,
+    budget: int = DEFAULT_SCORE_BUDGET,
+) -> list[NA3DPlan]:
+    """Plans for every device of a mesh, all with the same group structure.
+
+    ``uniform_spans`` alone equalises key counts but not grouping: a shard touching the volume
+    border sees window regimes an interior shard never does, so the two end up with different
+    numbers of groups. Here every device carries the union of geometries present anywhere on
+    the mesh, each padded with repeated tiles to the mesh-wide maximum. The padding is attended
+    and discarded — :attr:`TileGroup.real_tiles` is what keeps it out of the output.
+
+    The cost is dispatched tiles: on the production stage-5 geometry the union is 60 classes
+    and the padding raises 1856 tiles to 3190. Stages whose natural tile count is already tiny
+    inflate by much more in ratio and by almost nothing in absolute terms.
+    """
+    natural = [plan_na3d_sharded(shards, kernel_size, halo=halo, uniform_spans=True, budget=budget) for shards in grid]
+
+    # Padding runs even where the shapes already agree, because the ordering it imposes is
+    # itself load-bearing: ``build_mesh_device_plan`` pairs group *i* of one device with group
+    # *i* of the next, and a plan built per device orders its groups by whichever geometry it
+    # happened to meet first. Sorting the mesh-wide geometry union is what makes index *i* mean
+    # the same thing everywhere. Skipping the pad when shapes coincide would reintroduce that
+    # ordering assumption for a few dozen tiles.
+    tiles_by_geometry: dict[tuple, int] = {}
+    for plan in natural:
+        for group in plan.groups:
+            tiles_by_geometry[group.geometry] = max(tiles_by_geometry.get(group.geometry, 0), len(group.query_slices))
+    canonical = sorted(tiles_by_geometry)
+
+    padded = []
+    for plan in natural:
+        present = {group.geometry: group for group in plan.groups}
+        groups = []
+        for geometry in canonical:
+            width = tiles_by_geometry[geometry]
+            group = present.get(geometry)
+            if group is None:
+                # No tile of this shape here, but the dispatch has to exist. A slice anchored at
+                # the buffer origin is in bounds by construction: tiles never exceed the queries
+                # and a span never exceeds the buffer.
+                query = tuple(slice(0, len(axis[0])) for axis in geometry)
+                key = tuple(slice(0, axis[2]) for axis in geometry)
+                group = TileGroup(
+                    geometry=geometry,
+                    query_slices=(query,),
+                    key_slices=(key,),
+                    n_queries=math.prod(len(axis[0]) for axis in geometry),
+                    n_keys=math.prod(axis[2] for axis in geometry),
+                    real_tiles=0,
+                )
+            real = group.kept_tiles
+            fill = width - len(group.query_slices)
+            groups.append(
+                TileGroup(
+                    geometry=geometry,
+                    query_slices=group.query_slices + group.query_slices[:1] * fill,
+                    key_slices=group.key_slices + group.key_slices[:1] * fill,
+                    n_queries=group.n_queries,
+                    n_keys=group.n_keys,
+                    real_tiles=real,
+                )
+            )
+        padded.append(replace(plan, groups=tuple(groups)))
+    return padded
 
 
 def build_mesh_device_plan(
@@ -547,9 +631,16 @@ def build_mesh_device_plan(
 
     restores = []
     for plan in plans:
-        order = torch.cat([torch.cat([_flat_indices(plan.dims, b) for b in g.query_slices]) for g in plan.groups])
+        kept_rows, kept_positions, cursor = [], [], 0
+        for group in plan.groups:
+            group_rows = torch.cat([_flat_indices(plan.dims, block) for block in group.query_slices])
+            keep = group.kept_tiles * group.n_queries
+            kept_rows.append(group_rows[:keep])
+            kept_positions.append(torch.arange(cursor, cursor + keep))
+            cursor += group_rows.numel()
+        order = torch.cat(kept_rows)
         assert order.numel() == math.prod(plan.output_dims)
-        restores.append(torch.argsort(order).to(torch.int32).reshape(1, -1))
+        restores.append(torch.cat(kept_positions)[torch.argsort(order)].to(torch.int32).reshape(1, -1))
 
     return NA3DDevicePlan(
         plan=reference,

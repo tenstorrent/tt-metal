@@ -24,11 +24,12 @@ import torch
 import ttnn
 
 from ...layers.na3d import (
+    DEFAULT_SCORE_BUDGET,
     AxisShard,
     build_mesh_device_plan,
     na3d_torch,
     neighborhood_attention_3d,
-    plan_na3d_sharded,
+    plan_na3d_mesh,
     uniform_halo,
 )
 from ...parallel.manager import CCLManager
@@ -40,14 +41,14 @@ def _axis_shards(length: int, parts: int) -> list[AxisShard]:
     return [AxisShard(length=length, start=a, stop=b) for a, b in zip(edges, edges[1:])]
 
 
-def _mesh_plans(dims, kernel, mesh, halo):
+def _mesh_plans(dims, kernel, mesh, halo, budget=DEFAULT_SCORE_BUDGET):
     """One plan per device, row-major over the mesh: H on axis 0, W on axis 1."""
-    plans = []
-    for h_shard in _axis_shards(dims[1], mesh[0]):
-        for w_shard in _axis_shards(dims[2], mesh[1]):
-            shards = (AxisShard(dims[0], 0, dims[0]), h_shard, w_shard)
-            plans.append(plan_na3d_sharded(shards, kernel, halo=halo, uniform_spans=True))
-    return plans
+    grid = [
+        (AxisShard(dims[0], 0, dims[0]), h_shard, w_shard)
+        for h_shard in _axis_shards(dims[1], mesh[0])
+        for w_shard in _axis_shards(dims[2], mesh[1])
+    ]
+    return plan_na3d_mesh(grid, kernel, halo=halo, budget=budget)
 
 
 # neighbor_pad_async routes over fabric, so the mesh has to come up with a fabric config —
@@ -59,17 +60,20 @@ _FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, dims, kernel",
+    "mesh_device, device_params, dims, kernel, budget",
     [
-        ((4, 8), _FABRIC, (4, 32, 64), (3, 7, 7)),  # det-stage kernel
-        ((4, 8), _FABRIC, (4, 32, 64), (11, 11, 11)),  # stage-5 kernel, halo 5 each side
-        ((4, 8), _FABRIC, (4, 48, 96), (11, 11, 11)),  # wider shards, same halo
+        ((4, 8), _FABRIC, (4, 32, 64), (3, 7, 7), DEFAULT_SCORE_BUDGET),  # det-stage kernel
+        ((4, 8), _FABRIC, (4, 32, 64), (11, 11, 11), DEFAULT_SCORE_BUDGET),  # stage-5 kernel, halo 5 a side
+        ((4, 8), _FABRIC, (4, 48, 96), (11, 11, 11), DEFAULT_SCORE_BUDGET),  # wider shards, same halo
+        # A budget small enough to force several tiles per shard, which is where the plans stop
+        # agreeing on their own and the canonical padded group set is what makes them agree.
+        ((4, 8), _FABRIC, (4, 32, 64), (3, 7, 7), 2**13),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("padding_mode", ["replicate", "zeros"])
 @pytest.mark.parametrize("heads, head_dim", [(2, 64)])
-def test_na3d_across_mesh_matches_host(*, mesh_device, dims, kernel, padding_mode, heads, head_dim):
+def test_na3d_across_mesh_matches_host(*, mesh_device, dims, kernel, budget, padding_mode, heads, head_dim):
     mesh = tuple(mesh_device.shape)
     channels = heads * head_dim
     halo = (0, uniform_halo(dims[1], mesh[0], kernel[1]), uniform_halo(dims[2], mesh[1], kernel[2]))
@@ -104,7 +108,7 @@ def test_na3d_across_mesh_matches_host(*, mesh_device, dims, kernel, padding_mod
             )
         )
 
-    plans = _mesh_plans(dims, kernel, mesh, halo)
+    plans = _mesh_plans(dims, kernel, mesh, halo, budget=budget)
     device_plan = build_mesh_device_plan(plans, mesh_device=mesh_device)
     buffer_dims = plans[0].dims
     reshaped = [ttnn.reshape(x, (1, *buffer_dims, heads, head_dim)) for x in padded]

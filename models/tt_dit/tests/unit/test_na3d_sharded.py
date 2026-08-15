@@ -24,6 +24,7 @@ from ...layers.na3d import (
     AxisShard,
     na3d_torch,
     plan_na3d,
+    plan_na3d_mesh,
     plan_na3d_sharded,
     required_halo,
     uniform_halo,
@@ -177,6 +178,58 @@ def test_uniform_spans_give_every_device_one_shape(*, dims, mesh, kernel):
         local = [_uniform_buffer(x, shards, halo) for x in (q, k, v)]
         pieces.append(na3d_torch(*local, kernel, scale=1.0, plan=plan))
     torch.testing.assert_close(_reassemble(dims, grid, pieces, 2, 16, q.dtype), expected, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "dims, mesh, kernel, budget",
+    [
+        ((4, 32, 32), (1, 4, 4), (3, 7, 7), 2**22),  # single-tile: uniform_spans already sufficed
+        ((4, 32, 32), (1, 4, 4), (3, 7, 7), 2**14),  # multi-tile: uniform_spans alone gave 3 shapes
+        ((4, 32, 32), (1, 2, 4), (3, 5, 5), 2**12),  # 4x4x2 tiles per shard
+        ((4, 24, 24), (1, 2, 2), (11, 11, 11), 2**14),
+        ((8, 32, 64), (1, 4, 8), (3, 7, 7), 2**13),
+    ],
+)
+def test_mesh_plans_share_one_shape_and_stay_correct(*, dims, mesh, kernel, budget):
+    """The canonical padded group set: one dispatch shape per mesh, whatever the tiling.
+
+    ``uniform_spans`` equalises key counts but not grouping, so a multi-tile shard still
+    diverges — an edge device meets window regimes an interior one never does. Padding to the
+    mesh-wide union of geometries closes that. The padding is attended and thrown away, so the
+    result must be identical to the whole-volume run.
+    """
+    halo = tuple(uniform_halo(d, p, kk) for d, p, kk in zip(dims, mesh, kernel))
+    grid = _grid(dims, mesh)
+    plans = plan_na3d_mesh(grid, kernel, halo=halo, budget=budget)
+
+    assert len({_shape_signature(p) for p in plans}) == 1, "mesh plans must agree on one shape"
+    # Group i must mean the same geometry on every device: the mesh builder pairs them by index.
+    for plan in plans[1:]:
+        assert [g.geometry for g in plan.groups] == [g.geometry for g in plans[0].groups]
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, *dims, 2, 16, dtype=torch.float64) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0)
+    pieces = [
+        na3d_torch(*[_uniform_buffer(x, shards, halo) for x in (q, k, v)], kernel, scale=1.0, plan=plan)
+        for shards, plan in zip(grid, plans)
+    ]
+    torch.testing.assert_close(_reassemble(dims, grid, pieces, 2, 16, q.dtype), expected, rtol=0, atol=1e-12)
+
+
+def test_padding_tiles_are_excluded_from_the_output():
+    """Padded tiles must be discarded, not written — the restore indexes around them."""
+    dims, mesh, kernel = (4, 32, 32), (1, 4, 4), (3, 7, 7)
+    halo = tuple(uniform_halo(d, p, kk) for d, p, kk in zip(dims, mesh, kernel))
+    plans = plan_na3d_mesh(_grid(dims, mesh), kernel, halo=halo, budget=2**14)
+
+    padded = sum(len(g.query_slices) for g in plans[0].groups)
+    real = sum(g.kept_tiles for g in plans[0].groups)
+    assert padded > real, "this geometry is supposed to need padding"
+    # Every device answers exactly its own queries, no matter how many tiles were dispatched.
+    for plan in plans:
+        covered = sum(g.kept_tiles * g.n_queries for g in plan.groups)
+        assert covered == plan.output_dims[0] * plan.output_dims[1] * plan.output_dims[2]
 
 
 @pytest.mark.parametrize("kernel", DIFFVAE_KERNELS)
