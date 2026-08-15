@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <utility>
 
