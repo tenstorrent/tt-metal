@@ -52,3 +52,47 @@ def test_neighborhood_3d_matches_na3d_torch(device, dims, kernel):
     got = ttnn.to_torch(out).reshape(s, head_dim)
 
     assert_quality(ref, got, pcc=0.99)
+
+
+# T-shards (frame ranges) whose token offset t_lo*H*W lands on a TILE_HEIGHT boundary, so the shard
+# is expressible as a windowed_q_token_offset. HW = 64 here (a multiple of 32).
+@pytest.mark.parametrize("t_lo, t_hi", [(0, 4), (4, 8), (2, 6)])
+def test_neighborhood_3d_q_offset_shard(device, t_lo, t_hi):
+    """SP-over-T capability: a globally-offset Q shard against full K/V reproduces the same slice of
+    the full result. This is what lets the host split Q over T across a mesh (K/V replicated)."""
+    torch.manual_seed(0)
+    dims, kernel, head_dim = (8, 8, 8), (3, 3, 3), 64
+    t_, h_, w_ = dims
+    s, hw = t_ * h_ * w_, h_ * w_
+
+    q = torch.randn(1, t_, h_, w_, 1, head_dim)
+    k = torch.randn(1, t_, h_, w_, 1, head_dim)
+    v = torch.randn(1, t_, h_, w_, 1, head_dim)
+
+    tk = ttnn.from_torch(k.reshape(1, 1, s, head_dim), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tv = ttnn.from_torch(v.reshape(1, 1, s, head_dim), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    full = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            ttnn.from_torch(q.reshape(1, 1, s, head_dim), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            tk,
+            tv,
+            is_causal=False,
+            neighborhood_3d=(t_, h_, w_, *kernel),
+        )
+    ).reshape(s, head_dim)
+
+    lo, hi = t_lo * hw, t_hi * hw
+    q_shard = q[:, t_lo:t_hi].reshape(1, 1, hi - lo, head_dim)
+    got = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            ttnn.from_torch(q_shard, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            tk,
+            tv,
+            is_causal=False,
+            neighborhood_3d=(t_, h_, w_, *kernel),
+            windowed_q_token_offset=lo,
+        )
+    ).reshape(hi - lo, head_dim)
+
+    assert_quality(full[lo:hi], got, pcc=0.99)
