@@ -3606,9 +3606,25 @@ distinguish *"the cap did nothing"* from *"both runs exceeded the truncation lim
 run over a 26-layer backbone plus flow and codec stacks, exceeding 50000 op invocations at **both**
 depths is entirely expected.
 
-*(Marked inferred: I did not capture the two raw sequences. What is certain is that the reported
-signal equals the truncation constant exactly, and that saturation would produce exactly this
-symptom.)*
+The next line of the same run prints the comparison in its rawest form:
+
+```
+[optimize/cc] depth-knob bridge: {'TT_PERF_LAYERS': '2'} did not reduce work
+              (op-count 50000->50000); ignoring
+[optimize/cc] measuring FULL-model end-to-end (BEFORE) — ALL layers (uncapped), no tracy
+```
+
+`op-count 50000->50000` — the truncation constant on both sides of the arrow, reported as an
+op-count. A depth cap from 26 layers to 2 producing *byte-identical* op counts is not a plausible
+measurement; a clipped sequence compared against another clipped sequence is.
+
+*(Still marked inferred rather than proven: I did not dump the two raw `_SEQ` lists to show both
+exceeded 50000. What is established is that the compared value equals the truncation constant
+exactly, on both sides, and that saturation produces precisely this symptom.)*
+
+The consequence is immediate and visible in the next line: the knob is ignored and the tool measures
+the **full uncapped model**, which is the opposite of the bounded profiling window the knob exists
+to provide.
 
 ### 2. The knob really is only half-wired — VERIFIED
 
