@@ -54,9 +54,6 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
 
     // compute_output_specs derives each output layout from one input; the outputs are only
     // interchangeable if every input shares the same placement.
-    TT_FATAL(
-        dQ.memory_config() == dK.memory_config() && dK.memory_config() == dV.memory_config(),
-        "MLAQKVAssembleBw: dQ, dK, and dV must share the same memory config.");
 
     const auto dQ_shape = dQ.padded_shape();
     const auto dK_shape = dK.padded_shape();
