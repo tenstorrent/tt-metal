@@ -95,8 +95,7 @@ uint32_t compute_rand_scale_bits(float lower, float upper) {
 
 // Linear index of this device among the SEEDED (data-parallel) mesh axes only. Devices that differ
 // solely on a replicated axis get the same index -- and therefore the same RNG stream -- which is
-// what keeps a tensor-parallel replica group in sync. Mirrors the shard_linear_idx computation
-// inside ttnn::rand's program factory.
+// what keeps a tensor-parallel replica group in sync.
 uint32_t seeded_linear_index(
     const ttnn::MeshCoordinate& coord,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,

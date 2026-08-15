@@ -32,7 +32,7 @@ namespace ttml::metal {
  * @param seed_axes   Mesh axes that must draw DISTINCT noise per device (the data-parallel axes).
  *                    Axes omitted stay in lockstep across devices. Empty (default) => identical
  *                    noise everywhere, matching ttnn_fixed::sample's default.
- * @param logits_padding_mask Optional additive mask, same shape/dtype as `logits`, subtracted from
+ * @param logits_padding_mask Optional additive mask, same dtype as `logits` but shape [1, 1, 1, V], subtracted from
  *                    the scores.
  * @param positions   Optional per-batch-entry token position: [B, 1, 1, 1] UINT32 ROW_MAJOR
  *                    INTERLEAVED, i.e. this op's own position-mode output spec. Absent samples every

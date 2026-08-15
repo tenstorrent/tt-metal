@@ -176,6 +176,11 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
         // when they BUILD this tensor, where the values are still on the host, and the reader clamps
         // the tile row so a bad value cannot read outside the logits buffer.
         check_index_tensor(*tensor_args.positions, "positions", /*position_aware=*/true);
+
+        TT_FATAL(
+            tensor_args.positions->tensor_topology() == logits.tensor_topology(),
+            "GumbelSample: 'positions' must be distributed across the mesh exactly as the logits are "
+            "-- shard it with the SAME mapper the batch was sharded with");
     }
 
     if (tensor_args.preallocated_output.has_value()) {
