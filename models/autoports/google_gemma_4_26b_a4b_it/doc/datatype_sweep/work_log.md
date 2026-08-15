@@ -95,4 +95,7 @@ fidelity version was not needed to satisfy the BFP4+LoFi completeness rule.
   omitted branch/base-SHA/environment provenance. Added those fields to every
   JSON/CSV row and this log; numerical and capability evidence required no
   change. Rereview verdict is recorded in `stage_review.md`.
-- Local checkpoint commit: pending clean rereview. Never push this stage commit.
+- Local implementation/report checkpoint: `973be9f5451a9defaeb4ef5368fa1f239f70da34`
+  (`Sweep Gemma4 full-model precision policy`). The follow-up evidence/metadata
+  commit force-adds the repo-ignored CSV and raw logs and records this SHA.
+  Neither commit was pushed.
