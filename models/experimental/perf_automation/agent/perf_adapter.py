@@ -110,7 +110,17 @@ def resolve_batch(pipeline, requested: int = 0) -> int:
     """
     if int(requested or 0) > 0:
         return int(requested)
-    for attr in ("max_batch_size", "batch_size", "batch", "max_batch"):
+    # `B` IS IN THIS LIST BECAUSE A PIPELINE USED IT AND WAS READ AS BATCH 1. Voxtral-Mini-3B declares
+    # DECODE_BATCH = 8 and stores it as `self.B`, nothing else. The generated perf test resolved that
+    # correctly -- it checks B -- and printed PERF_BATCH_STREAMS=8, while this function, which is what
+    # the ADAPTER asks and therefore what the scorecard is built from, stopped at "max_batch". So a run
+    # serving 8 users reported batch=1 and its aggregate throughput eightfold low (11.42 tok/s against
+    # ~91.4), on 2026-08-15. The device work was correct throughout; only the number published was not.
+    #
+    # Two lists naming the same property is how they drifted. This one is the authority -- the test's
+    # copy is written per-model by an agent and cannot be relied on to agree -- so it carries every
+    # name any pipeline here has used.
+    for attr in ("max_batch_size", "batch_size", "batch", "max_batch", "B"):
         try:
             v = int(getattr(pipeline, attr, 0) or 0)
         except (TypeError, ValueError):
@@ -264,6 +274,18 @@ class PipelineStageAdapter:
     def setup(self, device) -> None:
         p = self._pipe = self._build(device)
         self.batch = resolve_batch(p, self._requested_batch)
+        # SAY WHEN THE ANSWER IS A GUESS. `batch` scales the aggregate throughput the scorecard
+        # publishes, so an unresolved one does not look like a missing value -- it looks like a
+        # single-user run. On 2026-08-15 that reported 11.42 tok/s for a pipeline serving 8, and
+        # nothing in the log hinted the number had been defaulted rather than measured. If the
+        # pipeline declares none of the names resolve_batch knows, the operator should hear it.
+        if self._requested_batch <= 0 and self.batch == 1:
+            print(
+                "PERF_BATCH_UNRESOLVED=1 pipeline=%s declares none of "
+                "(max_batch_size, batch_size, batch, max_batch, B); assuming 1 user -- aggregate "
+                "throughput is reported per-user until it does" % type(p).__name__,
+                flush=True,
+            )
         stages = []
         _stage_names = getattr(p, "PIPELINE_STAGES", None)
         if not _stage_names:
