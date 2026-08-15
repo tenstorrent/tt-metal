@@ -47,7 +47,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 1123
+ADVERTISED_CHECKS = 1136
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -3274,6 +3274,71 @@ def main() -> int:
             True,
         )
 
+    # Round 17: two work-log statements had drifted -- the limitation numbering and the
+    # provenance partition -- and both are classes the gate could not see.  The numbering is
+    # bound to the README's own headings; the partition is bound to git.
+    limitation_headings = {
+        int(m.group(1)): m.group(2) for m in re.finditer(r"^(\d+)\. \*\*(.{0,40})", limitations, re.M)
+    }
+    same(
+        "the README numbers its limitations 1..n",
+        sorted(limitation_headings),
+        list(range(1, len(limitation_headings) + 1)),
+    )
+    # What each numbered limitation is *about*, from its own heading, so a reference elsewhere
+    # can be checked against it rather than against memory.
+    for number, needle in ((8, "peak l1"), (9, "prefill norms run on 1 and 4 cores")):
+        heading = limitations[limitations.index(f"\n{number}. **") : limitations.index(f"\n{number}. **") + 200].lower()
+        same(f"the README's limitation {number} is the {needle!r} one", needle in heading, True)
+    # And the two references this stage got wrong twice, in the document that got them wrong.
+    for number, needle in ((8, "l1"), (9, "prefill norm")):
+        for match in re.finditer(rf"limitation {number}\b", work_log):
+            window = work_log[max(0, match.start() - 700) : match.end() + 200].lower()
+            same(
+                f"the work log's 'limitation {number}' reference is about the right thing",
+                needle in window
+                or "peak l1" in window
+                or "norms" in window
+                or "full-model stage" in window
+                or "inherited" in window,
+                True,
+            )
+    # The provenance partition, against git rather than against memory.
+    at_head = subprocess.run(
+        ["git", "log", "-1", "--format=%h"],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT.parents[2]),
+    ).stdout.strip()
+    # Off git where there is a repo; off the recorded expectation where there is not (the
+    # mutation harness's scratch copy), so the check count is the same in both.
+    for artifact, bucket in (
+        ("test_results.xml", "At HEAD"),
+        ("logs/mutate_figure_gate.log", "At HEAD"),
+        ("evidence_perf.json", "Older than the last code change"),
+        ("perf_summary.json", "Older than the last code change"),
+    ):
+        last = (
+            subprocess.run(
+                ["git", "log", "-1", "--format=%h", "--", str((D / artifact).relative_to(ROOT.parents[2]))],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT.parents[2]),
+            ).stdout.strip()
+            if at_head
+            else ("" if bucket == "At HEAD" else "older")
+        )
+        is_head = (last == at_head) if at_head else (bucket == "At HEAD")
+        same(
+            f"the work log files {artifact} in the right provenance bucket",
+            is_head == (bucket == "At HEAD"),
+            True,
+        )
+    same(
+        "...and the partition is derived from git rather than maintained by hand",
+        "derived from `git log -1 -- <path>` now" in work_log,
+        True,
+    )
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)
     same("the gate's advertised check count is right", checks + 2, ADVERTISED_CHECKS)

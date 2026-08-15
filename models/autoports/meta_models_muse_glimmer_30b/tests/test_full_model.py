@@ -956,21 +956,47 @@ def test_a_failed_prefill_capture_falls_back_and_stays_off(generator):
     mesh's fixed trace region) is accounted on the device *before* the throw, so retrying walks
     the decode trace's recapture into the same wall, and that one is on the shipped default.
 
-    The state, not an injected fault, is what this pins.  Making ``ttnn.end_trace_capture``
-    raise **hangs the device** -- ending a trace twice does, and the injected failure leaves the
-    capture in a state the real one does not -- so this drives the flag the failure path sets
-    and asserts what the rest of the generator does with it: no capture attempt, an eager
-    prefill that still answers correctly, and a ``capability_report()`` that says so.  The
-    release side of the same subsystem *is* fault-injected (three committed negative controls);
-    this side is not, and that difference is stated rather than papered over.
+    Two halves, injected where each can be.  Replacing ``_capture_prefill_trace`` itself makes
+    the failure happen *before* ``begin_trace_capture``, so no trace is begun and no queue is
+    left recording -- that half is a real fault injection and it pins the thing that matters:
+    the failure is **not retried on the next request**.  Raising *inside* the capture is what
+    cannot be tested: ending a trace twice hangs the device, and the injection leaves state the
+    real failure does not.  So the second half drives the flag directly and asserts what the
+    rest of the generator does with it.  Round 16 wrote the whole thing off as untestable and
+    round 17 was right that this was one level too pessimistic.
     """
     prompt = _prompt(96, seed=63)
     want = generator.generate(prompt_token_ids=prompt, max_new_tokens=3, enable_trace=True)
     assert generator._prefill_traces == {}, "the shipped default captures no prefill trace"
 
+    # The producer half, injected one level *up* from the capture.  Round 17 pointed out that
+    # the hazard is specific: raising inside ``_capture_prefill_trace`` leaves the queue
+    # recording, but replacing the method itself never enters record mode at all -- so this
+    # branch is testable after all, and it is the branch that decides whether the failure is
+    # retried per request.
+    real_capture = generator._capture_prefill_trace
+    generator.gen_config.prefill_trace = True
+    try:
+
+        def refuse(*a, **k):
+            raise RuntimeError("injected: trace region exhausted")
+
+        generator._capture_prefill_trace = refuse
+        generator.reset()
+        assert generator.generate(prompt_token_ids=prompt, max_new_tokens=3, enable_trace=True) == want
+        assert generator._prefill_capture_failures == 1
+        assert generator._prefill_capture_disabled, "one failure disables capture for this generator"
+        assert generator._prefill_traces == {}
+
+        # ...and the next request does not try again, which is the whole point.
+        generator.reset()
+        assert generator.generate(prompt_token_ids=prompt, max_new_tokens=3, enable_trace=True) == want
+        assert generator._prefill_capture_failures == 1, "no second capture attempt"
+    finally:
+        generator._capture_prefill_trace = real_capture
+
     generator._prefill_capture_disabled = True
     generator._prefill_capture_failures = 1
-    generator.gen_config.prefill_trace = True
     try:
         generator.reset()
         assert generator.generate(prompt_token_ids=prompt, max_new_tokens=3, enable_trace=True) == want

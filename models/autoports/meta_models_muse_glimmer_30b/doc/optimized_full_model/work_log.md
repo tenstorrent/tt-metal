@@ -194,7 +194,7 @@ columns x 2 B), leaving 1,238,144 B of the 1,455,232 B bank free at that peak. T
 "7,296 B of headroom" figure quoted elsewhere in this port is a different pool (a
 `TT_CCL`'s global semaphores) at a different moment (the decoder's tightest in-layer
 point), so the two do not conflict — but "allocates nothing" was false and is now a
-measured line item and limitation 7.
+measured line item and limitation 8.
 
 The one thing that needed checking rather than assuming is the padding.
 `50688 / 52 = 975` columns per core is not a tile multiple, so each core is rounded to
@@ -261,7 +261,7 @@ the measured all-layer step is **22.656 ms**, 0.7 % better than predicted.
 | --- | --- |
 | pack `wqkv` + `attn_gate` (OPT-001: two projections consuming the same post-norm activation) | Both rows are the *best* DRAM utilisation in the layer — **77.12 %** (`wqkv`, id 3039) and **69.35 %** (`attn_gate`, id 3172) in this stage's `tracy/decode_sliding_perf_report.csv`, against 52.27–52.65 % for the MLP rows — so they are weight-bandwidth-bound and packing cannot reduce the bytes. And the two outputs need different downstream layouts (QKV is `sharded_to_interleaved` into `nlp_create_qkv_heads_decode`; the gate stays width-sharded until after SDPA), so a packed output needs an unshard, two slices and a reshard to split, which is ~4 µs against a ~3–5 µs saving. Recorded in the operation-topology audit with the DRAM% evidence rather than measured, because the byte argument is decisive: the packed matmul reads the same 16.3 MB. |
 | wider RMSNorm grid, decode | The four decode norms must consume and produce the 16-core boundary spec, which is the inter-layer residual contract this stage is required to preserve. |
-| sharded prefill terminal/embedding norms | They run on 1 and 4 cores for ~134 µs each because `ttnn.rms_norm` on a DRAM-interleaved input parallelises over tile rows and both see a 32-row slice. 0.27 ms of a 65 ms TTFT; the fix changes prefill numerics on the accuracy gates' critical path, so it is priced and left as limitation 8 rather than taken for 0.4 % of a figure whose process spread is 8 %. |
+| sharded prefill terminal/embedding norms | They run on 1 and 4 cores for ~134 µs each because `ttnn.rms_norm` on a DRAM-interleaved input parallelises over tile rows and both see a 32-row slice. 0.27 ms of a 65 ms TTFT; the fix changes prefill numerics on the accuracy gates' critical path, so it is priced and left as limitation 9 rather than taken for 0.4 % of a figure whose process spread is 8 %. |
 | `o_proj` OPT-011 narrower working shard | Kept declined, and **one of the decoder stage's three reasons no longer applies**: change 3 breaks the same single-grid invariant and adds three reshards, so "it costs a reshard and the invariant" is no longer a reason this stage can use. What survives is what decided it: the candidate won 0.11 % on `sliding`, was inside the noise on `full`, and cost 13 % of the multichip-vs-single-chip PCC headroom. Recorded as a candidate a decoder stage may revisit now that the invariant is already gone. |
 | fewer decode collectives | Two all-reduces per layer is the replicated-residual contract. A fractured residual would halve the dispatch count, and the decoder stage's `fractured_decode_probe.py` owns that question. Out of scope here: the goal preserves the residual layout. |
 | persistent CCL staging buffers | **Worth 14–17 % of the prefill reduce-scatter's host cost** at the model's BFP8/4-worker setting (~2 ms of TTFT), and blocked by the decoder stage's intermittent first-use correctness race. An earlier row here said they were "within noise" on host cost; that was the BF16 hot-loop arm and is withdrawn (§2.4). |
@@ -322,22 +322,32 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 
 **Provenance, per artifact.** This paragraph used to say that every row above post-dated the
 last code change. That was true when it was written and stopped being true around round 7;
-round 15 of the stage review caught it still standing. The honest version is a partition:
+round 15 caught it and replaced it with a partition — and round 17 caught *that* partition
+misfiling six artifacts into "current". Both times the failure was the same: a hand-maintained
+classification of files that keep moving. It is derived from `git log -1 -- <path>` now, and
+what it says is:
 
-* **Current** — re-run after the last code change: the 58-case suite forward and reverse, the
-  gated watcher run, `evidence_perf{,_before,_prefill_trace}.json` and their logs, the context
-  contract, `perf_summary.json`, `invalidation_cost_probe.json`,
-  `prefill_trace_probe_8192.json`, both mutation-harness arms and the three negative controls.
-* **Older, and unaffected for a stated reason** — `evidence_accuracy.json`,
-  `evidence_fp32_gate.json`, `evidence_misses.json`, `evidence_autoregress.json`,
-  `sampler_ab.json`, `qualitative/`, the four `tracy/` captures and the limitation-6 watcher
-  arms date from `3d03b5ca595`–`24cdea2f559`. Every commit after round 6 that touched
-  `tt/*.py` or `models/common/sampling/generator.py` changed **trace lifecycle and reporting,
-  not the traced graphs or their numerics**: the release/retry/defer paths, a divisibility
-  `raise`, the `deallocate` warning, a two-pass `set_kv_cache`, `capability_report` fields, and
-  the sampler's orphan list. None of them alters an op, a dtype, a layout or a program config,
-  which is what those artifacts measure. The behavioural claims among them
-  (`split_sampling`, `fallback_audit`) are independently re-pinned by the current 58-case run.
+* **At HEAD** — `test_results.xml` and both suite logs, the gated watcher run and its verdicts,
+  `logs/mutate_figure_gate.log`, `logs/mutate_figure_gate_sweep.log` and
+  `logs/prefill_trace_multibucket_probe.log`.
+* **Older than the last code change, and unaffected for a stated reason** — the perf arms
+  (`evidence_perf{,_before}.json`, round 7), the prefill-trace arm (round 8),
+  `perf_summary.json` (round 13), `invalidation_cost_probe.json` (round 10),
+  `prefill_trace_probe_8192.json` and `doc/context_contract.json` (round 15), the accuracy,
+  fp32-gate, autoregressive, miss, sampler, A/B, qualitative and Tracy artifacts (round 2's
+  commit `3d03b5ca595`), and the three negative controls (rounds 4, 9, 11). Every commit since
+  that touched `tt/*.py` or `models/common/sampling/generator.py` changed **trace lifecycle,
+  reporting or a guard** — the release/retry/defer paths, a divisibility `raise`, the
+  `deallocate` warning, a two-pass `set_kv_cache`, `capability_report` fields, the sampler's
+  orphan list, the prefill-capture fallback — and none of them alters an op, a dtype, a layout
+  or a program config, which is what those artifacts measure.
+* **The one intervening change that is *not* invisible to a perf number**, named rather than
+  swept in: round 9 made `_invalidate_traces_if_cache_moved()` unconditional on
+  `decode_forward` and added it to `generate()`. That is per-call host work the perf arms did
+  not pay. It is measured — 7.57 µs with a trace live, 0.033 % of the token-out step, and the
+  reported figure comes from `generate()`'s own loop, which calls `_decode_step_traced`
+  directly and pays it once per `generate()` rather than per token
+  ([`invalidation_cost_probe.json`](invalidation_cost_probe.json)).
 * **Diagnostic, and unchanged by any of it** — `ttft_breakdown_before.json`,
   `prefill_host_probe.json`, `prefill_opcount.json`, `ccl_host_probe_*.json`,
   `prefill_trace_probe.json`, `l1_highwater_probe.json` and the three `decode_ab*.json`.
@@ -731,7 +741,7 @@ derivable value made the gate fail. The count is now summed from the parsed arm 
 | **P2** the clamp assertion was vacuous | both release paths short-circuit on empty state, so `max(0, ...)` was never executed and removing it left the test green. The test now calls `note_trace_released()` directly to exercise it |
 | **P2** contract path resolution was narrow and the HF exception was a line-level escape hatch | every `doc/` artifact path in the current-stage subtree is resolved, not just `.py` tokens in `tested.commands`; the exception matches the exact HF command string rather than any line containing `--arm hf` |
 | a fourth stale suite size, and this log's own record of the round-6 fix was stale by one | both corrected against `test_results.xml` |
-| limitation cross-references off by one (the prefill norms are limitation 9, not 8) | fixed in both documents |
+| limitation cross-references off by one (the prefill norms are limitation 9, not 8) | fixed in the README then; round 17 found two more in *this* file (§2's L1 item and §4's prefill-norm row) and they are fixed now, with the numbering bound by the figure gate so the next drift is a failure rather than a finding |
 | the contract's notes named the wrong predecessor block | derived from the blocks actually nested rather than hardcoded, and the recorded `--arm tt` / `--arm compare` commands now carry the `--reuse-hf-control` flag they were run with |
 | the "nine new cases" table listed eight | the ninth added |
 | `ADVERTISED_CHECKS`' comment claimed a cross-document binding | described as what it is: an internal drift tripwire |
@@ -1030,6 +1040,33 @@ re-`end` a capture for the same reason.
 | **P2** `prefill_trace_max_entries > 1` — the configuration recommended to serving — had never been run by any test, probe or evidence file | `bench/prefill_trace_multibucket_probe.py`: two buckets resident, each replayed after the other, **every generation token-identical to an eager arm on the same build**. It also settled a false alarm: an in-suite version of the same sequence appeared to diverge, and the probe showed the divergence was my test's reuse of stale expectations, not the feature |
 | **P2** the probe's own docstring still said the stage had decided *not* to ship a prefill trace | rewritten to describe the shipped opt-in flag and what the probe is for |
 
+### Round 17 — `more-work-needed`
+
+Four P2s, no P1, and the theme is that **two of them were fixes reported as complete**. Round
+15 replaced a false provenance sentence with a partition; round 17 found the partition itself
+misfiling six artifacts as "current" and still carrying round 15's suite size. Round 6 recorded
+"limitation cross-references off by one … fixed in both documents"; two references in *this*
+file were still wrong. A hand-maintained classification of files that keep moving does not stay
+true, and a record of a fix is not the fix.
+
+Both are derived now rather than maintained: the provenance partition comes from
+`git log -1 -- <path>`, and the figure gate binds the limitation numbering to the README's own
+headings and checks every `limitation N` reference in this file against what that limitation is
+about.
+
+The third finding was mine to answer: round 16 wrote off the capture-failure path as untestable
+because injecting inside `_capture_prefill_trace` hangs the device. Round 17 pointed out that
+was one level too pessimistic — replacing the *method* raises before `begin_trace_capture`, so
+no trace begins and no queue records. That half is a real fault injection now, and it pins the
+thing that matters: **the failure is not retried on the next request**.
+
+| finding | what was done |
+| --- | --- |
+| **P2** §6's provenance partition misfiled six artifacts and quoted a stale suite size | derived from `git log`, with the one intervening change that *is* visible to a perf number named and priced (round 9's unconditional invalidation, 7.57 µs, 0.033 % of the step, and not on the measured loop at all) |
+| **P2** the capture-failure branch was executed by nothing, and the cleanup began one line too late | injected at the method boundary, which is safe; `tokens`/`tt_page_table` are freed if the warm compile, the drain or `begin_trace_capture` raises — the last of which is exactly where the trace region runs out |
+| **P2** three stale counts and a false record of a completed fix | corrected, and the numbering bound so the next drift is a gate failure |
+| **P2** the trace-region budget behind the serving advice is unmeasured | **not closed**: stated as a named limitation instead. The region is 400 MB, one 52-layer capture's occupancy is unmeasured, and the multi-bucket probe runs on a 2-layer build — so the advice to raise `prefill_trace_max_entries` now says what is known and what is not, and the sticky disable's cost is stated with it |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -1053,7 +1090,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `c6a85246281` | round-13 review fixes: the RoPE tables moved out of the terminal term with every dependent figure recomputed, the both-captures rule that catches the class, and the perimeter statement corrected against seven surviving in-perimeter mutations |
 | `d8c5d686b13` | round-14 review fixes: the layer-stack floor table bound cell by cell, the generated mutation sweep as a harness arm, the cross-check loop moved to where it covers every binding, and the cross-capture bracket derived rather than stated |
 | `917a3225afd` | round-15 review fixes: the 8192-row prefill-trace measurement that replaced a 64x extrapolation, the eager fallback on a failed capture, and per-artifact evidence provenance |
-| *(this commit)* | round-16 review fixes: the sticky capture-failure disable with cleanup and a report field, the multi-bucket probe that exercises the recommended serving configuration, and the corrected probe docstring |
+| `b1b3a3569fd` | round-16 review fixes: the sticky capture-failure disable with cleanup and a report field, the multi-bucket probe that exercises the recommended serving configuration, and the corrected probe docstring |
+| *(this commit)* | round-17 review fixes: the provenance partition derived from git, the capture-failure branch actually injected, the earlier cleanup boundary, the limitation numbering bound, and the unmeasured trace-region budget stated as a limitation |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:

@@ -614,6 +614,18 @@ by [`bench/prefill_trace_multibucket_probe.py`](bench/prefill_trace_multibucket_
 buckets resident, each replayed after the other, every generation token-identical to an eager
 arm on the same build
 ([`logs/prefill_trace_multibucket_probe.log`](logs/prefill_trace_multibucket_probe.log)).
+**What is not measured, and what it costs to get it wrong.** The trace region is fixed at
+400 MB (`open_multichip_mesh(trace_region_size=...)`), and how much of it one 52-layer prefill
+capture occupies is **not measured** — neither probe reports a trace-region byte, and the
+multi-bucket probe runs on a 2-layer build. So "raise `prefill_trace_max_entries` to its bucket
+count" is advice with a known resource and an unknown budget, and a caller that overshoots pays
+more than a failed capture: the first failure disables prefill tracing for that generator, so
+the short buckets that were the point lose the win too. That is the conservative direction — the
+region is global and accounted before the failure throws, so retrying walks the always-on decode
+trace into the same wall — but it means a caller should raise the knob a bucket at a time and
+watch `capability_report()['prefill_capture_failures']` rather than set it optimistically.
+Recorded as limitation 10.
+
 A capture that fails disables prefill tracing for that generator rather than retrying it per
 request — the trace region is a global resource accounted before the failure throws, so a retry
 loop would walk the always-on decode trace's recapture into the same wall — and
@@ -1338,7 +1350,16 @@ Thirteen cases are new (three of them parametrizations of one test) and each pin
    process-to-process spread is 8 %. Priced in
    [Where TTFT actually goes](#where-ttft-actually-goes) so a later stage can take it
    with the accuracy re-run it needs.
-10. **The full-model stage's own limitations are inherited unchanged**: the
+10. **The trace region one prefill capture occupies is not measured, and the knob that
+   depends on it is recommended.** The region is fixed at 400 MB; neither prefill-trace probe
+   reports a region byte, and the multi-bucket probe runs on a 2-layer build, so how many
+   52-layer buckets fit is unknown. A caller that overshoots `prefill_trace_max_entries` loses
+   prefill tracing entirely for that generator — the first failed capture disables it, because
+   the region is global and accounted before the throw — so raise it a bucket at a time and
+   watch `capability_report()['prefill_capture_failures']`. Measuring the per-capture occupancy
+   is one probe arm and is the obvious first thing for a serving stage that wants the flag on.
+
+11. **The full-model stage's own limitations are inherited unchanged**: the
    `max_batch_size`/`max_seq_len` DRAM trade, non-tile-aligned prompts writing unread
    zero K/V past the logical length, `TTPenalties`' unused ~45 MB, log-probs being
    unavailable on 4 devices, greedy reproducibility being guaranteed after `reset()`,
@@ -1586,7 +1607,7 @@ Implementation:
 | [`../../tt/generator.py`](../../tt/generator.py) | `GeneratorConfig.prefill_trace` / `prefill_trace_max_entries`, `_prefill_traced`, `_capture_prefill_trace`, `_kv_cache_signature`, `_invalidate_traces_if_cache_moved`, `_release_prefill_traces`, `_release_decode_trace`, `_retry_orphaned_traces`, `_free_or_defer`, `capability_report` |
 | [`../../tt/multichip_decoder.py`](../../tt/multichip_decoder.py) | `close_multichip_mesh` also drops the model's CCL semaphore cache (round 5) |
 | [`../../../../common/sampling/generator.py`](../../../../common/sampling/generator.py) | **shared**: `reset_trace` fails closed and returns its failure count, `retry_orphaned_traces`, `orphaned_trace_count` (round 9). Additive on the healthy path — it returns 0 and behaves exactly as before, and the other callers (`models/tt_transformers/tt/model.py`, `models/demos/deepseek_v3`) ignore the return value. On the *unhealthy* path the change is a deliberate trade for them too: a slot whose release raised is now retained rather than dropped, which is what stops a live trace's captured tensors being collected — but since none of those callers calls `retry_orphaned_traces()`, for them a failed release pins the slot for the life of the sampler instead of leaking it silently. That is the safer of the two, and it is stated here because it is a behaviour change outside this stage's model. `models/experimental/llama32_1b_quasar/sampling/generator.py` is a vendored copy of the pre-round-9 file and still has the original defect; it is out of this stage's scope and is recorded in `work_log.md` rather than changed |
-| [`../../tests/test_full_model.py`](../../tests/test_full_model.py) | ten new contract tests (twelve cases with parametrization) |
+| [`../../tests/test_full_model.py`](../../tests/test_full_model.py) | eleven new contract tests (thirteen cases with parametrization) |
 
 Evidence:
 

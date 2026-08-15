@@ -647,10 +647,25 @@ class MuseGlimmerGenerator(Generator):
 
         # Warm compile: trace capture cannot compile programs, and this path's
         # ``ttnn.slice`` offsets and program configs are baked into the program hash.
-        ttnn.deallocate(forward())
-        ttnn.synchronize_device(self.mesh_device)
-        self.counters["synchronizations"] += 1
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        #
+        # The warm compile, the drain and ``begin_trace_capture`` are inside the guard too.
+        # Round 17 pointed out that the round-16 cleanup started one line too late: a raise in
+        # any of these three -- and ``begin_trace_capture`` is exactly where the trace region
+        # runs out, which ``_capture_decode_trace`` has its own handler for -- leaked ``tokens``
+        # and ``tt_page_table`` (~288 KB/device of page table at full context) with no owner for
+        # the life of the generator.
+        try:
+            ttnn.deallocate(forward())
+            ttnn.synchronize_device(self.mesh_device)
+            self.counters["synchronizations"] += 1
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        except Exception:
+            for tensor in (tokens, tt_page_table):
+                try:
+                    ttnn.deallocate(tensor)
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
         # Everything from here to ``end_trace_capture`` runs with cq0 in record mode, and a
         # raise inside it used to leave the queue recording -- the caller's eager fallback then
         # died on its first host-to-device write ("Writes are not supported during trace
