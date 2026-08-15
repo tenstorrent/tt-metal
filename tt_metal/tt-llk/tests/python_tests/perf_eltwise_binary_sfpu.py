@@ -145,6 +145,8 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwLogicalRightShift,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
+        # Included for the test-only handwritten/generated MulInt32 corpus A/B.
+        MathOperation.SfpuMulInt32,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
