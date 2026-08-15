@@ -15,12 +15,15 @@ from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
+from ....utils.test import line_params_req_exact_devices
 from ....utils.tracing import Tracer
 
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
+        # 2x2 covers 4-chip boxes (BH QuietBox 2): the 2x4 config with tp halved to fit axis 1.
+        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((1, 8), 0, 1, 1, id="1x8sp0tp1"),
         pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
         pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1"),
@@ -42,7 +45,8 @@ from ....utils.tracing import Tracer
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 34000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": 34000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_transformer(

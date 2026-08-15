@@ -1037,7 +1037,7 @@
   skus:
     bh_quietbox_2:
       timeout: 20
-      tier: 3
+      tier: 2
       release_ready: false
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
