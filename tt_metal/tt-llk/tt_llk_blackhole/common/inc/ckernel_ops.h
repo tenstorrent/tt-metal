@@ -1110,9 +1110,9 @@
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
 //
-// Redirected: 128 of 137.  These have no matching intrinsic or a
+// Redirected: 129 of 137.  These have no matching intrinsic or a
 // different operand shape, and keep their original definitions:
-//   MOP_CFG, PACR, PACR_SETREG, RAREB, REPLAY, SFPLUTFP32, SFPSETMAN, SFP_STOCH_RND, TRNSPSRCA
+//   MOP_CFG, PACR, PACR_SETREG, RAREB, REPLAY, SFPLUTFP32, SFPSETMAN, TRNSPSRCA
 //
 // RAREB and TRNSPSRCA have intrinsics but no rvtt-cfg-reads.def entry, so
 // routing them through one would trade an asm barrier for a "not in read-set
@@ -1632,6 +1632,16 @@
 #define TTI_TBUFCMD __builtin_rvtt_tbufcmd()
 #undef TTI_TRNSPSRCB
 #define TTI_TRNSPSRCB __builtin_rvtt_trnspsrcb()
+
+// Spelled bh_sfpstochrnd, not sfp_stoch_rnd, which is why the name sweep
+// missed it.  The field order matches TT_OP_SFP_STOCH_RND exactly.
+#undef TT_SFP_STOCH_RND
+#define TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
+    __builtin_rvtt_bh_sfpstochrnd(                                                           \
+        (unsigned)(rnd_mode), (unsigned)(imm8_math), (unsigned)(lreg_src_b), (unsigned)(lreg_src_c), (unsigned)(lreg_dest), (unsigned)(instr_mod1))
+#undef TTI_SFP_STOCH_RND
+#define TTI_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
+    TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
 
 #undef TTI_UNPACR
 #define TTI_UNPACR(                         \

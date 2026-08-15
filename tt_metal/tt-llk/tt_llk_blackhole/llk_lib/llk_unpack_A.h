@@ -396,15 +396,31 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
+    // Branch around the call rather than selecting the register into a local:
+    // cfg_store carries the word index to pass_rvtt_config, which forgets just
+    // that word, but only while the index is a compile-time constant.  Behind a
+    // runtime select it has to discard the whole tracked config state instead.
     if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
     {
-        const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
-        cfg_store(cfg, upk0_reg, address);
+        if (unp_cfg_context == 0)
+        {
+            cfg_store(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
+        }
+        else
+        {
+            cfg_store(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
+        }
     }
     else
     {
-        const std::uint32_t upk1_reg = (unp_cfg_context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
-        cfg_store(cfg, upk1_reg, address);
+        if (unp_cfg_context == 0)
+        {
+            cfg_store(cfg, THCON_SEC1_REG3_Base_address_ADDR32, address);
+        }
+        else
+        {
+            cfg_store(cfg, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, address);
+        }
     }
 
     // Trisc::SEMPOST for context acquire

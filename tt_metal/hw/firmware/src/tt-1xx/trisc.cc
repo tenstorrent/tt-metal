@@ -122,7 +122,7 @@ int main(int argc, char* argv[]) {
     {
         // #31901: initialize PRNG seed to 0 to avoid nondeterministic behavior
         volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-        cfg[PRNG_SEED_Seed_Val_ADDR32] = 0;
+        ckernel::cfg_store(cfg, PRNG_SEED_Seed_Val_ADDR32, 0);
         riscv_wait(600);
     }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
