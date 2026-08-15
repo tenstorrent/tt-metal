@@ -32,7 +32,7 @@ from ...layers.na3d import AxisShard, build_mesh_device_plan
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.na3d import plan_na3d_mesh, uniform_halo
 from ...layers.normalization import RMSNorm
-from .diffvae_ltx import MeshShardConfig, _even_shards
+from .diffvae_ltx import MeshShardConfig, _even_shards, pad_from_neighbours
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -744,16 +744,7 @@ class DiffVAEStage5(Module):
             volume = ttnn.reshape(
                 ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), (local.batch, local.t, local.h, local.w, channels)
             )
-            padded = shard.ccl.neighbor_pad(
-                volume,
-                dims=[2, 3],
-                pad_left=[halo[1], halo[2]],
-                pad_right=[halo[1], halo[2]],
-                padding_mode="replicate",
-                axes=[0, 1],
-                neighbor_sems=[shard.ccl.get_np_ping_pong_semaphore(0), shard.ccl.get_np_ping_pong_semaphore(1)],
-                num_links=[1, 1],
-            )
+            padded = pad_from_neighbours(shard.ccl, volume, dims=[2, 3], halo=(halo[1], halo[2]))
             return ttnn.to_layout(ttnn.reshape(padded, (1, local.batch, -1, channels)), ttnn.TILE_LAYOUT)
 
         return exchange

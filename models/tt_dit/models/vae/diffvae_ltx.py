@@ -307,6 +307,31 @@ class MeshShardConfig:
     enter_stage: int = 1
 
 
+def pad_from_neighbours(ccl, volume: ttnn.Tensor, *, dims, halo, padding_mode: str = "replicate") -> ttnn.Tensor:
+    """Halo-exchange two axes of a split volume, one axis at a time.
+
+    Sequential rather than ``neighbor_pad_async``'s fused 2D mode. The fused path stages corner
+    sticks in an L1 buffer sized by every outer dimension a core owns, so at 145 frames it asks
+    for 3.8 MB against a 1.5 MB budget; the 1D path allocates none. Corners still come out right
+    because the second pass runs after every device already holds the first pass's halo, so what
+    it copies from its neighbour includes that neighbour's rows.
+    """
+    for axis, (dim, width) in enumerate(zip(dims, halo)):
+        if width == 0:
+            continue
+        volume = ccl.neighbor_pad(
+            volume,
+            dims=[dim],
+            pad_left=[width],
+            pad_right=[width],
+            padding_mode=padding_mode,
+            axes=[axis],
+            neighbor_sems=[ccl.get_np_ping_pong_semaphore(axis)],
+            num_links=[1],
+        )
+    return volume
+
+
 def _even_shards(length: int, parts: int) -> list[AxisShard]:
     assert length % parts == 0, f"axis {length} does not split evenly over {parts} devices"
     step = length // parts
@@ -476,22 +501,17 @@ class DeterministicStages(Module):
     def _enter_shard(
         self, x: ttnn.Tensor, dims: tuple[int, int, int], channels: int, shard: "MeshShardConfig"
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
-        """Replicated volume to one shard per device, via host.
+        """Replicated volume to one shard per device, on device.
 
-        Each device keeps a different sub-box, which no device-side op expresses: a ttnn program
-        carries the same arguments everywhere. The round trip is paid once, and the entry stage
-        is chosen so the volume is still small when it happens.
+        ``mesh_partition`` is the inverse of an all-gather: each device keeps its own slice of a
+        replicated tensor, which is exactly the per-device sub-box a ttnn program cannot express
+        as a slice. Once per axis, because it partitions one cluster axis at a time.
         """
-        local = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).reshape(1, *dims, channels)
-        sharded = ttnn.from_torch(
-            local,
-            device=self.mesh_device,
-            dtype=x.get_dtype(),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=shard.mesh, dims=[2, 3]),
-        )
+        volume = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, *dims, channels))
+        volume = ttnn.mesh_partition(volume, dim=2, cluster_axis=0)
+        volume = ttnn.mesh_partition(volume, dim=3, cluster_axis=1)
         query = (dims[0], dims[1] // shard.mesh[0], dims[2] // shard.mesh[1])
-        return ttnn.to_layout(ttnn.reshape(sharded, (-1, channels)), ttnn.TILE_LAYOUT), query
+        return ttnn.to_layout(ttnn.reshape(volume, (-1, channels)), ttnn.TILE_LAYOUT), query
 
     def _rope(self, dims: tuple[int, int, int]) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if dims not in self._rope_cache:
@@ -588,19 +608,7 @@ class DeterministicStages(Module):
 
         def exchange(tokens: ttnn.Tensor) -> ttnn.Tensor:
             volume = ttnn.reshape(ttnn.to_layout(tokens, ttnn.ROW_MAJOR_LAYOUT), (1, *query_dims, channels))
-            padded = shard.ccl.neighbor_pad(
-                volume,
-                dims=[2, 3],
-                pad_left=[halo[1], halo[2]],
-                pad_right=[halo[1], halo[2]],
-                padding_mode="replicate",
-                axes=[0, 1],
-                neighbor_sems=[
-                    shard.ccl.get_np_ping_pong_semaphore(0),
-                    shard.ccl.get_np_ping_pong_semaphore(1),
-                ],
-                num_links=[1, 1],
-            )
+            padded = pad_from_neighbours(shard.ccl, volume, dims=[2, 3], halo=(halo[1], halo[2]))
             return ttnn.to_layout(ttnn.reshape(padded, (-1, channels)), ttnn.TILE_LAYOUT)
 
         return exchange
