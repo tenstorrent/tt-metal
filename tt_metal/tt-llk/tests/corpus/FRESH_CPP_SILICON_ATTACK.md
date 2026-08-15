@@ -14,6 +14,7 @@ This lane asks whether compiler-visible SFPI C++ can beat an existing hand sched
 | 6 | Reduce row max | Existing correctness and isolated perf | needs reduction/addressing audit before a fresh body |
 | 7 | Softmax-K | Correctness harness exists | numerical approximation work; no isolated perf fixture |
 | 8 | SDPA exp unclamped | Correctness harness exists | numerical/FP32-destination parity first; no isolated perf fixture |
+| 9 | SigmoidAppx | Short typed cubic control with existing unary correctness and isolated perf fixtures | measured below |
 
 Welford, Reduce-SDPA, binary broadcast, TTNNWhere, and MulInt32 are excluded because they were already measured. TopK is excluded from this lane until its typed multi-result/index-tracking conversion is accepted.
 
@@ -63,3 +64,17 @@ Both selectors passed fresh silicon correctness processes before profiling. Each
 Evidence is archived under `/localdev/nkapre/fresh-cpp-addcmul-bh-silicon-20260815`. It contains the correctness and perf logs, raw/post CSVs, the MATH_ISOLATE ELFs and disassemblies, per-run hashes, and an aggregate SHA256 manifest.
 
 This negative isolates a second general compiler opportunity. Both variants form replay, so replay formation itself is not the gap. Production unrolls and interleaves two independent rows into one 14-instruction capture: two loads for each input stream, two multiplies, two MADs, two rounding operations, and two stores, then advances RWC by four. Fresh semantic C++ captures one row as seven instructions and advances by two after every replay. It therefore fails to overlap the independent multiply/MAD/round latency chains across adjacent loop iterations. The durable target is target-aware loop unroll-and-jam/software pipelining before replay capture, driven by dependency and SFPU latency/resource information. It must remain operation-agnostic and preserve the source expression's rounding/order semantics.
+
+## Blackhole silicon: SigmoidAppx
+
+Both selectors passed the paired silicon correctness gate. The fresh typed cubic uses the checked-in Float16_b contract (`atol=0.13`, `rtol=0.05`, and PCC greater than `0.99`); its host discriminator measured maximum absolute error `0.060843` and PCC `0.997736`. Wormhole and Blackhole correctness and profiler sources compiled, and both Blackhole selectors passed CRAQ before device execution.
+
+Each cell is three fresh, serialized device processes. The metric is scoped `TILE_LOOP mean(MATH_ISOLATE)` cycles/tile.
+
+| Production | Fresh semantic C++ | Delta |
+|---:|---:|---:|
+| 222.8515625 / 222.8515625 / 222.8515625 | 446.8515625 / 446.8515625 / 446.8515625 | +100.52% |
+
+Evidence is archived under `/localdev/nkapre/sigmoidappx-bh-silicon-20260815`; its aggregate SHA256 manifest is `b52cdbd14b8b89c62d37d289d5830a5a0c28324f13f55390e73d8a58f0305908`.
+
+The production body uses a replayed load, `SFPLUT`, add, and store. The fresh cubic instead materializes two FP32 constants inside every row (four `sfploadi` half-immediates), then emits square, MAD, multiply, add, and store without replay. This is negative evidence for three generic targets: loop-invariant SFPU constant hoisting, allocation of invariants to special registers, and replay extraction from counted typed loops. The compiler work must be driven by invariant dataflow and loop legality, not by recognizing SigmoidAppx or its coefficients.

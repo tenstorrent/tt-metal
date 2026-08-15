@@ -44,6 +44,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    FRESH_CPP_IMPL,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -851,6 +852,7 @@ def eltwise_unary_sfpu(
     spec_A=None,
     custom_atol=None,
     custom_rtol=None,
+    fresh_cpp_impl=0,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -903,6 +905,7 @@ def eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
+            FRESH_CPP_IMPL(fresh_cpp_impl),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -944,6 +947,22 @@ def eltwise_unary_sfpu(
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
     ), "Assert against golden failed"
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.SigmoidAppx,
+        FastMode.No,
+        [64, 64],
+        custom_atol=0.13,
+        custom_rtol=0.05,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false

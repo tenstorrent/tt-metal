@@ -8,6 +8,18 @@
 // SFPLOADMACRO templates, or hand-interleaved software schedule.
 namespace ckernel::sfpu {
 
+template <int ITERATIONS>
+inline void calculate_sigmoid_appx_fresh_cpp() {
+    for (int row = 0; row < ITERATIONS; ++row) {
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        const sfpi::vFloat input_squared = input * input;
+        const sfpi::vFloat result = (-0.00447352f * input_squared + 0.19833094f) * input + 0.5f;
+
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool IS_MAX, int ITERATIONS>
 inline void calculate_binary_max_min_fresh_cpp(
     const std::uint32_t dst_index_in0,

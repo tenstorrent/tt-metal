@@ -25,6 +25,11 @@ CORRECTNESS_METRICS = {"none", "pcc", "exact", "tolerance"}
 # Every exception is keyed by the complete stable corpus ID.  There are no
 # basename fragments, substring matches, or inferred semantic classifications.
 AUDITED_SEEDS = {
+    "metal__ckernel_sfpu_sigmoid_appx": dict(
+        semantic_cpp_class="ready", semantic_cpp_blocker="Fresh typed cubic is functionally valid; competitive lowering needs loop-invariant SFPU constant materialization/hoisting, special-register allocation, and counted-loop replay formation.",
+        paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="tolerance",
+        correctness_threshold="Float16_b rtol=0.05 atol=0.13 plus PCC > 0.99", correctness_source="test_sfpu_unary.py::test_sigmoid_appx_fresh_cpp",
+        silicon_status="loss", silicon_result="BH MATH_ISOLATE: fresh semantic C++ 446.8515625 cycles vs production 222.8515625 (+100.52%), three fresh samples each.", silicon_source="FRESH_CPP_SILICON_ATTACK.md; sfpu_device_baseline_v1.tsv; audited BH device archive"),
     "legacy__ckernel_sfpu_welfords": dict(
         semantic_cpp_class="typed_wrapper_needed", semantic_cpp_blocker="Generated vFloat body exists; raw LREG live-in/live-out ABI remains an explicit typed-boundary requirement.",
         paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="tolerance",
@@ -82,6 +87,14 @@ AUDITED_SEEDS = {
         silicon_status="blocked", silicon_result="No paired isolated profiler fixture.", silicon_source="f1_candidates.tsv rank 9"),
 }
 
+AUDITED_MAPPINGS = {
+    "metal__ckernel_sfpu_sigmoid_appx": dict(
+        functional_modules="test_sfpu_unary.py::test_sigmoid_appx_fresh_cpp",
+        perf_modules="perf_eltwise_unary_sfpu.py::test_perf_sigmoid_appx_fresh_cpp",
+        notes="Audited paired production/fresh semantic-C++ SigmoidAppx selector and isolated profiler fixture.",
+    ),
+}
+
 DEFAULT_AUDIT = dict(
     semantic_cpp_class="unmapped", semantic_cpp_blocker="No row-specific semantic-C++ conversion audit or paired selector has been completed.",
     paired_selector_status="absent", test_status="not_run", perf_status="not_run", correctness_metric="none", correctness_threshold="not established",
@@ -135,6 +148,8 @@ def inventory():
           raw_tti=str(int(raw)),typed_sfpi=str(int(typed)),replay=str(int(replay)),mop=str(int(mop)),
           functional_modules=functional,perf_modules=perf,mapping_state=state,
           notes=mapped[2] if mapped else "explicitly unmapped: no audited functional module")
+        if row["id"] in AUDITED_MAPPINGS:
+            row.update(AUDITED_MAPPINGS[row["id"]]); row["mapping_state"]="mapped"
         row.update(DEFAULT_AUDIT); row.update(AUDITED_SEEDS.get(row["id"], {})); rows.append(row)
     return rows
 
@@ -260,6 +275,7 @@ def main():
             for row in rows:
                 if row["id"] in reviewed:
                     row.update({k:reviewed[row["id"]].get(k,"") for k in AUDIT_FIELDS})
+                row.update(AUDITED_SEEDS.get(row["id"], {}))
         write_manifest(rows)
     current=read_manifest() if MANIFEST.exists() else []
     errors,counts=validate(current)

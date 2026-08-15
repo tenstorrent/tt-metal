@@ -109,6 +109,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
+#include "fresh_cpp_operations.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -219,16 +224,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        test_utils::call_unary_sfpu_operation<
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            SFPU_UNARY_OPERATION,
-                            APPROX_MODE,
-                            is_fp32_dest_acc_en,
-                            ITERATIONS,
-                            FAST_MODE,
-                            STABLE_SORT,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_sigmoid_appx_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else
+                        {
+                            test_utils::call_unary_sfpu_operation<
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                SFPU_UNARY_OPERATION,
+                                APPROX_MODE,
+                                is_fp32_dest_acc_en,
+                                ITERATIONS,
+                                FAST_MODE,
+                                STABLE_SORT,
+                                CLAMP_NEGATIVE>(block_tile, formats.math);
+                        }
                     }
                 }
             }
@@ -254,16 +272,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU operation
-                        test_utils::call_unary_sfpu_operation<
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            SFPU_UNARY_OPERATION,
-                            APPROX_MODE,
-                            is_fp32_dest_acc_en,
-                            ITERATIONS,
-                            FAST_MODE,
-                            STABLE_SORT,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_sigmoid_appx_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else
+                        {
+                            test_utils::call_unary_sfpu_operation<
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                SFPU_UNARY_OPERATION,
+                                APPROX_MODE,
+                                is_fp32_dest_acc_en,
+                                ITERATIONS,
+                                FAST_MODE,
+                                STABLE_SORT,
+                                CLAMP_NEGATIVE>(block_tile, formats.math);
+                        }
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

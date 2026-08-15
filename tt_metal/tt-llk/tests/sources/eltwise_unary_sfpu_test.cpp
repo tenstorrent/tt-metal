@@ -53,6 +53,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
+#include "fresh_cpp_operations.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -94,16 +99,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // calculation of sfpu operation on dest
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
-            test_utils::call_unary_sfpu_operation<
-                DST_SYNC,
-                is_fp32_dest_acc_en,
-                SFPU_UNARY_OPERATION,
-                APPROX_MODE,
-                is_fp32_dest_acc_en,
-                iterations,
-                FAST_MODE,
-                false /* STABLE_SORT */,
-                CLAMP_NEGATIVE>(block_tile, formats.math);
+            if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    calculate_sigmoid_appx_fresh_cpp,
+                    (iterations),
+                    block_tile,
+                    VectorMode::None);
+            }
+            else
+            {
+                test_utils::call_unary_sfpu_operation<
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    SFPU_UNARY_OPERATION,
+                    APPROX_MODE,
+                    is_fp32_dest_acc_en,
+                    iterations,
+                    FAST_MODE,
+                    false /* STABLE_SORT */,
+                    CLAMP_NEGATIVE>(block_tile, formats.math);
+            }
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

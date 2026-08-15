@@ -14,3 +14,5 @@ metal__ckernel_sfpu_mul_int32	bh	device_cycles	MATH_ISOLATE	generated	562.625	me
 legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY	handwritten	159.25	measured	TTNN_WHERE_COMPILER_AB.md
 legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY	generated	312.5	measured	TTNN_WHERE_COMPILER_AB.md; SFPI-GCC 8f943c2f8
 legacy__ckernel_sfpu_topk	bh	device_cycles	TOPK_BODY			BLOCKED	no isolated paired profiler metric
+metal__ckernel_sfpu_sigmoid_appx	bh	device_cycles	MATH_ISOLATE	production	222.8515625	measured	audited BH archive; three identical fresh samples
+metal__ckernel_sfpu_sigmoid_appx	bh	device_cycles	MATH_ISOLATE	fresh_cpp	446.8515625	measured	audited BH archive; three identical fresh samples
