@@ -56,6 +56,9 @@ autograd::TensorPtr ring_attention_sdpa(
     TT_FATAL(
         !mask.has_value(),
         "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
+    TT_FATAL(
+        mask_type != ttml::metal::AttentionMaskType::Arbitrary,
+        "Arbitrary attention mask is not supported in CP mode, use None or Causal");
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
@@ -170,34 +173,41 @@ autograd::TensorPtr ring_attention_sdpa(
                                       mesh_device]() mutable {
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
         const auto& grad_output = out->get_grad();
+        const auto& attn_output = out->get_value();
         const auto& query_tensor = query->get_value();
-        auto* mesh_device = query_tensor.device();
-        auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
 
         ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_accum = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_accum = ttnn::zeros_like(value->get_value());
 
-        ttnn::Tensor recomputed_output = ttnn::empty_like(query_tensor);
-        ttnn::Tensor recomputed_intermediate = ttnn::empty(
-            ttnn::Shape{batch_num, heads, seq_len_local, 32U},
-            ttnn::DataType::FLOAT32,
-            ttnn::Layout::TILE,
-            mesh_device,
-            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
         ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());
 
-        // Slice parameters for extracting logsumexp from intermediate column 0
-        const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
-        const ttsl::SmallVector<uint32_t> lse_end = {batch_num, heads, seq_len_local, 1};
+        // Standard ring-flash-attention backward: every step gets the UNSCALED upstream
+        // gradient, the GLOBAL forward output, and the GLOBAL logsumexp. The sdpa_bw
+        // kernels recompute P = exp(scale*QK^T - lse) from the supplied lse, so the global
+        // lse yields the global attention weights restricted to this chunk's columns, and
+        // u = rowsum(dO * O_global) is the global softmax-backward correction. Per-chunk
+        // contributions then sum to the exact dQ/dK/dV. Feeding per-chunk O/lse here would
+        // bias dQ/dK (per-chunk u instead of global) — only dV would come out right.
+        //
+        // The global lse goes in column 0 of the (B, H, S, 32) FP32 intermediates layout
+        // the kernels expect; the remaining 31 columns are ignored padding.
+        const ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> lse_padding = {
+            {0, 0},  // batch
+            {0, 0},  // heads
+            {0, 0},  // seq_len
+            {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
+        };
+        ttnn::Tensor global_intermediates = ttnn::pad(final_lse, lse_padding, 0.0F, false, std::nullopt);
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
             const uint32_t step_idx = step;
 
+            // Devices skipped by the causal schedule at this step do not run the kernels,
+            // so their step buffers must be zeroed to contribute nothing to the accumulators.
             {
                 ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);
                 ttnn::Tensor zero_K = ttnn::zeros_like(grad_K_step);
@@ -207,37 +217,14 @@ autograd::TensorPtr ring_attention_sdpa(
                 ttnn::copy(zero_V, grad_V_step);
             }
 
-            // RECOMPUTE: Run forward SDPA to get output and intermediate for this step
-            // K/V are already at the correct ring position (same as forward used at this step)
             // Use Backward direction (same as forward) since src = (device + step) % ring_size
-            auto [step_output, step_intermediate] = ttml::metal::ring_sdpa_fw(
-                query_tensor,
-                k_current,
-                v_current,
-                ring_size,
-                cp_axis_value,
-                step_idx,
-                mask_type,
-                ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
-                recomputed_output,
-                recomputed_intermediate);
-
-            // RECOMPUTE: Calculate effective weight from recomputed logsumexp and final global lse
-            // step_weight = exp(lse_j - final_lse) = Z_j / Z_total
-            ttnn::Tensor lse_j = ttnn::slice(step_intermediate, lse_start, lse_end, slice_step);
-            ttnn::Tensor step_weight = ttnn::exp(ttnn::subtract(lse_j, final_lse));
-
-            // Scale grad_output by the weight applied to this chunk in forward
-            // d(chunk_output_j) = weight_j * d(final_output)
-            ttnn::Tensor scaled_grad_output = ttnn::multiply(grad_output, step_weight);
-
             auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_sdpa_bw(
-                scaled_grad_output,
-                step_output,  // Recomputed
+                grad_output,
+                attn_output,  // Global forward output saved by autograd
                 query_tensor,
-                k_current,          // K at current ring position
-                v_current,          // V at current ring position
-                step_intermediate,  // Recomputed
+                k_current,             // K at current ring position
+                v_current,             // V at current ring position
+                global_intermediates,  // Global logsumexp in intermediates layout
                 ring_size,
                 cp_axis_value,
                 step_idx,

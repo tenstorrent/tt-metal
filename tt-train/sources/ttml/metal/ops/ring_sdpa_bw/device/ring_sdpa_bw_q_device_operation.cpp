@@ -8,6 +8,8 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+
 namespace ttml::metal::ops::ring_sdpa_bw::q {
 
 using namespace tt::tt_metal;
@@ -17,9 +19,8 @@ using namespace ttnn;
 
 void RingSDPABwQDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.query.device() != nullptr, "Query tensor must be on device");
-    TT_FATAL(attrs.ring_size > 0, "Ring size must be > 0");
-    TT_FATAL(attrs.step < attrs.ring_size, "Step must be < ring_size");
+    validate_ring_attributes(attrs, tensor_args.query);
+    validate_intermediates_tensor(tensor_args.intermediates, tensor_args.query);
 }
 
 RingSDPABwQDeviceOperation::spec_return_value_t RingSDPABwQDeviceOperation::compute_output_specs(
