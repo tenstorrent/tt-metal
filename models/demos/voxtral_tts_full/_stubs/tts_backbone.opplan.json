@@ -1,0 +1,539 @@
+{
+  "component": "tts_backbone",
+  "class_name": "TtsBackbone",
+  "module_function": "tts_backbone",
+  "pre_bound": [],
+  "llm_gaps": [
+    {
+      "name": "layers.0.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.0.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.0.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.0.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.1.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.1.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.1.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.1.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.2.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.2.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.2.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.2.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.3.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.3.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.3.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.3.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.4.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.4.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.4.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.4.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.5.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.5.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.5.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.5.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.6.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.6.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.6.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.6.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.7.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.7.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.7.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.7.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.8.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.8.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.8.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.8.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.9.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.9.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.9.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.9.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.10.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.10.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.10.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.10.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.11.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.11.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.11.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.11.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.12.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.12.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.12.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.12.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.13.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.13.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.13.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.13.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.14.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.14.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.14.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.14.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.15.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.15.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.15.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.15.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.16.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.16.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.16.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.16.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.17.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.17.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.17.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.17.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.18.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.18.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.18.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.18.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.19.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.19.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.19.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.19.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.20.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.20.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.20.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.20.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.21.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.21.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.21.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.21.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.22.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.22.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.22.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.22.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.23.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.23.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.23.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.23.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.24.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.24.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.24.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.24.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "layers.25.input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.25.self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "layers.25.post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "layers.25.mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    },
+    {
+      "name": "norm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    }
+  ],
+  "palette": [],
+  "counts": {
+    "op-REUSE": 0,
+    "op-ADAPT": 0,
+    "op-NEW": 105
+  }
+}

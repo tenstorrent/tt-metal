@@ -1,0 +1,34 @@
+{
+  "component": "decoder_layer",
+  "class_name": "DecoderLayer",
+  "module_function": "decoder_layer",
+  "pre_bound": [],
+  "llm_gaps": [
+    {
+      "name": "input_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "self_attn",
+      "class": "VoxtralAttention",
+      "notes": ""
+    },
+    {
+      "name": "post_attention_layernorm",
+      "class": "VoxtralRMSNorm",
+      "notes": ""
+    },
+    {
+      "name": "mlp",
+      "class": "VoxtralMLP",
+      "notes": ""
+    }
+  ],
+  "palette": [],
+  "counts": {
+    "op-REUSE": 0,
+    "op-ADAPT": 0,
+    "op-NEW": 4
+  }
+}
