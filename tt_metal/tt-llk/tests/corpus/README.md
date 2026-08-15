@@ -1,5 +1,35 @@
 # F1/F2 LLK corpus seed
 
+## Complete SFPU corpus
+
+`sfpu_corpus_v1.tsv` is the authoritative, versioned inventory of every SFPU
+header shipped for Blackhole (41) and Wormhole (32, a strict subset). Unlike
+the 11-row `f1_candidates.tsv` prioritization seed, every row is present and
+has either audited functional/performance mappings or an explicit `unmapped`
+state. Static columns record raw TTI, typed SFPI, replay, and MOP presence.
+
+Validate inventory drift in presubmit:
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --validate
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list
+```
+
+Regenerate only after auditing additions/removals and mappings:
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --update --validate
+```
+
+The runner exposes `compile`, `craq`, and serialized `silicon` modes. Without
+the required simulator or explicit hardware `--execute` authorization it
+records machine-readable `SKIP_NO_SIMULATOR`, `SKIP_UNMAPPED`, or
+`SKIP_HARDWARE_NOT_AUTHORIZED`; it never substitutes wall time or instruction
+counts for device cycles. Each run writes pinned revision/manifest provenance,
+JSON, TSV, and Markdown summaries under its run directory. Hardware collection
+is intentionally nightly/manual and must be serialized by the lab runner; it
+is not a pull-request gate.
+
 `f1_candidates.tsv` is a deliberately small, auditable corpus seed for the
 F1 cost-model and F2 differential-driver work.  It inventories only kernels
 with a hand-written replay/MOP/SFPLOADMACRO advantage or a clearly convertible

@@ -88,11 +88,22 @@ def emit_summary(run, records, provenance):
     lines += [f"| {r['id']} | {r['arch']} | {r['status']} | {r['reason']} |" for r in records]
     (run/"summary.md").write_text("\n".join(lines)+"\n")
 
+def compare_baseline(records, baseline, threshold):
+    old=json.loads(baseline.read_text()).get("results",[])
+    index={(r.get("id"),r.get("arch"),r.get("mode")):r for r in old}; compared=[]
+    for r in records:
+        prior=index.get((r["id"],r["arch"],r["mode"])); now=r.get("cycles"); before=prior and prior.get("cycles")
+        if not isinstance(now,(int,float)) or not isinstance(before,(int,float)) or before==0:
+            compared.append({"id":r["id"],"status":"SKIP_NO_DEVICE_CYCLES","reason":"both runs need numeric device cycles"}); continue
+        delta=100.0*(now-before)/before
+        compared.append({"id":r["id"],"status":"REGRESSION" if delta>threshold else "PASS","delta_pct":delta})
+    return compared
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--update",action="store_true"); ap.add_argument("--validate",action="store_true")
     ap.add_argument("--list",action="store_true"); ap.add_argument("--mode",choices=("compile","craq","silicon")); ap.add_argument("--arch",choices=("bh","wh"),default="bh")
     ap.add_argument("--run-root",type=pathlib.Path); ap.add_argument("--simulator",type=pathlib.Path); ap.add_argument("--baseline",type=pathlib.Path)
-    ap.add_argument("--max-regression-pct",type=float,default=0.0); ap.add_argument("--execute",action="store_true",help="required for hardware execution")
+    ap.add_argument("--max-regression-pct",type=float,default=0.0); ap.add_argument("--execute",action="store_true",help="execute the selected mode (otherwise emit a plan)")
     a=ap.parse_args(); rows=inventory()
     if a.update: write_manifest(rows)
     current=read_manifest() if MANIFEST.exists() else []
@@ -111,8 +122,39 @@ def main():
         mods=r["functional_modules" if a.mode!="silicon" else "perf_modules"]
         if not mods: records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"SKIP_UNMAPPED","reason":"no audited module mapping","artifact":""}); continue
         if a.mode=="craq" and (not a.simulator or not a.simulator.is_file()): records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"SKIP_NO_SIMULATOR","reason":"--simulator required","artifact":""}); continue
-        if a.mode=="silicon" and not a.execute: records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"SKIP_HARDWARE_NOT_AUTHORIZED","reason":"serialized hardware requires --execute","artifact":""}); continue
-        records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"READY","reason":mods,"artifact":""})
+        if not a.execute:
+            status="SKIP_HARDWARE_NOT_AUTHORIZED" if a.mode=="silicon" else "PLAN_ONLY"
+            records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":status,"reason":mods,"artifact":""}); continue
+        records.append({"id":r["id"],"arch":a.arch,"mode":a.mode,"status":"QUEUED","reason":mods,"artifact":""})
+    queued=[r for r in records if r["status"]=="QUEUED"]
+    if queued:
+        pydir=LLK/"tests/python_tests"; python=pydir/".venv/bin/python"; log=run/f"{a.mode}.log"
+        mods=sorted({m for r in queued for m in r["reason"].split(",") if m and " " not in m})
+        env=os.environ.copy(); env.update({"TT_METAL_HOME":str(ROOT),"SHORT_ARCH":a.arch,
+            "SIM_ARCH":"blackhole" if a.arch=="bh" else "wormhole"})
+        if not python.is_file():
+            rc=None; why="missing tt-llk .venv"
+        elif a.mode=="compile":
+            cmd=[str(python),"-m","pytest","-o","addopts=",*mods,"--compile-producer","-q"]; why="compile gate"
+            with log.open("w") as f: rc=subprocess.run(cmd,cwd=pydir,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
+        elif a.mode=="craq":
+            runner=pathlib.Path(os.environ.get("CRAQ_SIM_ROOT","/localdev/nkapre/craq-sim"))/"scripts/perf/llk-sim-perf.sh"
+            cmd=[str(runner),"--sample","1","--run-root",str(run/"craq")]+sum((["--module",m] for m in mods),[])
+            env["SIMULATOR"]=str(a.simulator); why="CRAQ device-cycle gate"
+            with log.open("w") as f: rc=subprocess.run(cmd,cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
+        else:
+            cmd=[str(python),"-m","pytest","-o","addopts=",*mods,"-q"]; why="serialized silicon gate"
+            lock=HERE/"sfpu-silicon.lock"
+            import fcntl
+            with lock.open("w") as lk, log.open("w") as f:
+                fcntl.flock(lk,fcntl.LOCK_EX); rc=subprocess.run(cmd,cwd=pydir,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
+        for rec in queued:
+            rec["status"]="SKIP_MISSING_ENV" if rc is None else ("PASS" if rc==0 else "FAIL")
+            rec["reason"]=why; rec["artifact"]=str(log) if log.exists() else ""
+    if a.baseline:
+        comparisons=compare_baseline(records,a.baseline,a.max_regression_pct)
+        (run/"comparison.json").write_text(json.dumps(comparisons,indent=2)+"\n")
+        prov["baseline"]=str(a.baseline)
     emit_summary(run,records,prov); print(run)
     return 0
 if __name__=="__main__": raise SystemExit(main())

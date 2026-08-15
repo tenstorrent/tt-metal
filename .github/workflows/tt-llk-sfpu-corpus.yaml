@@ -1,0 +1,32 @@
+name: tt-llk SFPU corpus
+
+on:
+  pull_request:
+    paths:
+      - "tt_metal/tt-llk/tt_llk_*/common/inc/sfpu/**"
+      - "tt_metal/tt-llk/tests/corpus/**"
+      - ".github/workflows/tt-llk-sfpu-corpus.yaml"
+  workflow_dispatch:
+
+jobs:
+  inventory-and-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject SFPU inventory drift
+        run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --validate
+      - name: Materialize compile and CRAQ plans
+        run: |
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list > sfpu-bh-plan.tsv
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch wh --list > sfpu-wh-plan.tsv
+          test "$(wc -l < sfpu-bh-plan.tsv)" -eq 41
+          test "$(wc -l < sfpu-wh-plan.tsv)" -eq 32
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sfpu-corpus-plans
+          path: sfpu-*-plan.tsv
+
+# Compile execution belongs in the normal tt-llk toolchain image. CRAQ needs a
+# pinned libttsim.so, and silicon needs a serialized lab runner. Those jobs call
+# sfpu_corpus.py with --mode compile|craq|silicon and publish its run directory;
+# absence of either resource is a recorded skip, never a green performance run.
