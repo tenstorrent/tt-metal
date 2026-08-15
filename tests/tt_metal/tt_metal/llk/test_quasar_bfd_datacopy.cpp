@@ -69,25 +69,25 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     experimental::DataflowBufferSpec in0_dfb_spec{
         .unique_id = IN0_DFB,
         .entry_size = single_tile_size,
-        .num_entries = 2,
+        .num_entries = TILES_PER_INPUT,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
     experimental::DataflowBufferSpec in1_dfb_spec{
         .unique_id = IN1_DFB,
         .entry_size = single_tile_size,
-        .num_entries = 2,
+        .num_entries = TILES_PER_INPUT,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
     experimental::DataflowBufferSpec in2_dfb_spec{
         .unique_id = IN2_DFB,
         .entry_size = single_tile_size,
-        .num_entries = 2,
+        .num_entries = TILES_PER_INPUT,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
     experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = single_tile_size,
-        .num_entries = 4,
+        .num_entries = TILES_PER_INPUT,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
