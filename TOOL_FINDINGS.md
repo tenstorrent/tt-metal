@@ -136,6 +136,7 @@ defect.
 | **F37** | the generated test calls `_captured_submodule_path()`, defined in 0 of 7 emitted files → guaranteed first-round `NameError` for every model; and its input defaults drop the causal mask (non-causal golden) and stage index tensors as bf16 (8191→8192) | **YES — with F36** | small |
 | **F38** | `optimize --devices` defaults to `"0,1"`, so a 1-chip box is planned as 2-chip TP=2 — overriding an explicit `--mesh 1,1` and ignoring the `parallelism_manifest.json` the tool wrote itself | **YES** | one line |
 | **F39** | the e2e report prints `Verdict: PASS` beside `e2e PCC n/a` — verdict and measurement come from different sources and only one survived the cc-engine refactor (real value was 0.99998) | **YES** | small |
+| **F40** | the baseline measurement completes (`756.4513 ms`, 8 iters, 4 stages PCC-clean) and is then discarded by a segfault in `close_mesh_device` at teardown; the run reports a missing CSV and optimizes on with no baseline | **YES — with F31** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -2907,9 +2908,23 @@ raise is the only thing that reaches the caller. The abort, the signal, and the 
 log the caller cites but does not read.
 
 **The masking is the finding, not the bus error.** Whether the bus error is a ttnn defect, a
-profiler-buffer overrun on a three-block forward, or a fault in our own hand-written perf test is
-not established here and is not claimed. What is established is that an abort was reported as a
-missing file.
+profiler-buffer overrun on a three-block forward, or a fault in the perf test itself is not
+established here and is not claimed. What is established is that an abort was reported as a missing
+file.
+
+**CORRECTION (2026-08-15, from the re-run).** An earlier draft of this entry called
+`test_main_perf.py` "our own hand-written perf test". It is not ours. The optimize stage generates
+it — the re-run's own log shows it being produced from the PCC test:
+
+```
+  auto-gen perf from pcc (agentic) -> tests/e2e/test_main_perf.py::test_main_perf
+  auto-gen perf from pcc           -> tests/e2e/test_main_perf.py::test_main_perf
+```
+
+The file in the aborted session carried the same name because that session was running `optimize`,
+which had generated it. So the crash is inside the tool's own generated artifact on the tool's own
+path, and the attribution above should be read accordingly. See F40, where the same measurement
+crashes again — this time in device teardown, after producing its numbers.
 
 ### Fixes
 
@@ -3471,6 +3486,89 @@ result: a reader cannot tell 0.9999 from 0.9900 from "the gate was satisfied som
 3. **Never print a verdict beside `n/a`.** If the value is genuinely unavailable, say why — `PASS
    (gate satisfied; PCC not recorded by this path)` is honest; `PASS … n/a` reads as an oversight
    the reader must not notice.
+
+---
+
+## ★★★ F40 — a teardown segfault throws away a measurement that already succeeded
+
+**Status: live, hit at Step 10/10 of the optimize stage** · severity: the baseline the whole perf
+run is judged against is discarded after being computed · reported: not yet
+
+The optimize stage's final discovery step is *"Measuring the baseline latency (trace+1CQ)"*. It ran,
+and it ran **well** — from its own tracy log:
+
+```
+[perf] iter 4/8  744.0 ms/call
+[perf] iter 5/8  745.9 ms/call
+[perf] iter 6/8  749.7 ms/call
+[perf] iter 7/8  753.3 ms/call
+[perf] iter 8/8  756.4 ms/call
+[perf] stages: {'prefill': ok pcc=1.000002, 'decode': ok pcc=1.000000,
+                'flow': ok pcc=1.000000, 'vocode': ok pcc=1.000001}
+FORWARD_WALL_MS=756.4513
+TRACE_PER_TOKEN_MS=756.4513
+TRACE_REPLAY_PATH=trace+1cq native batch=1
+```
+
+Eight iterations, all four pipeline stages traced and PCC-clean, the baseline printed. The very next
+line:
+
+```
+Fatal Python error: Segmentation fault
+
+Thread (most recent call first):
+  ttnn/ttnn/distributed/distributed.py:689 in close_mesh_device
+  models/demos/voxtral_tts_full/tests/e2e/test_main_perf.py:108 in _close_device
+  models/demos/voxtral_tts_full/tests/e2e/test_main_perf.py:233 in test_main_perf
+Aborted (core dumped)
+```
+
+**The crash is in device teardown, after the work.** `close_mesh_device` segfaults once the
+measurement is complete, killing the process before tracy's post-processing writes its device CSV.
+The tool then reports:
+
+```
+  ✗ discovery failed (TracyRunError):
+      tracy run exit 1
+      Fatal Python error: Segmentation fault
+      Aborted (core dumped)
+      AssertionError: cpp_device_perf_report.csv not found and legacy device log
+      profile_log_device.csv is also missing …
+```
+
+and continues without a baseline:
+
+```
+  [optimize/cc] discovery exited 1 but the manifest is complete; continuing.
+```
+
+### Three separable problems
+
+1. **`close_mesh_device` segfaults.** On the same device, in the same session, `test_tts_e2e.py`
+   opens and closes cleanly seven times over (7 passed in 50.96s). Whatever the generated perf test
+   leaves open — a trace buffer, a captured program — makes teardown fatal. This is the underlying
+   defect and it is in the tool's own generated artifact (see the F31 correction).
+2. **A completed measurement is discarded because of what happened afterwards.** `756.4513 ms` was
+   on stdout. The run is judged a total failure over a CSV that a *post-measurement* crash prevented
+   from being written. Nothing tries to recover the number that was already printed.
+3. **It proceeds anyway, without a baseline.** `discovery exited 1 but the manifest is complete;
+   continuing` is the worst of both: not a halt the operator must resolve, and not a usable
+   reference point either. Every later "win" is measured against nothing.
+
+F31 recorded the reporting half of this (an abort surfaced as a missing file). F40 is the same
+masking with the additional insult that the data existed.
+
+### Fixes
+
+1. **Parse the numbers the run already emitted.** `FORWARD_WALL_MS` / `TRACE_PER_TOKEN_MS` are
+   printed on stdout in the tool's own format; a run that produced them has produced a baseline,
+   whatever happened during teardown.
+2. **Do not let teardown fail a run.** Wrap `_close_device` so a crash after the measurement is a
+   warning; better, let the process exit without closing — the OS reclaims the device, and this is a
+   short-lived profiling child.
+3. **Report the abort as the cause, not the missing CSV** (F31 fix 1, unchanged).
+4. **Refuse to optimize with no baseline**, or say loudly that improvements will be unverifiable.
+   `continuing` after a failed baseline measurement is a decision worth surfacing.
 
 ---
 
