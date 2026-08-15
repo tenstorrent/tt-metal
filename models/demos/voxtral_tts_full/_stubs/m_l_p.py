@@ -19,7 +19,7 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
+from models.demos.voxtral_tts_full._stubs.attention import linear, stage_weight
 
 
 class TtVoxtralMLP:
@@ -27,26 +27,21 @@ class TtVoxtralMLP:
         self.gate, self.down, self.up = gate, down, up
 
     @classmethod
-    def build(cls, device, torch_module):
-        def stage(t):
-            return ttnn.from_torch(
-                t.detach().float().t().contiguous().to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-
+    def build(cls, device, torch_module, dtype=ttnn.bfloat16):
+        # `stage_weight` folds in the F.linear transpose's counterpart and, at ttnn.float32,
+        # stages the hi/lo bfloat16 pair the model's `linear` multiplies exactly -- same four
+        # bytes per parameter, 3.7x tighter product. See `_stubs/attention.py`.
+        stage = lambda t: stage_weight(device, t.detach().float().t(), dtype)  # noqa: E731
         return cls(stage(torch_module.gate_proj), stage(torch_module.down_proj), stage(torch_module.up_proj))
 
     def __call__(self, h, *args, **kwargs):
-        linear = lambda t, w: ttnn.linear(t, w, compute_kernel_config=COMPUTE_CONFIG)  # noqa: E731
         gated = ttnn.mul(ttnn.silu(linear(h, self.gate)), linear(h, self.up))
         return linear(gated, self.down)
 
 
-def build(device, torch_module=None):
-    return TtVoxtralMLP.build(device, torch_module)
+def build(device, torch_module=None, **kwargs):
+    return TtVoxtralMLP.build(device, torch_module, **kwargs)
 
 
-def m_l_p(device, torch_module=None):
-    return TtVoxtralMLP.build(device, torch_module)
+def m_l_p(device, torch_module=None, **kwargs):
+    return TtVoxtralMLP.build(device, torch_module, **kwargs)

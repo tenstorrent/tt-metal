@@ -62,7 +62,7 @@ import ttnn
 # output ~2% SHORT of the reference -- a scale error, which PCC cannot see per-component but
 # which compounds through a stack, and this block stacks 8 transformer layers behind 4 norms
 # each.
-from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
+from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG, rms_norm, softmax
 
 # From the checkpoint's params.json, via voxtral_common_ref.
 _N_AUDIO_SPECIAL = 2
@@ -202,7 +202,7 @@ class TtVoxtralCodecDecoder:
 
     @staticmethod
     def _norm(x, weight, eps):
-        return ttnn.rms_norm(x, weight=weight, epsilon=eps, compute_kernel_config=COMPUTE_CONFIG)
+        return rms_norm(x, weight, eps)
 
     # ---- pieces ---------------------------------------------------------------------
     def _quantizer_decode(self, codes, n_frames):
@@ -252,9 +252,10 @@ class TtVoxtralCodecDecoder:
         scores = ttnn.mul(self._matmul(q, ttnn.permute(k, (0, 1, 3, 2))), _HEAD_DIM**-0.5)
         scores = ttnn.add(scores, ttnn.slice(bias, [0, 0, 0, 0], [1, _N_HEADS, seq_len, seq_len]))
 
-        # As in `_stubs/attention.py`: the softmax needs the model-wide compute config, or it
-        # runs LoFi/approx and loses a biased fraction of the attention mass.
-        attn = self._matmul(ttnn.softmax(scores, dim=-1, compute_kernel_config=COMPUTE_CONFIG), v)
+        # As in `_stubs/attention.py`: the model's composed softmax, not the fused op, which
+        # runs LoFi/approx on its default config and loses a biased fraction of the attention
+        # mass -- and is still 2.8x looser than the composition even at HiFi4.
+        attn = self._matmul(softmax(scores, dim=-1), v)
         attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, seq_len, _N_HEADS * _HEAD_DIM))
         x = ttnn.add(x, ttnn.mul(self._linear(attn, layer["wo"]), layer["attn_scale"]))
 

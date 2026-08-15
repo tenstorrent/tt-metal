@@ -38,6 +38,18 @@ tests/pcc/conftest.py), so the two integrate the same trajectory.
 CFG_ALPHA. The reference's default is 1.2 and `VoxtralFlowMatching.forward` only forwards a
 cfg_alpha it was actually given, so 1.2 -- not config.json's `flow_cfg_alpha: 1.3` -- is what
 this block runs unless a caller overrides it. `build(cfg_alpha=...)` follows the same default.
+
+PRECISION IS A KNOB HERE BECAUSE THE OUTPUT IS QUANTISED. `build(dtype=...)` selects the staged
+weight/activation precision; bfloat16 is the default and what the per-component PCC test runs.
+The e2e pipeline builds this block with `ttnn.float32`, and the reason is specific to Block 2:
+its 36 acoustic floats are ROUNDED onto 21 FSQ levels, so accuracy is only useful up to the
+nearest rounding boundary and useless past it. Measured on the reference's own trajectories, a
+few of the 36 dimensions per frame land within 0.005 of a boundary (in the scaled 0..20 units),
+i.e. within 5e-4 of x -- and bfloat16 carries ~4e-3 of relative error, so those dimensions flip
+a code on arithmetic noise alone. A flipped code is not a small error downstream: it shifts a
+latent by a full 1/20th of its range, and the waveform PCC collapses rather than degrades. fp32
+puts three orders of margin between the arithmetic and the boundary. The block is 390M
+parameters, so the extra ~0.8 GB is affordable where it would not be for the 3.4B backbone.
 """
 from __future__ import annotations
 
@@ -50,7 +62,13 @@ import ttnn
 # fp32 destination accumulation matters most for `ttnn.rms_norm`, which without it returns an
 # output ~2% SHORT of the reference -- and this block runs its 3 layers 7 times per frame, so
 # a per-layer scale error is applied 21 times before the codes are read out.
-from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
+from models.demos.voxtral_tts_full._stubs.attention import (
+    linear,
+    matmul,
+    softmax,
+    stage_weight,
+)
+from models.demos.voxtral_tts_full._stubs.attention import rms_norm as _rms_norm
 
 # From voxtral_common_ref / the checkpoint's params.json.
 _DIM = 3072
@@ -83,25 +101,39 @@ class TtVoxtralFlowMatching:
         self.n_steps = n_steps
 
     @classmethod
-    def build(cls, device, torch_module, cfg_alpha: float = _CFG_ALPHA, n_steps: int = _N_STEPS, batch: int = 1):
+    def build(
+        cls,
+        device,
+        torch_module,
+        cfg_alpha: float = _CFG_ALPHA,
+        n_steps: int = _N_STEPS,
+        batch: int = 1,
+        dtype=ttnn.bfloat16,
+    ):
         w = {k: v.detach().float() for k, v in torch_module._as_dict().items()}
+        torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
 
         def stage(t, layout=ttnn.TILE_LAYOUT):
-            return ttnn.from_torch(
-                t.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
-            )
+            return ttnn.from_torch(t.contiguous().to(torch_dtype), dtype=dtype, layout=layout, device=device)
+
+        # Matmul operands go through `stage_weight`, which at ttnn.float32 stages the hi/lo
+        # bfloat16 pair (see `_stubs/attention.py`): the FPU keeps only ~11 mantissa bits of a
+        # native fp32 operand, and this block's output is ROUNDED, so the bits it drops are the
+        # ones that decide a code. Norm vectors, masks and the staged tokens are elementwise
+        # only -- bit-exact in fp32 -- so they stay plain tensors.
+        mm_weight = lambda t: stage_weight(device, t, dtype)  # noqa: E731
 
         def layer(prefix):
             return {
                 "attn_norm": stage(w[prefix + "attention_norm.weight"]),
-                "wq": stage(w[prefix + "attention.wq.weight"].t()),
-                "wk": stage(w[prefix + "attention.wk.weight"].t()),
-                "wv": stage(w[prefix + "attention.wv.weight"].t()),
-                "wo": stage(w[prefix + "attention.wo.weight"].t()),
+                "wq": mm_weight(w[prefix + "attention.wq.weight"].t()),
+                "wk": mm_weight(w[prefix + "attention.wk.weight"].t()),
+                "wv": mm_weight(w[prefix + "attention.wv.weight"].t()),
+                "wo": mm_weight(w[prefix + "attention.wo.weight"].t()),
                 "ffn_norm": stage(w[prefix + "ffn_norm.weight"]),
-                "w1": stage(w[prefix + "feed_forward.w1.weight"].t()),
-                "w2": stage(w[prefix + "feed_forward.w2.weight"].t()),
-                "w3": stage(w[prefix + "feed_forward.w3.weight"].t()),
+                "w1": mm_weight(w[prefix + "feed_forward.w1.weight"].t()),
+                "w2": mm_weight(w[prefix + "feed_forward.w2.weight"].t()),
+                "w3": mm_weight(w[prefix + "feed_forward.w3.weight"].t()),
             }
 
         # `semantic_code`: [EMPTY_AUDIO] is forbidden ([END_AUDIO] is allowed -- that is how
@@ -129,11 +161,11 @@ class TtVoxtralFlowMatching:
             time_tokens.append(stage(projected.reshape(1, 1, _DIM).repeat(2 * batch, 1, 1)))
 
         tensors = {
-            "w_semantic": stage(w["semantic_codebook_output.weight"].t()),
+            "w_semantic": mm_weight(w["semantic_codebook_output.weight"].t()),
             "semantic_mask": stage(mask),
-            "w_input": stage(w["input_projection.weight"].t()),
-            "w_llm": stage(w["llm_projection.weight"].t()),
-            "w_acoustic": stage(w["acoustic_codebook_output.weight"].t()),
+            "w_input": mm_weight(w["input_projection.weight"].t()),
+            "w_llm": mm_weight(w["llm_projection.weight"].t()),
+            "w_acoustic": mm_weight(w["acoustic_codebook_output.weight"].t()),
             "final_norm": stage(w["norm.weight"]),
             "layers": [layer(f"layers.{i}.") for i in range(_N_LAYERS)],
             "time_tokens": time_tokens,
@@ -141,16 +173,15 @@ class TtVoxtralFlowMatching:
             "uncond_token": stage(torch.zeros(batch, 1, _DIM)),
             "x_start": stage(torch.zeros(batch, _N_ACOUSTIC)),
             "batch": batch,
+            "dtype": dtype,
         }
         return cls(device, tensors, float(cfg_alpha), int(n_steps))
 
-    @staticmethod
-    def _linear(x, w):
-        return ttnn.linear(x, w, compute_kernel_config=COMPUTE_CONFIG)
+    _linear = staticmethod(linear)
 
     @staticmethod
     def _norm(x, weight):
-        return ttnn.rms_norm(x, weight=weight, epsilon=_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
+        return _rms_norm(x, weight, _NORM_EPS)
 
     def _block(self, x, layer):
         seq_len = int(x.shape[-2])
@@ -169,13 +200,13 @@ class TtVoxtralFlowMatching:
         # port); bidirectional and unmasked, so there is no bias term to add.
         n_rep = _N_HEADS // _N_KV_HEADS
         qg = ttnn.reshape(q, (batch, _N_KV_HEADS, n_rep * seq_len, _HEAD_DIM))
-        scores = ttnn.matmul(qg, ttnn.permute(k, (0, 1, 3, 2)), compute_kernel_config=COMPUTE_CONFIG)
-        # The compute config belongs on the softmax as much as on the matmuls -- on the default
-        # it runs LoFi/approx and the rows do not sum to 1 (see `_stubs/attention.py`). This
-        # block integrates 7 Euler steps into a value that is then ROUNDED onto 21 FSQ levels,
-        # so a biased attention mass is a bias on the code that comes out.
-        probs = ttnn.softmax(ttnn.mul(scores, _HEAD_DIM**-0.5), dim=-1, compute_kernel_config=COMPUTE_CONFIG)
-        attn = ttnn.matmul(probs, v, compute_kernel_config=COMPUTE_CONFIG)
+        scores = matmul(qg, ttnn.permute(k, (0, 1, 3, 2)))
+        # The softmax is the model's composed one (see `_stubs/attention.py`): the fused op is
+        # 2.8x looser even at HiFi4, and on its DEFAULT config the rows do not sum to 1 at all.
+        # This block integrates 7 Euler steps into a value that is then ROUNDED onto 21 FSQ
+        # levels, so a biased attention mass is a bias on the code that comes out.
+        probs = softmax(ttnn.mul(scores, _HEAD_DIM**-0.5), dim=-1)
+        attn = matmul(probs, v)
         attn = ttnn.reshape(attn, (batch, _N_HEADS, seq_len, _HEAD_DIM))
         attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (batch, seq_len, _N_HEADS * _HEAD_DIM))
 
@@ -198,6 +229,12 @@ class TtVoxtralFlowMatching:
     def __call__(self, llm_hidden, cfg_alpha=None, n_steps=None, x_0=None, **kwargs):
         batch = self.batch
 
+        # The caller's activation may arrive at the residual stream's precision; the staged
+        # weights fix this block's. Convert rather than refuse, so a bf16 backbone can drive an
+        # fp32 flow block (which is the configuration the e2e gate runs -- see the docstring).
+        if llm_hidden.dtype != self.dtype:
+            llm_hidden = ttnn.typecast(llm_hidden, self.dtype)
+
         # --- semantic code: greedy argmax over the masked logits -------------------------
         logits = ttnn.add(self._linear(llm_hidden, self.w_semantic), self.semantic_mask)
         semantic = ttnn.reshape(ttnn.argmax(logits, dim=-1), (batch, 1))
@@ -207,6 +244,8 @@ class TtVoxtralFlowMatching:
         llm_token_pair = ttnn.concat([llm_token, self.uncond_token], dim=0)
 
         x = x_0 if isinstance(x_0, ttnn.Tensor) else self.x_start
+        if x.dtype != self.dtype:
+            x = ttnn.typecast(x, self.dtype)
         alpha = self.cfg_alpha
         dt = 1.0 / self.n_steps
         for step in range(self.n_steps):
@@ -225,7 +264,7 @@ class TtVoxtralFlowMatching:
         # A frame whose semantic code is [END_AUDIO] is never decoded -- its acoustic slots
         # are [EMPTY_AUDIO], which is 0, so zeroing them is the whole of that rule. The
         # comparison is safe in bf16: 1 is exact, and no other code rounds onto it.
-        is_end = ttnn.eq(ttnn.typecast(semantic, ttnn.bfloat16), float(_END_AUDIO_ID))
+        is_end = ttnn.eq(ttnn.typecast(semantic, self.dtype), float(_END_AUDIO_ID))
         codes = ttnn.mul(codes, ttnn.add(ttnn.neg(is_end), 1.0))
 
         codes = ttnn.typecast(ttnn.add(codes, float(_N_AUDIO_SPECIAL)), ttnn.uint32)
@@ -238,9 +277,9 @@ class TtVoxtralFlowMatching:
         )
 
 
-def build(device, torch_module=None):
-    return TtVoxtralFlowMatching.build(device, torch_module)
+def build(device, torch_module=None, **kwargs):
+    return TtVoxtralFlowMatching.build(device, torch_module, **kwargs)
 
 
-def flow_matching(device, torch_module=None):
-    return TtVoxtralFlowMatching.build(device, torch_module)
+def flow_matching(device, torch_module=None, **kwargs):
+    return TtVoxtralFlowMatching.build(device, torch_module, **kwargs)

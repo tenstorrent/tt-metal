@@ -1,0 +1,29 @@
+{
+  "trace_1cq": true,
+  "stages": {
+    "prefill": {
+      "captured": true,
+      "capacity": 256,
+      "pcc": 1.0000001192092896,
+      "ms": 121.1855411529541
+    },
+    "decode": {
+      "captured": true,
+      "capacity": 256,
+      "pcc": 1.0000001192092896,
+      "ms": 120.60928344726562
+    },
+    "vocode": {
+      "captured": true,
+      "capacity": 8,
+      "pcc": 1.0000004768371582,
+      "ms": 4.128217697143555
+    }
+  },
+  "trace_region_size": 33554432,
+  "pipeline_stages": [
+    "prefill",
+    "decode",
+    "vocode"
+  ]
+}

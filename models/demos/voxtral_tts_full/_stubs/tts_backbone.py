@@ -33,7 +33,7 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
+from models.demos.voxtral_tts_full._stubs.attention import rms_norm
 from models.demos.voxtral_tts_full._stubs.decoder_layer import TtVoxtralDecoderLayer
 
 _NORM_EPS = 1e-5
@@ -61,7 +61,7 @@ class TtVoxtralTtsBackbone:
         x = inputs_embeds
         for layer in self.layers:
             x = layer(x, rope=True, causal=True)
-        return ttnn.rms_norm(x, weight=self.final_norm, epsilon=self.eps, compute_kernel_config=COMPUTE_CONFIG)
+        return rms_norm(x, self.final_norm, self.eps)
 
 
 def build(device, torch_module=None):

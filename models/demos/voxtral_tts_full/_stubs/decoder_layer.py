@@ -26,7 +26,12 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG, TtVoxtralAttention
+from models.demos.voxtral_tts_full._stubs.attention import (
+    TtVoxtralAttention,
+    linear,
+    rms_norm,
+    stage_weight,
+)
 
 # `voxtral_common_ref.NORM_EPS` -- the backbone's RMSNorm epsilon. Read off the module when
 # it is present so a re-tuned checkpoint cannot silently disagree with this default.
@@ -42,12 +47,7 @@ class TtVoxtralDecoderLayer:
     @classmethod
     def build(cls, device, torch_module):
         def stage(t):
-            return ttnn.from_torch(
-                t.detach().float().t().contiguous().to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
+            return stage_weight(device, t.detach().float().t(), ttnn.bfloat16)
 
         def stage_vector(t):
             return ttnn.from_torch(
@@ -71,11 +71,13 @@ class TtVoxtralDecoderLayer:
         return cls(TtVoxtralAttention.build(device, torch_module.self_attn), weights, eps)
 
     def __call__(self, x, cis=None, bias=None, cache=None, *, rope=None, causal=None, **kwargs):
-        h = ttnn.rms_norm(x, weight=self.attn_norm, epsilon=self.eps, compute_kernel_config=COMPUTE_CONFIG)
+        # The norms are the model's composed `rms_norm`, not `ttnn.rms_norm` -- the fused op
+        # carries 1.56e-3 relative error where the composition is at the fp32 floor, and these
+        # two are applied to the residual stream itself, 26 times over. See `_stubs/attention.py`.
+        h = rms_norm(x, self.attn_norm, self.eps)
         x = ttnn.add(x, self.attn(h, cis=cis, bias=bias, rope=rope, causal=causal))
 
-        h = ttnn.rms_norm(x, weight=self.ffn_norm, epsilon=self.eps, compute_kernel_config=COMPUTE_CONFIG)
-        linear = lambda t, w: ttnn.linear(t, w, compute_kernel_config=COMPUTE_CONFIG)  # noqa: E731
+        h = rms_norm(x, self.ffn_norm, self.eps)
         gated = ttnn.mul(ttnn.silu(linear(h, self.gate)), linear(h, self.up))
         return ttnn.add(x, linear(gated, self.down))
 
