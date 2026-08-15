@@ -21,13 +21,20 @@ from helpers.golden_generators import (
     quantize_input_to_unpack_format,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    MathOperation,
+    PerfRunType,
+    format_dict,
+)
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
 )
+from helpers.perf.core import PerfConfig
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -1740,3 +1747,55 @@ def test_sfpu_binary_bcast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@pytest.mark.parametrize(
+    "binary_bcast_impl,label", [(0, "handwritten_replay"), (1, "generated_sfpi")]
+)
+def test_sfpu_binary_bcast_device_profile(
+    perf_report, binary_bcast_impl, label
+):
+    """Profile the same one-tile COL/ADD body for the handwritten/generated A/B."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[32, 32],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[32, 32],
+    )
+    configuration = PerfConfig(
+        "sources/sfpu_binary_bcast_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MATH_OP(mathop=MathOperation.SfpuElwadd),
+            SFPU_BCAST_DIM(BroadcastType.COL),
+            INPUT_TILE_A(tile_index=0),
+            BinaryBcastImpl(binary_bcast_impl),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            tilize(src_A, stimuli_format=formats.input_format),
+            formats.input_format,
+            tilize(src_B, stimuli_format=formats.input_format),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "BINARY_BCAST_BODY"]
+    assert len(rows) >= 1, rows.to_string(index=False)
+    # Module-scoped perf_report retains earlier parametrized cases when both
+    # selectors run in one pytest process.  This case contributes the newest
+    # scoped marker row; summing would make the second selector look 2x slower.
+    cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(
+        f"BINARY_BCAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}"
+    )
