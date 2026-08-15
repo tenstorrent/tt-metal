@@ -1,0 +1,16 @@
+{
+  "attention_bfp4_lofi": {
+    "decision": "rejected",
+    "evidence": "real-weight sliding prefill",
+    "observed_pcc": 0.9386111951,
+    "required_pcc": 0.995,
+    "timing_artifact": "candidate_runs/fresh_attention_bfp4_lofi_b1.json"
+  },
+  "expert_bfp4_lofi_block11": {
+    "decision": "rejected",
+    "evidence": "traced batch-32 sliding decode minimum-user PCC",
+    "observed_pcc": 0.993908388,
+    "required_pcc": 0.995,
+    "timing_artifact": "candidate_runs/fresh_expert_bfp4_block11_b1.json"
+  }
+}

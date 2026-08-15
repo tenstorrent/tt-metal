@@ -1,0 +1,437 @@
+{
+  "batch": 1,
+  "current_position": 32,
+  "decoder_source_sha256": "c2152de3360e17c108ca73c4400500eac3a63aea6871dcbd43a897571feec016",
+  "diagnostic_host_component_reads": true,
+  "eligible_for_runtime_fallback_or_latency_evidence": false,
+  "failures": {},
+  "hf_pcc_threshold": 0.995,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "material_pcc_delta": 0.0002,
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "real_weights": true,
+  "records": {
+    "A_norm_sdpa": {
+      "hf_pcc": 0.9995748665925691,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "experts": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "norm": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "router": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "sdpa": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 0.9994973373357806,
+        "_dense_mlp": 0.9994545033967563,
+        "_moe_decode": 0.9996877260288122,
+        "_router_weights": 0.9999282024065548
+      },
+      "vs_default_final_pcc": 0.9993350751471843
+    },
+    "B_post_attention": {
+      "hf_pcc": 0.999588638373293,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "experts": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "norm": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "router": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "sdpa": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 0.999944850053566,
+        "_dense_mlp": 0.9998551150928482,
+        "_moe_decode": 0.9995860283574405,
+        "_router_weights": 0.9996977472455598
+      },
+      "vs_default_final_pcc": 0.9997619341532954
+    },
+    "D_default": {
+      "hf_pcc": 0.9993880856759789,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "experts": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "norm": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "router": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "sdpa": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 1.0,
+        "_dense_mlp": 1.0,
+        "_moe_decode": 1.0,
+        "_router_weights": 1.0
+      },
+      "vs_default_final_pcc": 1.0
+    },
+    "H_blanket": {
+      "hf_pcc": 0.9996705310715095,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "experts": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "norm": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "router": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "sdpa": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 0.999624210155561,
+        "_dense_mlp": 0.999505940812926,
+        "_moe_decode": 0.9994260321876581,
+        "_router_weights": 0.9995558054594006
+      },
+      "vs_default_final_pcc": 0.9993083974397774
+    },
+    "leaf_dense_o": {
+      "hf_pcc": 0.9994538648393445,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "experts": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "norm": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "router": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "sdpa": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 0.999944850053566,
+        "_dense_mlp": 0.9998551150928482,
+        "_moe_decode": 0.9997925392843231,
+        "_router_weights": 0.9998389459183287
+      },
+      "vs_default_final_pcc": 0.9998196867884926
+    },
+    "leaf_experts": {
+      "hf_pcc": 0.9993810924628539,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "experts": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "norm": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "router": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "sdpa": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 1.0,
+        "_dense_mlp": 1.0,
+        "_moe_decode": 0.9997793465655075,
+        "_router_weights": 1.0
+      },
+      "vs_default_final_pcc": 0.9999266453005384
+    },
+    "leaf_norm": {
+      "hf_pcc": 0.9992610356801884,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "experts": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "norm": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "router": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "sdpa": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 0.999624084173503,
+        "_dense_mlp": 0.9995486634598099,
+        "_moe_decode": 0.9996543524434864,
+        "_router_weights": 0.9999066658504001
+      },
+      "vs_default_final_pcc": 0.9994165106217553
+    },
+    "leaf_router": {
+      "hf_pcc": 0.9994305002084588,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "experts": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "norm": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "router": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        },
+        "sdpa": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 1.0,
+        "_dense_mlp": 1.0,
+        "_moe_decode": 0.9998096866071648,
+        "_router_weights": 0.9997540156591266
+      },
+      "vs_default_final_pcc": 0.9999034581500083
+    },
+    "leaf_sdpa": {
+      "hf_pcc": 0.9994258311171741,
+      "hit_counts": {
+        "dense_o": 4,
+        "experts": 3,
+        "norm": 11,
+        "router": 2,
+        "sdpa": 1
+      },
+      "passes_0_995": true,
+      "policies": {
+        "dense_o": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "experts": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "norm": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "router": {
+          "compute_kernel_config_present": false,
+          "kind": "framework_default"
+        },
+        "sdpa": {
+          "compute_kernel_config_present": true,
+          "fp32_dest_acc_en": true,
+          "kind": "explicit",
+          "math_approx_mode": false,
+          "math_fidelity": "MathFidelity.HiFi4",
+          "packer_l1_acc": false
+        }
+      },
+      "vs_default_component_pcc": {
+        "_attention_decode": 0.9998915666127027,
+        "_dense_mlp": 0.999778136679286,
+        "_moe_decode": 0.999606590468966,
+        "_router_weights": 0.9997363723358941
+      },
+      "vs_default_final_pcc": 0.9996655585927001
+    }
+  },
+  "test_source_sha256": "7b9f342b614e9ae7a0fb4c8160eece0c997a14bba47fd6b3844e691749324454"
+}

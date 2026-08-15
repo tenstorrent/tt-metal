@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "source": {
+    "kind": "canonical HuggingFace safetensors, range-downloaded by layer",
+    "layers": [0, 5],
+    "layer_sha256": {
+      "0": "35b133216899e3586e37aa5eb01ee4b69215a9681160c7e7f30ca70be81507f6",
+      "5": "fbf600961763ddeab1815811ecea255f19b965132a51ce03565283be624b38de"
+    },
+    "checkpoint_collection_command": "GEMMA4_RANGE_DOWNLOAD=1 pytest -s models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py -k real_weights",
+    "statistics_method": "Population moments accumulated in float64 over safetensors BF16 slices of at most 8388608 values; min/max were accumulated over the same complete tensors.",
+    "note": "The local collection cache is not required by tests; this tracked file is their input."
+  },
+  "generator": {
+    "distribution": "normal",
+    "algorithm": "torch.Generator.manual_seed followed by torch.normal",
+    "chunk_elements": 1048576
+  },
+  "layers": {
+    "0": {
+      "layer_kind": "sliding_attention",
+      "weights": {
+        "experts.down_proj": {"shape": [128, 2816, 704], "dtype": "bf16", "numel": 253755392, "mean": 1.6391748504300392e-06, "std": 0.0419468002415043, "min": -0.6015625, "max": 0.6640625, "seed": 1221974464103599771},
+        "experts.gate_up_proj": {"shape": [128, 1408, 2816], "dtype": "bf16", "numel": 507510784, "mean": -6.463517107912154e-06, "std": 0.02511370257983374, "min": -0.390625, "max": 0.392578125, "seed": 852582512637932219},
+        "input_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 4.4845803000710225, "std": 1.9114789015931868, "min": 1.703125, "max": 30.625, "seed": 3503662078116890701},
+        "layer_scalar": {"shape": [1], "dtype": "bf16", "numel": 1, "mean": 0.0703125, "std": 0.0, "min": 0.0703125, "max": 0.0703125, "seed": 7229463665281572556},
+        "mlp.down_proj.weight": {"shape": [2816, 2112], "dtype": "bf16", "numel": 5947392, "mean": -9.295200542101211e-07, "std": 0.035110790384131514, "min": -0.3984375, "max": 0.3828125, "seed": 316987059909347250},
+        "mlp.gate_proj.weight": {"shape": [2112, 2816], "dtype": "bf16", "numel": 5947392, "mean": -2.017564791671721e-05, "std": 0.029684624531464875, "min": -0.318359375, "max": 0.3359375, "seed": 4489734353043517867},
+        "mlp.up_proj.weight": {"shape": [2112, 2816], "dtype": "bf16", "numel": 5947392, "mean": 3.009985872880064e-06, "std": 0.030234415214386124, "min": -0.47265625, "max": 0.41015625, "seed": 6351429027499568799},
+        "post_attention_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 2.1680265123193916, "std": 4.506569780630561, "min": 0.01416015625, "max": 16.5, "seed": 3830124315713313538},
+        "post_feedforward_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 13.771894151514227, "std": 7.834497912259145, "min": 0.0211181640625, "max": 23.0, "seed": 1674085666291403359},
+        "post_feedforward_layernorm_1.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 4.40667200223966, "std": 10.289830896438112, "min": -2.40625, "max": 135.0, "seed": 1483876014092368104},
+        "post_feedforward_layernorm_2.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 4.341294635425914, "std": 5.803446940110166, "min": -3.671875, "max": 89.5, "seed": 5975034585798159979},
+        "pre_feedforward_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 2.4298019842668013, "std": 1.3235693833297426, "min": 0.0108642578125, "max": 22.875, "seed": 9118974522451509743},
+        "pre_feedforward_layernorm_2.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 1.1283012662421574, "std": 0.32093397294678255, "min": -0.012451171875, "max": 2.265625, "seed": 6986973057872892629},
+        "router.per_expert_scale": {"shape": [128], "dtype": "bf16", "numel": 128, "mean": 0.999542236328125, "std": 0.010968639120535936, "min": 0.98046875, "max": 1.0234375, "seed": 4259086085805797497},
+        "router.proj.weight": {"shape": [128, 2816], "dtype": "bf16", "numel": 360448, "mean": 3.2079736776970755e-05, "std": 0.01882893593314983, "min": -0.1533203125, "max": 0.13671875, "seed": 3447273442356643859},
+        "router.scale": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 32.05482066761363, "std": 0.922107816217522, "min": 30.5, "max": 33.75, "seed": 8595294149735196118},
+        "self_attn.k_norm.weight": {"shape": [256], "dtype": "bf16", "numel": 256, "mean": 0.1220703125, "std": 0.0, "min": 0.1220703125, "max": 0.1220703125, "seed": 3986655458485301430},
+        "self_attn.k_proj.weight": {"shape": [2048, 2816], "dtype": "bf16", "numel": 5767168, "mean": 1.1229274304343354e-05, "std": 0.03241478637884806, "min": -0.353515625, "max": 0.33984375, "seed": 1515597284029485151},
+        "self_attn.o_proj.weight": {"shape": [2816, 4096], "dtype": "bf16", "numel": 11534336, "mean": 4.803921334543889e-06, "std": 0.027102564134235806, "min": -0.482421875, "max": 0.47265625, "seed": 2200925590260985146},
+        "self_attn.q_norm.weight": {"shape": [256], "dtype": "bf16", "numel": 256, "mean": 1.0234375, "std": 0.0, "min": 1.0234375, "max": 1.0234375, "seed": 817811259145521233},
+        "self_attn.q_proj.weight": {"shape": [4096, 2816], "dtype": "bf16", "numel": 11534336, "mean": 1.312965072198007e-05, "std": 0.02988122899877069, "min": -0.50390625, "max": 0.49609375, "seed": 8359890837505508398},
+        "self_attn.v_proj.weight": {"shape": [2048, 2816], "dtype": "bf16", "numel": 5767168, "mean": -7.274617412718469e-06, "std": 0.03255777396845822, "min": -0.515625, "max": 0.58984375, "seed": 119507192139998005}
+      }
+    },
+    "5": {
+      "layer_kind": "full_attention",
+      "weights": {
+        "experts.down_proj": {"shape": [128, 2816, 704], "dtype": "bf16", "numel": 253755392, "mean": 3.1007435881828722e-06, "std": 0.043099431917872424, "min": -0.8359375, "max": 0.83203125, "seed": 6185923792227951225},
+        "experts.gate_up_proj": {"shape": [128, 1408, 2816], "dtype": "bf16", "numel": 507510784, "mean": 5.9504681835294095e-05, "std": 0.029547175800136587, "min": -0.4453125, "max": 0.41015625, "seed": 7056520671400085637},
+        "input_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 37.55000549283895, "std": 31.7928074978352, "min": -0.0028228759765625, "max": 136.0, "seed": 6592381727126972375},
+        "layer_scalar": {"shape": [1], "dtype": "bf16", "numel": 1, "mean": 0.65234375, "std": 0.0, "min": 0.65234375, "max": 0.65234375, "seed": 3054013511470216067},
+        "mlp.down_proj.weight": {"shape": [2816, 2112], "dtype": "bf16", "numel": 5947392, "mean": -3.5202900918095726e-05, "std": 0.03578666487423225, "min": -0.6875, "max": 0.69140625, "seed": 5966474436330210506},
+        "mlp.gate_proj.weight": {"shape": [2112, 2816], "dtype": "bf16", "numel": 5947392, "mean": 5.778704848301756e-05, "std": 0.033569690201142574, "min": -0.40625, "max": 0.431640625, "seed": 343422501608046798},
+        "mlp.up_proj.weight": {"shape": [2112, 2816], "dtype": "bf16", "numel": 5947392, "mean": -6.197684547506631e-06, "std": 0.03483936908778762, "min": -0.458984375, "max": 0.490234375, "seed": 5471519618364813582},
+        "post_attention_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 0.2939327887513421, "std": 0.42609842332968667, "min": 0.00087738037109375, "max": 1.1015625, "seed": 7314375188333928028},
+        "post_feedforward_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 0.9910860007459467, "std": 0.9647149659540503, "min": 0.00186920166015625, "max": 2.046875, "seed": 6202676451166883562},
+        "post_feedforward_layernorm_1.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 6.634042393077504, "std": 10.15574078747557, "min": -0.212890625, "max": 163.0, "seed": 1606673223014707070},
+        "post_feedforward_layernorm_2.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 5.298602364280007, "std": 6.4842149770211375, "min": -4.3125, "max": 102.5, "seed": 3398549831192263927},
+        "pre_feedforward_layernorm.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 22.29786002500491, "std": 20.78846723600019, "min": -0.000156402587890625, "max": 93.0, "seed": 7182170237282828829},
+        "pre_feedforward_layernorm_2.weight": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 49.78387746847743, "std": 51.84557131078246, "min": -0.306640625, "max": 175.0, "seed": 2059676131242616352},
+        "router.per_expert_scale": {"shape": [128], "dtype": "bf16", "numel": 128, "mean": 1.000701904296875, "std": 0.011904789489617632, "min": 0.98046875, "max": 1.0234375, "seed": 6401621682510380121},
+        "router.proj.weight": {"shape": [128, 2816], "dtype": "bf16", "numel": 360448, "mean": -0.00015332226407012556, "std": 0.018842459380883015, "min": -0.11962890625, "max": 0.15234375, "seed": 4175657793558492824},
+        "router.scale": {"shape": [2816], "dtype": "bf16", "numel": 2816, "mean": 32.05348899147727, "std": 0.9216624072394878, "min": 30.5, "max": 33.75, "seed": 221889009091739836},
+        "self_attn.k_norm.weight": {"shape": [512], "dtype": "bf16", "numel": 512, "mean": 0.062255859375, "std": 0.0, "min": 0.062255859375, "max": 0.062255859375, "seed": 224601887504650328},
+        "self_attn.k_proj.weight": {"shape": [1024, 2816], "dtype": "bf16", "numel": 2883584, "mean": 8.829056460319345e-06, "std": 0.03561740446367552, "min": -0.47265625, "max": 0.431640625, "seed": 1396362549446394235},
+        "self_attn.o_proj.weight": {"shape": [2816, 8192], "dtype": "bf16", "numel": 23068672, "mean": -2.460251787312647e-06, "std": 0.030433406925500648, "min": -0.4921875, "max": 0.494140625, "seed": 705369094312359451},
+        "self_attn.q_norm.weight": {"shape": [512], "dtype": "bf16", "numel": 512, "mean": 1.0078125, "std": 0.0, "min": 1.0078125, "max": 1.0078125, "seed": 4625475483551219318},
+        "self_attn.q_proj.weight": {"shape": [8192, 2816], "dtype": "bf16", "numel": 23068672, "mean": 1.4416916030240978e-05, "std": 0.03451596337949914, "min": -0.55078125, "max": 0.5390625, "seed": 7217919417055344837}
+      }
+    }
+  }
+}

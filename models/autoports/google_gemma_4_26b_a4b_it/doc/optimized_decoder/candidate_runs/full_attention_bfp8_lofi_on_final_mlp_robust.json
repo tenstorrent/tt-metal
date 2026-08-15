@@ -1,0 +1,611 @@
+{
+  "pcc_layer5_full_attention_shared0.json": {
+    "decode_current_pos": 32,
+    "decode_pcc": 0.9997458989528252,
+    "decode_threshold": 0.995,
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "8ea9ccd4f638f52c2d8e049f23b5f2defd09bb2fcfa95acdca9ec5662d854a71",
+      "optimized_test_sha256": "d5ac0d63465ec573c134892f5ffcc0e46db41decd2fc8f702c5028923bf515a3",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "dram_sharded_roles": "()",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_ATTENTION_WEIGHT_DTYPE": "bfp8",
+          "GEMMA4_OPT_CANDIDATE_ID": "full_attention_bfp8_lofi_on_final_mlp_robust",
+          "GEMMA4_OPT_DRAM_BLOCK_W_MLP_DOWN": "11",
+          "GEMMA4_OPT_DRAM_BLOCK_W_PACKED_MLP_GATE_UP": "11",
+          "GEMMA4_OPT_DRAM_SHARDED_ROLES": "packed_mlp_gate_up,mlp_down",
+          "GEMMA4_OPT_EXACT_COMMAND": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+          "GEMMA4_OPT_FULL_ATTENTION_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_WEIGHT_DTYPE": "bfp8"
+        }
+      }
+    },
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9966292248972847,
+        "threshold": 0.995
+      },
+      {
+        "passed": true,
+        "pcc": 0.9997458989528252,
+        "threshold": 0.995
+      }
+    ],
+    "prefill_pcc": 0.9966292248972847,
+    "prefill_threshold": 0.995,
+    "sequence_length": 32,
+    "shared_physical_cache": false
+  },
+  "pcc_layer5_full_attention_shared1.json": {
+    "decode_current_pos": 32,
+    "decode_pcc": 0.9997458989528252,
+    "decode_threshold": 0.995,
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "8ea9ccd4f638f52c2d8e049f23b5f2defd09bb2fcfa95acdca9ec5662d854a71",
+      "optimized_test_sha256": "d5ac0d63465ec573c134892f5ffcc0e46db41decd2fc8f702c5028923bf515a3",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "dram_sharded_roles": "()",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_ATTENTION_WEIGHT_DTYPE": "bfp8",
+          "GEMMA4_OPT_CANDIDATE_ID": "full_attention_bfp8_lofi_on_final_mlp_robust",
+          "GEMMA4_OPT_DRAM_BLOCK_W_MLP_DOWN": "11",
+          "GEMMA4_OPT_DRAM_BLOCK_W_PACKED_MLP_GATE_UP": "11",
+          "GEMMA4_OPT_DRAM_SHARDED_ROLES": "packed_mlp_gate_up,mlp_down",
+          "GEMMA4_OPT_EXACT_COMMAND": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+          "GEMMA4_OPT_FULL_ATTENTION_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_WEIGHT_DTYPE": "bfp8"
+        }
+      }
+    },
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9966292248972847,
+        "threshold": 0.995
+      },
+      {
+        "passed": true,
+        "pcc": 0.9997458989528252,
+        "threshold": 0.995
+      }
+    ],
+    "prefill_pcc": 0.9966292248972847,
+    "prefill_threshold": 0.995,
+    "sequence_length": 32,
+    "shared_physical_cache": true
+  },
+  "prefill_batch2_layer5_full_attention.json": {
+    "batch": 2,
+    "hf_vs_ttnn_pcc": 0.9985170837437779,
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "8ea9ccd4f638f52c2d8e049f23b5f2defd09bb2fcfa95acdca9ec5662d854a71",
+      "optimized_test_sha256": "d5ac0d63465ec573c134892f5ffcc0e46db41decd2fc8f702c5028923bf515a3",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "dram_sharded_roles": "()",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_ATTENTION_WEIGHT_DTYPE": "bfp8",
+          "GEMMA4_OPT_CANDIDATE_ID": "full_attention_bfp8_lofi_on_final_mlp_robust",
+          "GEMMA4_OPT_DRAM_BLOCK_W_MLP_DOWN": "11",
+          "GEMMA4_OPT_DRAM_BLOCK_W_PACKED_MLP_GATE_UP": "11",
+          "GEMMA4_OPT_DRAM_SHARDED_ROLES": "packed_mlp_gate_up,mlp_down",
+          "GEMMA4_OPT_EXACT_COMMAND": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+          "GEMMA4_OPT_FULL_ATTENTION_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_WEIGHT_DTYPE": "bfp8"
+        }
+      }
+    },
+    "page_table_shape": [
+      2,
+      2
+    ],
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9985170837437779,
+        "threshold": 0.995
+      }
+    ],
+    "real_shape": [
+      2,
+      32,
+      2816
+    ],
+    "sequence_length": 32,
+    "threshold": 0.995
+  },
+  "prefill_boundaries_full_attention.json": {
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "8ea9ccd4f638f52c2d8e049f23b5f2defd09bb2fcfa95acdca9ec5662d854a71",
+      "optimized_test_sha256": "d5ac0d63465ec573c134892f5ffcc0e46db41decd2fc8f702c5028923bf515a3",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "dram_sharded_roles": "()",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_ATTENTION_WEIGHT_DTYPE": "bfp8",
+          "GEMMA4_OPT_CANDIDATE_ID": "full_attention_bfp8_lofi_on_final_mlp_robust",
+          "GEMMA4_OPT_DRAM_BLOCK_W_MLP_DOWN": "11",
+          "GEMMA4_OPT_DRAM_BLOCK_W_PACKED_MLP_GATE_UP": "11",
+          "GEMMA4_OPT_DRAM_SHARDED_ROLES": "packed_mlp_gate_up,mlp_down",
+          "GEMMA4_OPT_EXACT_COMMAND": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+          "GEMMA4_OPT_FULL_ATTENTION_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_WEIGHT_DTYPE": "bfp8"
+        }
+      }
+    },
+    "results": [
+      {
+        "logical_sequence_length": 1,
+        "page_table": [
+          0
+        ],
+        "pcc": 0.9997777701956283,
+        "physical_sequence_length": 32,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 31,
+        "page_table": [
+          0
+        ],
+        "pcc": 0.9961229316049638,
+        "physical_sequence_length": 32,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 32,
+        "page_table": [
+          0
+        ],
+        "pcc": 0.9976285516771884,
+        "physical_sequence_length": 32,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 33,
+        "page_table": [
+          0
+        ],
+        "pcc": 0.9975246493842306,
+        "physical_sequence_length": 64,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 127,
+        "page_table": [
+          0
+        ],
+        "pcc": 0.9983400127370814,
+        "physical_sequence_length": 128,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 128,
+        "page_table": [
+          0
+        ],
+        "pcc": 0.9985669778019927,
+        "physical_sequence_length": 128,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 129,
+        "page_table": [
+          1,
+          0
+        ],
+        "pcc": 0.9982300112856736,
+        "physical_sequence_length": 160,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 1023,
+        "page_table": [
+          7,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "pcc": 0.9974708400555881,
+        "physical_sequence_length": 1024,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 1024,
+        "page_table": [
+          7,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "pcc": 0.9979979228422894,
+        "physical_sequence_length": 1024,
+        "threshold": 0.995
+      },
+      {
+        "logical_sequence_length": 1025,
+        "page_table": [
+          8,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "pcc": 0.9980970469035307,
+        "physical_sequence_length": 1056,
+        "threshold": 0.995
+      }
+    ]
+  },
+  "trace_full_attention_batch32.json": {
+    "batch": 32,
+    "best_replay_user": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "current_positions": [
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32
+    ],
+    "eager_vs_trace_replay_pcc": 1.0,
+    "eager_vs_trace_replay_threshold": 0.9999,
+    "hf_vs_trace_replay_min_user_pcc": 0.9997458989528252,
+    "hf_vs_trace_replay_pcc": 0.9997458989528251,
+    "hf_vs_trace_replay_per_user_pcc": [
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252,
+      0.9997458989528252
+    ],
+    "hf_vs_trace_replay_threshold": 0.995,
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "8ea9ccd4f638f52c2d8e049f23b5f2defd09bb2fcfa95acdca9ec5662d854a71",
+      "optimized_test_sha256": "d5ac0d63465ec573c134892f5ffcc0e46db41decd2fc8f702c5028923bf515a3",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "None",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "dram_sharded_roles": "()",
+          "expert_decode_input_l1": "True",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_ATTENTION_WEIGHT_DTYPE": "bfp8",
+          "GEMMA4_OPT_CANDIDATE_ID": "full_attention_bfp8_lofi_on_final_mlp_robust",
+          "GEMMA4_OPT_DRAM_BLOCK_W_MLP_DOWN": "11",
+          "GEMMA4_OPT_DRAM_BLOCK_W_PACKED_MLP_GATE_UP": "11",
+          "GEMMA4_OPT_DRAM_SHARDED_ROLES": "packed_mlp_gate_up,mlp_down",
+          "GEMMA4_OPT_EXACT_COMMAND": "env final-mlp attention-bfp8-lofi pytest full real+batch2+boundary+trace32",
+          "GEMMA4_OPT_FULL_ATTENTION_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_FIDELITY": "lofi",
+          "GEMMA4_OPT_MLP_WEIGHT_DTYPE": "bfp8"
+        }
+      }
+    },
+    "page_table_shape": [
+      32,
+      2
+    ],
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9997458989528251,
+        "threshold": 0.995
+      },
+      {
+        "passed": true,
+        "pcc": 1.0,
+        "threshold": 0.9999
+      },
+      {
+        "passed": true,
+        "pcc": 1.0,
+        "threshold": 0.9999
+      }
+    ],
+    "repeat_replay_pcc": 1.0,
+    "repeat_replay_threshold": 0.9999
+  }
+}

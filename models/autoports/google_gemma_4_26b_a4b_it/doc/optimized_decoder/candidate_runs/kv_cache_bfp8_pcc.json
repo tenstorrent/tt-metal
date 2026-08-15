@@ -1,0 +1,148 @@
+{
+  "pcc_layer0_sliding_attention_shared1.json": {
+    "decode_current_pos": 32,
+    "decode_pcc": 0.9941311289947546,
+    "decode_threshold": 0.995,
+    "layer_idx": 0,
+    "layer_type": "sliding_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "BFP8 paged KV cache real-weight both layer kinds",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "7ab28873373df095ac470a6a15013f0c587d389d5687577ab902502f8ab98942",
+      "optimized_test_sha256": "ed637e7b984bd4b2ff11446d89a3e8c7b7dab09707a5521d040da21dadb39551",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "DataType.BFLOAT8_B",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "expert_decode_input_l1": "False",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_CANDIDATE_ID": "kv_cache_bfp8_pcc",
+          "GEMMA4_OPT_EXACT_COMMAND": "BFP8 paged KV cache real-weight both layer kinds",
+          "GEMMA4_OPT_KV_CACHE_DTYPE": "bfp8"
+        }
+      }
+    },
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9983444781460227,
+        "threshold": 0.995
+      },
+      {
+        "passed": false,
+        "pcc": 0.9941311289947546,
+        "threshold": 0.995
+      }
+    ],
+    "prefill_pcc": 0.9983444781460227,
+    "prefill_threshold": 0.995,
+    "sequence_length": 32,
+    "shared_physical_cache": true
+  },
+  "pcc_layer5_full_attention_shared0.json": {
+    "decode_current_pos": 32,
+    "decode_pcc": 0.9998179666247877,
+    "decode_threshold": 0.995,
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "optimized_stage_provenance": {
+      "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+      "exact_command": "BFP8 paged KV cache real-weight both layer kinds",
+      "hardware": {
+        "arch": "Blackhole P300C",
+        "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      },
+      "optimized_decoder_sha256": "7ab28873373df095ac470a6a15013f0c587d389d5687577ab902502f8ab98942",
+      "optimized_test_sha256": "ed637e7b984bd4b2ff11446d89a3e8c7b7dab09707a5521d040da21dadb39551",
+      "resolved_policy": {
+        "constructor_defaults": {
+          "activation_dtype": "DataType.BFLOAT16",
+          "attention_math_fidelity": "MathFidelity.HiFi4",
+          "attention_weight_dtype": "DataType.BFLOAT8_B",
+          "dense_decode_dram_sharded": "False",
+          "dram_in0_block_w": "None",
+          "expert_decode_input_l1": "False",
+          "expert_down_in0_block_w": "11",
+          "expert_down_out_subblock_w": "None",
+          "expert_down_per_core_n": "2",
+          "expert_gate_in0_block_w": "11",
+          "expert_gate_math_fidelity": "MathFidelity.LoFi",
+          "expert_gate_out_subblock_w": "None",
+          "expert_gate_per_core_n": "2",
+          "expert_math_fidelity": "MathFidelity.LoFi",
+          "expert_weight_dtype": "DataType.BFLOAT8_B",
+          "full_attention_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_math_fidelity": "MathFidelity.HiFi2",
+          "mlp_weight_dtype": "DataType.BFLOAT8_B",
+          "packed_dense_gate_up": "True",
+          "prefill_expert_chunk_size": "32",
+          "prefill_expert_down_in0_block_w": "11",
+          "prefill_expert_gate_in0_block_w": "44",
+          "prefill_expert_per_core_n": "2",
+          "prefill_expert_tail_in0_block_w": "1",
+          "prefill_expert_tail_per_core_n": "11",
+          "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+          "prefill_routed_active": "True",
+          "residual_shard_cores": "0",
+          "tensor_cache_path": "None",
+          "weight_dtype": "DataType.BFLOAT16"
+        },
+        "environment_overrides": {
+          "GEMMA4_OPT_CANDIDATE_ID": "kv_cache_bfp8_pcc",
+          "GEMMA4_OPT_EXACT_COMMAND": "BFP8 paged KV cache real-weight both layer kinds",
+          "GEMMA4_OPT_KV_CACHE_DTYPE": "bfp8"
+        }
+      }
+    },
+    "pcc_results": [
+      {
+        "passed": true,
+        "pcc": 0.9983414183144167,
+        "threshold": 0.995
+      },
+      {
+        "passed": true,
+        "pcc": 0.9998179666247877,
+        "threshold": 0.995
+      }
+    ],
+    "prefill_pcc": 0.9983414183144167,
+    "prefill_threshold": 0.995,
+    "sequence_length": 32,
+    "shared_physical_cache": false
+  }
+}

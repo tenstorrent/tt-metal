@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "hf_advertised_context": 262144,
+  "current_supported_context": 262144,
+  "capability_reduction": null,
+  "validated_at_utc": "2026-07-28",
+  "hardware": {
+    "architecture": "Blackhole",
+    "board": "P300",
+    "mesh": [
+      1,
+      1
+    ],
+    "chips_used": 1
+  },
+  "functional_decoder": {
+    "prefill": {
+      "contract_batches": [
+        1,
+        2
+      ],
+      "tested_context": 262144,
+      "largest_non_aligned_context_tested": 262143,
+      "layer_kinds": {
+        "sliding_attention": {
+          "layer_idx": 0,
+          "tested_context": 262144,
+          "aligned_artifact": "functional_decoder/prefill_capacity_sliding_attention_262144.json",
+          "non_aligned_artifact": "functional_decoder/prefill_capacity_sliding_attention_262143.json",
+          "batch_2_artifact": "functional_decoder/prefill_batch2_layer0_sliding_attention.json"
+        },
+        "full_attention": {
+          "layer_idx": 5,
+          "tested_context": 262144,
+          "aligned_artifact": "functional_decoder/prefill_capacity_full_attention_262144.json",
+          "non_aligned_artifact": "functional_decoder/prefill_capacity_full_attention_262143.json",
+          "batch_2_artifact": "functional_decoder/prefill_batch2_layer5_full_attention.json"
+        }
+      }
+    },
+    "decode": {
+      "contract_batches": [
+        1,
+        32
+      ],
+      "largest_tested_batch": 32,
+      "serving_batch": 32,
+      "tested_context": 262144,
+      "largest_tested_current_position": 262143,
+      "traced": true,
+      "mutable_buffer_replay_tested_at_batch": 32,
+      "layer_kinds": {
+        "sliding_attention": {
+          "layer_idx": 0,
+          "context_artifact": "functional_decoder/advertised_context_decode_sliding_attention.json",
+          "batch_contract_artifacts": [
+            "functional_decoder/trace_sliding_attention_batch1.json",
+            "functional_decoder/trace_sliding_attention_batch32.json"
+          ]
+        },
+        "full_attention": {
+          "layer_idx": 5,
+          "context_artifact": "functional_decoder/advertised_context_decode_full_attention.json",
+          "batch_contract_artifacts": [
+            "functional_decoder/trace_full_attention_batch1.json",
+            "functional_decoder/trace_full_attention_batch32.json"
+          ]
+        }
+      }
+    }
+  },
+  "paged_cache": {
+    "sliding_attention": {
+      "logical_block_size": 64,
+      "num_kv_heads": 8,
+      "head_dim": 256,
+      "bounded_modulo_tail_integrity_tested": true
+    },
+    "full_attention": {
+      "logical_block_size": 128,
+      "num_kv_heads": 2,
+      "head_dim": 512,
+      "shared_physical_cache_view_also_tested": true
+    }
+  },
+  "notes": "No context reduction: real-weight whole-layer prefill passed at aligned 262144 and non-aligned 262143 for both layer kinds. Traced batch-1 decode passed at current position 262143 using rolled page tables, nonzero cache baselines, and device-verified distinct history sentinels at logical positions 0, 131071, and 262142. Traced correctness, mutable-buffer replay, and current-source latency passed at serving batch 32."
+}

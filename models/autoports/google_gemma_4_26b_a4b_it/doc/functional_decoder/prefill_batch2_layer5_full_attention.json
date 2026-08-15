@@ -1,0 +1,18 @@
+{
+  "batch": 2,
+  "hf_vs_ttnn_pcc": 0.9989939565392536,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "page_table_shape": [
+    2,
+    2
+  ],
+  "real_shape": [
+    2,
+    32,
+    2816
+  ],
+  "sequence_length": 32,
+  "threshold": 0.995
+}

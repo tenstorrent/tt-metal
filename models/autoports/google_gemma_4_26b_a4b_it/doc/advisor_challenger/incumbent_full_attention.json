@@ -1,0 +1,80 @@
+{
+  "label": "incumbent_full_attention",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "layer_counts": {
+    "sliding_attention": 25,
+    "full_attention": 5
+  },
+  "num_hidden_layers": 30,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.2616609595716,
+    1.2612987868487835,
+    1.2621510215103626,
+    1.2620532140135765,
+    1.2615083530545235
+  ],
+  "median_ms": 1.2616609595716,
+  "incumbent_ms": 1.2616609595716,
+  "noise_floor_ms": 0.0008522346615791321,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one full_attention decoder layer, traced decode replay, batch 1, measured end to end on the host",
+  "measured_at": "2026-08-03T08:57:03+00:00",
+  "shipped_policy": {
+    "weight_dtype": "BFLOAT16",
+    "activation_dtype": "BFLOAT16",
+    "attention_weight_dtype_by_layer_kind": {
+      "sliding_attention": "BFLOAT16",
+      "full_attention": "BFLOAT8_B"
+    },
+    "mlp_weight_dtype": "BFLOAT8_B",
+    "mlp_down_weight_dtype": "BFLOAT8_B",
+    "prefill_expert_weight_dtype": "BFLOAT8_B",
+    "expert_weight_dtype": "BFLOAT8_B",
+    "attention_math_fidelity": "HiFi4",
+    "full_attention_math_fidelity": "LoFi",
+    "mlp_math_fidelity": "LoFi",
+    "expert_gate_math_fidelity": "LoFi",
+    "expert_math_fidelity": "LoFi",
+    "packed_dense_gate_up": true,
+    "dram_in0_block_w": null,
+    "dram_in0_block_w_by_role": {
+      "packed_mlp_gate_up": 11,
+      "mlp_down": 11,
+      "o_proj": null
+    },
+    "dram_sharded_roles_by_layer_kind": {
+      "sliding_attention": [
+        "packed_mlp_gate_up",
+        "mlp_down"
+      ],
+      "full_attention": [
+        "o_proj",
+        "packed_mlp_gate_up",
+        "mlp_down"
+      ]
+    },
+    "expert_decode_input_l1": true,
+    "expert_gate_in0_block_w": 11,
+    "expert_down_in0_block_w": 11,
+    "expert_gate_per_core_n": 2,
+    "expert_down_per_core_n": 2
+  },
+  "shipped_weight_dtypes": {
+    "sliding_attention.qkv": "BFLOAT16",
+    "sliding_attention.o_proj": "BFLOAT16",
+    "full_attention.qkv": "BFLOAT8_B",
+    "full_attention.o_proj": "BFLOAT8_B",
+    "mlp_gate_up": "BFLOAT8_B",
+    "mlp_down": "BFLOAT8_B",
+    "prefill_experts": "BFLOAT8_B",
+    "decode_experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy_final_retry/decode_perf_report.csv; doc/optimized_decoder/tracy_full_final/decode_perf_report.csv; doc/optimized_decoder/candidate_runs/final_selected_policy_perf.json",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

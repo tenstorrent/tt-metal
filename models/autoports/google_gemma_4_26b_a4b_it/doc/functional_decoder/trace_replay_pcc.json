@@ -1,0 +1,13 @@
+{
+  "decode_current_pos": 32,
+  "eager_vs_trace_replay_pcc": 1.0,
+  "eager_vs_trace_replay_threshold": 0.9999,
+  "hf_vs_trace_replay_pcc": 0.9994359644320917,
+  "hf_vs_trace_replay_threshold": 0.995,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "sequence_length": 32,
+  "trace_replay_repeat_pcc": 1.0,
+  "trace_replay_repeat_threshold": 0.9999
+}

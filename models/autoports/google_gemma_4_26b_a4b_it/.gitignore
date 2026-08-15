@@ -1,0 +1,11 @@
+# Raw profiler captures — never commit these. Nothing reads them; the derived
+# tables next to them (ops.csv, perf_report*.csv, *_perf_report.txt) are the evidence.
+# Across mvasiljevic/qb2/skillexp/** these five patterns reached 5.43 GB in 267 blobs.
+*.tracy
+tracy_ops_times.csv
+tracy_ops_times.csv.gz
+profile_log_device.csv
+profile_log_device.csv.gz
+
+# Converted-weight cache (also covered by the repo-root *.tensorbin rule)
+weight_cache/
