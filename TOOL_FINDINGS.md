@@ -137,6 +137,7 @@ defect.
 | **F38** | `optimize --devices` defaults to `"0,1"`, so a 1-chip box is planned as 2-chip TP=2 — overriding an explicit `--mesh 1,1` and ignoring the `parallelism_manifest.json` the tool wrote itself | **YES** | one line |
 | **F39** | the e2e report prints `Verdict: PASS` beside `e2e PCC n/a` — verdict and measurement come from different sources and only one survived the cc-engine refactor (real value was 0.99998) | **YES** | small |
 | **F40** | the baseline measurement completes (`756.4513 ms`, 8 iters, 4 stages PCC-clean) and is then discarded by a segfault in `close_mesh_device` at teardown; the run reports a missing CSV and optimizes on with no baseline | **YES — with F31** | small |
+| **F41** | the depth-knob sanity check compares op sequences truncated at 50000 and reads the shared limit as "cap never reached the builder"; the knob is also only backbone-deep while its comment claims every stack | **YES** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -3569,6 +3570,93 @@ masking with the additional insult that the data existed.
 3. **Report the abort as the cause, not the missing CSV** (F31 fix 1, unchanged).
 4. **Refuse to optimize with no baseline**, or say loudly that improvements will be unverifiable.
    `continuing` after a failed baseline measurement is a decision worth surfacing.
+
+---
+
+## ★★ F41 — the "is the depth knob inert?" check saturates against its own truncation limit, and the knob it tests is only half-wired
+
+**Status: live, hit sizing the profiling window** · severity: the tool concludes its depth cap does
+not work, and sizes the profiling window from an explicitly unverified floor · reported: not yet
+
+At the start of pipeline optimization the tool checks whether the depth knob actually reduces work:
+
+```
+[optimize/cc] depth knob is INERT: capping to 2 produced the SAME work signal (50000) as the full
+              model, so the cap never reached the builder. Refusing to report a coverage window
+              measured against an uncapped model.
+[optimize/cc] coverage (unverified-floor): 437 distinct op(s) -> TT_PERF_LAYERS=2
+[optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS=2 (covers all block types)
+```
+
+**The refusal is good practice** — it declines to trust a coverage window it could not verify, and
+says so. The conclusion it refuses on, however, looks wrong in two independent ways.
+
+### 1. The work signal is truncated at exactly the value it reported — INFERRED
+
+`models/experimental/perf_automation/cc_optimize/_op_sig_probe.py:616`:
+
+```python
+print("PERF_OP_SIG_SEQUENCE=" + json.dumps(_SEQ[:50000]), flush=True)
+```
+
+The op-signature sequence is cut to its first **50000** entries before being emitted — and `50000`
+is precisely the "SAME work signal" reported for both the capped and the uncapped run. Any two runs
+that each emit ≥50000 op invocations produce byte-identical signals here, so the comparison cannot
+distinguish *"the cap did nothing"* from *"both runs exceeded the truncation limit"*. For an 8-frame
+run over a 26-layer backbone plus flow and codec stacks, exceeding 50000 op invocations at **both**
+depths is entirely expected.
+
+*(Marked inferred: I did not capture the two raw sequences. What is certain is that the reported
+signal equals the truncation constant exactly, and that saturation would produce exactly this
+symptom.)*
+
+### 2. The knob really is only half-wired — VERIFIED
+
+The generated perf test documents itself as capping everything:
+
+```python
+# DEPTH. A POSITIVE TT_PERF_LAYERS caps every repeated stack; ABSENT means ALL LAYERS …
+```
+
+and then builds with only the backbone capped (`test_main_perf.py:123`):
+
+```python
+pipe = P.build_pipeline(device, model=model, layers=PERF_LAYERS)
+```
+
+No `flow_layers`, no `vocode_layers` — both of which `build_pipeline` accepts, and both of which the
+e2e suite's own `test_layer_cap_is_not_inert` exercises:
+
+```python
+capped = P.build_pipeline(device, model=hf_model, layers=2, flow_layers=1, vocode_layers=1)
+assert len(capped.backbone_layers) == 2
+assert len(capped.flow_layers) == 1
+assert capped.depths["vocode"] == 1
+```
+
+That test **passes**. So the pipeline's cap works; the generated perf test simply does not use two
+thirds of it, while claiming in a comment that it does. Capping the backbone alone leaves the flow
+and vocode stacks at full depth — and the tool's own `partial_stage_coverage` note records that
+those untimed stages dominate a real run.
+
+### Why the two compound
+
+The tool ends up believing its depth cap is inert when the more likely truth is *"the cap is partial
+and the detector is saturated"*. It then profiles a window sized from an unverified floor — i.e.
+more work than intended — which is the same direction that produces the profiler crashes in F31 and
+F40. A depth cap that genuinely bounded all three stacks is the documented remedy for exactly those
+overflows.
+
+### Fixes
+
+1. **Do not compare truncated sequences.** Compare lengths before truncation, or hash the full
+   sequence, or raise the cap and record that it was hit. A detector whose two inputs are both
+   clipped to the same constant cannot report anything but "identical".
+2. **Say when the signal saturated.** `work signal 50000 == truncation limit; comparison
+   inconclusive` is a different message from `the cap never reached the builder`, and it points at
+   the right fix.
+3. **Wire the whole knob.** Pass `flow_layers` / `vocode_layers` through from `TT_PERF_LAYERS`, or
+   change the comment to say only the backbone is capped.
 
 ---
 
