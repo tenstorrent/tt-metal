@@ -126,7 +126,7 @@ _LLAMA_DEMO_MANIFESTS = {
                 "p300.performance.ci_b1_dp2",
             }
         ),
-        "sha256": "da5540c50225a4e25ad7261ae9d35a5f3147c524ed0b98ceb5b659543b4bcffd",
+        "sha256": "ddfe8b75427e2d1720e48811e7d97eaaaebcf290f2fcbba093cb6ece15384a39",
     },
     _LLAMA33_70B_CONTRACT_ID: {
         "ids": frozenset(
