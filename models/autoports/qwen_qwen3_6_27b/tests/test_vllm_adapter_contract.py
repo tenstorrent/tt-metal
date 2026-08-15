@@ -97,3 +97,17 @@ def test_compact_sampling_params_scatter_to_persistent_slots():
     assert formatted.presence_penalty[5] == 0.25
     assert formatted.frequency_penalty[2] == 1.25
     assert formatted.repetition_penalty[5] == 1.1
+
+
+def test_sampling_contract_key_changes_only_for_device_sampler_state():
+    baseline = SamplingParams(temperature=[1.0], top_k=[1], top_p=[0.0], seed=[42])
+    next_seed = SamplingParams(temperature=[1.0], top_k=[1], top_p=[0.0], seed=[999])
+    changed_top_k = SamplingParams(temperature=[1.0], top_k=[7], top_p=[0.0], seed=[999])
+    assert Qwen36ForCausalLM._sampling_key(baseline) == Qwen36ForCausalLM._sampling_key(next_seed)
+    assert Qwen36ForCausalLM._sampling_key(baseline) != Qwen36ForCausalLM._sampling_key(changed_top_k)
+
+
+def test_decode_skips_unchanged_sampler_parameter_refresh():
+    source = inspect.getsource(Qwen36ForCausalLM.decode_forward)
+    assert "sampling_changed = sampling_key != self._sampling_contract_key" in source
+    assert "refresh_sampling_params=sampling_changed" in source
