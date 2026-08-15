@@ -45,6 +45,74 @@ inline void fill_diag_subtile_zeros(
     }
 }
 
+// --- 3D-neighborhood (NATTEN) mask ---------------------------------------------------------------
+// Inward-shifted window bounds [lo, hi) along one axis for a query coordinate (mirrors na3d.window_bounds
+// and the host-validated in_axis: start = clamp(q - ker/2, 0, len - ker)).
+inline void nbr_axis_bounds(uint32_t q, uint32_t len, uint32_t ker, uint32_t& lo, uint32_t& hi) {
+    if (ker > len) {
+        ker = len;
+    }
+    const uint32_t half = ker / 2;
+    uint32_t start = (q < half) ? 0u : (q - half);
+    const uint32_t last = len - ker;
+    if (start > last) {
+        start = last;
+    }
+    lo = start;
+    hi = start + ker;
+}
+
+// Fill one Float16_b mask tile with the 3D-neighborhood pattern: element (r, c) is 0 when the K token
+// k_base+c lies in the (kt,kh,kw) box of the Q token q_base+r over a (T,H,W) grid flattened T-outer
+// (t = idx/(H*W), h = (idx%(H*W))/W, w = idx%W), else -inf. Rows/cols past the last real token (index
+// >= T*H*W) stay -inf. Per-element because the flattened 3D window is not a contiguous tile rectangle.
+template <uint32_t tile_bytes, uint32_t cb_mask_in>
+inline void fill_neighborhood_3d_tile(
+    uint32_t tile_id,
+    uint32_t q_base,
+    uint32_t k_base,
+    uint32_t T,
+    uint32_t H,
+    uint32_t W,
+    uint32_t kt,
+    uint32_t kh,
+    uint32_t kw) {
+    fill_neginf_tile<tile_bytes>(cb_mask_in, tile_id);
+    constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t FW = tt::constants::FACE_WIDTH;
+    const uint32_t HW = H * W;
+    const uint32_t sites = T * HW;
+    CircularBuffer cb(cb_mask_in);
+    volatile tt_l1_ptr uint16_t* p =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
+    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+        const uint32_t q = q_base + r;
+        if (q >= sites) {
+            continue;
+        }
+        const uint32_t qt = q / HW;
+        const uint32_t qrem = q % HW;
+        uint32_t t0, t1, h0, h1, w0, w1;
+        nbr_axis_bounds(qt, T, kt, t0, t1);
+        nbr_axis_bounds(qrem / W, H, kh, h0, h1);
+        nbr_axis_bounds(qrem % W, W, kw, w0, w1);
+        const uint32_t face_row = (r >= FH) ? 2u : 0u;
+        const uint32_t fr = r & (FH - 1);
+        for (uint32_t c = 0; c < tt::constants::TILE_WIDTH; ++c) {
+            const uint32_t k = k_base + c;
+            if (k >= sites) {
+                continue;
+            }
+            const uint32_t ktt = k / HW;
+            const uint32_t krem = k % HW;
+            if (ktt >= t0 && ktt < t1 && (krem / W) >= h0 && (krem / W) < h1 && (krem % W) >= w0 && (krem % W) < w1) {
+                const uint32_t face = face_row + ((c >= FW) ? 1u : 0u);
+                p[face * (FH * FW) + fr * FW + (c & (FW - 1))] = 0x0000;
+            }
+        }
+    }
+}
+
 // Generate and push the full block-diagonal mask (Sq_chunk_t x Sk_chunk_t tiles per K chunk, for all K
 // chunks) for a single Q chunk. Self-contained: the start window is searched from cu_window_seqlens for
 // this Q chunk's row range, so the result is independent of the order in which Q chunks are scheduled
@@ -60,7 +128,34 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t valid_Skt,
     uint32_t k_num_chunks,
     uint32_t cu_window_seqlens_eles,
-    uint32_t q_tok_offset) {
+    uint32_t q_tok_offset,
+    uint32_t nb_T,
+    uint32_t nb_H,
+    uint32_t nb_W,
+    uint32_t nb_kt,
+    uint32_t nb_kh,
+    uint32_t nb_kw) {
+    // 3D-neighborhood mode (nb_T != 0): full K-range, per-element mask, independent of cu_window_seqlens.
+    if (nb_T != 0) {
+        const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+        const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
+        CircularBuffer cb_mask(cb_mask_in);
+        for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+            const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
+            cb_mask.reserve_back(mask_chunk_tiles);
+            for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                const uint32_t q_base = q_tok_offset + (q_row_start_tile + row) * tt::constants::TILE_HEIGHT;
+                for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                    const uint32_t k_base = (k_row_start_tile + col) * tt::constants::TILE_HEIGHT;
+                    fill_neighborhood_3d_tile<mask_tile_bytes, cb_mask_in>(
+                        row * Sk_chunk_t + col, q_base, k_base, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw);
+                }
+            }
+            noc.async_read_barrier();
+            cb_mask.push_back(mask_chunk_tiles);
+        }
+        return;
+    }
     // cu_window_seqlens is INT32/UINT32 (validated host-side); both store non-negative cumulative
     // lengths in 32-bit words, so a plain uint32 read is correct for either.
     CircularBuffer cb_cu(cb_cu_window_in);
@@ -204,7 +299,13 @@ inline void windowed_generate_if_enabled(
     uint32_t valid_Skt,
     uint32_t k_num_chunks,
     uint32_t cu_window_seqlens_eles,
-    uint32_t q_tok_offset) {
+    uint32_t q_tok_offset,
+    uint32_t nb_T,
+    uint32_t nb_H,
+    uint32_t nb_W,
+    uint32_t nb_kt,
+    uint32_t nb_kh,
+    uint32_t nb_kw) {
     if constexpr (W) {
         constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
         generate_windowed_mask_for_q_chunk<mask_tile_bytes, cb_mask_in, cb_cu_window_in>(
@@ -216,6 +317,12 @@ inline void windowed_generate_if_enabled(
             valid_Skt,
             k_num_chunks,
             cu_window_seqlens_eles,
-            q_tok_offset);
+            q_tok_offset,
+            nb_T,
+            nb_H,
+            nb_W,
+            nb_kt,
+            nb_kh,
+            nb_kw);
     }
 }

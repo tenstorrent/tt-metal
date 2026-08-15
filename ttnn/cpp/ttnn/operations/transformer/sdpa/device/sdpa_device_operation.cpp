@@ -425,6 +425,38 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     auto validate_windowed_mode = [&]() {
+        if (attrs.neighborhood_3d.has_value()) {
+            const auto& nbr = attrs.neighborhood_3d.value();  // {T, H, W, kt, kh, kw}
+            TT_FATAL(!attrs.is_causal, "3D-neighborhood SDPA is non-causal; is_causal must be false.");
+            TT_FATAL(
+                !tensors.attn_mask.has_value(), "3D-neighborhood SDPA builds its own mask; attn_mask must not be set.");
+            TT_FATAL(
+                !tensors.cu_window_seqlens.has_value(),
+                "3D-neighborhood SDPA is mutually exclusive with cu_window_seqlens.");
+            TT_FATAL(
+                attrs.sliding_window_size.value_or(0) == 0,
+                "3D-neighborhood SDPA does not support sliding_window_size.");
+            TT_FATAL(
+                !attrs.use_mla && !tensors.attention_sink.has_value(),
+                "3D-neighborhood SDPA does not support MLA / attention_sink.");
+            TT_FATAL(
+                !(attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value()),
+                "3D-neighborhood SDPA does not support chunked/paged mode.");
+            validate_shapes_and_chunks();
+            for (uint32_t i = 0; i < 6; ++i) {
+                TT_FATAL(nbr[i] >= 1, "neighborhood_3d[{}] must be >= 1, got {}.", i, nbr[i]);
+            }
+            const uint32_t sites = nbr[0] * nbr[1] * nbr[2];
+            TT_FATAL(
+                sites == static_cast<uint32_t>(k.logical_shape()[-2]),
+                "neighborhood_3d T*H*W = {} must equal the K sequence length {}.",
+                sites,
+                k.logical_shape()[-2]);
+            TT_FATAL(
+                attrs.windowed_q_token_offset == 0,
+                "neighborhood_3d does not support windowed_q_token_offset yet (comes with the step-3 k-range).");
+            return;
+        }
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
         TT_FATAL(!attrs.is_causal, "Windowed SDPA is non-causal; is_causal must be false.");
         TT_FATAL(
@@ -633,6 +665,7 @@ Tensor sdpa(
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
+    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -647,8 +680,9 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
-            .is_windowed = cu_window_seqlens.has_value(),
+            .is_windowed = cu_window_seqlens.has_value() || neighborhood_3d.has_value(),
             .windowed_q_token_offset = windowed_q_token_offset,
+            .neighborhood_3d = neighborhood_3d,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },

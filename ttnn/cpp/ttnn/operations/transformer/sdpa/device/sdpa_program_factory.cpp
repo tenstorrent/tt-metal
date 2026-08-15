@@ -578,7 +578,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         .append_to(reader_compile_time_args);
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
-    TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
+    TensorAccessorArgs(
+        (is_windowed && tensor_args.cu_window_seqlens.has_value()) ? tensor_args.cu_window_seqlens.value().buffer()
+                                                                   : nullptr)
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(
         tensor_args.windowed_q_token_offset_tensor.has_value()
@@ -644,7 +646,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
     // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
+    TensorAccessorArgs(
+        (is_windowed && tensor_args.cu_window_seqlens.has_value()) ? tensor_args.cu_window_seqlens.value().buffer()
+                                                                   : nullptr)
         .append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
@@ -802,19 +806,27 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
+    // {T, H, W, kt, kh, kw} for 3D-neighborhood mode; all-zero otherwise. Passed as runtime args to the
+    // reader (k-range) and writer (mask gen); the kernels select the 3D path when the leading dim (T) != 0.
+    const std::array<uint32_t, 6> neighborhood =
+        operation_attributes.neighborhood_3d.value_or(std::array<uint32_t, 6>{});
     if (is_windowed) {
-        const auto& cu = tensor_args.cu_window_seqlens.value();
-        tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-        cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-        // K-range narrowing: the reader gets its OWN cu_window copy (sharing the writer's CB would put
-        // two producers on one CB), and a small reader->compute ctrl CB carrying each Q chunk's
-        // {k_lo, k_hi} (double-buffered so the reader can run a Q chunk ahead; sparse_sdpa precedent).
-        cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+        // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
+        // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
+        // Q chunk ahead (sparse_sdpa precedent). The cu_window CBs are only for the block-diagonal path.
         constexpr uint32_t k_range_page_size = 16;
         cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
-        cu_window_buffer = cu.buffer();
-        cu_window_seqlens_eles = cu.logical_shape()[-1];
         windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
+        if (tensor_args.cu_window_seqlens.has_value()) {
+            const auto& cu = tensor_args.cu_window_seqlens.value();
+            tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
+            cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+            // The reader gets its OWN cu_window copy (sharing the writer's CB would put two producers on
+            // one CB).
+            cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+            cu_window_buffer = cu.buffer();
+            cu_window_seqlens_eles = cu.logical_shape()[-1];
+        }
         if (tensor_args.windowed_q_token_offset_tensor.has_value()) {
             // Per-device form: the writer reads the value at runtime, so the scalar baked into the
             // program is unused. Kept identical across devices, which is the point -- one program.
@@ -1492,6 +1504,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
+        // 3D-neighborhood descriptor {T,H,W,kt,kh,kw}; zeros when block-diagonal (T==0 selects that path).
+        for (uint32_t d : neighborhood) {
+            reader_args.push_back(d);
+        }
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -1510,7 +1526,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
              cu_window_seqlens_eles,                           // 11: window count + 1
              windowed_q_token_offset,                          // 12: global origin of this Q shard (scalar)
-             windowed_q_offset_buffer});                       // 13: same, per-device (nullptr => use 12)
+             windowed_q_offset_buffer,                         // 13: same, per-device (nullptr => use 12)
+             neighborhood[0],                                  // 14: 3D-neighborhood T (0 => block-diagonal)
+             neighborhood[1],                                  // 15: H
+             neighborhood[2],                                  // 16: W
+             neighborhood[3],                                  // 17: kt
+             neighborhood[4],                                  // 18: kh
+             neighborhood[5]});                                // 19: kw
 
         compute_desc.emplace_runtime_args(
             core,

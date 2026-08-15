@@ -75,6 +75,13 @@ void kernel_main() {
     // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
     // available. Zero address means the caller used the scalar above.
     const uint32_t q_tok_offset_addr = get_arg_val<uint32_t>(13);
+    // 3D-neighborhood descriptor {T,H,W,kt,kh,kw}; T==0 selects the block-diagonal (cu_window) path.
+    const uint32_t nb_T = get_arg_val<uint32_t>(14);
+    const uint32_t nb_H = get_arg_val<uint32_t>(15);
+    const uint32_t nb_W = get_arg_val<uint32_t>(16);
+    const uint32_t nb_kt = get_arg_val<uint32_t>(17);
+    const uint32_t nb_kh = get_arg_val<uint32_t>(18);
+    const uint32_t nb_kw = get_arg_val<uint32_t>(19);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -122,27 +129,33 @@ void kernel_main() {
 
     // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
     // Q chunk from it (so the reader streams Q/K/V only).
+    // Block-diagonal only (nb_T == 0): the cu_window CB is a real, dedicated CB and there is a cu_window
+    // tensor to load. In 3D-neighborhood mode (nb_T != 0) there is no cu tensor (cu_window_seqlens_addr is
+    // 0) and cb_cu_window_in is not a dedicated CB, so touching it (reserve/read/push) would read a null
+    // tensor and desync a shared CB. The 3D mask needs no cu load, so skip this whole block.
     if constexpr (use_windowed_mask) {
-        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
-        CircularBuffer cb_cu(cb_cu_window_in);
-        cb_cu.reserve_back(1);
-        noc.async_read(
-            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
-        // every other CB here has a producer/consumer contract with another kernel that a writer-side
-        // reserve/push would break.
-        if (q_tok_offset_addr != 0) {
-            const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
-            CircularBuffer cb_off(cb_windowed_q_offset);
-            cb_off.reserve_back(1);
-            const uint32_t off_ptr = cb_off.get_write_ptr();
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+        if (nb_T == 0) {
+            const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+            constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
+            CircularBuffer cb_cu(cb_cu_window_in);
+            cb_cu.reserve_back(1);
+            noc.async_read(
+                cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
             noc.async_read_barrier();
-            q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+            // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
+            // every other CB here has a producer/consumer contract with another kernel that a writer-side
+            // reserve/push would break.
+            if (q_tok_offset_addr != 0) {
+                const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
+                CircularBuffer cb_off(cb_windowed_q_offset);
+                cb_off.reserve_back(1);
+                const uint32_t off_ptr = cb_off.get_write_ptr();
+                noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+                noc.async_read_barrier();
+                q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+            }
+            cb_cu.push_back(1);
         }
-        cb_cu.push_back(1);
     }
 
     if constexpr (is_chunked) {
@@ -209,7 +222,13 @@ void kernel_main() {
                 windowed_valid_Skt,
                 k_num_chunks,
                 cu_window_seqlens_eles,
-                q_tok_offset);
+                q_tok_offset,
+                nb_T,
+                nb_H,
+                nb_W,
+                nb_kt,
+                nb_kh,
+                nb_kw);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

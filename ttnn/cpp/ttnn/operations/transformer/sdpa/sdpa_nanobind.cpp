@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -351,7 +352,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
-        nb::arg("windowed_q_token_offset_tensor") = nb::none());
+        nb::arg("windowed_q_token_offset_tensor") = nb::none(),
+        nb::arg("neighborhood_3d") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,

@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <array>
 #include <optional>
 
 namespace ttnn::prim {
@@ -29,6 +30,11 @@ struct SDPAParams {
     // output are addressed locally; cu_window_seqlens and K/V stay global, so the mask generator offsets
     // Q by this to find the right windows. 0 means Q spans the whole sequence (the unsharded case).
     uint32_t windowed_q_token_offset = 0;
+    // 3D-neighborhood (NATTEN) windowed mode: each query attends a (kt,kh,kw) box, inward-shifted at
+    // borders, over a (T,H,W) grid flattened T-outer (t = idx/(H*W), h = (idx%(H*W))/W, w = idx%W).
+    // When set, the writer synthesizes the per-element 3D mask on-device (no cu_window_seqlens needed);
+    // mutually exclusive with the 1D windowed / sliding-window modes. Layout: {T, H, W, kt, kh, kw}.
+    std::optional<std::array<uint32_t, 6>> neighborhood_3d;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

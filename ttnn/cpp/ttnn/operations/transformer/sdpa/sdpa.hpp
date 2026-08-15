@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
+#include <array>
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 
 namespace ttnn::transformer {
@@ -33,7 +34,12 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    /// 3D-neighborhood (NATTEN) windowed mode: {T, H, W, kt, kh, kw}. Each query attends a (kt,kh,kw)
+    /// box, inward-shifted at borders, over a (T,H,W) grid flattened T-outer. The on-device mask is
+    /// synthesized from these six ints -- no cu_window_seqlens. Mutually exclusive with the 1D
+    /// windowed / sliding-window / causal modes; requires T*H*W == the K sequence length.
+    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

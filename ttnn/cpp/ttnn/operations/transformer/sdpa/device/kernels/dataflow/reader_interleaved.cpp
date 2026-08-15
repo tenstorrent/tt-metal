@@ -190,11 +190,20 @@ void kernel_main() {
     uint32_t cu_window_seqlens_eles = 0;
     uint32_t windowed_q_tok_offset = 0;
     uint32_t windowed_q_tok_offset_addr = 0;
+    // 3D-neighborhood: T != 0 selects the full-K path (per-element mask built by the writer); the
+    // reader keeps the range full and skips the cu_window load/narrowing.
+    uint32_t nb_T = 0;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
+        nb_T = get_arg_val<uint32_t>(argidx++);  // 14: T
+        (void)get_arg_val<uint32_t>(argidx++);   // 15: H (reader only needs T to branch)
+        (void)get_arg_val<uint32_t>(argidx++);   // 16: W
+        (void)get_arg_val<uint32_t>(argidx++);   // 17: kt
+        (void)get_arg_val<uint32_t>(argidx++);   // 18: kh
+        (void)get_arg_val<uint32_t>(argidx++);   // 19: kw
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -292,21 +301,27 @@ void kernel_main() {
     // CB with its own producer contract), resolving the per-device Q-offset override first so the
     // 4-byte read can stage through the same landing spot before the full array overwrites it.
     volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
+    // Block-diagonal only: the cu_window reader CB is a real, dedicated CB (allocated only when a
+    // cu_window_seqlens tensor is present). In 3D-neighborhood mode (nb_T != 0) there is no cu tensor and
+    // cb_id_windowed_cu_reader aliases the Q input CB, so we must NOT touch it (a stray reserve_back would
+    // desync Q streaming and corrupt the output). Skip the whole cu-reader setup for 3D.
     if constexpr (use_windowed_narrowing) {
-        CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
-        cb_cu_reader.reserve_back(1);
-        const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
-        if (windowed_q_tok_offset_addr != 0) {
-            const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+        if (nb_T == 0) {
+            CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
+            cb_cu_reader.reserve_back(1);
+            const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
+            if (windowed_q_tok_offset_addr != 0) {
+                const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
+                noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+                noc.async_read_barrier();
+                windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+            }
+            const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+            constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
+            noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
             noc.async_read_barrier();
-            windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+            windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
         }
-        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
-        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
     }
 
     uint32_t read_offset = 0;
@@ -394,18 +409,20 @@ void kernel_main() {
             uint32_t windowed_k_lo = 0;
             uint32_t windowed_k_hi = k_num_chunks;
             if constexpr (use_windowed_narrowing) {
-                const auto range = windowed_k_chunk_range(
-                    q_chunk,
-                    Sq_chunk_t,
-                    valid_Sqt,
-                    windowed_q_tok_offset,
-                    windowed_cu_ptr,
-                    cu_window_seqlens_eles,
-                    Sk_chunk_t,
-                    k_num_chunks,
-                    tt::constants::TILE_HEIGHT);
-                windowed_k_lo = range.k_lo;
-                windowed_k_hi = range.k_hi;
+                if (nb_T == 0) {  // block-diagonal narrows via cu_window; 3D-neighborhood keeps full K
+                    const auto range = windowed_k_chunk_range(
+                        q_chunk,
+                        Sq_chunk_t,
+                        valid_Sqt,
+                        windowed_q_tok_offset,
+                        windowed_cu_ptr,
+                        cu_window_seqlens_eles,
+                        Sk_chunk_t,
+                        k_num_chunks,
+                        tt::constants::TILE_HEIGHT);
+                    windowed_k_lo = range.k_lo;
+                    windowed_k_hi = range.k_hi;
+                }
                 CircularBuffer cb_k_range(cb_id_windowed_k_range);
                 cb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
