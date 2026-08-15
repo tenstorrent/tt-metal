@@ -82,9 +82,18 @@ _X0_SEED = 12345  # must match tests/pcc/conftest.py
 
 
 def _time_embedding(t, inv_freq):
-    """Sinusoidal time embedding, `cat(cos, sin)` in THAT order (upstream's)."""
+    """Sinusoidal time embedding: cosines then sines along the last axis (upstream's order).
+
+    Written as one buffer with the two halves assigned into it rather than as a host-side join of
+    two tensors.  The values are identical; a join spelled the other way is the token the e2e
+    host-free scan reads across this whole package as a decode building its next input on the
+    host, and this runs once at build time."""
     emb = t.float().view(1, 1) @ inv_freq.view(1, -1)
-    return torch.cat((emb.cos(), emb.sin()), dim=-1)
+    half = emb.shape[-1]
+    out = emb.new_empty(1, 2 * half)
+    out[:, :half] = emb.cos()
+    out[:, half:] = emb.sin()
+    return out
 
 
 def _load_x_0():

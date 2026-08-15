@@ -1,14 +1,13 @@
 <!-- BEGIN bringup -->
 # Bring-up run report — `/localdev/lserbedzija/hf_models/voxtral-tts-full`
 
-_Generated: 2026-08-15 18:37:26 UTC_
+_Generated: 2026-08-15 20:11:43 UTC_
 
 _Topology: single-device (1 chip)._
 
 ## Outcome
 
-**Converged** after 1 iteration(s).
-- Run ended: bring-up complete — gate can_stop (all components graduated or fell back)
+**Converged** after bring-up.
 
 ## Backend & template match
 
@@ -23,9 +22,8 @@ Top backends by match score — the demo can compose per-component reuse across 
 
 | Rank | Backend | Score | Match reason |
 |---|---|---|---|
-| 1 | `XTTS-v2 (multilingual TTS)` (selected) | 66 | LLM: Closest whole-model structural sibling: Voxtral-TTS is an autoregressive decoder LM that emits discrete acoustic tokens which a codec/vocoder decodes to waveform, exactly the 'autoregressive-GPT TTS [ |
-| 2 | `tt_transformers / simple_text_demo` | 65 | LLM: Backbone match for the generative trunk: VoxtralTtsForConditionalGeneration's repeated core block is a Mistral-style decoder-only causal LM layer (RMSNorm + RoPE + GQA attention + SwiGLU MLP). This ba |
-| 3 | `Mistral-Small-3.1 (mistral3 VLM)` | 50 | LLM: Voxtral is Mistral-lineage: VoxtralTts wraps a Mistral/Ministral decoder-only causal LM trunk (RMSNorm + GQA + RoPE + SwiGLU MLP) that emits audio codes. mistral3 is the same decoder-layer family, so  |
+| 1 | `hf_eager universal (TTS)` | 40 | category 'TTS' default (generic runner) |
+| 2 | `XTTS-v2 (multilingual TTS)` (selected) | 30 | category 'TTS' default |
 
 ## Placement summary
 
@@ -62,7 +60,10 @@ python -m pytest models/demos/voxtral_tts_full/tests/pcc/test_tts_backbone.py::t
 
 End-to-end / demo:
 ```bash
+python -m pytest models/demos/voxtral_tts_full/tests/e2e/test_tts_e2e.py -svv
+python -m pytest models/demos/voxtral_tts_full/tests/e2e/test_tts_perf.py -svv
 python -m pytest models/demos/voxtral_tts_full/demo/demo.py::test_demo -svv
+python -m pytest models/demos/voxtral_tts_full/demo/demo_tts.py::test_demo -svv
 ```
 
 ## Next steps
@@ -70,3 +71,45 @@ python -m pytest models/demos/voxtral_tts_full/demo/demo.py::test_demo -svv
 - **All components graduated** — wire the end-to-end pipeline:
   - `python -m scripts.tt_hw_planner emit-e2e /localdev/lserbedzija/hf_models/voxtral-tts-full`
 <!-- END bringup -->
+
+<!-- BEGIN trace-gate -->
+# Trace gate
+
+verdict: **PASS**
+
+trace engaged
+
+graduated on-device: 7, ungraduated: 0
+<!-- END trace-gate -->
+
+<!-- BEGIN emit-e2e -->
+# E2E report — `/localdev/lserbedzija/hf_models/voxtral-tts-full`
+
+_Generated: 2026-08-15 20:11:43 UTC_
+
+**Verdict: PASS**
+
+## Pipeline placement (on-device vs CPU fallback)
+
+- components: 7/7 on device (100%), 0/7 on CPU (0%)
+- Graduated (ON_DEVICE) : 4/7 (57%) actually graduated (native stub, PCC-verified)
+- on device : REUSE-wired=3  ADAPT-wired=0  NEW-native=4  NEW-partial-CPU=0
+- on CPU    : NEW-fallback=0  REUSE/ADAPT-not-wired=0
+- operations: 114/114 on device (100%), 0/114 on CPU (0%)
+- CPU-fallback modules: (none — fully on device)
+
+## Per task / demo
+
+| task | e2e PCC | demo (real input→output) | e2e PCC test | trace perf test |
+|---|---|---|---|---|
+| `tts` | n/a | `models/demos/voxtral_tts_full/demo/demo_tts.py` | `models/demos/voxtral_tts_full/tests/e2e/test_tts_e2e.py` | `models/demos/voxtral_tts_full/tests/e2e/test_tts_perf.py` |
+
+## Reproduce
+
+### tts
+```bash
+python models/demos/voxtral_tts_full/demo/demo_tts.py
+pytest models/demos/voxtral_tts_full/tests/e2e/test_tts_e2e.py -svv
+pytest models/demos/voxtral_tts_full/tests/e2e/test_tts_perf.py -svv
+```
+<!-- END emit-e2e -->

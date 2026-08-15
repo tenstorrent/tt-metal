@@ -23,14 +23,13 @@ from models.demos.voxtral_tts_full.tt_common import (
     interleaved_to_halves,
     rope_tables,
     stage,
-    stage_weight,
+    stage_weight_split,
     tt_apply_rope,
     tt_gqa_attention,
-    tt_linear,
+    tt_linear_hp,
     tt_merge_heads,
     tt_rms_norm,
     tt_split_heads,
-    tt_swiglu,
     verify_rope_permutation,
 )
 
@@ -68,7 +67,15 @@ class TtBackboneAttention:
     The checkpoint rotates INTERLEAVED pairs (`view_as_complex`).  Rather than pay for an
     interleave on device, `interleaved_to_halves` folds that pairing into the wq/wk rows at build
     time so the cheap half-split rotation is exact.  The permutation is identical on both sides
-    of q.k^T, so it cancels in the scores and leaves v / wo untouched."""
+    of q.k^T, so it cancels in the scores and leaves v / wo untouched.
+
+    PROJECTIONS USE THE HI/LO SPLIT MATMUL (`tt_linear_hp`), not the plain one.  A plain fp32
+    matmul bottoms out at 1.2e-3 relative on this board and 26 layers of it leave the last
+    hidden state ~4e-4 off; Block 2 then integrates that into a QUANTISED output, where a
+    dimension within ~1e-3 of an FSQ boundary flips a code and the trajectory diverges from
+    there.  Measured end to end over 8 frames: plain 67 flipped codes / 0.898 waveform PCC,
+    split 0 flips.  The weights themselves are exactly bfloat16 (released checkpoint), so the
+    weight `lo` term is None and the cost is one extra matmul per projection, not three."""
 
     def __init__(self, tables, weights, dims):
         self.tables = tables
@@ -86,10 +93,10 @@ class TtBackboneAttention:
             verify_rope_permutation(wq, n_heads, head_dim, ROPE_THETA)
             verify_rope_permutation(wk, n_kv_heads, head_dim, ROPE_THETA)
         weights = (
-            stage_weight(interleaved_to_halves(wq, n_heads, head_dim), device),
-            stage_weight(interleaved_to_halves(wk, n_kv_heads, head_dim), device),
-            stage_weight(module.v_proj, device),
-            stage_weight(module.o_proj, device),
+            stage_weight_split(interleaved_to_halves(wq, n_heads, head_dim), device),
+            stage_weight_split(interleaved_to_halves(wk, n_kv_heads, head_dim), device),
+            stage_weight_split(module.v_proj, device),
+            stage_weight_split(module.o_proj, device),
         )
         return cls(tables, weights, (n_heads, n_kv_heads, head_dim))
 
@@ -97,17 +104,21 @@ class TtBackboneAttention:
         _, seq, _ = h.shape
         d = self.head_dim
         cos, sin = self.tables.rope(seq)
-        q = tt_apply_rope(tt_split_heads(tt_linear(h, self.wq), self.n_heads, d), cos, sin)
-        k = tt_apply_rope(tt_split_heads(tt_linear(h, self.wk), self.n_kv_heads, d), cos, sin)
-        v = tt_split_heads(tt_linear(h, self.wv), self.n_kv_heads, d)
+        q = tt_apply_rope(tt_split_heads(tt_linear_hp(h, self.wq), self.n_heads, d), cos, sin)
+        k = tt_apply_rope(tt_split_heads(tt_linear_hp(h, self.wk), self.n_kv_heads, d), cos, sin)
+        v = tt_split_heads(tt_linear_hp(h, self.wv), self.n_kv_heads, d)
         mask = self.tables.mask(seq) if causal else None
         attn = tt_gqa_attention(q, k, v, mask, self.n_heads, self.n_kv_heads, d, seq)
-        return tt_linear(tt_merge_heads(attn), self.wo)
+        return tt_linear_hp(tt_merge_heads(attn), self.wo)
 
 
 class TtBackboneMLP:
     """`w2(silu(w1 x) * w3 x)` -- `gate_proj` / `down_proj` / `up_proj` are the reference's
-    `w1` / `w2` / `w3`."""
+    `w1` / `w2` / `w3`.
+
+    Same hi/lo split as the attention projections, and for the same reason: this is the widest
+    matmul in the layer (K = 9216 on the way down), so it is where a plain fp32 matmul gives up
+    the most, and the residual stream carries that straight into Block 2's quantiser."""
 
     def __init__(self, weights):
         self.w1, self.w2, self.w3 = weights
@@ -115,13 +126,14 @@ class TtBackboneMLP:
     @classmethod
     def from_module(cls, device, module):
         return cls((
-            stage_weight(module.gate_proj, device),
-            stage_weight(module.down_proj, device),
-            stage_weight(module.up_proj, device),
+            stage_weight_split(module.gate_proj, device),
+            stage_weight_split(module.down_proj, device),
+            stage_weight_split(module.up_proj, device),
         ))
 
     def __call__(self, h):
-        return tt_swiglu(h, self.w1, self.w2, self.w3)
+        gated = ttnn.mul(ttnn.silu(tt_linear_hp(h, self.w1)), tt_linear_hp(h, self.w3))
+        return tt_linear_hp(gated, self.w2)
 
 
 class TtRMSNorm:

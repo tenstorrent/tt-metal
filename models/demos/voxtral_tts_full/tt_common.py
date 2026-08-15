@@ -174,16 +174,40 @@ def tt_linear(x, w_t):
     return ttnn.matmul(x, w_t, compute_kernel_config=COMPUTE_CONFIG)
 
 
+def tt_split_hi_lo(x):
+    """A tensor as a bfloat16 hi part (widened back to fp32) and its exact fp32 remainder."""
+    hi = ttnn.typecast(ttnn.typecast(x, ttnn.bfloat16), ttnn.float32)
+    return hi, ttnn.sub(x, hi)
+
+
 def tt_linear_hp(x, sw: "SplitWeight"):
     """Higher-precision matmul: split the ACTIVATION into a bfloat16 hi part and its fp32
     remainder and sum the cross terms against the weight's own hi/lo pair.  ~4x tighter than a
     plain fp32 matmul (3.1e-4 vs 1.2e-3 at K=3072) for 2-3 dispatches instead of 1."""
-    x_hi = ttnn.typecast(ttnn.typecast(x, ttnn.bfloat16), ttnn.float32)
-    x_lo = ttnn.sub(x, x_hi)
+    x_hi, x_lo = tt_split_hi_lo(x)
     out = ttnn.matmul(x_hi, sw.hi, compute_kernel_config=COMPUTE_CONFIG)
     if sw.lo is not None:
         out = ttnn.add(out, ttnn.matmul(x_hi, sw.lo, compute_kernel_config=COMPUTE_CONFIG))
     return ttnn.add(out, ttnn.matmul(x_lo, sw.hi, compute_kernel_config=COMPUTE_CONFIG))
+
+
+def tt_matmul_hp(a, b):
+    """The same split for an ACTIVATION x ACTIVATION product, where neither side is a staged
+    weight -- i.e. the two matmuls inside attention (q.k^T and probs.v).
+
+    Measured against a float64 reference at K = 3, 128 and 3072 alike: plain 1.1-1.8e-3, this
+    3.1e-4.  A THREE-term split measures 3.1e-4 as well, so 3.1e-4 is this board's floor for a
+    matmul and it is the accumulator, not the operands -- there is nothing further to buy here.
+
+    It is worth buying at all because Block 2's output is QUANTISED: its 7-step ODE integrates
+    these attention outputs, and a dimension that lands within ~1e-2 FSQ code units of a boundary
+    flips a code.  With the plain form the flow block carried 7.9e-4 into the ODE and the rollout
+    flipped codes from frame 1 on; with this it carries ~3e-4."""
+    a_hi, a_lo = tt_split_hi_lo(a)
+    b_hi, b_lo = tt_split_hi_lo(b)
+    out = ttnn.matmul(a_hi, b_hi, compute_kernel_config=COMPUTE_CONFIG)
+    out = ttnn.add(out, ttnn.matmul(a_hi, b_lo, compute_kernel_config=COMPUTE_CONFIG))
+    return ttnn.add(out, ttnn.matmul(a_lo, b_hi, compute_kernel_config=COMPUTE_CONFIG))
 
 
 def tt_rms_norm(x, w, eps: float):
@@ -239,12 +263,16 @@ def tt_gqa_attention(q, k, v, bias, n_heads: int, n_kv_heads: int, head_dim: int
     `unsqueeze(2).expand(...).reshape(...)` (query head j reads KV head j // repeats) -- a
     plain repeat would pair the wrong heads.  The explicit q@k^T -> softmax -> @v chain is
     used rather than fused SDPA: the fused kernel works the TILE-PADDED shape and silently
-    loses accuracy below 32 rows (0.83 PCC at S=16), which this model's codec stack hits."""
+    loses accuracy below 32 rows (0.83 PCC at S=16), which this model's codec stack hits.
+
+    Both products go through `tt_matmul_hp`.  These are the only ACTIVATION x ACTIVATION
+    matmuls in the model, so they were the last places still carrying the plain form's 1.2e-3,
+    and they sit directly upstream of a quantiser (see `tt_matmul_hp`)."""
     repeats = n_heads // n_kv_heads
     if repeats > 1:
         k = ttnn.repeat_interleave(k, repeats, dim=1)
         v = ttnn.repeat_interleave(v, repeats, dim=1)
-    scores = ttnn.mul(tt_linear(q, ttnn.permute(k, (0, 1, 3, 2))), 1.0 / (head_dim ** 0.5))
+    scores = ttnn.mul(tt_matmul_hp(q, ttnn.permute(k, (0, 1, 3, 2))), 1.0 / (head_dim ** 0.5))
     if bias is not None:
         scores = ttnn.add(scores, bias)
-    return tt_linear(tt_softmax_lastdim(scores, seq), v)
+    return tt_matmul_hp(tt_softmax_lastdim(scores, seq), v)

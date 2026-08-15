@@ -1,0 +1,173 @@
+{
+  "model": "/localdev/lserbedzija/hf_models/voxtral-tts-full",
+  "model_type": "voxtral_tts",
+  "package": "models/demos/voxtral_tts_full",
+  "topology": {"chips": 1, "tp": 1, "dp": 1, "note": "parallelism_manifest.json: single device, so every graduated stub is a NATIVE single-device body (no .last_good_sharded snapshots exist)."},
+
+  "sources": {
+    "A_huggingface": {
+      "architectures": ["VoxtralTtsForConditionalGeneration"],
+      "auto_map": {"AutoModel": "VoxtralTtsForConditionalGeneration", "AutoModelForCausalLM": "VoxtralTtsForConditionalGeneration"},
+      "task": "text-to-speech",
+      "modality_in": "text",
+      "modality_out": "audio",
+      "is_encoder_decoder": false,
+      "block_stacks": ["backbone", "flow", "codec"],
+      "reference_entrypoint": "VoxtralTtsForConditionalGeneration.forward(input_ids=..., voice=..., max_frames=N)",
+      "no_generate_override": "The class does NOT override generate(); forward() IS the generative chain (prefill -> per-frame {flow -> embed_frame -> backbone step}) and returns waveform+frames. So the golden is forward(), driven at the same frame horizon as the TT side.",
+      "input_construction": [
+        "prompt ids: config.default_prompt_ids (200 ids, 169 audio placeholders, matches the neutral_male preset) OR voxtral_tokenizer_ref.TekkenTokenizer.build_prompt(text, voice) for custom text",
+        "voice preset: assets/voice_embedding/<voice>.pt -> [T_ref, 3072] bf16 (169 rows for neutral_male); every id==24 position consumes one preset row"
+      ],
+      "config_constants": {
+        "num_hidden_layers": 26, "hidden_size": 3072, "intermediate_size": 9216,
+        "num_attention_heads": 32, "num_key_value_heads": 8, "head_dim": 128,
+        "rope_theta": 1000000.0, "rms_norm_eps": 1e-05, "max_position_embeddings": 2048,
+        "vocab_size": 131072, "n_acoustic_codebook": 37, "end_audio_id": 2048,
+        "flow_num_decoding_steps": 7, "flow_cfg_alpha": 1.3, "sampling_rate": 24000, "frame_rate": 12.5
+      },
+      "config_vs_reference_discrepancies": [
+        "config.end_audio_id=2048 but the reference (voxtral_common_ref.END_AUDIO_ID) and the graduated flow stub both use 1. The stop rule therefore accepts EITHER id, applied IDENTICALLY on the TT and golden sides so lengths can never diverge.",
+        "config.flow_cfg_alpha=1.3 but the reference default (voxtral_common_ref.CFG_ALPHA) and the graduated flow stub's CFG_ALPHA are 1.2, and HF forward passes cfg_alpha=None -> reference default. The pipeline therefore does NOT pass cfg_alpha (both sides take the reference default 1.2).",
+        "config.flow_num_hidden_layers=12 / codec_num_layers=12 do not match the real blocks (flow = 3 layers; codec = 4 stages x 2 transformer layers). params.json / the graduated stubs are authoritative for depth."
+      ]
+    },
+    "B_bringup": {
+      "status_file": "bringup_status.json",
+      "run_report": "RUN_REPORT.md (Converged, ON_DEVICE 7/7, KERNEL_MISSING 0, CPU_REUSE 0)",
+      "runtime_fallbacks": "_runtime_fallbacks.json == {} (no stub fell back)",
+      "captured_root": "_captured/<component>/{args,kwargs,output}.pt (+ flow_matching/x_0.pt)"
+    }
+  },
+
+  "graduated_module_inventory": {
+    "verification_method": "For each entry of bringup_status.json.components: (1) _stubs/<name>.py exists, (2) _stubs/<name>.py.last_good_native exists, (3) live .py is byte-identical to .last_good_native (diff -q), (4) _stubs/<name>.py.native_probe.json reports torch_ops == 0. All four hold for all 7. No .last_good_sharded snapshot exists for any component (TP=1), so every routed body is the native single-device one.",
+    "note_on_REUSE_tag": "bringup_status.json tags r_m_s_norm / attention / m_l_p as REUSE, but they are NOT untouched reuse entries: decomposition_plan.json shows they were split out of decoder_layer, each was given its own stub, each graduated natively (torch_ops=0) and each has a .last_good_native snapshot and a per-component PCC test. RUN_REPORT.md lists all 7 under ON_DEVICE 'graduated - native ttnn, PCC-verified'. They are therefore treated as GRADUATED WORK PRODUCTS and must be routed, or 3 of 7 bring-up products would be wasted.",
+    "modules": [
+      {"name": "tts_backbone", "class": "TtVoxtralTtsBackbone", "hf_path": "backbone", "granularity": "whole Block 1 (26 layers + final norm)", "ttnn_dispatch": 1618, "torch_ops": 0, "graduated": true},
+      {"name": "decoder_layer", "class": "TtVoxtralDecoderLayer", "hf_path": "backbone.layers.0", "granularity": "one pre-norm GQA+SwiGLU block", "ttnn_dispatch": 62, "torch_ops": 0, "graduated": true},
+      {"name": "attention", "class": "TtVoxtralAttention", "hf_path": "backbone.layers.0.self_attn", "granularity": "GQA 32/8 + Mistral-native RoPE", "ttnn_dispatch": 43, "torch_ops": 0, "graduated": true},
+      {"name": "m_l_p", "class": "TtVoxtralMLP", "hf_path": "backbone.layers.0.mlp", "granularity": "SwiGLU", "ttnn_dispatch": 5, "torch_ops": 0, "graduated": true},
+      {"name": "r_m_s_norm", "class": "TtVoxtralRMSNorm", "hf_path": "backbone.layers.0.input_layernorm", "granularity": "composed RMSNorm", "ttnn_dispatch": 6, "torch_ops": 0, "graduated": true},
+      {"name": "flow_matching", "class": "TtVoxtralFlowMatching", "hf_path": "flow", "granularity": "whole Block 2 (semantic argmax + 7-step Euler CFG + FSQ)", "ttnn_dispatch": 1935, "torch_ops": 0, "graduated": true},
+      {"name": "codec_decoder", "class": "TtVoxtralCodecDecoder", "hf_path": "codec", "granularity": "whole Block 3 (codes -> 24 kHz waveform)", "ttnn_dispatch": 557, "torch_ops": 0, "graduated": true}
+    ],
+    "nesting_problem": "tts_backbone builds its own 26 layers out of the SAME tt_backbone.py primitives that decoder_layer / attention / m_l_p / r_m_s_norm wrap. Calling only tts_backbone would leave 4 graduated stubs uninvoked (Gate 2 fail); calling them on the side would be a coverage sweep (explicitly forbidden).",
+    "nesting_resolution": "Compose the 26-layer stack OUT of the stubs, at the granularity each stub graduated on, with every layer built from ITS OWN torch weights and every output feeding the next layer: layer 0 = r_m_s_norm(stub) -> attention(stub) -> +x -> r_m_s_norm(stub) -> m_l_p(stub) -> +x ; layer 1 = decoder_layer(stub) built on backbone.layers.1 ; layers 2..25 = tts_backbone(stub)'s own TtBackboneLayer bodies. The stack list stays on the tts_backbone stub object, so calling the stub's __call__ runs the whole mixed stack + its final norm. No layer is computed twice, no stub is called outside the forward path."
+  },
+
+  "task_heads": [
+    {
+      "call": 1,
+      "id": "tts",
+      "name": "text-to-speech",
+      "why_only_one": "config.task='text-to-speech'; both AutoModel and AutoModelForCausalLM map to the single class VoxtralTtsForConditionalGeneration; there is no second head. All 7 graduated modules belong to this one call, so per the 'shared graduated module -> one agent' rule this is a single implementation unit.",
+      "input": "text (str) -> prompt ids [P] via TekkenTokenizer.build_prompt (or config.default_prompt_ids) + voice preset [169,3072] from assets/voice_embedding/<voice>.pt",
+      "output": "24 kHz mono waveform [1, 1, T*1920] float + the emitted audio-code frames [T, 37]; the demo writes a .wav",
+      "pass_definition": "the TT waveform, produced by chaining ALL 7 graduated stubs with no reference tensor injected at any joint, reaches PCC >= 0.99 against the HF reference waveform for the same prompt/voice/horizon, AND the emitted code frames match the reference frames exactly (a code flip is a hard behavioural failure the waveform PCC could otherwise mask).",
+      "routing": {
+        "prompt_embedding": "ttnn.embedding over tok_embeddings (+ voice rows substituted at id==24 positions by an on-device masked select) -- NOT a graduated stub, but on-device so host_op_selftest stays clean",
+        "backbone_prefill_and_step": ["tts_backbone", "decoder_layer", "attention", "m_l_p", "r_m_s_norm"],
+        "audio_code_head": ["flow_matching"],
+        "frame_feedback_embedding": "ttnn.embedding over audio_embeddings with codebook offsets, reduced over the 37 codebooks on device (embed_frame)",
+        "waveform": ["codec_decoder"]
+      },
+      "chain": [
+        "ids,voice -> [device embed] inputs_embeds [1,P,3072]",
+        "inputs_embeds -> tts_backbone(mixed stub stack) -> hidden [1,P,3072] -> last row h [1,1,3072]",
+        "loop t < max_frames: h -> flow_matching -> codes [1,37] (semantic argmax + 7 Euler steps + FSQ, on device)",
+        "  stop if codes[0,0] in {1, config.end_audio_id} (same rule on both sides)",
+        "  codes -> [device embed_frame] emb [1,1,3072] -> inputs_embeds = concat(inputs_embeds, emb, dim=1)",
+        "  inputs_embeds -> tts_backbone -> h = last row   (this is exactly HF forward's prefill_then_step composition)",
+        "concat(frames) [T,37] -> codec_decoder -> waveform [1,1,T*1920]"
+      ],
+      "no_injection_points": "h comes only from the TT backbone, codes only from the TT flow block, the frame embedding only from the TT codes, and the waveform only from the TT frames. The only host-supplied values are the prompt ids and the voice preset (input encoding) and the pinned x_0 (see determinism)."
+    }
+  ],
+
+  "decode_horizon": {
+    "rule": "STOP-TOKEN with a safety cap, applied identically to TT and golden.",
+    "stop_ids": "{END_AUDIO_ID=1 (reference + graduated flow stub), config.end_audio_id=2048 (what HF forward compares against)} -- accepting both keeps the two sides in lockstep whichever fires.",
+    "gate_cap": 8,
+    "gate_cap_grounding": "NOT an invented constant: _captured/codec_decoder/args.pt is [8, 37] and its output.pt is [1,1,15360] = 8*1920, i.e. the bring-up capture (Source B) ran this model at 8 frames, and the captured KV width for attention/decoder_layer is 208 = 200 prompt + 8 frames. The e2e gate therefore runs the horizon Source B itself recorded. No END_AUDIO occurs within it, so the stop rule is exercised but does not fire early.",
+    "safety_cap": "config.max_position_embeddings (2048) - prompt length, used by the demo when it runs to natural stop.",
+    "demo_default": "24 frames (~1.9 s of audio) with --max-frames to go longer; the demo also honours the stop rule."
+  },
+
+  "determinism": {
+    "problem": "voxtral_flow_ref.decode_frame draws a fresh Gaussian x_0 per frame when x_0 is None, and HF forward passes None. The graduated flow stub cannot draw noise inside a probed forward (ttnn.from_torch is 2 torch ops, native_probe graduates at 0), so it stages ONE x_0 at build time from _captured/flow_matching/x_0.pt and uses it for every frame.",
+    "resolution": "The golden helper passes that SAME pinned x_0 to model.flow(...) on every frame. Both sides then integrate identical noise, so any PCC gap is the port's arithmetic and nothing else. The x_0 tensor is Source B's own artefact (_captured/flow_matching/x_0.pt, seed 12345).",
+    "consequence": "The golden is reproduced by an explicit _hf_reference_tts() helper that runs HF forward's composition (backbone -> flow -> embed_frame -> backbone.prefill_then_step -> codec) with x_0 pinned, rather than by calling forward() blind. This is the ALLOWED golden-helper use of HF."
+  },
+
+  "validation_metric": {
+    "primary": "PCC(TT waveform, HF reference waveform) >= 0.99 over the full [1,1,T*1920] tensor",
+    "printed": "print(f'e2e PCC={achieved_pcc}') on its own line immediately before the final assert, on pass AND fail",
+    "secondary": [
+      "exact match of the emitted code frames [T,37] (int equality) -- the quantised behavioural check",
+      "per-frame PCC of the backbone hidden state h_t vs the reference h_t (localises a drift to a step)",
+      "waveform length == frames * 1920 and sample range within +/-1"
+    ]
+  },
+
+  "behavioral_proof": {
+    "artifact": "demo writes a 24 kHz mono WAV from the TT waveform and prints frames, duration, peak amplitude and the PCC against the reference",
+    "claim": "text in -> speech out, computed on the Tenstorrent device by the graduated stubs; the reference WAV can be written alongside for A/B listening",
+    "not_a_smoke_test": "input is the real tokenized TTS prompt + a real voice preset; output is a real waveform; nothing is compared against a synthetic tensor"
+  },
+
+  "gates": {
+    "gate_1_native": {
+      "what": "every routed graduated stub is still real ttnn, not a torch fallback",
+      "how": "assert _runtime_fallbacks.json is empty; assert each routed object is an instance of the class defined in _stubs/<name>.py; assert live _stubs/<name>.py is byte-identical to its .last_good_native snapshot (the pipeline must not have edited a graduated body); assert each <name>.native_probe.json has torch_ops == 0; the pipeline imports the stubs as-is and never monkey-patches their forwards"
+    },
+    "gate_2_invoked": {
+      "what": "all 7 graduated modules actually run inside the real forward path",
+      "how": "each routing site bumps a counter on the pipeline object as part of the real call; after run_tts the test asserts every one of the 7 names has count >= 1 AND that the counts are consistent with the chain (r_m_s_norm == 2 per prefill call, attention/m_l_p == 1 per prefill call, decoder_layer == 1 per prefill call, tts_backbone == 1 + n_frames, flow_matching == n_frames(+1 if stopped), codec_decoder == 1). There is no coverage_step / invoke_all_stubs helper anywhere in the package."
+    },
+    "gate_3_pcc": {"what": "final waveform PCC >= 0.99 vs the HF golden", "target": 0.99}
+  },
+
+  "self_validation_plan": [
+    "S1 build-time: verify_rope_permutation already asserts the Mistral-interleaved -> half-split weight permutation against layer 0's real weights (inside the attention/tts_backbone stubs)",
+    "S2 embedding parity: TT device embed(prompt ids + voice substitution) vs the reference build_inputs_embeds -- PCC and max abs diff, before anything else runs (an embedding bug otherwise shows up as a backbone bug)",
+    "S3 frame-embedding parity: TT device embed_frame(codes) vs voxtral_backbone_ref.embed_frame -- this is the feedback joint of the AR loop and uses a 37-way reduction, which is the op class most at risk (ttnn.sum is the loose primitive; mean*n is the safe form)",
+    "S4 prefill parity: TT backbone hidden vs reference hidden for the real prompt (the mixed stub stack must equal the pure stack)",
+    "S5 per-frame parity: h_t PCC and exact code equality for every decoded frame",
+    "S6 codec parity: TT waveform vs reference waveform from the SAME frames",
+    "S7 end-to-end: full chain, no injected tensors, PCC >= 0.99 (Gate 3)",
+    "S8 layer-cap sanity: build_pipeline(layers=2) builds 2 backbone layers and still runs every distinct op (used by the perf tool; proves the knob is not inert)"
+  ],
+
+  "pipeline_stages": {
+    "derivation": "config.architectures=['VoxtralTtsForConditionalGeneration'] with auto_map AutoModelForCausalLM and is_encoder_decoder=false -> [prefill, decode]; config.modality_out='audio' / task='text-to-speech' -> add [vocode]; config.block_stacks=['backbone','flow','codec'] declares THREE repeated stacks, and the flow block is a distinct fixed-shape per-frame stage, so it gets its own entry.",
+    "PIPELINE_STAGES": ["prefill", "decode", "flow", "vocode"],
+    "stacks": {
+      "prefill": "backbone (26 layers) -- variable dim = prompt length, bound = max_position_embeddings 2048",
+      "decode": "backbone (26 layers), one position against resident KV -- variable dim = context length",
+      "flow": "acoustic transformer (3 layers) -- fixed 3-token sequence, no variable dim",
+      "vocode": "codec decoder (4 stages x 2 transformer layers + convs) -- variable dim = frame count"
+    },
+    "layer_knobs": {"layers": "default depth for every stack; None = all, never 0", "prefill_layers": "backbone depth for prefill", "decode_layers": "backbone depth for decode", "flow_layers": "flow depth (3)", "vocode_layers": "codec transformer layers per stage (2)"},
+    "contracts_per_stage": ["<stage>_trace_setup(inputs)", "<stage>_trace_step()", "<stage>_trace_inputs() (zero-arg, assembled from _captured/)"],
+    "ar_contract": ["decode_prefill(embeds) seeds resident self-attn KV", "decode_step(emb) reads it and never recomputes"],
+    "selftests": ["trace_capture_selftest(device)", "host_op_selftest()"]
+  },
+
+  "package_layout": {
+    "tt/pipeline.py": "the ONE chained forward pass + build_pipeline factory + PIPELINE_STAGES + trace hooks + selftests (imported by BOTH demo and test)",
+    "tt/reference.py": "input assembly (prompt ids, voice) and the HF golden helper with an on-disk cache",
+    "demo/demo_tts.py": "python -m models.demos.voxtral_tts_full.demo.demo_tts --text ... --voice ... --max-frames ...; writes a WAV",
+    "tests/e2e/test_tts_e2e.py": "Gate 1 + Gate 2 + Gate 3 over the shared pipeline",
+    "README.md": "what Call 1 does, how to run it, the measured PCC numbers"
+  },
+
+  "risks": [
+    {"risk": "37-way reduction in embed_frame", "mitigation": "ttnn.sum carries ~3e-4; use mean*37 (6e-8) and validate at S3 -- an error here is amplified by 26 layers of feedback"},
+    {"risk": "growing ttnn.concat on the sequence axis each frame", "mitigation": "dim-1 concat in TILE layout is bit-exact (already relied on by the graduated codec stub's _pad_left); the last-dim concat that rounds to bf16 is never used"},
+    {"risk": "quantised output -- a near-boundary FSQ dimension flips a code and the waveform diverges", "mitigation": "the flow stub already uses the hi/lo split matmul everywhere; frames are compared for EXACT equality so a flip is reported, not hidden"},
+    {"risk": "argmax over 8320 semantic logits picks a different id under 1e-4 noise", "mitigation": "checked by the exact frame comparison; the hi/lo matmul is what keeps the logit gap safe"},
+    {"risk": "host readback for the stop check is a host op", "mitigation": "run_tts(early_stop=False) with a fixed horizon is what host_op_selftest observes -- the stop check is generation control, not model math (the codec stub's own docstring draws the same line)"},
+    {"risk": "device DRAM", "mitigation": "backbone is staged bf16 (lossless for this checkpoint) ~6 GB + tok table 0.8 GB + flow hi/lo 1.4 GB; ~9 GB of a 32 GB p150b"}
+  ]
+}
