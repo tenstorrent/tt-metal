@@ -60,6 +60,26 @@ AUDITED_SEEDS = {
         paired_selector_status="blocked", test_status="blocked", perf_status="blocked", correctness_metric="exact",
         correctness_threshold="exact value/index association; exact stable indices, tie-equivalent indices only for explicitly unstable cases", correctness_source="test_topk.py:134-240; TOPK_TYPED_CONVERSION_BLOCKER.md",
         silicon_status="blocked", silicon_result="No semantically complete paired selector or isolated silicon result.", silicon_source="TOPK_TYPED_CONVERSION_BLOCKER.md; sfpu_device_baseline_v1.tsv"),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk": dict(
+        semantic_cpp_class="typed_wrapper_needed", semantic_cpp_blocker="Semantic scoring can be fresh C++; TopK paired state, destination/RWC movement, transpose, and MOP/replay ownership need typed architectural models.",
+        paired_selector_status="absent", test_status="not_run", perf_status="blocked", correctness_metric="tolerance",
+        correctness_threshold="values must pass the test's format tolerance/PCC gate and indices must preserve value/index association", correctness_source="test_sfpu_generic_moe_gate_topk.py",
+        silicon_status="blocked", silicon_result="No paired isolated profiler fixture.", silicon_source="f1_candidates.tsv rank 7"),
+    "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
+        semantic_cpp_class="ready", semantic_cpp_blocker="No architectural conversion blocker identified at the vFloat leaf boundary; numerical-domain and FP32 destination parity must be characterized before promotion.",
+        paired_selector_status="absent", test_status="not_run", perf_status="blocked", correctness_metric="pcc",
+        correctness_threshold="PCC > 0.99 plus per-format element tolerance unless the paired test establishes a stricter contract", correctness_source="test_sfpu_sdpa_exp_unclamped.py; helpers/utils.py:548-785",
+        silicon_status="blocked", silicon_result="No isolated paired profiler module.", silicon_source="f1_candidates.tsv rank 10"),
+    "legacy__ckernel_sfpu_softmax_k": dict(
+        semantic_cpp_class="ready", semantic_cpp_blocker="No architectural conversion blocker identified at the vFloat leaf boundary; transcendental approximation and precision parity must be characterized before promotion.",
+        paired_selector_status="absent", test_status="not_run", perf_status="blocked", correctness_metric="pcc",
+        correctness_threshold="PCC > 0.99 plus per-format element tolerance unless the paired test establishes a stricter contract", correctness_source="test_sfpu_softmax_k.py; helpers/utils.py:548-785",
+        silicon_status="blocked", silicon_result="No isolated paired profiler module.", silicon_source="f1_candidates.tsv rank 9"),
+    "legacy__ckernel_sfpu_topk_xl": dict(
+        semantic_cpp_class="typed_wrapper_needed", semantic_cpp_blocker="Requires typed paired value/index state, eight-value transpose, replay-range allocation, alternating-direction legality, and general MOP formation.",
+        paired_selector_status="absent", test_status="not_run", perf_status="blocked", correctness_metric="exact",
+        correctness_threshold="exact values and exact companion indices for deterministic stimuli", correctness_source="test_topk_xl.py",
+        silicon_status="blocked", silicon_result="No paired isolated profiler fixture.", silicon_source="f1_candidates.tsv rank 9"),
 }
 
 DEFAULT_AUDIT = dict(
@@ -142,6 +162,8 @@ def validate(rows):
         if row.get("correctness_metric") not in CORRECTNESS_METRICS: errors.append(f"bad correctness metric: {row_id}")
         if row.get("silicon_status") not in SILICON_STATUSES: errors.append(f"bad silicon status: {row_id}")
         if not row.get("semantic_cpp_blocker"): errors.append(f"missing exact blocker/readiness statement: {row_id}")
+        if row.get("mapping_state") == "mapped" and row.get("semantic_cpp_class") == "unmapped":
+            errors.append(f"mapped row lacks semantic-C++ audit: {row_id}")
         if row.get("silicon_status") in {"win","parity","loss"}:
             if row.get("test_status") != "pass" or row.get("correctness_metric") == "none":
                 errors.append(f"ungated silicon result: {row_id}")

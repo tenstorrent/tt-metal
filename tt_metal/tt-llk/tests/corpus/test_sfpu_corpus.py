@@ -21,6 +21,8 @@ class CorpusTest(unittest.TestCase):
             self.assertIn(row["semantic_cpp_class"],M.SEMANTIC_CPP_CLASSES)
             self.assertTrue(row["semantic_cpp_blocker"])
             self.assertIn(row["correctness_metric"],M.CORRECTNESS_METRICS)
+            if row["mapping_state"] == "mapped":
+                self.assertNotEqual(row["semantic_cpp_class"],"unmapped")
 
     def test_measured_silicon_is_correctness_gated(self):
         rows={r["id"]:r for r in M.read_manifest()}
