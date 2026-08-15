@@ -11,5 +11,6 @@ legacy__ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	handwritten
 legacy__ckernel_sfpu_binary_bcast	bh	device_cycles	BINARY_BCAST_BODY	generated	608	measured	BINARY_BCAST_SILICON_AB.md
 metal__ckernel_sfpu_mul_int32	bh	device_cycles	MATH_ISOLATE	handwritten	283.9296875	measured	audited BH device archive
 metal__ckernel_sfpu_mul_int32	bh	device_cycles	MATH_ISOLATE	generated	562.625	measured	audited BH device archive
-legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY			BLOCKED	no isolated paired profiler metric
+legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY	handwritten	159.25	measured	TTNN_WHERE_COMPILER_AB.md
+legacy__ckernel_sfpu_where	bh	device_cycles	TTNN_WHERE_BODY	generated	312.5	measured	TTNN_WHERE_COMPILER_AB.md; SFPI-GCC 8f943c2f8
 legacy__ckernel_sfpu_topk	bh	device_cycles	TOPK_BODY			BLOCKED	no isolated paired profiler metric

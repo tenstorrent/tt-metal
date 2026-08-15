@@ -29,7 +29,8 @@ side effects but did not reset `GIMPLE_DEBUG_BIND` uses before clearing or
 removing the defining statement.  The SFPI-GCC fix resets those debug-only uses
 at both lowering paths.
 
-- Local SFPI-GCC commit: `5a18ac485` (not pushed).
+- SFPI-GCC `nkapre/sfpi`: `8f943c2f8` (the validated fix rebased onto the
+  current compiler branch).
 - Baseline reproducer: WH, BH, and QSR all fail with `definition in block 2
   follows the use` / `verify_ssa`.
 - Fixed compiler: WH, BH, and QSR all compile at `-O3 -g`.
@@ -41,7 +42,8 @@ at both lowering paths.
 
 ## Blackhole silicon evidence
 
-The serialized run used TT-Metal commit `156a76bdd69a80bba34172747efaf0e862414037`,
+The serialized run used the source change later rebased and pushed as TT-Metal
+`1dd59d9c`,
 compiler SHA256 `569fb8fd0f0a267dd566cdc740a577c76ef69cdeea905a64e7c79e6b1f19ebfd`,
 and host `bh-33-special-nkapre-for-reservation-112326`.
 
