@@ -100,7 +100,9 @@
 - Successful benchmark server and final evidence server both terminated
   cleanly. Process audit found no live vLLM/EngineCore device owner afterward.
 
-## Remaining handoff
+## Review and local commits
 
-- Independent stage review and local isolated commits; SHAs are appended after
-  review remediation.
+- Independent `$stage-review` final verdict: `clean-pass`.
+- tt-metal stage commit: `6f597ee054c133fe242ea7983a08c5a373d6b902`.
+- sibling vLLM plugin commit: `ed7a409b9c56f276acaa9a764c409703e41c8ef0`.
+- Commits are local only; nothing was pushed.
