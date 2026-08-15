@@ -51,12 +51,13 @@ def _dram_in_use(mesh_device) -> str:
         return f"unavailable ({type(err).__name__}: {err})"
 
 
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_frames, height, width",
     [((4, 8), _FABRIC, 145, 1088, 1920)],
     indirect=["mesh_device", "device_params"],
 )
-def test_sharded_decode_at_production_size(*, mesh_device, num_frames, height, width):
+def test_sharded_decode_at_production_size(*, mesh_device, num_frames, height, width, traced):
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
 
@@ -74,6 +75,8 @@ def test_sharded_decode_at_production_size(*, mesh_device, num_frames, height, w
 
     decoder = DiffVAEDecoder(config, mesh_device=mesh_device)
     decoder.load_checkpoint(CHECKPOINT)
+    # Capture is opt-in per decoder; the pipeline sets the same flag after its warmup pass.
+    decoder._traced = traced
 
     shard = MeshShardConfig(
         ccl=CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear),
@@ -123,7 +126,7 @@ def test_sharded_decode_at_production_size(*, mesh_device, num_frames, height, w
 
     expected = (1, config["out_channels"], num_frames, height, width)
     print(
-        f"\n145f SPLIT DECODE: latent {tuple(latent.shape)} -> pixels {tuple(pixels.shape)} "
+        f"\n145f SPLIT DECODE [{'traced' if traced else 'eager'}]: latent {tuple(latent.shape)} -> pixels {tuple(pixels.shape)} "
         f"in {elapsed:.1f}s on {mesh[0]}x{mesh[1]}\n  DRAM: {_dram_in_use(mesh_device)}"
     )
     assert tuple(pixels.shape) == expected, f"{tuple(pixels.shape)} != {expected}"
