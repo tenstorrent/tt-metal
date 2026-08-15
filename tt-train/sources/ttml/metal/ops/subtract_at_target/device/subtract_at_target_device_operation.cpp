@@ -5,6 +5,7 @@
 #include "subtract_at_target_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <limits>
 
 #include "subtract_at_target_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -50,6 +51,15 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
         "SubtractAtTarget: input must be rank 4, got rank {}",
         tensor_args.input.logical_shape().rank());
 
+    // The reader sizes its target-page reads from the target's inner dim, but the program cache
+    // is keyed on the input shape alone; this tie keeps a cached program valid for the target
+    // tensor it runs with.
+    TT_FATAL(
+        tensor_args.target.logical_shape()[-1] == tensor_args.input.logical_shape()[-2],
+        "SubtractAtTarget: target inner dim ({}) must equal input sequence dim ({})",
+        tensor_args.target.logical_shape()[-1],
+        tensor_args.input.logical_shape()[-2]);
+
     TT_FATAL(args.local_V > 0U, "SubtractAtTarget: local_V must be > 0");
 
     if (args.cluster_axis.has_value()) {
@@ -89,11 +99,17 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
 }
 
 ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v / local_V / cluster_axis / subtract_value only affect runtime args (they're patched
-    // by override_runtime_arguments per coord); they don't change the compiled kernel binary.
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // first_v / local_V / subtract_value only affect runtime args (they're patched by
+    // override_runtime_arguments per coord). cluster_axis, however, determines the mesh-workload
+    // structure (one program per TP slab when set vs one per coordinate when unset) and the
+    // program-to-coordinate mapping, so it must be part of the hash. value_or keeps nullopt
+    // distinct from axis 0 (an optional hashes its payload directly, so nullopt and 0 would
+    // otherwise collide); the sentinel can never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SubtractAtTargetDeviceOperation>(
-        tensor_args.input.dtype(), tensor_args.input.logical_shape());
+        args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
+        tensor_args.input.dtype(),
+        tensor_args.input.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::subtract_at_target::device

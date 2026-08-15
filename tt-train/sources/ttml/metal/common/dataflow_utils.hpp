@@ -392,6 +392,43 @@ inline void read_tiles_by_row(
 }
 
 /**
+ * Read up to `read_capacity_bytes` of uint32 target indices for one tile-row from a row-major
+ * page, clamping the transfer to the page end (the page holds only the logical inner dim, so a
+ * fixed-size read would run past it whenever the logical height is not a multiple of
+ * TILE_HEIGHT). Slots past the clamp are filled with 0xFFFFFFFF: padded tile rows must never
+ * alias a valid class index, and every consumer bounds-checks its targets, so the sentinel is
+ * always skipped.
+ *
+ * Issues its own noc_async_read_barrier; the caller only handles CB reserve/push.
+ *
+ * @param addr_gen            Address generator for the row-major target buffer
+ * @param l1_write_addr       Destination in L1 (capacity >= read_capacity_bytes)
+ * @param tiled_row           Global tile-row index (page = tiled_row / tiled_H)
+ * @param tiled_H             Tile-rows per page
+ * @param page_bytes          Logical page size in bytes (inner dim * sizeof(uint32_t))
+ * @param read_capacity_bytes Bytes consumed per tile-row (TILE_HEIGHT * sizeof(uint32_t))
+ */
+template <typename AddrGen>
+inline void read_target_indices_page_clamped(
+    const AddrGen& addr_gen,
+    const uint32_t l1_write_addr,
+    const uint32_t tiled_row,
+    const uint32_t tiled_H,
+    const uint32_t page_bytes,
+    const uint32_t read_capacity_bytes) {
+    auto [page, offset] = get_page_and_offset(tiled_row, tiled_H);
+    const uint32_t read_bytes = offset < page_bytes ? std::min(read_capacity_bytes, page_bytes - offset) : 0U;
+    if (read_bytes > 0U) {
+        noc_async_read(addr_gen.get_noc_addr(page, offset), l1_write_addr, read_bytes);
+        noc_async_read_barrier();
+    }
+    volatile tt_l1_ptr uint32_t* indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
+    for (uint32_t i = read_bytes / sizeof(uint32_t); i < read_capacity_bytes / sizeof(uint32_t); ++i) {
+        indices[i] = 0xFFFFFFFFU;
+    }
+}
+
+/**
  * F10 helper: read a `rows x cols` block of tiles from a row-major source (DRAM) and lay them
  * out *column-major* in the destination circular buffer. Each source tile at logical position
  * (r, c) — DRAM tile id `start_idx + r * cols + c` — is written to CB position `c * rows + r`.
