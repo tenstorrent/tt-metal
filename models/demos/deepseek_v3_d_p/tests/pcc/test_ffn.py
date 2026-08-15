@@ -21,7 +21,7 @@ from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("batch_seq_len", [640], ids=["640"])
+@pytest.mark.parametrize("batch_seq_len", [4096, 3200], ids=["4K", "3.2K"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [

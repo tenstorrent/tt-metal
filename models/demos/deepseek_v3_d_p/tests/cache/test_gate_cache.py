@@ -62,8 +62,8 @@ def create_gate_input(config, mesh_device):
 )
 @pytest.mark.parametrize(
     "gate_mode",
-    [GateComputeMode.DEVICE_FP32],
-    ids=["device_fp32"],
+    [GateComputeMode.DEVICE, GateComputeMode.HOST_MATMUL, GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL],
+    ids=["device_gate", "host_matmul", "host_grouped_gate", "host_all"],
 )
 def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     """Test: weights → cold cache → warm cache produce identical outputs."""
