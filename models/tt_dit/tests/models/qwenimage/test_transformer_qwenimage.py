@@ -164,7 +164,7 @@ def test_transformer(
         torch_output = torch_model.forward(
             hidden_states=spatial,
             encoder_hidden_states=prompt,
-            encoder_hidden_states_mask=torch.tensor([]),  # an empty tensor to mark that this value is never used
+            encoder_hidden_states_mask=None,  # None marks that this value is never used
             timestep=timestep / 1000,
             img_shapes=img_shapes,
             txt_seq_lens=txt_seq_lens,
