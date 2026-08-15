@@ -260,6 +260,8 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? closest_to_Wt_multiple_of_block_size : twice_block_size;
 
     tt::DataFormat default_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat precise_data_format = tt::DataFormat::Float32;
+
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
@@ -286,7 +288,7 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_sum = create_circular_buffer(
-        program, all_cores, kSumCbIndex, default_data_format, float32_single_tile_size_bytes, kNumSumTiles);
+        program, all_cores, kSumCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumSumTiles);
     [[maybe_unused]] auto cb_mean_bcast = create_circular_buffer(
         program,
         all_cores,
@@ -295,7 +297,7 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
         bfloat16_single_tile_size_bytes,
         kNumMeanBcastTiles);
     [[maybe_unused]] auto cb_variance_sum = create_circular_buffer(
-        program, all_cores, kVarianceSumCbIndex, default_data_format, float32_single_tile_size_bytes, kNumSumTiles);
+        program, all_cores, kVarianceSumCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumSumTiles);
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
         program,
         all_cores,

@@ -175,9 +175,9 @@ static void CompareKernelVsXArray(
         ASSERT_EQ(dbeta_ref.shape(), metal_dbeta_flat.shape());
 
         // Compare values
-        EXPECT_TRUE(xt::allclose(metal_dx_flat, dx_ref, 1.0e-3F, 5e-1F));
-        EXPECT_TRUE(xt::allclose(metal_dgamma_flat, dgamma_ref, 1.0e-3F, 5e-1F));
-        EXPECT_TRUE(xt::allclose(metal_dbeta_flat, dbeta_ref, 1.0e-3F, 5e-1F));
+        EXPECT_TRUE(xt::allclose(metal_dx_flat, dx_ref, 1.0e-3F, 1e-2F));
+        EXPECT_TRUE(xt::allclose(metal_dgamma_flat, dgamma_ref, 1.0e-3F, 1e-2F));
+        EXPECT_TRUE(xt::allclose(metal_dbeta_flat, dbeta_ref, 1.0e-3F, 1e-2F));
     }
 }
 
