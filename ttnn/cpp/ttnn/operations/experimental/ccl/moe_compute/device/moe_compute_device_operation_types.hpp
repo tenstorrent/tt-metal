@@ -22,7 +22,16 @@ namespace ttnn::experimental::prim {
 // (matmul + fused selective_reduce_combine). `ComputeOnly` bypasses the combine path:
 // no combine cores allocated, no fabric setup, no global semaphores; op emits 5 tensors
 // instead of 6 (matmul_output is the final output).
-enum class MoEComputePath : uint8_t { Full = 0, ComputeOnly = 1 };
+// Values 0-2 are stable. Staged values are exposed as a fail-closed API seam:
+// they require the metadata-only/global-count producer before execution.
+enum class MoEComputePath : uint8_t {
+    Full = 0,
+    ComputeOnly = 1,
+    SparseSlots = 2,
+    MetadataOnly = 3,
+    ReduceGlobal = 4,
+    ComputeWithGlobal = 5,
+};
 
 struct MoEComputeParams {
     // MoE compute attributes
@@ -38,6 +47,7 @@ struct MoEComputeParams {
     uint32_t num_data_parallel_cores = 0;
 
     MoEComputePath path = MoEComputePath::Full;
+    ttnn::MemoryConfig sparse_slots_output_memory_config = ttnn::DRAM_MEMORY_CONFIG;
 
     // Ring size in matmul cores. On WH this is always 12 (DRAM banks), so keep the
     // field initializer at the WH-neutral default. On BH, invoke() resolves this to
@@ -70,6 +80,7 @@ struct MoEComputeParams {
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
         attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);
         attrs.emplace_back("path", static_cast<uint32_t>(path));
+        attrs.emplace_back("sparse_slots_output_memory_config", sparse_slots_output_memory_config);
         attrs.emplace_back("bh_ring_size", bh_ring_size);
         attrs.emplace_back("combine_params", combine_params);
         attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));
