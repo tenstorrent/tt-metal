@@ -10,6 +10,7 @@ int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
 and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
+import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
@@ -29,6 +30,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     MathOperation,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
@@ -38,6 +40,7 @@ from helpers.param_config import (
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
+from helpers.perf.core import PerfConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     MATH_OP,
@@ -306,3 +309,58 @@ def test_eltwise_unary_typecast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@pytest.mark.parametrize("typecast_impl,label", [(0, "handwritten"), (1, "semantic")])
+def test_typecast_device_profile(perf_report, typecast_impl: int, label: str):
+    """Profile one UInt16 -> Float16_b SFPU body on silicon."""
+    formats = InputOutputFormat(DataFormat.UInt16, DataFormat.Float16_b)
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec.uniform(0, 255),
+        spec_B=StimuliSpec.uniform(0, 255),
+    )
+
+    configuration = PerfConfig(
+        "sources/eltwise_unary_typecast_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=MathOperation.Typecast),
+            TYPECAST_FORMATS(formats.input_format, formats.output_format),
+            TypecastImpl(typecast_impl),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(1),
+            NUM_TILES_IN_BLOCK(1),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    for fmt_config in configuration.formats_config:
+        fmt_config.pack_src = formats.output_format
+
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "TYPECAST_BODY"]
+    assert len(rows) >= 1, rows.to_string(index=False)
+    cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"TYPECAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
