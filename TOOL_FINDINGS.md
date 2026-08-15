@@ -130,6 +130,7 @@ defect.
 | **F31** | a profiled child that aborted (SIGBUS) is reported as a missing CSV | **YES** | small |
 | **F32** | `termination_check()` blocks 30 min with no progress channel; the retry never returns | **YES** | medium |
 | **F33** | `worktree-list` can never print ORPHAN (`id(s) in orphans`), so dead worktrees accumulate looking active; `PermissionError` is also misread as dead | **YES** | one line |
+| **F34** | the overlay store silently restores a deleted model over a clean HEAD, so a from-scratch run is unreachable and two runs from one commit differ invisibly; `overlay-drop` also fails to empty its scope | **YES — reproducibility** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -2791,9 +2792,27 @@ On hard drift it prints exactly one line (`cli.py:8142-8149`):
 [registry] N mapped registry path(s) are stale on this checkout — run `tt_hw_planner sync-registry` for detail.
 ```
 
-The detail — `format_drift(issues)`, the part naming *which* path is gone — is emitted only when
-`TT_HW_PLANNER_VERBOSE` is set. The whole body is wrapped in `except Exception: pass`, so a drift
-check that itself throws is indistinguishable from a clean checkout.
+…followed by the full `format_drift(issues)` listing, naming every stale path. **Verified against a
+live `auto-up` on 2026-08-15**, which printed all 26 before proceeding.
+
+That the detail appears at all is an accident worth its own line. It is guarded by
+`if os.environ.get("TT_HW_PLANNER_VERBOSE")` (`cli.py:8147`), and the default is set at
+`cli.py:8082` as:
+
+```python
+os.environ.setdefault("TT_HW_PLANNER_VERBOSE", "0")
+```
+
+The string `"0"` is **truthy** in Python, so the guard is always true and verbose output is
+permanently on for this branch — including for a user who sets `TT_HW_PLANNER_VERBOSE=0` explicitly
+to turn it off. The check wants `not in ("", "0", "false")`, the idiom the same file already uses
+for `TT_HW_PLANNER_NO_WRAP` (`__main__.py:34`).
+
+**So the tool prints everything it knows and proceeds anyway** — which is the finding in its
+strongest form. This is not a reporting gap that hides the problem; the operator is shown 26 stale
+paths, by name, and the run continues into template selection regardless. The whole body is also
+wrapped in `except Exception: pass`, so a drift check that itself throws is indistinguishable from
+a clean checkout.
 
 ### What it cost here, measured
 
@@ -2824,8 +2843,10 @@ ours was.
 1. **Make hard drift on the *selected* backend fatal.** Global drift can stay advisory — 27 stale
    paths in unrelated families should not block a bring-up. But once template selection has
    *picked* an entry, a missing `demo_path` on that entry is not a warning, it is a broken run.
-2. **Print the detail with the warning, not behind `TT_HW_PLANNER_VERBOSE`.** The one line the user
-   sees names no path, so it cannot be acted on without a second command.
+2. **Fix the verbosity guard** — `os.environ.setdefault("TT_HW_PLANNER_VERBOSE", "0")` plus a bare
+   truthiness test means the flag can never be off, and `TT_HW_PLANNER_VERBOSE=0` does not turn it
+   off. Compare against `("", "0", "false")` as `__main__.py:34` already does. (The drift detail
+   itself should stay visible — print it unconditionally rather than by accident.)
 3. **Narrow the `except Exception: pass`.** A drift check that crashes currently reports as a clean
    checkout.
 
@@ -2983,6 +3004,79 @@ another user**. That PID is alive. Classified orphan, it becomes a `git worktree
 2. **`PermissionError` means alive.** Only `ProcessLookupError` means gone.
 3. **Have `worktree-cleanup` print the same status `worktree-list` computes**, so the two can never
    disagree about what is reclaimable.
+
+---
+
+## ★★★ F34 — deleting the model does not delete the model: the overlay store silently restores it, and a from-scratch run is unreachable
+
+**Status: live in this checkout** · severity: two runs from the same HEAD start from different
+states, and the difference is invisible · reported: not yet
+
+To re-run the pipeline cleanly at PCC 0.99, `models/demos/voxtral_tts_full/` was deleted and the
+deletion **committed** (`42e9bee5f7`). HEAD contained no demo directory; `git status` was clean.
+`auto-up` was then launched.
+
+The isolation worktree was created from that HEAD — correctly, and `git log` inside it confirms
+`42e9bee5f7`. Then one line went past:
+
+```
+  [isolation] applied 0 _shared + 1 model overlay(s)
+```
+
+After that line, the worktree contained the **entire previous port**: 63 files, including every
+graduated stub, their `.best_native` / `.last_good_native` graduation snapshots,
+`.bringup_cc_state.json` (16234 B), `bringup_status.json` (5928 B) and the previous run's
+`RUN_REPORT.md` — all stamped with the current run's timestamp, all reinstated on top of a HEAD
+that does not contain them.
+
+The overlay store had retained a whole-directory patch for the model. Nothing in the run says a
+previously-ported demo directory has just been reinstated; the notice is a count of overlays.
+
+**Why this is worse than a surprising default**
+
+1. **A from-scratch run is not reachable through the documented surface.** Delete the model's
+   directory, commit, re-run — and the model comes back. There is no `--no-overlays` /
+   `--from-scratch`.
+2. **Reproducibility inverts.** Two runs from the same commit produce different starting states
+   depending on overlay state that is not in the tree, not in the log, and not in the report.
+3. **It is invisible in exactly the place it matters.** The RUN_REPORT records placements and PCC
+   for what it *believes* it built this run.
+
+`--reverify` does mitigate part of it — it clears restored graduation snapshots so each component
+re-earns its gate — and we passed it. But it is opt-in, it addresses only the markers, and the
+restored *implementations* remain regardless. A run that begins with a finished port is not a
+bring-up, whatever the markers say.
+
+**The documented wipe does not wipe.** `overlay-drop <model_id>` is documented as *"Omit rel_path to
+wipe ALL overlays for the scope."* Run against this model it dropped every patch and left:
+
+```
+scripts/tt_hw_planner/overlays/_localdev_…_voxtral-tts-full/locked_modules.json
+  {"decoder_layer": {"locked_ts": 1786786489.8,
+                     "reason": "children all on device; recomposed as whole-module target"}}
+```
+
+A pin from the previous run, recording a structural decision about `decoder_layer`, surviving the
+command whose stated job is to wipe the scope. It had to be removed by hand.
+
+**A tell in the same log.** The successful overlay was preceded by ~30 lines of the form
+`skipped <path> — git apply --check returned rc=1 … already exists in working directory`. The
+overlay system was largely failing to apply against a tree it had itself just populated; the patch
+that *did* apply was the whole-directory one. The mechanism is noisy about its failures and silent
+about its one consequential success.
+
+### Fixes
+
+1. **Say what was restored, not how many.** `restored models/demos/voxtral_tts_full/ (63 files,
+   incl. 5 graduation markers) from the overlay store` is one line and ends the entire class of
+   confusion.
+2. **Provide `--no-overlays` (or `--from-scratch`)**, and name it in the bring-up docs as the way to
+   reproduce a clean port.
+3. **Make `overlay-drop <scope>` empty the scope** — `locked_modules.json` included — or state what
+   it deliberately preserves and why.
+4. **Never carry graduation markers in an overlay.** Ported source is legitimate to reuse; a
+   "this component already passed its PCC gate" marker earned in a different run under a different
+   threshold is not — see F26 (report what the gate measured) and F29 (the threshold sets quality).
 
 ---
 
