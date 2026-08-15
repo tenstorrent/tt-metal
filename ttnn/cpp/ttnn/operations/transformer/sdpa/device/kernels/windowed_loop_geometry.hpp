@@ -158,3 +158,108 @@ inline WindowedKChunkRange neighborhood_t_k_chunk_range(
     }
     return {k_lo, k_hi};
 }
+
+/**
+ * Step 5 (H/W-band) refinement of the T-band above. Within the T band, the H window is a
+ * contiguous [h_lo, h_hi) row range per frame but the frames are HW apart, so the in-window K is a
+ * SET of runs, not one range. Rather than restructure the compute's k-loop, the reader packs only
+ * the active K chunks (dense) and the writer masks them by their real positions, so the compute
+ * still walks a contiguous [0, N). Reader and writer must agree on the active set exactly, so this
+ * box + membership test is the single source (same contract as windowed_k_chunk_range).
+ *
+ * The box is the union of the chunk's queries' windows, computed conservatively per axis: T from
+ * [qt_min, qt_max] (Step 3), H from [qh_min, qh_max] when the chunk lies in one frame, else the
+ * whole H axis (a frame-straddling chunk can't be H-narrowed cheaply — correct, just less narrow).
+ * W stays full here; the per-(t,h) W band is step 5b. Supersets are always safe: the per-element
+ * mask -inf's whatever the box over-includes.
+ */
+struct NeighborhoodBox {
+    uint32_t t0;
+    uint32_t t1;
+    uint32_t h_lo;
+    uint32_t h_hi;
+};
+
+inline uint32_t nbr_shift_start(uint32_t q, uint32_t len, uint32_t ker) {
+    if (ker > len) {
+        ker = len;
+    }
+    const uint32_t half = ker / 2;
+    const uint32_t last = len - ker;
+    uint32_t start = q < half ? 0u : q - half;
+    if (start > last) {
+        start = last;
+    }
+    return start;
+}
+
+inline NeighborhoodBox neighborhood_box(
+    uint32_t q_chunk,
+    uint32_t Sq_chunk_t,
+    uint32_t valid_Sqt,
+    uint32_t q_tok_offset,
+    uint32_t T,
+    uint32_t H,
+    uint32_t W,
+    uint32_t kt,
+    uint32_t kh,
+    uint32_t tile_height) {
+    const uint32_t HW = H * W;
+    const uint32_t sites = T * HW;
+    const uint32_t q_row_start_tile = q_chunk * Sq_chunk_t < valid_Sqt ? q_chunk * Sq_chunk_t : valid_Sqt;
+    const uint32_t q_lo = q_tok_offset + q_row_start_tile * tile_height;
+    if (q_lo >= sites) {
+        return {0, 1, 0, H};  // padded-tail chunk: degenerate box (its rows are never written)
+    }
+    uint32_t q_hi = q_lo + Sq_chunk_t * tile_height;
+    if (q_hi > sites) {
+        q_hi = sites;
+    }
+    const uint32_t qt_min = q_lo / HW;
+    const uint32_t qt_max = (q_hi - 1) / HW;
+    const uint32_t ker_t = kt > T ? T : kt;
+    const uint32_t t0 = nbr_shift_start(qt_min, T, kt);
+    const uint32_t t1 = nbr_shift_start(qt_max, T, kt) + ker_t;
+
+    uint32_t qh_min;
+    uint32_t qh_max;
+    if (qt_min == qt_max) {
+        qh_min = (q_lo % HW) / W;
+        qh_max = ((q_hi - 1) % HW) / W;
+    } else {
+        qh_min = 0;  // spans frames: H can't be cheaply bounded, keep the whole axis
+        qh_max = H - 1;
+    }
+    const uint32_t ker_h = kh > H ? H : kh;
+    const uint32_t h_lo = nbr_shift_start(qh_min, H, kh);
+    const uint32_t h_hi = nbr_shift_start(qh_max, H, kh) + ker_h;
+    return {t0, t1, h_lo, h_hi};
+}
+
+// A K chunk (flattened tokens [c*chunk_toks, c*chunk_toks + chunk_toks)) is active iff it overlaps
+// the box's H band in some in-band frame: union over t in [t0,t1) of [t*HW + h_lo*W, t*HW + h_hi*W).
+// A chunk touches at most a couple of frames (chunk_toks << HW), so this is O(1) in practice.
+inline bool neighborhood_chunk_active(
+    uint32_t c, uint32_t chunk_toks, uint32_t HW, uint32_t W, uint32_t sites, const NeighborhoodBox& box) {
+    const uint32_t lo = c * chunk_toks;
+    if (lo >= sites) {
+        return false;
+    }
+    uint32_t hi = lo + chunk_toks;  // exclusive token bound of this chunk
+    if (hi > sites) {
+        hi = sites;
+    }
+    const uint32_t f0 = lo / HW;
+    const uint32_t f1 = (hi - 1) / HW;
+    for (uint32_t t = f0; t <= f1; ++t) {
+        if (t < box.t0 || t >= box.t1) {
+            continue;
+        }
+        const uint32_t band_lo = t * HW + box.h_lo * W;
+        const uint32_t band_hi = t * HW + box.h_hi * W;
+        if (lo < band_hi && hi > band_lo) {
+            return true;
+        }
+    }
+    return false;
+}

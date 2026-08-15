@@ -135,9 +135,13 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t nb_kt,
     uint32_t nb_kh,
     uint32_t nb_kw) {
-    // 3D-neighborhood mode (nb_T != 0): per-element mask, K-range narrowed to the T band this Q
-    // chunk can see (H/W stay scattered inside each frame, -inf'd per element). The reader computes
-    // the identical range for its K stream + ctrl CB, so the per-Q-chunk mask counts agree.
+    // 3D-neighborhood mode (nb_T != 0): per-element mask over the ACTIVE K chunks only. The T band
+    // bounds the outer loop; within it the H band makes the in-window K a set of runs (frames are
+    // HW apart), so we pack -- masks are emitted only for chunks the box touches, by their real k
+    // positions, and the reader streams exactly those chunks in the same order, so the compute walks
+    // a dense [0, N). Reader and writer share neighborhood_box + neighborhood_chunk_active, so their
+    // active sets (and per-Q-chunk counts) agree exactly. W stays full inside each active chunk;
+    // out-of-window H/W is -inf'd per element as before.
     if (nb_T != 0) {
         const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
         const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -153,8 +157,16 @@ inline void generate_windowed_mask_for_q_chunk(
             Sk_chunk_t,
             k_num_chunks,
             tt::constants::TILE_HEIGHT);
+        const auto box = neighborhood_box(
+            q_chunk, Sq_chunk_t, valid_Sqt, q_tok_offset, nb_T, nb_H, nb_W, nb_kt, nb_kh, tt::constants::TILE_HEIGHT);
+        const uint32_t HW = nb_H * nb_W;
+        const uint32_t sites = nb_T * HW;
+        const uint32_t chunk_toks = Sk_chunk_t * tt::constants::TILE_HEIGHT;
         CircularBuffer cb_mask(cb_mask_in);
         for (uint32_t k_chunk = nbr_range.k_lo; k_chunk < nbr_range.k_hi; ++k_chunk) {
+            if (!neighborhood_chunk_active(k_chunk, chunk_toks, HW, nb_W, sites, box)) {
+                continue;
+            }
             const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
             cb_mask.reserve_back(mask_chunk_tiles);
             for (uint32_t row = 0; row < Sq_chunk_t; ++row) {

@@ -197,6 +197,7 @@ void kernel_main() {
     uint32_t nb_H = 0;
     uint32_t nb_W = 0;
     uint32_t nb_kt = 0;
+    uint32_t nb_kh = 0;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
@@ -206,8 +207,8 @@ void kernel_main() {
         nb_H = get_arg_val<uint32_t>(argidx++);   // 15: H
         nb_W = get_arg_val<uint32_t>(argidx++);   // 16: W
         nb_kt = get_arg_val<uint32_t>(argidx++);  // 17: kt
-        (void)get_arg_val<uint32_t>(argidx++);    // 18: kh (not needed for the T band)
-        (void)get_arg_val<uint32_t>(argidx++);    // 19: kw
+        nb_kh = get_arg_val<uint32_t>(argidx++);  // 18: kh
+        (void)get_arg_val<uint32_t>(argidx++);    // 19: kw (W band is step 5b; not needed yet)
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -410,9 +411,16 @@ void kernel_main() {
             // Windowed narrowing: this Q chunk's K-chunk range. Pushed to compute over the ctrl CB
             // BEFORE any blocking CB reserve, so compute learns its bounds even while this reader is
             // parked on cb_k space. The writer self-computes the same range from the same tensor.
+            // windowed_k_lo/hi bound this reader's K-loop. For block-diagonal they are also what the
+            // compute processes (streamed contiguously). For 3D-neighborhood they are the outer T band;
+            // the reader then PACKS only the active chunks, so the compute walks a dense [0, N] instead
+            // (nbr_box drives which chunks in the T band are active — see the K-loop skip below).
             uint32_t windowed_k_lo = 0;
             uint32_t windowed_k_hi = k_num_chunks;
+            NeighborhoodBox nbr_box = {0, 1, 0, 0};
             if constexpr (use_windowed_narrowing) {
+                uint32_t ctrl_lo = 0;
+                uint32_t ctrl_hi = k_num_chunks;
                 if (nb_T == 0) {  // block-diagonal narrows via cu_window
                     const auto range = windowed_k_chunk_range(
                         q_chunk,
@@ -426,7 +434,9 @@ void kernel_main() {
                         tt::constants::TILE_HEIGHT);
                     windowed_k_lo = range.k_lo;
                     windowed_k_hi = range.k_hi;
-                } else {  // 3D-neighborhood narrows to the T band (must match the writer's mask loop)
+                    ctrl_lo = windowed_k_lo;
+                    ctrl_hi = windowed_k_hi;
+                } else {  // 3D-neighborhood: T band for the loop, packed active count for the compute
                     const auto range = neighborhood_t_k_chunk_range(
                         q_chunk,
                         Sq_chunk_t,
@@ -441,13 +451,35 @@ void kernel_main() {
                         tt::constants::TILE_HEIGHT);
                     windowed_k_lo = range.k_lo;
                     windowed_k_hi = range.k_hi;
+                    nbr_box = neighborhood_box(
+                        q_chunk,
+                        Sq_chunk_t,
+                        valid_Sqt,
+                        windowed_q_tok_offset,
+                        nb_T,
+                        nb_H,
+                        nb_W,
+                        nb_kt,
+                        nb_kh,
+                        tt::constants::TILE_HEIGHT);
+                    const uint32_t HW = nb_H * nb_W;
+                    const uint32_t sites = nb_T * HW;
+                    const uint32_t chunk_toks = Sk_chunk_t * tt::constants::TILE_HEIGHT;
+                    uint32_t n_active = 0;
+                    for (uint32_t c = windowed_k_lo; c < windowed_k_hi; ++c) {
+                        if (neighborhood_chunk_active(c, chunk_toks, HW, nb_W, sites, nbr_box)) {
+                            ++n_active;
+                        }
+                    }
+                    ctrl_lo = 0;
+                    ctrl_hi = n_active > 0 ? n_active : 1;  // always >= 1 chunk (matches the range contract)
                 }
                 CircularBuffer cb_k_range(cb_id_windowed_k_range);
                 cb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_k_range.get_write_ptr());
-                k_range_ptr[0] = windowed_k_lo;
-                k_range_ptr[1] = windowed_k_hi;
+                k_range_ptr[0] = ctrl_lo;
+                k_range_ptr[1] = ctrl_hi;
                 cb_k_range.push_back(1);
             }
 
@@ -514,6 +546,18 @@ void kernel_main() {
 
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                // 3D-neighborhood packs only the active chunks (the H band is scattered across the T
+                // band); skipping an inactive chunk here must match the writer's mask skip and the
+                // packed count pushed to the ctrl CB above. Block-diagonal (nb_T == 0) streams all.
+                if (nb_T != 0 && !neighborhood_chunk_active(
+                                     k_chunk,
+                                     Sk_chunk_t * tt::constants::TILE_HEIGHT,
+                                     nb_H * nb_W,
+                                     nb_W,
+                                     nb_T * nb_H * nb_W,
+                                     nbr_box)) {
+                    continue;
+                }
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
