@@ -9,6 +9,7 @@ performance, while accepting it on correctness.
 | --- | --- | ---: | ---: |
 | handwritten replay | 839, 839, 839 | 839 | baseline |
 | generated SFPI | 914, 914, 914 | 914 | +75 cycles (+8.94%) |
+| generated, compiler-owned load | 855.5, 855.5, 855.5 | 855.5 | +16.5 cycles (+1.97%) |
 
 The profiler marker is `REDUCE_SDPA_BODY` on PACK/TRISC2. It excludes SFPU
 initialization, prologue, epilogue, packing, and host time. The whole profiled
@@ -53,13 +54,38 @@ pair ordering already matches the replay payload. Replay removes repeated TRISC
 delivery pressure by asking Tensix to reissue an already-recorded fixed binary
 sequence.
 
+The first generated fixture used raw `TTI_SFPLOAD`. Although the linked ELF
+contains the expected load words, GCC sees each as opaque volatile `.ttinsn`
+inline asm, which terminates replay discovery before every compiler-owned
+`SFPSWAP`. Expressing the same load through the SFPI destination-register API
+makes the full eight-word sequence visible to the existing generic post-RA pass.
+The compiler then emits two 8-slot captures and fourteen playbacks, passes the
+same physical golden, and measures `855.5` cycles in each of three fresh device
+processes. This recovers 58.5 of the original 75-cycle deficit without changing
+the compiler or production LLK.
+
+The complete follow-up archive is
+`/localdev/nkapre/reduce-sdpa-compiler-load-bh-silicon-20260815`: both-selector
+correctness, three fresh processes per selector, 794-byte raw/post profiler rows,
+linked ELF/objdump/build headers, provenance, and SHA256 manifest. The earlier
+compiler-visibility proof is
+`/localdev/nkapre/reduce-sdpa-compiler-load-build-v2/pack.text.objdump`.
+
+The leading explanation for the remaining 16.5-cycle gap is capture placement:
+the linked generated body has two static capture sites and fourteen static
+playbacks, but each capture site is inside a dynamic loop and is revisited on
+the backedge. The handwritten LLK records once outside `REDUCE_SDPA_BODY`.
+Matched capture-hoisting A/B must establish full causality; the next compiler
+experiment is therefore safe capture hoisting, not opaque-asm decoding or
+kernel-specific instruction selection.
+
 ## General compiler opportunity
 
-Add late, post-register-allocation Tensix replay formation. Fingerprint repeated
-fixed-encoding Tensix subsequences, record one copy with no execution in a safe
-preheader, and replace eligible occurrences with replay commands. This is not a
-Reduce-SDPA pattern: it applies to any loop containing an identical, replay-safe
-SFPU sequence.
+Finish late, post-register-allocation Tensix replay formation. Keep the payload
+compiler-visible, fingerprint repeated fixed-encoding Tensix subsequences,
+record one copy with no execution in a safe preheader, and replace eligible
+occurrences with replay commands. This is not a Reduce-SDPA pattern: it applies
+to any loop containing an identical, replay-safe SFPU sequence.
 
 Legality must require a fixed instruction encoding after allocation, replay
 capacity, dominance of the recording, no control flow or host-visible side

@@ -96,26 +96,24 @@ namespace
 {
 
 // Compiler-flow counterpart to the eight-instruction LOAD/SWAP replay body in
-// ckernel_sfpu_reduce_custom.h.  Address generation and architectural LREG
-// ownership deliberately remain explicit: this fixture is intended to compare
-// scheduling/code generation, not to silently change the Reduce-SDPA ABI.
-template <sfpi::LRegs Accumulator, std::uint32_t LoadLreg, std::uint32_t Offset>
+// ckernel_sfpu_reduce_custom.h.  Keep the load compiler-owned so the generic
+// post-RA replay pass can see the complete fixed-encoding sequence; a raw
+// TTI_SFPLOAD would become opaque inline asm and split every candidate.
+template <sfpi::LRegs Accumulator, std::uint32_t Offset>
 sfpi_inline void generated_load_max()
 {
-    TTI_SFPLOAD(LoadLreg, InstrModLoadStore::FP16B, ADDR_MOD_3, Offset);
-    __builtin_rvtt_sfprawlreg_access(0, 1u << LoadLreg);
-
     sfpi::vFloat accumulator = sfpi::l_reg[Accumulator];
-    sfpi::vFloat input = sfpi::l_reg[static_cast<sfpi::LRegs>(LoadLreg)];
+    sfpi::vFloat input =
+        sfpi::dst_reg[Offset / sfpi::SFP_DESTREG_STRIDE].mode<sfpi::DataLayout::F16b>(ADDR_MOD_3);
     sfpi::l_reg[Accumulator] = sfpi::max(accumulator, input);
 }
 
 sfpi_inline void generated_reduce_group()
 {
-    generated_load_max<sfpi::LRegs::LReg4, p_sfpu::LREG2, 0>();
-    generated_load_max<sfpi::LRegs::LReg5, p_sfpu::LREG3, 2>();
-    generated_load_max<sfpi::LRegs::LReg6, p_sfpu::LREG2, 16>();
-    generated_load_max<sfpi::LRegs::LReg7, p_sfpu::LREG3, 18>();
+    generated_load_max<sfpi::LRegs::LReg4, 0>();
+    generated_load_max<sfpi::LRegs::LReg5, 2>();
+    generated_load_max<sfpi::LRegs::LReg6, 16>();
+    generated_load_max<sfpi::LRegs::LReg7, 18>();
 }
 
 sfpi_inline void generated_reduce_pass(const std::uint32_t block_height)
@@ -154,7 +152,7 @@ sfpi_inline void calculate_reduce_max_col_subblock_4x2_generated(const std::uint
     ckernel::sfpu::sfpu_reduce_max_col_subblock_4x2_load_initial_values();
     // L0/L1 carry prologue state across the raw transform, while L4--L7 are
     // raw accumulator definitions consumed by generated SFPI.  L2/L3 are
-    // announced precisely at each raw load above.
+    // compiler-owned temporaries produced by the loads above.
     __builtin_rvtt_sfprawlreg_access(0, 0xf3);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     generated_reduce_pass(block_height);
