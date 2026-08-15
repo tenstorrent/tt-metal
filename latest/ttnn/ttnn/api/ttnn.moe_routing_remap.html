@@ -397,7 +397,7 @@ cluster device 3: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0, 0,
 <li><p><strong>routing_weights_tensor</strong> (<em>ttnn.Tensor</em>) – tensor of weights for selected experts, replicated on all devices <cite>[1, total_experts]</cite></p></li>
 <li><p><strong>non_zero_weight_size</strong> (<em>integer</em>) – Total number of selected experts, non-zero weights in routing_weights_tensor.</p></li>
 <li><p><strong>expert_parallel_size</strong> (<em>integer</em>) – Number of devices in a cluster.</p></li>
-<li><p><strong>cluster_axis</strong> (<em>integer</em>) – Device mesh axis of cluster, 0: columns, 1: rows.</p></li>
+<li><p><strong>cluster_axis</strong> (<em>integer</em>) – Device mesh axis of cluster, 0: rows, 1: columns.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>

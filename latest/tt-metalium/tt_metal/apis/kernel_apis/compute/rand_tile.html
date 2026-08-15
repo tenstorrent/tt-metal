@@ -309,11 +309,11 @@
 <h1>rand_tile<a class="headerlink" href="#rand-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14rand_tile_initE8uint32_t">
-<span class="target" id="namespaceckernel_1a96f5684b69fa955f1bff85529c3a9d87"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">rand_tile_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">seed</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14rand_tile_initE8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14rand_tile_initE8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1ac332ebfe998f1afbae20dcd1c4ccf068"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">rand_tile_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">seed</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">stream_id</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14rand_tile_initE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Please refer to documentation for any_init. </p>
+<p>Initializes the random generator with seed + stream_id * 0x9E3779B9 modulo 2^32. Distinct stream IDs domain-separate related deterministic work ranges; stream_id=0 leaves the seed unchanged. </p>
 </dd>
 </dl>
 
@@ -322,7 +322,7 @@
 <span class="target" id="namespaceckernel_1a5b329016a9b1ca2124e8cc7f4623313c"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">rand_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">from</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">scale</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9rand_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise rand on each element of a of a tile in DST register at index tile_index. That is each element is overwritten with a randomly generated float. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise rand on each element of a of a tile in DST register at index tile_index. That is each element is overwritten with a randomly generated float. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. This operation records replay slots 0-15 when scale is finite and at least 2^-95, and slots 0-16 otherwise. Callers sharing the replay buffer with other SFPU operations must reinitialize it as needed. On Wormhole, this operation also programs LREG12 and LREG13. Callers must restore those programmable constants before another SFPU operation relies on them.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -338,23 +338,23 @@
 <tbody>
 <tr class="row-even">
 <td><p>tile_index  </p></td>
-<td><p>The index of the tile in DST register buffer to perform typecast operation  </p></td>
+<td><p>The index of the tile in the DST register buffer  </p></td>
 <td><p>uint32_t  </p></td>
 <td><p>Must be less than the size of the DST register buffer  </p></td>
 <td><p>True  </p></td>
 </tr>
 <tr class="row-odd">
 <td><p>from  </p></td>
-<td><p>Random range lowerbound(inclusive)  </p></td>
-<td><p>uint  </p></td>
-<td><p>Any number  </p></td>
+<td><p>FP32 bit pattern for the inclusive lower bound  </p></td>
+<td><p>uint32_t  </p></td>
+<td><p>Any supported FP32 value  </p></td>
 <td><p>True  </p></td>
 </tr>
 <tr class="row-even">
 <td><p>scale  </p></td>
-<td><p>Random scale rand float in range [from, from + scale]  </p></td>
-<td><p>uint  </p></td>
-<td><p>Must be greater than 0  </p></td>
+<td><p>FP32 bit pattern producing [from, from + scale], inclusively  </p></td>
+<td><p>uint32_t  </p></td>
+<td><p>Must be non-negative; zero produces a constant tile  </p></td>
 <td><p>True  </p></td>
 </tr>
 </tbody>
