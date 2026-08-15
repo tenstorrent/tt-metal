@@ -13,8 +13,10 @@
 //     matmul → c_2, then pack c_2 → c_5 transposed (tile content transposed + indices
 //     swapped) so the receiver can add directly. DM writer NOC-sends c_5 to the
 //     reduction partner. Diagonal cores use this path too: their even-K partial is
-//     symmetric (both (i,j) and (j,i) accumulate the same products in the same order),
-//     so the transposed block is identical to the direct one.
+//     symmetric ((i,j) and (j,i) accumulate the same products in the same order), so the
+//     transposed block matches the direct one — bitwise when multiplies are exact (HiFi4,
+//     the default; lower fidelities pair the src operands asymmetrically, leaving
+//     ulp-level differences).
 //   REDUCE_ACCUMULATOR:
 //     matmul → c_2, then add own c_2 (FP32) + partner's c_5 (BF16) → c_6. DM writer
 //     writes c_6 to DRAM. If MIRROR_OUTPUT is defined, also stage-add+transpose into c_4

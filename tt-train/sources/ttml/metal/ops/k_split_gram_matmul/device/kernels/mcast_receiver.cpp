@@ -24,11 +24,10 @@ void kernel_main() {
 #ifdef REDUCE_RECV
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(6);
     const uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(7));
-    constexpr uint32_t Mpc = get_compile_time_arg_val(8);
-    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t M_block = get_compile_time_arg_val(10);
-    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(11);
-    const uint32_t reduce_ack_sem_addr = get_semaphore(get_compile_time_arg_val(12));
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t M_block = get_compile_time_arg_val(9);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(10);
+    const uint32_t reduce_ack_sem_addr = get_semaphore(get_compile_time_arg_val(11));
     constexpr uint32_t N_block = M_block;
     constexpr uint32_t reduce_block_capacity = M_block * N_block;
 #else
