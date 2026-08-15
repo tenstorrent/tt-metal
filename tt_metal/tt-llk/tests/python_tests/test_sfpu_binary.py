@@ -1600,6 +1600,14 @@ class INPUT_TILE_A(TemplateParameter):
         return f"constexpr std::uint32_t INPUT_TILE_A_VAL = {self.tile_index};"
 
 
+@dataclass
+class BinaryBcastImpl(TemplateParameter):
+    value: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t BINARY_BCAST_IMPL = {self.value}u;"
+
+
 _BCAST_BINARY_OPS = {
     MathOperation.SfpuElwadd: torch.add,
     MathOperation.SfpuElwsub: torch.sub,
@@ -1650,12 +1658,14 @@ def _golden_sfpu_binary_bcast(
         MathOperation.SfpuElwmul,
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    binary_bcast_impl=[0, 1],  # handwritten LLK, compiler-owned SFPI arithmetic
 )
 def test_sfpu_binary_bcast(
     formats,
     bcast_dim,
     mathop,
     dest_acc,
+    binary_bcast_impl,
 ):
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
@@ -1701,6 +1711,7 @@ def test_sfpu_binary_bcast(
             MATH_OP(mathop=mathop),
             SFPU_BCAST_DIM(bcast_dim),
             INPUT_TILE_A(tile_index=0),
+            BinaryBcastImpl(binary_bcast_impl),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
