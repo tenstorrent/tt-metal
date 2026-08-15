@@ -82,6 +82,26 @@ paths are published in all three plan formats, but QSR is deliberately absent
 from the compile-gate matrix until it has a reviewed functional mapping; an
 all-`SKIP_UNMAPPED` lane is not reported as green compilation.
 
+Execution attribution is node-specific.  Before a shared pytest invocation,
+the runner collects each mapped row's selectors independently and records the
+exact concrete node IDs (including every parameterized instance).  The
+checked-in pytest reporter then records setup/call/teardown outcomes by exact
+node ID.  A nonzero aggregate pytest return code is provenance only: a failing
+node fails its owning row, while an unrelated row whose nodes all ran cleanly
+remains `PASS`.  Collection errors and nodes that never produced an outcome
+are explicit `ERROR_COLLECTION` and `ERROR_NOT_RUN` states.  Expected skips do
+not hide failures; a row with passing nodes and no failure passes while its
+skip count remains in `results.json`, and a row with only skips is
+`SKIP_ALL_TESTS`.
+
+The same preflight records the resolved SFPI compiler, binary SHA-256,
+`--version`, the repository pin from `tt_metal/sfpi-version`, and the installed
+`tests/sfpi/sfpi.version`.  Pin drift is always visible in provenance and can
+be made blocking with `--require-compiler-pin`.  Feature probes are attached
+to stable corpus row IDs: for example, a compiler without indexed TopK
+multi-result builtins blocks the TopK row as `BLOCKED_COMPILER_CAPABILITY` but
+does not suppress unrelated Sigmoid, Exp, broadcast, or reduction rows.
+
 Current evidence seeds the program honestly: Welford, Reduce-SDPA, and the
 accurate-BF16 Reciprocal lane are scoped body wins, binary broadcast is exact
 cycle parity, Where and MulInt32 are macro-dependent losses, and TopK requires typed multi-result architectural

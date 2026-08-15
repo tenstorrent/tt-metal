@@ -9,6 +9,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 LLK = ROOT / "tt_metal/tt-llk"
 MANIFEST = HERE / "sfpu_corpus_v2.tsv"
 DEVICE_BASELINE = HERE / "sfpu_device_baseline_v1.tsv"
+PYTEST_PLUGIN = "sfpu_corpus_pytest_plugin"
 EXPECTED = {"logical":164,"bh":152,"wh":138,"qsr":42,"physical_paths":332,"basename_union":143,"legacy_bh":41,"legacy_wh":32,"legacy_qsr":14,"raw":51,"typed":151,"replay":13,"mop":3}
 DISCOVERY_FIELDS = ["id","surface","arches","header_bh","header_wh","header_qsr","raw_tti","typed_sfpi","replay","mop",
                     "functional_modules","perf_modules","mapping_state","notes"]
@@ -21,6 +22,24 @@ GATE_STATUSES = {"not_run", "blocked", "pass", "fail"}
 PERF_STATUSES = {"not_run", "blocked", "measured"}
 SILICON_STATUSES = {"not_run", "blocked", "win", "parity", "loss"}
 CORRECTNESS_METRICS = {"none", "pcc", "exact", "tolerance"}
+
+# Capabilities are attached to complete corpus IDs, never inferred from a test
+# filename.  A missing capability blocks only rows that declare it.
+ROW_REQUIRED_CAPABILITIES = {
+    "legacy__ckernel_sfpu_topk": ("indexed_topk",),
+}
+COMPILER_CAPABILITY_PROBES = {
+    "indexed_topk": r"""
+using vec_t = __xtt_vector;
+void probe(vec_t a, vec_t b, vec_t c, vec_t d,
+           vec_t e, vec_t f, vec_t g, vec_t h) {
+  auto swap = __builtin_rvtt_sfpswap_indexed(a, b, c, d, 1);
+  auto transpose = __builtin_rvtt_sfptransp8(a, b, c, d, e, f, g, h);
+  (void)swap;
+  (void)transpose;
+}
+""",
+}
 
 # Every exception is keyed by the complete stable corpus ID.  There are no
 # basename fragments, substring matches, or inferred semantic classifications.
@@ -223,10 +242,105 @@ def validate(rows):
 def sha(path):
     h=hashlib.sha256(); h.update(path.read_bytes()); return h.hexdigest()
 
+def split_selectors(value):
+    return [x for x in value.split(",") if x and " " not in x]
+
+def row_selectors(row, mode):
+    functional=split_selectors(row["functional_modules"])
+    if mode != "silicon": return functional
+    return sorted(set(functional+split_selectors(row["perf_modules"])))
+
+def expected_sfpi_version(path=None):
+    path=path or ROOT/"tt_metal/sfpi-version"
+    if not path.is_file(): return ""
+    match=re.search(r"^sfpi_version=['\"]([^'\"]+)",path.read_text(),re.MULTILINE)
+    return match.group(1) if match else ""
+
+def compiler_preflight(compiler, arch, capabilities, run, installed_version=None,
+                       expected_version=None):
+    installed_version=installed_version or LLK/"tests/sfpi/sfpi.version"
+    expected_version=expected_version or ROOT/"tt_metal/sfpi-version"
+    expected=expected_sfpi_version(expected_version)
+    installed=installed_version.read_text().strip() if installed_version.is_file() else ""
+    result={"compiler":str(compiler),"compiler_realpath":"","compiler_sha256":"",
+            "compiler_version":"","compiler_version_returncode":None,"expected_sfpi_version":expected,
+            "installed_sfpi_version":installed,"pin_match":bool(expected and installed and expected==installed),
+            "capabilities":{}}
+    if not compiler.is_file():
+        result["status"]="MISSING_COMPILER"; return result
+    result["compiler_realpath"]=str(compiler.resolve())
+    result["compiler_sha256"]=sha(compiler)
+    version=run([str(compiler),"--version"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    result["compiler_version_returncode"]=version.returncode
+    result["compiler_version"]=(version.stdout or "").splitlines()[0] if version.stdout else ""
+    if version.returncode:
+        result["status"]="COMPILER_ERROR"; return result
+    mcpu={"bh":"tt-bh-tensix","wh":"tt-wh-tensix","qsr":"tt-qsr32-tensix"}[arch]
+    for capability in sorted(capabilities):
+        source=COMPILER_CAPABILITY_PROBES[capability]
+        probe=run([str(compiler),f"-mcpu={mcpu}","-std=c++17","-fsyntax-only","-x","c++","-"],
+                  input=source,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+        result["capabilities"][capability]={"available":probe.returncode==0,
+                                             "returncode":probe.returncode,
+                                             "output":probe.stdout or ""}
+    result["status"]="PASS" if result["pin_match"] else "PIN_MISMATCH"
+    return result
+
+def missing_row_capabilities(row_id, preflight):
+    return [cap for cap in ROW_REQUIRED_CAPABILITIES.get(row_id,())
+            if not preflight.get("capabilities",{}).get(cap,{}).get("available",False)]
+
+def pytest_report_command(python, selectors, extra, report, collect_only=False):
+    cmd=[str(python),"-m","pytest","-o","addopts=","-p",PYTEST_PLUGIN,*selectors,*extra,"-q"]
+    if collect_only: cmd.append("--collect-only")
+    return cmd
+
+def invoke_pytest_report(python, cwd, selectors, extra, report, log, env,
+                         collect_only=False, run=subprocess.run):
+    child_env=env.copy()
+    child_env["SFPU_CORPUS_PYTEST_REPORT"]=str(report)
+    prior=child_env.get("PYTHONPATH","")
+    child_env["PYTHONPATH"]=str(HERE)+(os.pathsep+prior if prior else "")
+    cmd=pytest_report_command(python,selectors,extra,report,collect_only)
+    with log.open("w") as f:
+        rc=run(cmd,cwd=cwd,env=child_env,stdout=f,stderr=subprocess.STDOUT).returncode
+    payload=json.loads(report.read_text()) if report.is_file() else {
+        "schema":1,"exitstatus":rc,"collected":[],"collection_errors":[],"reports":{}}
+    return rc,payload
+
+def terminal_outcome(phases):
+    failed=[when for when,data in phases.items() if data.get("outcome")=="failed"]
+    if failed: return "FAIL" if failed==["call"] else "ERROR"
+    call=phases.get("call",{})
+    if call.get("outcome")=="passed": return "PASS"
+    if call.get("outcome")=="skipped" or any(x.get("outcome")=="skipped" for x in phases.values()):
+        return "SKIP"
+    return "NOT_RUN"
+
+def attribute_pytest_row(rec, nodeids, reports, reason, artifact):
+    outcomes={nodeid:terminal_outcome(reports.get(nodeid,{})) for nodeid in sorted(nodeids)}
+    counts={status:sum(value==status for value in outcomes.values())
+            for status in ("PASS","FAIL","ERROR","SKIP","NOT_RUN")}
+    failing=[nodeid for nodeid,status in outcomes.items() if status in {"FAIL","ERROR"}]
+    missing=[nodeid for nodeid,status in outcomes.items() if status=="NOT_RUN"]
+    rec.update(nodeids=sorted(nodeids),outcome_counts=counts,failing_nodeids=failing,
+               missing_nodeids=missing,artifact=str(artifact),reason=reason)
+    if not nodeids:
+        rec["status"]="ERROR_NO_COLLECTED_TESTS"
+    elif failing:
+        rec["status"]="FAIL"
+    elif missing:
+        rec["status"]="ERROR_NOT_RUN"
+    elif counts["PASS"]:
+        rec["status"]="PASS"
+    else:
+        rec["status"]="SKIP_ALL_TESTS"
+
 def emit_summary(run, records, provenance):
     (run/"results.json").write_text(json.dumps({"provenance":provenance,"results":records},indent=2)+"\n")
     with (run/"results.tsv").open("w",newline="") as f:
-        keys=["id","arch","mode","status","reason","artifact",*AUDIT_FIELDS]
+        keys=["id","arch","mode","status","reason","artifact","selectors","nodeids",
+              "outcome_counts","failing_nodeids","missing_nodeids",*AUDIT_FIELDS]
         w=csv.DictWriter(f,keys,delimiter="\t",extrasaction="ignore",lineterminator="\n"); w.writeheader(); w.writerows(records)
     lines=["# SFPU corpus run","",f"- mode: `{provenance['mode']}`",f"- revision: `{provenance['tt_metal_head']}`","",
            "| id | arch | status | semantic C++ | correctness gate | silicon | reason |","|---|---|---|---|---|---|---|"]
@@ -279,6 +393,7 @@ def main():
     ap.add_argument("--run-root",type=pathlib.Path); ap.add_argument("--simulator",type=pathlib.Path); ap.add_argument("--baseline",type=pathlib.Path)
     ap.add_argument("--max-regression-pct",type=float,default=0.0); ap.add_argument("--execute",action="store_true",help="execute the selected mode (otherwise emit a plan)")
     ap.add_argument("--require-executed-mapped",action="store_true",help="fail unless at least one mapped row executed and every mapped row passed")
+    ap.add_argument("--require-compiler-pin",action="store_true",help="block execution when the installed SFPI version differs from tt_metal/sfpi-version")
     ap.add_argument("--allow-hardware",action="store_true"); ap.add_argument("--hardware-lock",type=pathlib.Path,default=pathlib.Path("/tmp/tt-llk-sfpu-silicon.lock"))
     ap.add_argument("--measurements",type=pathlib.Path,help="silicon TSV: id,arch,metric,scope,selector,cycles")
     ap.add_argument("--compare-results",type=pathlib.Path,help="compare an existing results.json to --baseline")
@@ -308,11 +423,11 @@ def main():
     if not a.mode: return 0
     run=(a.run_root or HERE/"runs"/(time.strftime("%Y%m%dT%H%M%SZ",time.gmtime())+f"-{a.arch}-{a.mode}")); run.mkdir(parents=True,exist_ok=False)
     head=subprocess.check_output(["git","-C",str(ROOT),"rev-parse","HEAD"],text=True).strip()
-    prov={"schema":1,"mode":a.mode,"arch":a.arch,"tt_metal_head":head,"manifest_sha256":sha(MANIFEST),"simulator":str(a.simulator or ""),"threshold_pct":a.max_regression_pct,"hardware_lock":str(a.hardware_lock)}
+    prov={"schema":2,"mode":a.mode,"arch":a.arch,"tt_metal_head":head,"manifest_sha256":sha(MANIFEST),"simulator":str(a.simulator or ""),"threshold_pct":a.max_regression_pct,"hardware_lock":str(a.hardware_lock)}
     records=[]
     for r in selected:
-        mods=r["functional_modules" if a.mode!="silicon" else "perf_modules"]
-        if not mods: records.append(record(r,a.arch,a.mode,"SKIP_UNMAPPED","no audited module mapping")); continue
+        selectors=row_selectors(r,a.mode)
+        if not selectors: records.append(record(r,a.arch,a.mode,"SKIP_UNMAPPED","no audited module mapping")); continue
         if a.mode=="silicon" and (r["paired_selector_status"] != "implemented" or r["test_status"] != "pass" or r["correctness_metric"] == "none"):
             records.append(record(r,a.arch,a.mode,"SKIP_CORRECTNESS_NOT_GATED","silicon requires an implemented selector and an explicit passing correctness metric")); continue
         if a.mode=="craq" and (not a.simulator or not a.simulator.is_file()): records.append(record(r,a.arch,a.mode,"SKIP_NO_SIMULATOR","--simulator required")); continue
@@ -320,57 +435,102 @@ def main():
             records.append(record(r,a.arch,a.mode,"SKIP_HARDWARE_NOT_AUTHORIZED","requires --execute --allow-hardware")); continue
         if not a.execute:
             status="SKIP_HARDWARE_NOT_AUTHORIZED" if a.mode=="silicon" else "PLAN_ONLY"
-            records.append(record(r,a.arch,a.mode,status,mods)); continue
-        records.append(record(r,a.arch,a.mode,"QUEUED",mods))
+            records.append(record(r,a.arch,a.mode,status,",".join(selectors))); continue
+        rec=record(r,a.arch,a.mode,"QUEUED","pytest collection pending")
+        rec["selectors"]=selectors
+        records.append(rec)
     queued=[r for r in records if r["status"]=="QUEUED"]
     if queued:
         pydir=LLK/"tests/python_tests"; python=pydir/".venv/bin/python"; log=run/f"{a.mode}.log"
-        mods=sorted({m for r in queued for m in r["reason"].split(",") if m and " " not in m})
-        if a.mode=="silicon":
-            correctness=sorted({m for rec in queued for m in next(x for x in selected if x["id"]==rec["id"])["functional_modules"].split(",") if m and " " not in m})
-            mods=sorted(set(mods)|set(correctness))
         env=os.environ.copy(); env.update({"TT_METAL_HOME":str(ROOT),"SHORT_ARCH":a.arch,
             "SIM_ARCH":{"bh":"blackhole","wh":"wormhole","qsr":"quasar"}[a.arch]})
         if not python.is_file():
-            rc=None; why="missing tt-llk .venv"
-        elif a.mode=="compile":
-            cmd=[str(python),"-m","pytest","-o","addopts=",*mods,"--compile-producer","-q"]; why="compile gate"
-            with log.open("w") as f: rc=subprocess.run(cmd,cwd=pydir,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
-        elif a.mode=="craq":
-            runner=pathlib.Path(os.environ.get("CRAQ_SIM_ROOT","/localdev/nkapre/craq-sim"))/"scripts/perf/llk-sim-perf.sh"
-            cmd=[str(runner),"--sample","1","--run-root",str(run/"craq")]+sum((["--module",m] for m in mods),[])
-            env["SIMULATOR"]=str(a.simulator); why="CRAQ modeled-cycle/functional gate"
-            with log.open("w") as f: rc=subprocess.run(cmd,cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
+            prov["pytest_returncode"]=None
+            for rec in queued:
+                rec["status"]="SKIP_MISSING_ENV"; rec["reason"]="missing tt-llk .venv"
         else:
-            cmd=[str(python),"-m","pytest","-o","addopts=",*mods,"-q"]; why="serialized correctness-plus-silicon gate"
-            lock=a.hardware_lock
-            import fcntl
-            with lock.open("w") as lk, log.open("w") as f:
-                fcntl.flock(lk,fcntl.LOCK_EX); rc=subprocess.run(cmd,cwd=pydir,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
-        for rec in queued:
-            rec["status"]="SKIP_MISSING_ENV" if rc is None else ("PASS" if rc==0 else "FAIL")
-            rec["reason"]=why; rec["artifact"]=str(log) if log.exists() else ""
-        if a.mode=="craq" and rc==0:
-            metric=run/"craq/llk_sim.tsv"; measured=[]
-            if metric.is_file():
-                with metric.open() as f: measured=list(csv.DictReader(f,delimiter="\t"))
+            compiler=LLK/"tests/sfpi/compiler/bin/riscv-tt-elf-g++"
+            required={cap for rec in queued for cap in ROW_REQUIRED_CAPABILITIES.get(rec["id"],())}
+            preflight=compiler_preflight(compiler,a.arch,required,subprocess.run)
+            preflight_path=run/"compiler-preflight.json"
+            preflight_path.write_text(json.dumps(preflight,indent=2,sort_keys=True)+"\n")
+            prov["compiler_preflight"]={k:v for k,v in preflight.items() if k!="capabilities"}
+            prov["compiler_preflight"]["artifact"]=str(preflight_path)
+            prov["compiler_preflight"]["capabilities"]={
+                name:{"available":data["available"],"returncode":data["returncode"]}
+                for name,data in preflight["capabilities"].items()}
             for rec in queued:
-                names=[pathlib.Path(x).name for x in next(x for x in selected if x["id"]==rec["id"])["functional_modules"].split(",")]
-                vals=[float(x["simulated_cycles"]) for x in measured if any(x.get("nodeid","").startswith(n) for n in names) and x.get("simulated_cycles")]
-                if vals:
-                    rec.update(metric="simulated_cycles",scope="craq_program",selector="default",cycles=max(vals))
+                missing=missing_row_capabilities(rec["id"],preflight)
+                if preflight["status"] in {"MISSING_COMPILER","COMPILER_ERROR"}:
+                    rec["status"]="BLOCKED_COMPILER_PREFLIGHT"; rec["reason"]="SFPI compiler preflight failed"
+                elif a.require_compiler_pin and not preflight["pin_match"]:
+                    rec["status"]="BLOCKED_COMPILER_PIN"; rec["reason"]="installed SFPI version does not match tt_metal/sfpi-version"
+                elif missing:
+                    rec["status"]="BLOCKED_COMPILER_CAPABILITY"; rec["reason"]="missing compiler capabilities: "+",".join(missing)
+                if rec["status"]!="QUEUED": rec["artifact"]=str(preflight_path)
+
+            collection_rcs={}; row_nodes={}; collect_extra=["--compile-producer"] if a.mode=="compile" else []
+            for rec in [x for x in queued if x["status"]=="QUEUED"]:
+                stem=re.sub(r"[^A-Za-z0-9_.-]+","_",rec["id"])
+                report=run/f"collect-{stem}.json"; collect_log=run/f"collect-{stem}.log"
+                rc,payload=invoke_pytest_report(python,pydir,rec["selectors"],collect_extra,
+                                                report,collect_log,env,collect_only=True)
+                collection_rcs[rec["id"]]=rc
+                nodeids=set(payload.get("collected",[])); row_nodes[rec["id"]]=nodeids
+                rec["nodeids"]=sorted(nodeids)
+                if rc!=0 or payload.get("collection_errors") or not nodeids:
+                    rec["status"]="ERROR_COLLECTION"; rec["reason"]="row selector collection failed"
+                    rec["artifact"]=str(collect_log)
+            prov["collection_returncodes"]=collection_rcs
+
+            runnable=[x for x in queued if x["status"]=="QUEUED"]
+            mods=sorted({selector for rec in runnable for selector in rec["selectors"]})
+            if runnable and a.mode in {"compile","silicon"}:
+                extra=["--compile-producer"] if a.mode=="compile" else []
+                report=run/f"{a.mode}-pytest.json"
+                if a.mode=="silicon":
+                    import fcntl
+                    with a.hardware_lock.open("w") as lk:
+                        fcntl.flock(lk,fcntl.LOCK_EX)
+                        rc,payload=invoke_pytest_report(python,pydir,mods,extra,report,log,env)
+                    why="serialized correctness-plus-silicon gate"
                 else:
-                    rec["status"]="FAIL"; rec["reason"]="mapped CRAQ row produced no modeled-cycle metric"
-        if a.mode=="silicon" and rc==0:
-            measured=[]
-            if a.measurements and a.measurements.is_file():
-                with a.measurements.open() as f: measured=list(csv.DictReader(f,delimiter="\t"))
-            for rec in queued:
-                hits=[x for x in measured if x.get("id")==rec["id"] and x.get("arch")==a.arch and x.get("cycles")]
-                if hits:
-                    x=hits[-1]; rec.update(metric=x["metric"],scope=x["scope"],selector=x["selector"],cycles=float(x["cycles"]))
-                else:
-                    rec["status"]="FAIL"; rec["reason"]="mapped silicon row produced no scoped device-cycle metric"
+                    rc,payload=invoke_pytest_report(python,pydir,mods,extra,report,log,env)
+                    why="compile gate"
+                prov["pytest_returncode"]=rc
+                prov["pytest_report"]=str(report)
+                for rec in runnable:
+                    attribute_pytest_row(rec,row_nodes[rec["id"]],payload.get("reports",{}),why,log)
+            elif runnable:
+                runner=pathlib.Path(os.environ.get("CRAQ_SIM_ROOT","/localdev/nkapre/craq-sim"))/"scripts/perf/llk-sim-perf.sh"
+                cmd=[str(runner),"--sample","1","--run-root",str(run/"craq")]+sum((["--module",m] for m in mods),[])
+                env["SIMULATOR"]=str(a.simulator)
+                with log.open("w") as f: rc=subprocess.run(cmd,cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
+                prov["pytest_returncode"]=rc
+                metric=run/"craq/llk_sim.tsv"; measured=[]
+                if metric.is_file():
+                    with metric.open() as f: measured=list(csv.DictReader(f,delimiter="\t"))
+                for rec in runnable:
+                    hits=[x for x in measured if x.get("nodeid") in row_nodes[rec["id"]] and x.get("simulated_cycles")]
+                    if hits:
+                        rec.update(status="PASS",reason="CRAQ modeled-cycle/functional gate",artifact=str(log),
+                                   metric="simulated_cycles",scope="craq_program",selector="default",
+                                   cycles=max(float(x["simulated_cycles"]) for x in hits),
+                                   measured_nodeids=sorted({x["nodeid"] for x in hits}))
+                    else:
+                        rec.update(status="ERROR_NOT_RUN",reason="mapped CRAQ row produced no exact-nodeid modeled-cycle metric",artifact=str(log))
+
+            if a.mode=="silicon":
+                measured=[]
+                if a.measurements and a.measurements.is_file():
+                    with a.measurements.open() as f: measured=list(csv.DictReader(f,delimiter="\t"))
+                for rec in runnable:
+                    if rec["status"]!="PASS": continue
+                    hits=[x for x in measured if x.get("id")==rec["id"] and x.get("arch")==a.arch and x.get("cycles")]
+                    if hits:
+                        x=hits[-1]; rec.update(metric=x["metric"],scope=x["scope"],selector=x["selector"],cycles=float(x["cycles"]))
+                    else:
+                        rec["status"]="FAIL"; rec["reason"]="mapped silicon row produced no scoped device-cycle metric"
     failed=False
     if a.require_executed_mapped:
         mapped=[r for r in records if next(x for x in selected if x["id"]==r["id"])["functional_modules"]]

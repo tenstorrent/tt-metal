@@ -1,4 +1,4 @@
-import importlib.util, json, pathlib, subprocess, sys, tempfile, unittest
+import importlib.util, json, os, pathlib, subprocess, sys, tempfile, unittest
 
 P=pathlib.Path(__file__).with_name("sfpu_corpus.py")
 S=importlib.util.spec_from_file_location("sfpu_corpus",P); M=importlib.util.module_from_spec(S); S.loader.exec_module(M)
@@ -111,5 +111,97 @@ class CorpusTest(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             data=json.loads((run/"results.json").read_text())
             self.assertEqual(data["provenance"]["executed_mapped_gate"],"FAIL")
+
+    def test_global_pytest_failure_is_attributed_to_exact_nodeid(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            (root/"test_lanes.py").write_text(
+                "def test_pass():\n    assert True\n\n"
+                "def test_fail():\n    assert False\n")
+            env=os.environ.copy()
+            nodes={}
+            for name in ("test_pass","test_fail"):
+                report=root/f"collect-{name}.json"
+                rc,payload=M.invoke_pytest_report(
+                    pathlib.Path(sys.executable),root,[f"test_lanes.py::{name}"],[],
+                    report,root/f"collect-{name}.log",env,collect_only=True)
+                self.assertEqual(rc,0)
+                nodes[name]=set(payload["collected"])
+            rc,payload=M.invoke_pytest_report(
+                pathlib.Path(sys.executable),root,["test_lanes.py"],[],
+                root/"run.json",root/"run.log",env)
+            self.assertNotEqual(rc,0)
+            passed={"status":"QUEUED"}; failed={"status":"QUEUED"}
+            M.attribute_pytest_row(passed,nodes["test_pass"],payload["reports"],"test",root/"run.log")
+            M.attribute_pytest_row(failed,nodes["test_fail"],payload["reports"],"test",root/"run.log")
+            self.assertEqual(passed["status"],"PASS")
+            self.assertEqual(failed["status"],"FAIL")
+            self.assertEqual(failed["failing_nodeids"],["test_lanes.py::test_fail"])
+
+    def test_function_selector_collects_every_parameterized_nodeid(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            (root/"test_params.py").write_text(
+                "import pytest\n"
+                "@pytest.mark.parametrize('value', [1, 2, 3])\n"
+                "def test_param(value):\n    assert value\n")
+            rc,payload=M.invoke_pytest_report(
+                pathlib.Path(sys.executable),root,["test_params.py::test_param"],[],
+                root/"collect.json",root/"collect.log",os.environ.copy(),collect_only=True)
+            self.assertEqual(rc,0)
+            self.assertEqual(len(payload["collected"]),3)
+            self.assertTrue(all(x.startswith("test_params.py::test_param[") for x in payload["collected"]))
+
+    def test_collection_failure_is_isolated_per_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            (root/"test_one.py").write_text("def test_ok():\n    pass\n")
+            bad_rc,bad=M.invoke_pytest_report(
+                pathlib.Path(sys.executable),root,["test_one.py::missing"],[],
+                root/"bad.json",root/"bad.log",os.environ.copy(),collect_only=True)
+            good_rc,good=M.invoke_pytest_report(
+                pathlib.Path(sys.executable),root,["test_one.py::test_ok"],[],
+                root/"good.json",root/"good.log",os.environ.copy(),collect_only=True)
+            self.assertNotEqual(bad_rc,0)
+            self.assertEqual(bad["collected"],[])
+            self.assertEqual(good_rc,0)
+            self.assertEqual(good["collected"],["test_one.py::test_ok"])
+
+    def test_compiler_capability_blocks_only_declared_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            compiler=root/"compiler"
+            compiler.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = \"--version\" ]; then echo fake-sfpi; exit 0; fi\n"
+                "cat >/dev/null\n"
+                "exit 1\n")
+            compiler.chmod(0o755)
+            expected=root/"sfpi-version"
+            expected.write_text("sfpi_version='9.9.9'\n")
+            installed=root/"sfpi.version"
+            installed.write_text("9.9.9\n")
+            preflight=M.compiler_preflight(
+                compiler,"bh",{"indexed_topk"},subprocess.run,installed,expected)
+            self.assertTrue(preflight["pin_match"])
+            self.assertFalse(preflight["capabilities"]["indexed_topk"]["available"])
+            self.assertEqual(M.missing_row_capabilities("legacy__ckernel_sfpu_topk",preflight),["indexed_topk"])
+            self.assertEqual(M.missing_row_capabilities("metal__ckernel_sfpu_sigmoid_appx",preflight),[])
+
+    def test_compiler_pin_mismatch_is_explicit(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            compiler=root/"compiler"
+            compiler.write_text("#!/bin/sh\necho fake-sfpi\nexit 0\n")
+            compiler.chmod(0o755)
+            expected=root/"sfpi-version"
+            expected.write_text("sfpi_version='2.0'\n")
+            installed=root/"sfpi.version"
+            installed.write_text("1.0\n")
+            preflight=M.compiler_preflight(compiler,"wh",set(),subprocess.run,installed,expected)
+            self.assertEqual(preflight["status"],"PIN_MISMATCH")
+            self.assertFalse(preflight["pin_match"])
+            self.assertEqual(preflight["expected_sfpi_version"],"2.0")
+            self.assertEqual(preflight["installed_sfpi_version"],"1.0")
 
 if __name__=="__main__": unittest.main()
