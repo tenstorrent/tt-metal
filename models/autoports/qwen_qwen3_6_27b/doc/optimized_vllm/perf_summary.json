@@ -1,0 +1,56 @@
+{
+  "model": "Qwen/Qwen3.6-27B",
+  "path": "vLLM TT plugin via models/autoports/qwen_qwen3_6_27b/tt/generator_vllm.py",
+  "shared_config": {
+    "max_model_len": 262144,
+    "mesh": "P300x2 physical 1x4 TP4",
+    "fabric": "FABRIC_1D_RING",
+    "trace_region_size": 200000000,
+    "sample_on_device_mode": "all",
+    "precision": "doc/datatype_sweep/selected_precision_config.json"
+  },
+  "primary_single_user": {
+    "shape": "128 input / 128 output / 1 request / concurrency 1 / max_num_seqs 1 / temperature 0",
+    "before": {
+      "ttft_p50_ms": 4138.572938740253,
+      "tpot_mean_ms": 70.73349911191566,
+      "itl_p50_ms": 55.86138367652893,
+      "itl_p99_ms": 57.502292655408375,
+      "aggregate_output_tok_s": 9.754515902107858,
+      "tpot_decode_t_s_u": 14.137572897641952
+    },
+    "after": {
+      "ttft_p50_ms": 3784.302861429751,
+      "tpot_mean_ms": 61.893432393787414,
+      "itl_p50_ms": 55.83961680531502,
+      "itl_p99_ms": 56.850052531808615,
+      "aggregate_output_tok_s": 10.9917931693809,
+      "tpot_decode_t_s_u": 16.15680309402869
+    }
+  },
+  "ci_serving_burst": {
+    "shape": "100 input / 100 output / 32 requests / unconstrained admission / max_num_seqs 32 / temperature 0",
+    "before": {
+      "ttft_p50_ms": 165476.97726543993,
+      "tpot_mean_ms": 280.0634916624257,
+      "itl_p50_ms": 244.01490110903978,
+      "itl_p99_ms": 578.0926791577798,
+      "aggregate_output_tok_s": 16.78495682319826
+    },
+    "after": {
+      "ttft_p50_ms": 162572.5184814073,
+      "tpot_mean_ms": 279.38098967283486,
+      "itl_p50_ms": 244.1308330744505,
+      "itl_p99_ms": 560.3792246616683,
+      "aggregate_output_tok_s": 17.04890711261236
+    },
+    "headline_decode_metric": false
+  },
+  "optimized_full_model_comparison": {
+    "shape": "canonical batch-1 split-token decode",
+    "decode_t_s_u": 17.467,
+    "serving_fraction": 0.925
+  },
+  "device_profiler": null,
+  "device_profiler_reason": "Serving-stage profiler collection explicitly prohibited by the goal contract"
+}

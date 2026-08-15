@@ -81,6 +81,7 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         self.max_seq_len = 0 if generator is None else generator.model.max_context
         self._decode_ready = False
         self._last_page_table: torch.Tensor | None = None
+        self._sampling_contract_key: tuple[Any, ...] | None = None
 
     @classmethod
     def get_max_tokens_all_users(
@@ -199,6 +200,38 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         gen = self._require_generator()
         if sampling_params is not None:
             gen.sampling.reset_sampling_params(format_sampling_params(sampling_params, 32))
+
+    @staticmethod
+    def _sampling_key(sampling_params) -> tuple[Any, ...]:
+        """Return the scheduler-owned sampler state that requires device refresh.
+
+        Seeds are deliberately excluded: ``SeedManager`` owns their per-token
+        advancement and refresh.  The remaining fields are exactly the state
+        consumed by ``SamplingGenerator.reset_sampling_params``.
+        """
+
+        formatted = format_sampling_params(sampling_params, 32)
+
+        def freeze(value):
+            if isinstance(value, torch.Tensor):
+                return tuple(value.reshape(-1).tolist())
+            if isinstance(value, list):
+                return tuple(value)
+            return value
+
+        return tuple(
+            freeze(getattr(formatted, name, None))
+            for name in (
+                "top_k",
+                "top_p",
+                "temperature",
+                "enable_log_probs",
+                "num_logprobs",
+                "presence_penalty",
+                "frequency_penalty",
+                "repetition_penalty",
+            )
+        )
 
     @staticmethod
     def _format_slot_sampling(sampling_params, slots):
@@ -324,12 +357,16 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
                 active_mask=start_pos.reshape(-1)[: gen.model.batch] >= 0,
             )
             return host_logits.unsqueeze(1)
+        sampling_key = self._sampling_key(sampling_params)
+        sampling_changed = sampling_key != self._sampling_contract_key
         gen.sampling.apply_decode_state(
             [sampling_params],
             reset_batch=reset_batch,
+            refresh_sampling_params=sampling_changed,
             prompt_tokens=prompt_tokens,
             output_tokens=output_tokens,
         )
+        self._sampling_contract_key = sampling_key
         start_values = start_pos.reshape(-1)[: gen.model.batch].tolist()
         active_seed_slots = [slot for slot, pos in enumerate(start_values) if int(pos) >= 0]
         formatted_params = format_sampling_params(sampling_params, 32)

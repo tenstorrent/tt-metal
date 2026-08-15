@@ -185,6 +185,7 @@ class SamplingGenerator:
         sampling_params_chunks: list,
         *,
         reset_batch: bool = False,
+        refresh_sampling_params: bool = True,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
@@ -206,7 +207,6 @@ class SamplingGenerator:
 
         if chunks_per_model == 1:
             formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
-            self.reset_sampling_params(formatted_params)
         else:
             # Row-sharded case: format each chunk to max_batch_size, concatenate.
             # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
@@ -220,6 +220,8 @@ class SamplingGenerator:
                 else:
                     concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
             formatted_params = SamplingParams(**concat_fields)
+
+        if refresh_sampling_params:
             self.reset_sampling_params(formatted_params)
 
         if reset_batch:
