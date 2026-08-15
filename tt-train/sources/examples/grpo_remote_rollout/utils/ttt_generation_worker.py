@@ -125,11 +125,14 @@ class TttGenerationWorker:
                 "TttGenerationWorker requires on-device sampling support, but model.sampling "
                 "is None for this configuration (vocab_size / mesh shape combination unsupported)."
             )
+        # Per-slot lists (not scalars): scalar SamplingParams fields are padded
+        # to the greedy default on non-slot-0 requests by scatter_sampling_params_to_slots.
+        n = self._global_batch_size
         self._sampling_params = SamplingParams(
-            temperature=float(temperature),
-            top_k=int(top_k),
-            top_p=float(top_p),
-            seed=seed,
+            temperature=[float(temperature)] * n,
+            top_k=[int(top_k)] * n,
+            top_p=[float(top_p)] * n,
+            seed=[seed] * n if seed is not None else None,
         )
 
     def generate(
