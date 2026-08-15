@@ -1,6 +1,7 @@
 # Optimized multichip decoder work log
 
-Stage implementation/evidence commit: `c78b0d5959a` (local only; not pushed).
+Local stage commits (not pushed): `c78b0d5959a`, `c4821fe5156`,
+`d854bfea7ab`, and final evidence refresh `27d88aa9ddc`.
 
 ## 2026-08-15 inventory and operation-topology audit
 
