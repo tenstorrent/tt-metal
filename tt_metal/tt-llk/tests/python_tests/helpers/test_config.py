@@ -961,6 +961,12 @@ class TestConfig:
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
 
+        # Test-only A/B selector for the compiler-owned MulInt32 corpus probe.
+        # The production LLK remains untouched; both functional and perf tests
+        # consume this define through tests/helpers/include/sfpu_operations.h.
+        if os.environ.get("TT_LLK_MUL_INT32_GENERATED") == "1":
+            OPTIONS_COMPILE += "-DTT_LLK_MUL_INT32_GENERATED "
+
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
     def build_shared_artefacts(self):

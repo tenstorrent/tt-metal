@@ -13,6 +13,87 @@
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 
+#ifdef TT_LLK_MUL_INT32_GENERATED
+namespace test_utils::mul_int32_generated {
+
+#if !(__riscv_xtttensixbh || __riscv_xtttensixqsr)
+template <unsigned SHIFT_A, unsigned SHIFT_B>
+inline sfpi::vFloat wh_chunk_product(const uint offset_a, const uint offset_b) {
+    constexpr unsigned mask = 0x3ff;
+    sfpi::vUInt a = sfpi::dst_reg[offset_a].mode<sfpi::DataLayout::U32>();
+    sfpi::vUInt b = sfpi::dst_reg[offset_b].mode<sfpi::DataLayout::U32>();
+    sfpi::vInt a_chunk = sfpi::as<sfpi::vInt>((a >> SHIFT_A) & mask);
+    sfpi::vInt b_chunk = sfpi::as<sfpi::vInt>((b >> SHIFT_B) & mask);
+    return sfpi::convert<sfpi::vFloat>(a_chunk, sfpi::RoundMode::Nearest) *
+           sfpi::convert<sfpi::vFloat>(b_chunk, sfpi::RoundMode::Nearest);
+}
+#endif
+
+// Exact low-32-bit multiplication expressed entirely through typed SFPI
+// values.  U32 loads/stores intentionally preserve the input bit patterns:
+// signed multiplication has the same low 32 bits as unsigned multiplication.
+template <int ITERATIONS>
+inline void calculate(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Typed dst_reg indices are in 32-lane rows.  Raw TT_SFPLOAD offsets use
+    // 64 here, which is the easy (and catastrophic) unit mismatch this A/B
+    // probe is meant to keep visible.
+    constexpr uint dst_tile_size = 32;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+#if __riscv_xtttensixbh || __riscv_xtttensixqsr
+        sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<sfpi::DataLayout::U32>();
+        sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<sfpi::DataLayout::U32>();
+        // BH has a typed 24x24->48 primitive.  This is the standard radix-23
+        // identity, retaining exactly the terms that contribute modulo 2^32.
+        sfpi::vUInt a_hi = a >> 23;
+        sfpi::vUInt b_hi = b >> 23;
+        sfpi::vUInt lo = sfpi::fractional_mul(a, b, sfpi::FractionalHalf::Low);
+        sfpi::vUInt hi = sfpi::fractional_mul(a, b, sfpi::FractionalHalf::High);
+        hi += sfpi::fractional_mul(a_hi, b, sfpi::FractionalHalf::Low);
+        hi += sfpi::fractional_mul(a, b_hi, sfpi::FractionalHalf::Low);
+        sfpi::vUInt result = lo + (hi << 23);
+#else
+        // WH has no integer multiply instruction.  Radix 2^10 keeps every
+        // chunk product and coefficient below 2^23, so FP32 arithmetic and
+        // the 2^23 mantissa-extraction conversion are exact (no saturation).
+        const uint offset_a = dst_index_in0 * dst_tile_size;
+        const uint offset_b = dst_index_in1 * dst_tile_size;
+        constexpr float bias = 8388608.0f;
+
+        // Build and consume one radix coefficient at a time.  Reloading the
+        // source chunks is deliberate: it bounds live SFPU values below the
+        // eight-register architectural file instead of relying on spills.
+        sfpi::vUInt result = sfpi::exman(wh_chunk_product<0, 0>(offset_a, offset_b) + bias);
+        sfpi::vFloat coefficient =
+            wh_chunk_product<0, 10>(offset_a, offset_b) + wh_chunk_product<10, 0>(offset_a, offset_b) + bias;
+        result += sfpi::vUInt(sfpi::exman(coefficient)) << 10;
+        coefficient = wh_chunk_product<0, 20>(offset_a, offset_b) +
+                      wh_chunk_product<10, 10>(offset_a, offset_b) +
+                      wh_chunk_product<20, 0>(offset_a, offset_b) + bias;
+        result += sfpi::vUInt(sfpi::exman(coefficient)) << 20;
+        coefficient = wh_chunk_product<0, 30>(offset_a, offset_b) +
+                      wh_chunk_product<10, 20>(offset_a, offset_b) +
+                      wh_chunk_product<20, 10>(offset_a, offset_b) +
+                      wh_chunk_product<30, 0>(offset_a, offset_b) + bias;
+        result += sfpi::vUInt(sfpi::exman(coefficient)) << 30;
+#endif
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<sfpi::DataLayout::U32>() = result;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace test_utils::mul_int32_generated
+
+namespace ckernel::sfpu {
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void mul_int32_generated(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    test_utils::mul_int32_generated::calculate<ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+}
+}  // namespace ckernel::sfpu
+#endif
+
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
@@ -2050,8 +2131,20 @@ void call_binary_sfpu_operation(
         // plain INT32 (two's-complement dest bits), so the sign-magnitude packer only
         // round-trips non-negative results; the test keeps operands positive with a
         // product < 2^31 (see test_sfpu_binary_mul_int32).
+#ifdef TT_LLK_MUL_INT32_GENERATED
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            mul_int32_generated,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+#else
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+#endif
     }
     else if constexpr (BINOP == BinaryOp::ISCLOSE)
     {
