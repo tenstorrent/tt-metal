@@ -1,71 +1,133 @@
-# Mistral Small 24B Instruct 2501 — TTI release handoff
+# Mistral Small 24B Instruct 2501 — authoritative v10 TTI release
 
-## Status
+## Final classification
 
-- Final classification: `release-workflow-fail` and `readiness-fail`.
-- The native v9 release workflow exited 1. Its immutable native report is `native_release_report.md` / `.json` and remains authoritative: two accuracy rows failed and the benchmark task exited before producing a block.
-- The benchmark harness defect was repaired afterward and the preserved acceptance-target run was regraded through the native TTI parser, target checker, acceptance checker, and report generator. `benchmark_report.md` / `.json` is a supplemental component report only; it records Benchmarks `PASS` (1/1) and does not convert the release workflow to PASS.
-- No `known_issues` masks or release waivers are declared. The remaining unwaived quality gaps are IFEval 75.6635% versus 78.755% and GPQA flexible-extract 38.8889% versus 40.3% (35/90, two answers short).
+- `release-workflow-fail`
+- `readiness-fail`
 
-## Scope and implementation
+The native release workflow reached a terminal report and failed two mandatory
+quality gates. It also exposed two independent serving failures. AutoFix repaired
+both serving defects and the failed benchmark/spec components were rerun through
+the native TTI workflows on the corrected exact server.
 
-- Target implementation: `models/autoports/mistralai_mistral_small_24b_instruct_2501`; the copied spec's `impl.code_path` matches it.
-- Server selector: `TT_MISTRAL_TEXT_VER=mistral_small_24b_autoport`.
-- HF model: `mistralai/Mistral-Small-24B-Instruct-2501`.
-- Server mode: external OpenAI-compatible autoport vLLM API on P300X2; no Docker and no stock `models/tt_transformers` or `models/demos` implementation.
-- Serving context remained 32768 with block size 32, fixed batch/max sequences 32, `max_num_batched_tokens=32768`, engine seed 9472, device sampling `all`, a 200,000,000-byte trace region, and `FABRIC_1D`.
+TTI has no generalized reports-only CLI, but its native `ReportSchema`,
+acceptance, and `ReportGenerator` primitives support lossless block aggregation.
+`final_reports_merge_v10.md` / `.json` combines the two retained valid eval
+blocks with the corrected 13 benchmark blocks and corrected two spec blocks. It
+is provenance-stamped with all three source paths and SHA256s. Its honest final
+acceptance remains FAIL with exactly the two quality blockers: Benchmarks PASS
+(1/13 passed, 12 NA), Spec Tests PASS (1/1), Evals FAIL (0/2). It is a
+reports-only native schema merge, not a claim that a second monolithic release
+command reran the valid evaluations.
 
-## Provenance
+No `known_issues` mask, score override, release waiver, implementation
+substitution, reduced context, or threshold change was used.
 
-- `runtime_model_spec_v9_immutable.json` is the exact runtime spec written by TTI for the v9 invocation. It records tt-metal base `1529e332a1c37937a682ba04b77e7dc3418f2589` and vLLM base `6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e`.
-- The launch checkout contained uncommitted changes. Logs demonstrate the launch configuration and observed behavior, but do not cryptographically attribute v9 to later vLLM commit `0e5e6495ac0a39e7c16a925140547cfb4a2e3030` or TTI commit `3e933fbbaaf71fd4859b017f8f08570e39834c09`.
-- The copied `release_spec.json` is the current corrected source spec, not an immutable record of every byte used at launch. It contains no quality masks. Use the immutable runtime spec for run provenance.
+## Exact scope
 
-## Workflow and CI-subset evidence
+- Implementation:
+  `models/autoports/mistralai_mistral_small_24b_instruct_2501`
+- Selector: `TT_MISTRAL_TEXT_VER=mistral_small_24b_autoport`
+- Model: `mistralai/Mistral-Small-24B-Instruct-2501`
+- Device: P300X2, four local Blackhole p300c chips, `MeshShape(1, 4)`
+- Server: external OpenAI-compatible TT vLLM API; no Docker and no stock model
+  implementation
+- Context/config: block size 32, max model length 32768, max sequences 32,
+  max batched tokens 32768, seed 9472, device sampling `all`, trace region
+  200,000,000 bytes, `FABRIC_1D`
+- TTI workflow checkout:
+  `b118a82c59d6a3b682253ff170ac4fe2990a300f`
+- tt-metal base: `5bab286dc7fb063f4f435c840af64359fe4bf533`
+- final nested vLLM: `aab6d846caf95c5e9cf8038f3338650a9132c383`
 
-The v9 release command used workflow `release`, tool `vllm`, device `p300x2`, external server `http://127.0.0.1:8000`, `--limit-samples-mode ci-nightly`, `--skip-system-sw-validation`, and `--disable-trace-capture`; the complete normalized arguments are in `runtime_model_spec_v9_immutable.json` and the client log.
+`runtime_model_spec_v10_native.json` is the TTI-written immutable spec for the
+terminal native release report; it records nested vLLM commit
+`971ee6cfcdd97a36a98e26f96ff7dda08441d219`, after the first repair. The current
+`release_spec.json` records final nested commit `aab6d846...`, after the second
+repair, and contains no masks.
 
-- IFEval used the CI-nightly 0.2 subset: 109/109 samples completed operationally, score 75.6635%, below the configured 78.755% threshold.
-- GPQA used the CI-nightly 0.2 subset: 90/90 samples completed through 13 preemptions, score 38.8889%, below the configured 40.3% threshold. There were no request, transport, page, slot, retry, EngineCore, or fatal errors in that run.
-- These are CI-subset scores compared with the workflow's configured thresholds; they are not unrestricted full-dataset accuracy claims.
-- Measured v9 durations were approximately 18m34s for the 0.2 IFEval subset, 73m05s for the 0.2 GPQA subset, and 19m53s for spec tests. A simple five-times projection for unrestricted evals plus the measured spec run is about 7h58m before setup/report overhead. That exceeded the three-hour release watchdog/reservation window, so `ci-nightly` was used; the projection is scheduling guidance, not performance evidence.
-- Spec/API conformance passed its two report blocks and all 22 parametrized vLLM chat-completion cases.
+## Native terminal release outcome
 
-The original benchmark task failed before requests because the benchmark environment's cached Transformers 5 Mistral tokenizer lacked `is_fast`. After the compatibility fix, the exact acceptance-target point completed 8/8 requests with zero failures: mean TTFT 1272.74 ms, mean TPOT 19.19 ms, and decode throughput 34.50 tokens/s. The corrected grader selects the strictest configured measurable tier, so a spec with only functional targets is explicitly PASS rather than NA.
+`native_release_report.md` and `.json` are the complete terminal report emitted
+by the native `release` workflow. Its acceptance status is FAIL:
 
-## Prompt and qualitative evidence
+- IFEval completed 109/109 samples operationally and scored
+  72.55740423987976%, below the 78.755% requirement.
+- GPQA completed 90/90 samples operationally and scored
+  38.88888888888889% flexible extract, below the 43.035% requirement.
+- The configured 128-input/128-output, concurrency-1 benchmark point completed
+  8/8 and passed all functional performance targets.
+- The next 32-concurrency benchmark point killed EngineCore because stale
+  device-state slots survived an idle cleanup, so later benchmark/spec rows in
+  that terminal report are not valid conformance evidence.
 
-- Both evals used the HF-declared instruct chat template.
-- GPQA used five official demonstrations and a held-out question. `gpqa_prompt_format_v2.json` records the inspectable seed-42 prompt construction metadata; the scored target remains the held-out item.
-- `vllm_qualitative_prompt_format.json`, `vllm_qualitative_verdict.md`, `vllm_non_aligned_prompt_check.json`, and `vllm_adapter_unit_tests.log` are small, inspectable evidence copied from the completed optimized-vLLM stage. They are supporting prompt/adapter checks, not replacements for release accuracy gates.
-- No raw eval sample JSONL or generated completion corpus is copied here.
+The evaluations used `--limit-samples-mode ci-nightly` (0.2 dataset limit), the
+HF-declared instruct chat template, deterministic seed 42, and the full 32768
+serving context. These are CI-subset scores, not unrestricted full-dataset
+claims. Aggregate evidence is in `eval_v10_aggregate_metadata.json`; raw sample
+JSONL and generated completion corpora are excluded.
 
-## Trace warning classification
+## AutoFix results
 
-`server_release_v9.log` contains one allocator warning at startup: device buffers were allocated while a trace was active. AutoDebug identified the first post-capture KV-cache reset as the unsupported ordering: its first `ttnn.fill` program compilation occurred after model and sampling traces had been retained. Commit `993aabf2f73b911062c3bb59412af0b5fdb3e456` compiles the in-place reset in the eager pre-capture phase and retains the post-capture reset as a program-cache hit. On the exact committed server, `server_tracefix_smoke.log` contains zero active-trace allocator warnings; health, models, deterministic chat, and a one-request non-page-aligned benchmark all returned HTTP 200. This closes the allocator-warning defect without claiming that the old allocation order was safe.
+The first failure occurred during GPQA at an exact KV page boundary: host token
+2,429 versus device position 2,432. Nested commit `971ee6c...` reserves the full
+three-token TT async pipeline lookahead. A 2,399-input/96-output hardware control
+crossed the failing boundary, completed 1/1, and the resumed GPQA completed
+90/90.
 
-The Mistral regex warning remains during the separate APIServer processor/chat-template warmup probe. It does not describe the registered live request tokenizer: `tokenizer_regex_ab.json` compares exact preserved IFEval and GPQA prompt messages, and all six live-plugin token sequences exactly match HF `fix_mistral_regex=true` while all six differ from `false`. The warning is noisy, but the live-tokenizer-bug hypothesis is refuted and does not justify rerunning the quality evaluations.
+The second failure followed the benchmark's single-request idle transition:
+32 historical state-slot owners remained before 31 new prefills. Nested commit
+`aab6d846...` reclaims only older off-batch owners, only under impossible slot
+pressure, while preserving immediately recent potentially live state. The exact
+lifecycle control completed 8/8 at concurrency 1 immediately followed by
+256/256 at concurrency 32, with zero failures.
 
-## Fixes and verification
+Focused host regressions passed 10 tests. Full reasoning and regression contracts
+are in `AUTODEBUG_V10.md` and `AUTOFIX.md`; compact hardware metrics are in
+`hardware_controls_v10.json`.
 
-- Production fixes retained: request-slot release; draining pending async decode token/position feedback before preemption repack; one lookahead KV token for async scheduling; cached Mistral tokenizer `is_fast` compatibility without tokenizer/template substitution; and GPQA few-shot/parser plus flexible-score-key corrections.
-- Remediation removes the invalid IFEval/GPQA masks and fixes functional-only benchmark grading, with a regression test.
-- Trace remediation precompiles the in-place KV-cache reset before trace capture. A focused event-order regression records reset -> capture -> reset; the complete autoport full-model test file passed 9 tests with 4 hardware-gated skips, and the nested plugin tokenizer suite passed all 6 tests.
-- Focused host tests cover scheduler/preemption, tokenizer adaptation, GPQA/config, report acceptance, target grading, and model-spec parsing. Exact remediation output is recorded in `remediation_tests.log`.
-- AutoFix final status remains `release-workflow-fail` / `readiness-fail`: the two mandatory quality gates remain below threshold, no waiver is valid, and the warning investigations found no surviving mechanism that predicts a score increase. A repeated full IFEval/GPQA run was therefore not presented as a fix or used to mask the failure.
+## Corrected native components
 
-## Cleanup
+The corrected benchmark used the native 13-point TTI sweep from 128 through
+16,384 input tokens. Only the spec's 128/128 concurrency-1 reference point is
+graded; the other 12 rows are explicitly NA/ungraded information rows. The
+graded point completed 8/8 with zero failures, mean TTFT 535.42 ms, mean TPOT
+18.94 ms, output throughput 43.53 tokens/s, and passed the configured functional
+targets (TTFT 1400 ms, per-user throughput 50 tokens/s, decode throughput 32
+tokens/s, tolerance 5%). See `benchmark_report_v10_slotfix.md` / `.json`.
 
-- Server/client processes and the `autoport-vllm-mistral-tti` tmux session were stopped; the TTI `.env` was removed.
-- The exact-server AutoFix smoke was stopped with no residual API-server or EngineCore process. `tt-smi -ls --local`, reset, and a final `tt-smi -ls --local` completed successfully; all four Blackhole p300c UMD chips were visible and resettable afterward, and a fresh `MeshShape(1, 4)` opened and closed successfully.
+The corrected native spec workflow reran logger fork safety plus all 22
+parametrized vLLM chat-completion conformance cases. All 22 passed; the task
+emitted two blocks, zero failures, Acceptance PASS, and rc=0 in 1084.8 seconds.
+See `spec_report_v10_slotfix.md` / `.json` for the authoritative component
+result.
 
-## Artifact inventory
+## Cleanup and artifact policy
 
-- Native outcome: `native_release_report.md`, `native_release_report.json`, `runtime_model_spec_v9_immutable.json`.
-- Pre-v9 ordering evidence: `pre_v9_benchmark_8of8.log` and its byte-exact TTI-written `pre_v9_benchmark_8of8_runtime_spec.json`. This was the benchmark portion of an earlier release attempt, not the later v9 workflow: it records 8/8 requests, zero failures, and predates v9.
-- Supplemental benchmark: `benchmark_report.md`, `benchmark_report.json`, `benchmark_raw_v9_fixed.json`, `benchmark_smoke_v9_fixed.json`.
-- Aggregate eval evidence: `ifeval_v9_results.json`, `gpqa_v9_results.json`, `eval_v9_aggregate_metadata.json`.
-- AutoFix evidence: `tokenizer_regex_ab.json`, `server_tracefix_smoke.log`, `chat_tracefix_smoke.json`, `benchmark_tracefix_smoke.log`, and `benchmark_tracefix_smoke.json`.
-- Prompt/qualitative evidence: `gpqa_prompt_format_v2.json`, `gpqa_v5_enginecore_failure_metadata.json`, `vllm_qualitative_prompt_format.json`, `vllm_qualitative_verdict.md`, `vllm_non_aligned_prompt_check.json`, `vllm_adapter_unit_tests.log`.
-- Configuration and logs: `release_spec.json`, `client_release_v9.log`, `server_release_v9.log`, `remediation_tests.log`.
-- Excluded: raw eval sample JSONL, caches, weights, tensor dumps, profiler bulk, `.env`, and secrets.
+The production server was stopped after all component work; no API server,
+EngineCore, TTI client, benchmark process, or port-8000 listener remained.
+Bounded local `tt-smi` list/reset/list succeeded for UMD IDs 0, 1, 2, and 3;
+all four Blackhole p300c chips remained visible and resettable. A fresh
+`MeshShape(1, 4)` then opened and closed successfully.
+
+Committed v10 artifacts are deliberately small and inspectable:
+
+- reports-only final acceptance: `final_reports_merge_v10.md` / `.json`
+- terminal native release: `native_release_report.md` / `.json`
+- native provenance: `runtime_model_spec_v10_native.json`, `release_spec.json`
+- corrected component reports and TTI-written specs:
+  `benchmark_report_v10_slotfix.md` / `.json`,
+  `runtime_model_spec_v10_benchmark_slotfix.json`,
+  `spec_report_v10_slotfix.md` / `.json`,
+  `runtime_model_spec_v10_spec_slotfix.json`
+- aggregate quality/control evidence: `eval_v10_aggregate_metadata.json`,
+  `hardware_controls_v10.json`, `remediation_tests_v10.log`
+- ordered hardware controls: `boundary_control_v10.log`,
+  `slot_control_order1_c1_n8_v10.log`,
+  `slot_control_order2_c32_n256_v10.log`
+- diagnosis: `AUTODEBUG_V10.md`, `AUTOFIX.md`
+
+Excluded: weights, tensor dumps, caches, raw per-request benchmark JSON, raw eval
+sample JSONL, generated completion corpora, profiler bulk, `.env`, and secrets.
+Older v9-named files in this directory remain historical evidence and are not
+the authoritative v10 result.

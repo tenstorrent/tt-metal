@@ -1,0 +1,723 @@
+{
+    "metadata": {
+        "model_name": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "device": "P300X2",
+        "generated_at": "2026-08-15T02:11:57.830327+00:00",
+        "report_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_final_reports_merge_2026-08-15_02-10-04",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "native reports-only schema merge: retained release eval blocks + corrected benchmarks report + corrected spec_tests report",
+        "runtime_model_spec_json": "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/release_spec.json",
+        "model_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_lookahead3",
+        "model_repo": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "5bab286dc7fb063f4f435c840af64359fe4bf533",
+        "vllm_commit": "aab6d846caf95c5e9cf8038f3338650a9132c383",
+        "model_impl": "mistral-small-24b-2501-autoport",
+        "reports_only_aggregation": true,
+        "source_reports": [
+            "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/release_cache_lookahead3/workflow_logs/reports_output/release/data/report_data_id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_lookahead3_2026-08-14_22-54-25.json",
+            "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/component_cache_slotfix/workflow_logs/reports_output/benchmarks/data/report_data_mistralai__Mistral-Small-24B-Instruct-2501_2026-08-15T015146+0000.json",
+            "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/spec_cache_slotfix/workflow_logs/reports_output/spec_tests/data/report_data_id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_lookahead3_2026-08-15_02-10-04.json"
+        ],
+        "source_report_sha256": {
+            "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/release_cache_lookahead3/workflow_logs/reports_output/release/data/report_data_id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_lookahead3_2026-08-14_22-54-25.json": "df4adc372f6280208219828cca975a3f15d45a982b74d262dd47a41bc9edfc9c",
+            "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/component_cache_slotfix/workflow_logs/reports_output/benchmarks/data/report_data_mistralai__Mistral-Small-24B-Instruct-2501_2026-08-15T015146+0000.json": "ca6d2a0d237aff00b4e0337789b4270fea035336a5b0819ad18a8724137fc9a1",
+            "/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/spec_cache_slotfix/workflow_logs/reports_output/spec_tests/data/report_data_id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_lookahead3_2026-08-15_02-10-04.json": "fd1dfe160ae3d2d7f0e7772f3dd149e9183bd6df888e5f1c955bfe9a904f9a27"
+        }
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "meta_ifeval",
+                "executed_task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": 82.9,
+                "published_score_ref": "https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks",
+                "gpu_reference_score": 82.9,
+                "gpu_reference_score_ref": "https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks",
+                "score": 72.55740423987976,
+                "ratio_to_published": 0.8752400993954131,
+                "ratio_to_reference": 0.8752400993954131,
+                "accuracy_check": 3
+            },
+            "title": "LLM Eval \u2014 meta_ifeval",
+            "task_type": "llm",
+            "id": "Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "task_name": "meta_ifeval",
+                "executed_task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": 82.9,
+                "published_score_ref": "https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "meta_gpqa_cot",
+                "executed_task_name": "gpqa_main_official_cot_n_shot",
+                "tolerance": 0.05,
+                "published_score": 45.3,
+                "published_score_ref": "https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks",
+                "gpu_reference_score": 45.3,
+                "gpu_reference_score_ref": "https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks",
+                "score": 38.88888888888889,
+                "ratio_to_published": 0.8584743684081434,
+                "ratio_to_reference": 0.8584743684081434,
+                "accuracy_check": 3
+            },
+            "title": "LLM Eval \u2014 meta_gpqa_cot",
+            "task_type": "llm",
+            "id": "Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "task_name": "meta_gpqa_cot",
+                "executed_task_name": "gpqa_main_official_cot_n_shot",
+                "tolerance": 0.05,
+                "published_score": 45.3,
+                "published_score_ref": "https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501#publicly-accesible-benchmarks"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 535.4211,
+                "p50_ttft": 535.3621,
+                "p99_ttft": 536.2663,
+                "mean_tpot_ms": 18.9356,
+                "mean_e2el_ms": 2940.241,
+                "tps_decode_throughput": 43.5302,
+                "request_throughput": 0.3401,
+                "error_request_count": null,
+                "target_check": 2,
+                "target_checks": {
+                    "functional": {
+                        "ttft": 1400.0,
+                        "ttft_ratio": 0.3824436428571429,
+                        "ttft_check": 2,
+                        "tput_user": 50.0,
+                        "tput_user_ratio": 1.0562115803037664,
+                        "tput_user_check": 2,
+                        "tput": 32.0,
+                        "tput_ratio": 1.36031875,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:11:17"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 256,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 1231.9274,
+                "p50_ttft": 1173.2031,
+                "p99_ttft": 1927.2188,
+                "mean_tpot_ms": 19.4668,
+                "mean_e2el_ms": 3704.2129,
+                "tps_decode_throughput": 1105.5074,
+                "request_throughput": 8.6368,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:11:56"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 127,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 539.1017,
+                "p50_ttft": 536.3768,
+                "p99_ttft": 548.6656,
+                "mean_tpot_ms": 18.4458,
+                "mean_e2el_ms": 19409.1897,
+                "tps_decode_throughput": 52.7578,
+                "request_throughput": 0.0515,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:13:40"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 28,
+                "num_requests": 112,
+                "input_sequence_length": 127,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 1318.5035,
+                "p50_ttft": 1166.0085,
+                "p99_ttft": 1902.6867,
+                "mean_tpot_ms": 18.8598,
+                "mean_e2el_ms": 20612.0475,
+                "tps_decode_throughput": 1390.9595,
+                "request_throughput": 1.3584,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:15:29"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 1023,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 25237.9815,
+                "p50_ttft": 25244.2737,
+                "p99_ttft": 25291.5683,
+                "mean_tpot_ms": 20.0478,
+                "mean_e2el_ms": 27784.0582,
+                "tps_decode_throughput": 4.6069,
+                "request_throughput": 0.036,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:17:55"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 28,
+                "num_requests": 112,
+                "input_sequence_length": 1023,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 49765.0522,
+                "p50_ttft": 50517.2003,
+                "p99_ttft": 51133.63,
+                "mean_tpot_ms": 27.7829,
+                "mean_e2el_ms": 53293.4762,
+                "tps_decode_throughput": 67.2488,
+                "request_throughput": 0.5254,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:22:03"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 2047,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 77666.3137,
+                "p50_ttft": 77630.0863,
+                "p99_ttft": 77906.7715,
+                "mean_tpot_ms": 21.4252,
+                "mean_e2el_ms": 80387.3092,
+                "tps_decode_throughput": 1.5923,
+                "request_throughput": 0.0124,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:28:52"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 15,
+                "num_requests": 60,
+                "input_sequence_length": 2047,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 150079.7778,
+                "p50_ttft": 155188.8548,
+                "p99_ttft": 155342.0004,
+                "mean_tpot_ms": 62.1951,
+                "mean_e2el_ms": 157978.55,
+                "tps_decode_throughput": 12.1535,
+                "request_throughput": 0.0949,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:40:51"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4095,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 182447.9011,
+                "p50_ttft": 182430.2711,
+                "p99_ttft": 182738.2693,
+                "mean_tpot_ms": 24.0369,
+                "mean_e2el_ms": 185500.5822,
+                "tps_decode_throughput": 0.69,
+                "request_throughput": 0.0054,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-14 23:56:26"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 7,
+                "num_requests": 28,
+                "input_sequence_length": 4095,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 339133.5284,
+                "p50_ttft": 365065.57,
+                "p99_ttft": 365758.6082,
+                "mean_tpot_ms": 229.619,
+                "mean_e2el_ms": 368295.143,
+                "tps_decode_throughput": 2.4328,
+                "request_throughput": 0.019,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-15 00:24:12"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8191,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 393025.0147,
+                "p50_ttft": 393025.0147,
+                "p99_ttft": 393085.2814,
+                "mean_tpot_ms": 29.2324,
+                "mean_e2el_ms": 396737.529,
+                "tps_decode_throughput": 0.3226,
+                "request_throughput": 0.0025,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-15 00:44:09"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 3,
+                "num_requests": 6,
+                "input_sequence_length": 8191,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 524311.2976,
+                "p50_ttft": 393240.5684,
+                "p99_ttft": 786999.7425,
+                "mean_tpot_ms": 545.2261,
+                "mean_e2el_ms": 593555.014,
+                "tps_decode_throughput": 0.6469,
+                "request_throughput": 0.0051,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-15 01:10:40"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 16383,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 814523.8863,
+                "p50_ttft": 814523.8863,
+                "p99_ttft": 814761.9669,
+                "mean_tpot_ms": 39.6608,
+                "mean_e2el_ms": 819560.8058,
+                "tps_decode_throughput": 0.1562,
+                "request_throughput": 0.0012,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "mistralai__Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "device": "P300X2",
+                "timestamp": "2026-08-15 01:51:45"
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "success": true,
+                "child_result": "OK",
+                "status": "pass",
+                "attempts": 1,
+                "logs": [],
+                "elapsed_seconds": 0.0035545630380511284,
+                "test_name": "LoggerForkSafetyTest",
+                "description": "Test for logging fork safety to prevent deadlocks"
+            },
+            "title": "Logger Fork Safety",
+            "task_type": "unit",
+            "id": "Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "num_of_devices": 4
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "endpoint_url": "http://127.0.0.1:8000/v1/chat/completions",
+                "model_name": "mistralai/Mistral-Small-24B-Instruct-2501",
+                "task_name": "vllm_chat_completions",
+                "parameter_conformance_summary": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "status": "\u2705 PASS",
+                        "summary": "3/3 passed"
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_n",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "status": "\u2705 PASS",
+                        "summary": "9/9 passed"
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    }
+                ],
+                "detailed_test_results": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "parametrization": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[temperature-0.0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_k-1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_p-0.01]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "parametrization": "test_logprobs",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[10]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[5]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[3]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "parametrization": "test_non_uniform_seeding",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "parametrization": "test_seed_reproducibility",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    }
+                ],
+                "success": true,
+                "status": "pass",
+                "attempts": 1,
+                "logs": [
+                    "/home/mvasiljevic/tti-release/mistral-small-24b-2501/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/lib/python3.10/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.",
+                    "The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"",
+                    "",
+                    "  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))",
+                    "......................                                                   [100%]",
+                    "22 passed in 1084.55s (0:18:04)"
+                ],
+                "elapsed_seconds": 1084.8064554859884,
+                "test_name": "VLLMParamConformanceTest",
+                "description": "vLLM chat/completions parameter conformance"
+            },
+            "title": "Vllm Chat Completions",
+            "task_type": "functional",
+            "id": "Mistral-Small-24B-Instruct-2501_P300X2",
+            "targets": {
+                "num_of_devices": 4,
+                "num_concurrent_requests": 4
+            }
+        }
+    ],
+    "acceptance_criteria": false,
+    "acceptance_blockers": {
+        "evals:LLM Eval \u2014 meta_ifeval": "Accuracy check failed.",
+        "evals:LLM Eval \u2014 meta_gpqa_cot": "Accuracy check failed."
+    },
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "FAIL",
+        "model_status": "FUNCTIONAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 13,
+                "passed": 1,
+                "failed": 0,
+                "na": 12,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "FAIL",
+                "total": 2,
+                "passed": 0,
+                "failed": 2,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {
+                    "evals:LLM Eval \u2014 meta_ifeval": "Accuracy check failed.",
+                    "evals:LLM Eval \u2014 meta_gpqa_cot": "Accuracy check failed."
+                },
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u274c `FAIL`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \u2705 `PASS` (1/13 passed, 12 NA)\n- Evals: \u274c `FAIL` (0/2 passed, 2 failed)\n- Spec Tests: \u2705 `PASS` (1/1 passed)\n\n#### Blockers\n\n- Accuracy check failed. (2 blocks)\n  - `evals:LLM Eval \u2014 meta_ifeval`\n  - `evals:LLM Eval \u2014 meta_gpqa_cot`"
+}

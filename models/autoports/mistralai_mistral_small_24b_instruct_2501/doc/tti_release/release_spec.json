@@ -1,5 +1,5 @@
 {
-  "model_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2",
+  "model_id": "id_autoport_mistral-small-24b-instruct-2501_p300x2_release_v10_lookahead3",
   "impl": {
     "impl_id": "mistral_small_24b_2501_autoport",
     "impl_name": "mistral-small-24b-2501-autoport",
@@ -53,8 +53,8 @@
       "TT_MISTRAL_TEXT_VER": "mistral_small_24b_autoport"
     }
   },
-  "tt_metal_commit": "1529e332a1c37937a682ba04b77e7dc3418f2589",
-  "vllm_commit": "6bd775d4f3a41d09d3ed03c40b45b5f9621fff9e",
+  "tt_metal_commit": "5bab286dc7fb063f4f435c840af64359fe4bf533",
+  "vllm_commit": "aab6d846caf95c5e9cf8038f3338650a9132c383",
   "hf_weights_repo": "mistralai/Mistral-Small-24B-Instruct-2501",
   "model_type": "LLM",
   "status": "FUNCTIONAL",

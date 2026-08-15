@@ -1,27 +1,56 @@
-# AutoFix: Mistral release-warning investigation
+# AutoFix: Mistral Small 24B v10 release failures
 
-## Final status
+## Outcome
 
-The trace allocation defect is fixed and verified on hardware. The tokenizer-regex hypothesis is refuted for the live request path. The release remains `release-workflow-fail` and `readiness-fail` because IFEval is 75.6635% versus 78.755% and GPQA is 38.8889% versus 40.3%; no mask or waiver is valid, and neither warning provides a surviving mechanism that predicts those scores will improve.
+AutoFix repaired both operational EngineCore failures without changing the
+model, implementation, serving context, acceptance thresholds, or eval scores.
+The corrected server completed the exact hardware controls and resumed native
+benchmark sweep without page- or slot-allocation failures.
 
-## Hypotheses and verdicts
+The overall release remains `release-workflow-fail` and `readiness-fail` because
+the mandatory quality gates remain below threshold:
 
-The live-bad-regex hypothesis is refuted. The TT platform's registered renderer/tokenizer constructs HF with `fix_mistral_regex=True`. `tokenizer_regex_ab.json` applies the exact checkpoint chat template to three preserved IFEval and three preserved GPQA message sets. Every live-plugin token sequence equals HF `fix=true`, while every `fix=false` sequence differs from token index 3. The remaining warning comes from a separate default processor/template probe in the APIServer process.
+- IFEval: 72.55740423987976% versus 78.755% required.
+- GPQA flexible extract: 38.88888888888889% versus 43.035% required.
 
-The harmless-trace-warning hypothesis is also refuted. The original order retained model and sampling traces before the first KV-cache reset compiled its in-place `ttnn.fill` programs, violating the allocator invariant. Commit `993aabf2f73b911062c3bb59412af0b5fdb3e456` compiles the reset in the eager pre-capture phase and retains the post-capture reset to clear warmup-written state. A regression proves reset -> capture -> reset ordering.
+There are no `known_issues` masks or waivers. Operational repair is not used to
+reinterpret either valid quality result.
+
+## Proven repairs
+
+### Full async KV lookahead
+
+The first failure was an exact page-boundary under-allocation. Host state was at
+token 2,429 while device-authoritative async state reached position 2,432, the
+first position of a new 32-token page. Commit
+`971ee6cfcdd97a36a98e26f96ff7dda08441d219` reserves the full three-token TT
+async pipeline depth. Its exact regression and a 2,399-input/96-output P300x2
+control passed; the resumed GPQA run completed 90/90 operationally.
+
+### Pressure-only stale state-slot reclamation
+
+The second failure followed an idle transition between benchmark points. A
+scheduler-only final cleanup never reached the TT worker, leaving 32 historical
+host slot owners before 31 new prefills. Commit
+`aab6d846caf95c5e9cf8038f3338650a9132c383` snapshots the immediately prior
+persistent-batch owners and, only under impossible slot pressure, reclaims older
+off-batch owners while preserving potentially live recent state.
+
+The focused regression recreates the 32-old/31-new allocation. The exact
+production-server lifecycle control ran concurrency 1 for 8 requests immediately
+followed by concurrency 32 for 256 requests; both completed with zero failures.
 
 ## Verification
 
-- Autoport full-model tests: 9 passed, 4 hardware-gated skipped.
-- Nested vLLM tokenizer tests: 6 passed.
-- Exact committed P300x2 server: zero active-trace allocation warnings and no fatal/traceback errors.
-- Health, models, deterministic chat, and non-page-aligned benchmark requests returned HTTP 200.
-- Deterministic response: exactly `TRACE SMOKE OK`.
-- Benchmark: 1 completed, 0 failed; 36 actual prompt tokens, 16 output tokens, mean TTFT 939.16 ms, mean TPOT 27.45 ms.
-- Shutdown left no API-server or EngineCore process. Reset completed, all four p300c chips were visible/resettable, and a fresh `MeshShape(1, 4)` opened and closed successfully.
+- Focused host regressions: 10 passed across state slots, async lookahead, and
+  async decode preemption.
+- Boundary hardware control: 1/1 completed, 0 failed.
+- Idle-transition control: 8/8 followed by 256/256 completed, 0 failed.
+- Native release GPQA after lookahead repair: 90/90 completed operationally.
+- Native benchmark after both repairs: see `benchmark_report_v10_slotfix.md`.
+- Native spec/API conformance after both repairs: see
+  `spec_report_v10_slotfix.md`.
 
-Evidence is preserved beside this report in `server_tracefix_smoke.log`, `chat_tracefix_smoke.json`, `benchmark_tracefix_smoke.log`, `benchmark_tracefix_smoke.json`, and `tokenizer_regex_ab.json`. Fresh-context diagnosis and source citations are in the repository-root `AUTODEBUG.md`.
-
-## Why no full quality rerun
-
-The exact A/B refutes bad regex tokenization on the live path. The trace repair removes a real unsupported startup allocation, but no evidence connects the old warning to changed answers in the completed v9 evaluation. Repeating roughly eight projected hours of unrestricted evaluation, or rerunning the same subset, would not constitute a proven quality fix. The unwaived quality failures are therefore reported unchanged. A future attempt needs a new, falsifiable model-quality hypothesis rather than a threshold mask.
+Fresh-context failure evidence and source-level reasoning are recorded in
+`AUTODEBUG_V10.md`; compact control metrics are in
+`hardware_controls_v10.json`.

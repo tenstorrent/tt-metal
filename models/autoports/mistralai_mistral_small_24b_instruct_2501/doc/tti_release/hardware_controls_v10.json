@@ -1,0 +1,45 @@
+{
+  "server": {
+    "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+    "device": "P300X2",
+    "max_model_len": 32768,
+    "max_num_seqs": 32,
+    "block_size": 32,
+    "tt_metal_commit": "5bab286dc7fb063f4f435c840af64359fe4bf533",
+    "vllm_commit": "aab6d846caf95c5e9cf8038f3338650a9132c383"
+  },
+  "async_page_boundary": {
+    "purpose": "Cross device position 2432 from an actual 2399-token prompt",
+    "completed": 1,
+    "failed": 0,
+    "duration_s": 95.99324913299643,
+    "input_tokens": 2399,
+    "output_tokens": 96,
+    "mean_ttft_ms": 93882.42717902176,
+    "mean_tpot_ms": 22.215003135467047
+  },
+  "state_slot_lifecycle": [
+    {
+      "purpose": "Single-concurrency point before idle transition",
+      "max_concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "duration_s": 23.51207409496419,
+      "input_tokens": 1017,
+      "output_tokens": 1024,
+      "mean_ttft_ms": 537.3186315991916,
+      "mean_tpot_ms": 18.90911821066952
+    },
+    {
+      "purpose": "Immediate 32-concurrency wave after idle transition",
+      "max_concurrency": 32,
+      "completed": 256,
+      "failed": 0,
+      "duration_s": 28.887711882125586,
+      "input_tokens": 32513,
+      "output_tokens": 32768,
+      "mean_ttft_ms": 1154.286837939253,
+      "mean_tpot_ms": 19.337166710818018
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+INFO 08-14 23:08:16 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-14 23:08:16 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-14 23:08:16 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-14 23:08:17 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x79dacd96cf40>, seed=0, num_prompts=8, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url=None, host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='mistralai/Mistral-Small-24B-Instruct-2501', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/logs/slot_control_c1_n8.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-4d674e0d-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=600, extra_body={'truncate_prompt_tokens': '128'})
+INFO 08-14 23:08:18 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [128, 128]
+WARNING 08-14 23:08:18 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+Waiting for endpoint to become up in 600 seconds
+ |          | 00:00 elapsed, ? remaining |          | 00:00 elapsed, 00:08 remaining |          | 00:02 elapsed, 946:14:12 remaining
+Initial test run completed.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+  0%|          | 0/8 [00:00<?, ?it/s] 12%|█▎        | 1/8 [00:02<00:20,  2.93s/it] 25%|██▌       | 2/8 [00:05<00:17,  2.94s/it] 38%|███▊      | 3/8 [00:08<00:14,  2.94s/it] 50%|█████     | 4/8 [00:11<00:11,  2.94s/it] 62%|██████▎   | 5/8 [00:14<00:08,  2.94s/it] 75%|███████▌  | 6/8 [00:17<00:05,  2.94s/it] 88%|████████▊ | 7/8 [00:20<00:02,  2.94s/it]100%|██████████| 8/8 [00:23<00:00,  2.94s/it]100%|██████████| 8/8 [00:23<00:00,  2.94s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     8
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  23.51
+Total input tokens:                      1017
+Total generated tokens:                  1024
+Request throughput (req/s):              0.34
+Output token throughput (tok/s):         43.55
+Peak output token throughput (tok/s):    57.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          86.81
+---------------Time to First Token----------------
+Mean TTFT (ms):                          537.32
+Median TTFT (ms):                        535.61
+P99 TTFT (ms):                           549.00
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          18.91
+Median TPOT (ms):                        18.90
+P99 TPOT (ms):                           18.94
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           18.76
+Median ITL (ms):                         17.76
+P99 ITL (ms):                            19.04
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          2938.78
+Median E2EL (ms):                        2937.49
+P99 E2EL (ms):                           2948.53
+==================================================

@@ -1,0 +1,46 @@
+INFO 08-14 23:09:02 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-14 23:09:02 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-14 23:09:02 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-14 23:09:03 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x762a53948f40>, seed=0, num_prompts=256, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url=None, host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='mistralai/Mistral-Small-24B-Instruct-2501', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/logs/slot_control_c32_n256.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-86eaf4f8-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=600, extra_body={'truncate_prompt_tokens': '128'})
+INFO 08-14 23:09:04 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [128, 128]
+WARNING 08-14 23:09:04 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+Waiting for endpoint to become up in 600 seconds
+ |          | 00:00 elapsed, ? remaining |          | 00:00 elapsed, 00:09 remaining |          | 00:02 elapsed, 972:01:58 remaining
+Initial test run completed.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+  0%|          | 0/256 [00:00<?, ?it/s]  0%|          | 1/256 [00:03<15:24,  3.63s/it] 13%|█▎        | 33/256 [00:07<00:42,  5.31it/s] 25%|██▌       | 65/256 [00:10<00:27,  6.93it/s] 38%|███▊      | 97/256 [00:14<00:20,  7.69it/s] 50%|█████     | 129/256 [00:18<00:15,  8.12it/s] 63%|██████▎   | 161/256 [00:21<00:11,  8.37it/s] 75%|███████▌  | 193/256 [00:25<00:07,  8.54it/s] 88%|████████▊ | 225/256 [00:28<00:03,  8.65it/s]100%|██████████| 256/256 [00:28<00:00,  8.86it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     256
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  28.89
+Total input tokens:                      32513
+Total generated tokens:                  32768
+Request throughput (req/s):              8.86
+Output token throughput (tok/s):         1134.32
+Peak output token throughput (tok/s):    1792.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          2259.82
+---------------Time to First Token----------------
+Mean TTFT (ms):                          1154.29
+Median TTFT (ms):                        1169.45
+P99 TTFT (ms):                           1189.02
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          19.34
+Median TPOT (ms):                        19.18
+P99 TPOT (ms):                           24.10
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           19.19
+Median ITL (ms):                         17.99
+P99 ITL (ms):                            21.31
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          3610.11
+Median E2EL (ms):                        3608.11
+P99 E2EL (ms):                           3626.30
+==================================================

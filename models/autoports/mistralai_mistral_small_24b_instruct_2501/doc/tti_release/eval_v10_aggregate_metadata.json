@@ -1,0 +1,34 @@
+{
+  "workflow": "release",
+  "limit_samples_mode": "ci-nightly",
+  "limit_fraction": 0.2,
+  "server": {
+    "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+    "device": "P300X2",
+    "tt_metal_commit": "5bab286dc7fb063f4f435c840af64359fe4bf533",
+    "vllm_commit": "971ee6cfcdd97a36a98e26f96ff7dda08441d219"
+  },
+  "evals": [
+    {
+      "task": "meta_ifeval",
+      "executed_task": "ifeval",
+      "samples_completed": 109,
+      "samples_failed_operationally": 0,
+      "reported_score_percent": 72.55740423987976,
+      "acceptance_threshold_percent": 78.755,
+      "status": "FAIL"
+    },
+    {
+      "task": "meta_gpqa_cot",
+      "executed_task": "gpqa_main_official_cot_n_shot",
+      "samples_completed": 90,
+      "samples_failed_operationally": 0,
+      "flexible_extract_percent": 38.88888888888889,
+      "acceptance_threshold_percent": 43.035,
+      "status": "FAIL"
+    }
+  ],
+  "known_issue_masks": [],
+  "waivers": [],
+  "note": "Aggregate-only evidence. Raw per-sample JSONL and completion corpora are excluded."
+}
