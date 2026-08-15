@@ -20,14 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-import ml_dtypes
 import numpy as np
 import torch
 import ttnn
 
 import ttml
 from huggingface_hub import snapshot_download
-from safetensors.numpy import load_file
 from safetensors.torch import save_file
 from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
@@ -67,31 +65,6 @@ def _deallocate_tensors(tensors: Any) -> None:
             ttnn.deallocate(t.get_value(), force=True)
         elif isinstance(t, ttnn.Tensor):
             ttnn.deallocate(t, force=True)
-
-
-def _load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
-    checkpoint = load_file(checkpoint_path)
-    parameters = model.parameters()
-    loaded, missing = 0, []
-
-    for name, param in parameters.items():
-        if name in checkpoint:
-            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-            if arr.ndim == 1:
-                arr = arr.reshape(1, 1, 1, -1)
-            elif arr.ndim == 2:
-                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-            param.assign(restored)
-            loaded += 1
-        else:
-            missing.append(name)
-
-    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
-    if missing:
-        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
-        for n in missing:
-            print(f"  - {n}")
 
 
 def _ensure_safetensors_dir(model_dir: str) -> str:
@@ -192,11 +165,11 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         )
 
         local_safetensors = os.path.isdir(model_source) and any(
-            f == "model.safetensors" for f in os.listdir(model_source)
+            f.endswith(".safetensors") for f in os.listdir(model_source)
         )
         if local_safetensors:
-            logging.info("Loading model from local safetensors: %s", model_source)
-            _load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
+            logging.info("Loading model from local safetensors dir: %s", model_source)
+            load_from_safetensors(tt_model, model_source, llama_cfg)
         else:
             logging.info("Downloading model from HuggingFace: %s", model_source)
             model_repo_path = snapshot_download(
