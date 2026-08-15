@@ -1,0 +1,39 @@
+{
+  "decode_current_pos": 32,
+  "decode_pcc": 0.9996959443440921,
+  "decode_threshold": 0.995,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_pcc": 0.9974075132917918,
+  "prefill_threshold": 0.995,
+  "provenance": {
+    "artifact_dir": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/autofix_bfp4_control",
+    "checkout_git_sha": "e45e09947780cdb1d44881b2fbc2b2a8efbf5a85",
+    "exact_command": "BFP8 control after explicit phase fix",
+    "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+    "gemma4_environment": {
+      "GEMMA4_EVIDENCE_COMMAND": "BFP8 control after explicit phase fix",
+      "GEMMA4_MULTICHIP_ARTIFACT_DIR": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/autofix_bfp4_control",
+      "GEMMA4_RANGE_DOWNLOAD": "1"
+    },
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3,
+        2,
+        1,
+        0
+      ],
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+    },
+    "measured_decoder_path": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py",
+    "measured_decoder_sha256": "ca5d85c42e4949e2c1920e103aede198b0e9cfd8b84ff9c93f00336fcf5b9589",
+    "multichip_test_sha256": "de784298903875e0864842b1e89a055f18b14c920c776ae57e969b8798cf1e6b",
+    "test_sha256": "6984c21228a35f2c1267e05486395795053cd3d2b2c78938f0864c8d1b966e6b",
+    "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
+    "ttnn_extension_sha256": "ed2bf1a78109396ab2411c7f7bd0a0fa341c3eb3c8b4f82a40985fadb3dc26a2"
+  },
+  "sequence_length": 32,
+  "shared_physical_cache": false
+}

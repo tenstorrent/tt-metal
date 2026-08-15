@@ -1,0 +1,8 @@
+{
+  "command": "TT_METAL_WATCHER=120 TT_METAL_WATCHER_DISABLE_ETH=1 GEMMA4_RANGE_DOWNLOAD=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q tests/test_multichip_decoder.py::test_multichip_non_aligned_prefill_and_decode_trace",
+  "result": "2 passed, 0 failed, 0 errors in 27.005 s",
+  "coverage": "watcher assert, pause, ring-buffer, stack, worker NoC/CB sanitizers on all four devices; separate from profiler",
+  "ethernet_limitation": "Full watcher instrumentation on ACTIVE_ETH cannot initialize FABRIC_1D_RING in this checkout: firmware program 27920 bytes exceeds the 25600-byte kernel-config buffer. Disabling only Ethernet watcher instrumentation is required; fabric remains enabled and model collectives execute.",
+  "watcher_log": "artifacts/watcher.log; sha256=541eec42c6f7959759338c37eab432552b8e774ac61f8721cd44dbbb1d5f7c30; no ERROR/FATAL/ASSERT/NOC marker after the passing run",
+  "timestamp_utc": "2026-08-15T16:37:38Z"
+}

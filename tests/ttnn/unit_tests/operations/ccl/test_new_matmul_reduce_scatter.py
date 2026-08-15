@@ -39,6 +39,7 @@ def run_reduce_scatter_impl(
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
+    matmul_core_grid=(8, 6),
 ):
     torch.manual_seed(0)
 
@@ -73,6 +74,7 @@ def run_reduce_scatter_impl(
     rs_num_batches = rs_input_shape[0]
     single_batch_input_shape = rs_input_shape[:]
     single_batch_input_shape[2] //= rs_num_batches
+    single_batch_input_shape[3] = mm_weights_shape[3]
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),
@@ -84,7 +86,7 @@ def run_reduce_scatter_impl(
         )
         for _ in range(num_iters)
     ]
-    rs_output_shape = rs_input_shape[:]
+    rs_output_shape = single_batch_input_shape[:]
     rs_output_shape[3] //= num_devices
     persistent_output_buffers = [
         ttnn.from_torch(
@@ -128,8 +130,10 @@ def run_reduce_scatter_impl(
         bias_tt = None
 
     ##### Configs for ttnn.matmul #####
-    core_grid = (8, 6)
-    in0_block_w = min(max_in0_block_w, mm_weights_shape[2] // num_devices // 32 // core_grid[0])
+    core_grid = matmul_core_grid
+    local_k_tiles = mm_weights_shape[2] // num_devices // 32
+    block_limit = max(1, min(max_in0_block_w, max(1, local_k_tiles // core_grid[0])))
+    in0_block_w = max(candidate for candidate in range(1, block_limit + 1) if local_k_tiles % candidate == 0)
     per_core_M = max(1, math.ceil(rs_input_shape[2] / 32 / core_grid[1]))  # M / TILE_HEIGHT / Grid_Size
     per_core_N = max(1, math.ceil(rs_input_shape[3] / 32 / core_grid[0]))  # N / TILE_WIDTH / Grid_Size
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -139,7 +143,10 @@ def run_reduce_scatter_impl(
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        out_block_w=per_core_N // 2,
+        # Exact model shapes can produce odd per-core N (Gemma hidden 2816
+        # gives 11 tiles on an 8-wide grid). One output block per grid column
+        # is both a legal divisor and satisfies the block-count constraint.
+        out_block_w=per_core_N,
         transpose_mcast=False,
         fused_activation=None,  # ttnn.UnaryOpType.SILU,
         fuse_batch=False,

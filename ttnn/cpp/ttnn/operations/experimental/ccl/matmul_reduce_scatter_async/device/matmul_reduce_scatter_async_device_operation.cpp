@@ -60,8 +60,13 @@ MatmulReduceScatterAsyncDeviceOperation::compute_output_specs(
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
     using ReduceScatterOp = ttnn::experimental::prim::ReduceScatterMinimalAsyncDeviceOperation;
+    // Reduce-scatter consumes the matmul result, not input A.  Use the
+    // persistent intermediate buffer because it has the materialized matmul
+    // output shape/config.  Deriving this spec from input A only happened to
+    // work for near-square tests and produces the wrong width for Gemma's
+    // nonsquare O/down projections.
     ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs reduce_scatter_tensor_args{
-        input_tensors[0], std::nullopt, std::nullopt};
+        tensor_args.persistent_intermediate, std::nullopt, std::nullopt};
 
     auto reduce_scatter_output_specs =
         ReduceScatterOp::compute_output_specs(args.reduce_scatter_params, reduce_scatter_tensor_args);

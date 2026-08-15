@@ -7,6 +7,7 @@ import os
 import platform
 import struct
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -20,21 +21,21 @@ from transformers import AutoConfig
 from transformers.cache_utils import DynamicCache
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer, Gemma4TextRotaryEmbedding
 
-import ttnn
 import models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder as decoder_module
+import ttnn
 from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import (
     FULL_BLOCK_SIZE,
     FULL_HEAD_DIM,
+    FULL_KIND,
     FULL_NUM_KV_HEADS,
     HIDDEN_SIZE,
     MODEL_ID,
     NUM_Q_HEADS,
+    PREFILL_SDPA_MAX_SEQ,
     SLIDING_BLOCK_SIZE,
     SLIDING_HEAD_DIM,
-    SLIDING_NUM_KV_HEADS,
-    FULL_KIND,
-    PREFILL_SDPA_MAX_SEQ,
     SLIDING_KIND,
+    SLIDING_NUM_KV_HEADS,
     FunctionalDecoder,
     _bounded_cache_fill_plan,
     _make_correctness_compute_config,
@@ -50,7 +51,10 @@ def _evidence_provenance(mesh_device, exact_command: str) -> dict:
     """Bind opt-in evidence to its exact source, test, build, and hardware."""
 
     decoder_path = Path(decoder_module.__file__).resolve()
+    measured_decoder_module = sys.modules[FunctionalDecoder.__module__]
+    measured_decoder_path = Path(measured_decoder_module.__file__).resolve()
     test_path = Path(__file__).resolve()
+    multichip_test_path = test_path.with_name("test_multichip_decoder.py")
     try:
         checkout_git_sha = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
@@ -70,7 +74,12 @@ def _evidence_provenance(mesh_device, exact_command: str) -> dict:
         arch = os.getenv("ARCH_NAME", "unknown")
     return {
         "functional_decoder_sha256": hashlib.sha256(decoder_path.read_bytes()).hexdigest(),
+        "measured_decoder_path": str(measured_decoder_path),
+        "measured_decoder_sha256": hashlib.sha256(measured_decoder_path.read_bytes()).hexdigest(),
         "test_sha256": hashlib.sha256(test_path.read_bytes()).hexdigest(),
+        "multichip_test_sha256": (
+            hashlib.sha256(multichip_test_path.read_bytes()).hexdigest() if multichip_test_path.exists() else None
+        ),
         "checkout_git_sha": checkout_git_sha,
         "ttnn_extension_path": str(extension_path),
         "ttnn_extension_sha256": hashlib.sha256(extension_path.read_bytes()).hexdigest(),
@@ -80,6 +89,8 @@ def _evidence_provenance(mesh_device, exact_command: str) -> dict:
             "platform": platform.platform(),
         },
         "exact_command": os.getenv("GEMMA4_EVIDENCE_COMMAND", exact_command),
+        "artifact_dir": str(ARTIFACT_DIR),
+        "gemma4_environment": {name: value for name, value in sorted(os.environ.items()) if name.startswith("GEMMA4_")},
     }
 
 
@@ -225,7 +236,7 @@ def _page_table(layer_type: str, *, shared_physical: bool, token_capacity: int |
     return torch.arange(blocks, dtype=torch.int32).view(1, blocks)
 
 
-def test_prefill_attention_dispatch_host():
+def test_prefill_attention_dispatch_host(expect_error):
     assert (
         _prefill_attention_path(
             PREFILL_SDPA_MAX_SEQ,
@@ -253,7 +264,7 @@ def test_prefill_attention_dispatch_host():
     assert (
         _prefill_attention_path(256, is_sliding=False, has_paged_cache=True, max_non_chunked_seq=128) == "full_chunked"
     )
-    with pytest.raises(ValueError, match="paged cache"):
+    with expect_error(ValueError, "paged cache"):
         _prefill_attention_path(
             PREFILL_SDPA_MAX_SEQ + 32,
             is_sliding=False,
@@ -337,9 +348,13 @@ def test_functional_decoder_real_weights_prefill_decode(
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     cache_shape = _cache_shape(layer_type, shared_physical=shared_physical)
+    cache_dtype = {
+        "bf16": ttnn.bfloat16,
+        "bfp8": ttnn.bfloat8_b,
+    }[os.getenv("GEMMA4_FUNCTIONAL_DECODER_CACHE_DTYPE", "bf16")]
     kv_cache = (
-        _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16)),
-        _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16)),
+        _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16), dtype=cache_dtype),
+        _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16), dtype=cache_dtype),
     )
 
     tt_prefill = decoder.prefill_forward(
@@ -379,6 +394,12 @@ def test_functional_decoder_real_weights_prefill_decode(
                 "prefill_threshold": 0.995,
                 "decode_pcc": float(actual_decode_pcc),
                 "decode_threshold": decode_pcc,
+                "provenance": _evidence_provenance(
+                    mesh_device,
+                    "GEMMA4_RANGE_DOWNLOAD=1 pytest -q "
+                    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::"
+                    "test_functional_decoder_real_weights_prefill_decode",
+                ),
             },
             indent=2,
             sort_keys=True,
@@ -1477,11 +1498,21 @@ def test_functional_decoder_perf_profile(mesh_device, device_params, layer_idx, 
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
 
+    trace_warmups = int(os.getenv("GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS", "0"))
+    trace_iterations = int(os.getenv("GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS", "1"))
+    if trace_warmups < 0 or trace_iterations < 1:
+        raise ValueError(f"invalid trace timing regime: {trace_warmups=} {trace_iterations=}")
+    for _ in range(trace_warmups):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+
     signpost(f"PERF_DECODE_{case_id}", f"cache_shape={cache_shape}")
     start = time.perf_counter()
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    for _ in range(trace_iterations):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
-    measured["decode_trace_host_ms"] = (time.perf_counter() - start) * 1000
+    measured["decode_trace_host_ms"] = (time.perf_counter() - start) * 1000 / trace_iterations
+    measured["decode_trace_warmups"] = trace_warmups + 1
+    measured["decode_trace_iterations"] = trace_iterations
     signpost(f"PERF_DECODE_{case_id}_END", f"cache_shape={cache_shape}")
     ttnn.release_trace(mesh_device, trace_id)
 

@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 import ttnn
-
 from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import (
     HIDDEN_SIZE,
     MLP_INTERMEDIATE_SIZE,
@@ -37,13 +36,13 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import (
     _make_decode_rope_memory_config,
     _replicate_mapper,
 )
-from models.demos.gemma4.tt.experts.operations import apply_geglu
-from models.demos.gemma4.tt.experts.weights import ExpertWeights
 from models.common.modules.mlp.mlp_1d import (
     _create_dram_sharded_mem_config,
     _dram_matmul_config,
     _dram_shard_core_grid_k_n,
 )
+from models.demos.gemma4.tt.experts.operations import apply_geglu
+from models.demos.gemma4.tt.experts.weights import ExpertWeights
 
 _DTYPES = {
     "bf16": ttnn.bfloat16,
@@ -71,9 +70,7 @@ _RESIDUAL_BOUNDARY_COUNTERS = (
     "expert_output",
     "residual_exit",
 )
-_DRAM_SHARDED_ROLES = frozenset(
-    {"qkv", "o_proj", "mlp_gate", "mlp_up", "mlp_down", "packed_mlp_gate_up"}
-)
+_DRAM_SHARDED_ROLES = frozenset({"qkv", "o_proj", "mlp_gate", "mlp_up", "mlp_down", "packed_mlp_gate_up"})
 
 
 def _candidate_from_env(name: str, default: Any, choices: dict[str, Any]) -> Any:
@@ -556,9 +553,7 @@ class OptimizedDecoder(FunctionalDecoder):
         )
         if attention_weight_dtype is None:
             layer_type = hf_config.layer_types[layer_idx]
-            attention_weight_dtype = (
-                ttnn.bfloat16 if layer_type == "sliding_attention" else ttnn.bfloat8_b
-            )
+            attention_weight_dtype = ttnn.bfloat16 if layer_type == "sliding_attention" else ttnn.bfloat8_b
         mlp_weight_dtype = _candidate_from_env(
             "GEMMA4_OPT_MLP_WEIGHT_DTYPE",
             mlp_weight_dtype,
@@ -645,7 +640,9 @@ class OptimizedDecoder(FunctionalDecoder):
             auto_selected_mlp_dram = True
         invalid_roles = set(dram_sharded_roles) - _DRAM_SHARDED_ROLES
         if invalid_roles:
-            raise ValueError(f"invalid DRAM-sharded roles {sorted(invalid_roles)}; choose from {sorted(_DRAM_SHARDED_ROLES)}")
+            raise ValueError(
+                f"invalid DRAM-sharded roles {sorted(invalid_roles)}; choose from {sorted(_DRAM_SHARDED_ROLES)}"
+            )
         if dense_decode_dram_sharded:
             dram_sharded_roles = tuple(sorted(_DRAM_SHARDED_ROLES))
         packed_dense_gate_up = _bool_from_env("GEMMA4_OPT_PACKED_DENSE_GATE_UP", packed_dense_gate_up)
@@ -804,7 +801,7 @@ class OptimizedDecoder(FunctionalDecoder):
         *,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ) -> ttnn.Tensor:
-        decode_candidate = weight_name in self.decode_dram_weights and _matrix_rows(x) <= TILE_SIZE
+        decode_candidate = self._use_decode_dram_weight(x, weight_name)
         weight = self.decode_dram_weights[weight_name] if decode_candidate else getattr(self.weights, weight_name)
         kwargs = {}
         if decode_candidate:
@@ -822,6 +819,10 @@ class OptimizedDecoder(FunctionalDecoder):
         if decode_candidate:
             result = ttnn.sharded_to_interleaved(result, ttnn.DRAM_MEMORY_CONFIG)
         return result
+
+    def _use_decode_dram_weight(self, x: ttnn.Tensor, weight_name: str) -> bool:
+        """Select decode-tuned weights; subclasses may add an explicit phase guard."""
+        return weight_name in self.decode_dram_weights and _matrix_rows(x) <= TILE_SIZE
 
     def _tracked_to_memory_config(
         self,
@@ -1181,9 +1182,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 ends=[1, 1, batch, HIDDEN_SIZE],
                 steps=[1, 1, 1, 1],
                 memory_config=(
-                    self.attention_sharded_memory_configs["o_output"]
-                    if sharded_residual
-                    else ttnn.DRAM_MEMORY_CONFIG
+                    self.attention_sharded_memory_configs["o_output"] if sharded_residual else ttnn.DRAM_MEMORY_CONFIG
                 ),
             )
         if sharded_residual:
@@ -1199,7 +1198,7 @@ class OptimizedDecoder(FunctionalDecoder):
         if self.residual_shard_cores != 0 and x.is_sharded():
             return self._dense_mlp_residual_sharded(x)
         if self.packed_dense_gate_up:
-            decode_candidate = "packed_mlp_gate_up" in self.decode_dram_weights and _matrix_rows(x) <= TILE_SIZE
+            decode_candidate = self._use_decode_dram_weight(x, "packed_mlp_gate_up")
             packed_weight = (
                 self.decode_dram_weights["packed_mlp_gate_up"] if decode_candidate else self.packed_mlp_gate_up
             )

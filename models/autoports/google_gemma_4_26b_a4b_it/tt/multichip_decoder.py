@@ -12,6 +12,7 @@ partials, so expanded MLP/expert/head activations never cross the fabric.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,12 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import (
     _text_config,
     _validate_text_config,
 )
-from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import (
+    OptimizedDecoder,
+    _dram_sharded_weight_and_config,
+    _matrix_rows,
+    _width_sharded_memory_config,
+)
 from models.demos.gemma4.tt.experts.weights import ExpertWeights
 
 TP_SIZE = 4
@@ -44,6 +50,29 @@ PADDED_MLP_INTERMEDIATE_SIZE = 2176
 LOCAL_MLP_INTERMEDIATE_SIZE = PADDED_MLP_INTERMEDIATE_SIZE // TP_SIZE
 PADDED_MOE_INTERMEDIATE_SIZE = 768
 LOCAL_MOE_INTERMEDIATE_SIZE = PADDED_MOE_INTERMEDIATE_SIZE // TP_SIZE
+
+
+def _packed_gate_up_mesh_source(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    """Pack each TP rank's gate/up slice before sharding across the mesh.
+
+    Concatenating the complete gate and up matrices before ``ShardTensorToMesh``
+    would put gate-only shards on the first ranks and up-only shards on the last
+    ranks.  The production packed matmul instead needs ``[gate_i, up_i]`` on
+    every rank.
+    """
+
+    import torch
+
+    gate_shards = gate.chunk(TP_SIZE, dim=-1)
+    up_shards = up.chunk(TP_SIZE, dim=-1)
+    return (
+        torch.cat(
+            [torch.cat((gate_shards[rank], up_shards[rank]), dim=-1) for rank in range(TP_SIZE)],
+            dim=-1,
+        )
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
 
 
 def _require_target_mesh(mesh_device: Any) -> None:
@@ -101,14 +130,68 @@ class MultichipDecoder(OptimizedDecoder):
         import torch
 
         _require_target_mesh(mesh_device)
+        dtype_names = {
+            "bf16": ttnn.bfloat16,
+            "bfp8": ttnn.bfloat8_b,
+            "bfp4": ttnn.bfloat4_b,
+        }
+        fidelity_names = {
+            "lofi": ttnn.MathFidelity.LoFi,
+            "hifi2": ttnn.MathFidelity.HiFi2,
+            "hifi4": ttnn.MathFidelity.HiFi4,
+        }
+
+        def dtype_from_env(name: str, current: ttnn.DataType | None) -> ttnn.DataType | None:
+            value = os.getenv(name)
+            if value is None:
+                return current
+            if value.lower() not in dtype_names:
+                raise ValueError(f"{name}={value!r}; choose from {sorted(dtype_names)}")
+            return dtype_names[value.lower()]
+
+        def fidelity_from_env(name: str) -> ttnn.MathFidelity | None:
+            value = os.getenv(name)
+            if value is None:
+                return None
+            if value.lower() not in fidelity_names:
+                raise ValueError(f"{name}={value!r}; choose from {sorted(fidelity_names)}")
+            return fidelity_names[value.lower()]
+
+        attention_weight_dtype = dtype_from_env("GEMMA4_MULTICHIP_ATTENTION_WEIGHT_DTYPE", attention_weight_dtype)
+        mlp_weight_dtype = dtype_from_env("GEMMA4_MULTICHIP_MLP_WEIGHT_DTYPE", mlp_weight_dtype)
+        mlp_down_weight_dtype = dtype_from_env("GEMMA4_MULTICHIP_MLP_DOWN_WEIGHT_DTYPE", mlp_down_weight_dtype)
+        expert_weight_dtype = dtype_from_env("GEMMA4_MULTICHIP_EXPERT_WEIGHT_DTYPE", expert_weight_dtype)
+        activation_dtype = dtype_from_env("GEMMA4_MULTICHIP_ACTIVATION_DTYPE", activation_dtype)
+        for env_name, kwarg_name in (
+            ("GEMMA4_MULTICHIP_ATTENTION_FIDELITY", "attention_math_fidelity"),
+            ("GEMMA4_MULTICHIP_MLP_FIDELITY", "mlp_math_fidelity"),
+            ("GEMMA4_MULTICHIP_EXPERT_GATE_FIDELITY", "expert_gate_math_fidelity"),
+            ("GEMMA4_MULTICHIP_EXPERT_FIDELITY", "expert_math_fidelity"),
+        ):
+            fidelity = fidelity_from_env(env_name)
+            if fidelity is not None:
+                kwargs[kwarg_name] = fidelity
+        for env_name, kwarg_name in (
+            ("GEMMA4_MULTICHIP_EXPERT_GATE_BLOCK_W", "expert_gate_in0_block_w"),
+            ("GEMMA4_MULTICHIP_EXPERT_DOWN_BLOCK_W", "expert_down_in0_block_w"),
+            ("GEMMA4_MULTICHIP_EXPERT_GATE_PER_CORE_N", "expert_gate_per_core_n"),
+            ("GEMMA4_MULTICHIP_EXPERT_DOWN_PER_CORE_N", "expert_down_per_core_n"),
+            ("GEMMA4_MULTICHIP_EXPERT_GATE_OUT_SUBBLOCK_W", "expert_gate_out_subblock_w"),
+            ("GEMMA4_MULTICHIP_EXPERT_DOWN_OUT_SUBBLOCK_W", "expert_down_out_subblock_w"),
+        ):
+            value = os.getenv(env_name)
+            if value is not None:
+                kwargs[kwarg_name] = int(value)
         text_config = _text_config(hf_config)
         _validate_text_config(text_config)
         kind = _layer_kind(text_config.layer_types[layer_idx])
+        kwargs.setdefault("attention_math_fidelity", ttnn.MathFidelity.HiFi2)
+        kwargs.setdefault("expert_gate_in0_block_w", 44)
+        kwargs.setdefault("expert_gate_per_core_n", 2)
+        kwargs.setdefault("expert_down_per_core_n", 2)
         prefix = _detect_layer_prefix(state_dict, layer_idx)
         cache_root = Path(tensor_cache_path) if tensor_cache_path is not None else None
-        attention_weight_dtype = attention_weight_dtype or (
-            ttnn.bfloat16 if kind.name == "sliding_attention" else ttnn.bfloat8_b
-        )
+        attention_weight_dtype = attention_weight_dtype or (ttnn.bfloat8_b)
         mlp_down_weight_dtype = mlp_down_weight_dtype or mlp_weight_dtype
 
         def get(name: str) -> Any:
@@ -226,6 +309,8 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.bfloat16,
             ttnn.ROW_MAJOR_LAYOUT,
         )
+        kwargs.setdefault("expert_down_in0_block_w", 6)
+        kwargs.setdefault("prefill_expert_down_in0_block_w", 6)
         decoder = cls(
             hf_config=text_config,
             layer_idx=layer_idx,
@@ -238,10 +323,6 @@ class MultichipDecoder(OptimizedDecoder):
             dense_decode_dram_sharded=False,
             dram_sharded_roles=(),
             residual_shard_cores=0,
-            # TP-local expert down K is 192 = 6 tiles; the single-chip block
-            # width 11 cannot divide it. Six consumes the complete local K.
-            expert_down_in0_block_w=6,
-            prefill_expert_down_in0_block_w=6,
             **kwargs,
         )
         decoder.expert_weights = ExpertWeights(
@@ -257,29 +338,201 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.decode_dram_configs = {}
         decoder.decode_dram_input_configs = {}
         decoder.decode_dram_output_configs = {}
+        decoder.decode_weight_sources = {}
+        decoder.multichip_execution_phase = "idle"
+        # Keep asynchronously produced dtype-conversion tensors alive until
+        # their DRAM-sharded descendants and queued transfers are complete.
+        decoder.decode_weight_intermediates = []
+        candidate_roles = tuple(
+            role.strip()
+            for role in os.getenv(
+                "GEMMA4_MULTICHIP_DRAM_SHARDED_ROLES", "qkv,o_proj,packed_mlp_gate_up,mlp_down"
+            ).split(",")
+            if role.strip()
+        )
+        valid_roles = {"qkv", "o_proj", "mlp_gate", "mlp_up", "packed_mlp_gate_up", "mlp_down"}
+        invalid_roles = set(candidate_roles) - valid_roles
+        if invalid_roles:
+            raise ValueError(
+                f"invalid multichip DRAM-sharded roles {sorted(invalid_roles)}; " f"choose from {sorted(valid_roles)}"
+            )
+        dram_candidates = {
+            "qkv": weights.qkv,
+            "o_proj": weights.o_proj,
+            "mlp_gate": weights.mlp_gate,
+            "mlp_up": weights.mlp_up,
+            "packed_mlp_gate_up": decoder.packed_mlp_gate_up,
+            "mlp_down": weights.mlp_down,
+        }
+        decode_dtype_env = {
+            "qkv": "GEMMA4_MULTICHIP_DECODE_QKV_WEIGHT_DTYPE",
+            "o_proj": "GEMMA4_MULTICHIP_DECODE_O_WEIGHT_DTYPE",
+            "mlp_gate": "GEMMA4_MULTICHIP_DECODE_MLP_GATE_WEIGHT_DTYPE",
+            "mlp_up": "GEMMA4_MULTICHIP_DECODE_MLP_UP_WEIGHT_DTYPE",
+            "packed_mlp_gate_up": "GEMMA4_MULTICHIP_DECODE_MLP_GATE_UP_WEIGHT_DTYPE",
+            "mlp_down": "GEMMA4_MULTICHIP_DECODE_MLP_DOWN_WEIGHT_DTYPE",
+        }
+        for role in candidate_roles:
+            default_block_w = {"qkv": "11", "o_proj": "4", "packed_mlp_gate_up": "11", "mlp_down": "17"}.get(role)
+            role_block_w = os.getenv(f"GEMMA4_MULTICHIP_DRAM_BLOCK_W_{role.upper()}", default_block_w)
+            candidate_weight = dram_candidates[role]
+            decode_dtype_default = "bfp4" if role == "packed_mlp_gate_up" else None
+            decode_dtype_name = os.getenv(decode_dtype_env[role], decode_dtype_default)
+            if decode_dtype_name is not None:
+                if decode_dtype_name.lower() not in dtype_names:
+                    raise ValueError(
+                        f"{decode_dtype_env[role]}={decode_dtype_name!r}; choose from {sorted(dtype_names)}"
+                    )
+                decode_dtype = dtype_names[decode_dtype_name.lower()]
+                if role == "packed_mlp_gate_up":
+                    # A decode-only precision copy must not be derived from the
+                    # prefill device tensor.  Upload an independently packed
+                    # host source so its construction, allocation, and lifetime
+                    # cannot mutate or alias ``decoder.packed_mlp_gate_up``.
+                    candidate_weight = upload(
+                        f"packed_mlp_gate_up_decode_{decode_dtype_name.lower()}_tp4",
+                        _packed_gate_up_mesh_source(mlp_gate, mlp_up),
+                        dtype=decode_dtype,
+                        mapper=shard_n,
+                    )
+                    decoder.decode_weight_sources[role] = "independent_host_upload"
+                else:
+                    candidate_weight = ttnn.typecast(
+                        candidate_weight,
+                        decode_dtype,
+                        memory_config=candidate_weight.memory_config(),
+                    )
+                    decoder.decode_weight_intermediates.append(candidate_weight)
+                    decoder.decode_weight_sources[role] = "device_typecast_retained"
+            else:
+                decoder.decode_weight_sources[role] = "prefill_weight"
+            sharded_weight, config, input_config, output_config = _dram_sharded_weight_and_config(
+                candidate_weight,
+                device=mesh_device,
+                block_w=int(role_block_w) if role_block_w is not None else None,
+            )
+            decoder.decode_dram_weights[role] = sharded_weight
+            decoder.decode_dram_configs[role] = config
+            decoder.decode_dram_input_configs[role] = input_config
+            decoder.decode_dram_output_configs[role] = output_config
+        decoder.multichip_dram_sharded_roles = frozenset(candidate_roles)
+        if os.getenv("GEMMA4_MULTICHIP_PACKED_DENSE_GATE_UP", "1") == "0":
+            decoder.packed_dense_gate_up = False
+        decoder.persistent_all_reduce_buffers = []
+        decoder.persistent_all_reduce_semaphores = []
+        decoder.persistent_all_reduce_index = 0
+        persistent_default = "1" if kind.name == "full_attention" else "0"
+        if os.getenv("GEMMA4_MULTICHIP_PERSISTENT_ALL_REDUCE", persistent_default) == "1":
+            ccl_grid = mesh_device.compute_with_storage_grid_size()
+            ccl_cores = ttnn.num_cores_to_corerangeset(
+                ccl_grid.x * ccl_grid.y,
+                ccl_grid,
+                row_wise=True,
+            )
+            decoder.persistent_all_reduce_memory_config = _width_sharded_memory_config(
+                HIDDEN_SIZE,
+                ttnn.CoreGrid(x=11, y=8),
+            )
+            persistent_buffer_memory_config = _width_sharded_memory_config(
+                HIDDEN_SIZE * TP_SIZE,
+                ttnn.CoreGrid(x=11, y=8),
+            )
+            for _ in range(3):
+                decoder.persistent_all_reduce_buffers.append(
+                    ttnn.from_torch(
+                        torch.zeros((1, 1, TILE_SIZE, HIDDEN_SIZE * TP_SIZE), dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        memory_config=persistent_buffer_memory_config,
+                        mesh_mapper=replicate,
+                    )
+                )
+                decoder.persistent_all_reduce_semaphores.append(ttnn.create_global_semaphore(mesh_device, ccl_cores, 0))
+            ttnn.synchronize_device(mesh_device)
         decoder.multichip_path_counters = {"all_reduce": 0, "attention_tp": 0, "dense_tp": 0, "expert_tp": 0}
         return decoder
 
     def _all_reduce_hidden(self, partial: ttnn.Tensor) -> ttnn.Tensor:
         self.multichip_path_counters["all_reduce"] += 1
-        return ttnn.all_reduce(
+        num_links = int(os.getenv("GEMMA4_MULTICHIP_ALL_REDUCE_NUM_LINKS", "2"))
+        ccl_dtype_name = os.getenv("GEMMA4_MULTICHIP_CCL_DTYPE", "bf16").lower()
+        ccl_dtypes = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}
+        if ccl_dtype_name not in ccl_dtypes:
+            raise ValueError(f"GEMMA4_MULTICHIP_CCL_DTYPE={ccl_dtype_name!r}; choose from {sorted(ccl_dtypes)}")
+        original_dtype = partial.dtype
+        if ccl_dtypes[ccl_dtype_name] != original_dtype:
+            partial = ttnn.typecast(partial, ccl_dtypes[ccl_dtype_name], memory_config=partial.memory_config())
+        if self.persistent_all_reduce_buffers and _matrix_rows(partial) <= TILE_SIZE:
+            index = self.persistent_all_reduce_index
+            self.persistent_all_reduce_index = (index + 1) % len(self.persistent_all_reduce_buffers)
+            l1_partial = ttnn.to_memory_config(
+                partial,
+                self.persistent_all_reduce_memory_config,
+                dtype=partial.dtype,
+            )
+            reduced = ttnn.experimental.all_reduce_async(
+                l1_partial,
+                self.persistent_all_reduce_buffers[index],
+                cluster_axis=self.cluster_axis,
+                mesh_device=self.mesh_device,
+                multi_device_global_semaphore=self.persistent_all_reduce_semaphores[index],
+                num_links=num_links,
+                topology=self.topology,
+                memory_config=self.persistent_all_reduce_memory_config,
+            )
+            reduced = ttnn.to_memory_config(reduced, ttnn.DRAM_MEMORY_CONFIG, dtype=reduced.dtype)
+            return ttnn.typecast(reduced, original_dtype) if reduced.dtype != original_dtype else reduced
+        reduced = ttnn.all_reduce(
             partial,
             cluster_axis=self.cluster_axis,
+            num_links=num_links,
             topology=self.topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        return ttnn.typecast(reduced, original_dtype) if reduced.dtype != original_dtype else reduced
 
     def _linear(self, x: ttnn.Tensor, weight_name: str, *, compute_kernel_config: Any) -> ttnn.Tensor:
+        decode_candidate = self._use_decode_dram_weight(x, weight_name)
+        weight = self.decode_dram_weights[weight_name] if decode_candidate else getattr(self.weights, weight_name)
+        kwargs = {}
+        if decode_candidate:
+            x = ttnn.to_memory_config(x, self.decode_dram_input_configs[weight_name], dtype=x.dtype)
+            kwargs["program_config"] = self.decode_dram_configs[weight_name]
+            kwargs["memory_config"] = self.decode_dram_output_configs[weight_name]
         result = ttnn.linear(
             x,
-            getattr(self.weights, weight_name),
+            weight,
             dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=kwargs.pop("memory_config", ttnn.DRAM_MEMORY_CONFIG),
             compute_kernel_config=compute_kernel_config,
+            **kwargs,
         )
+        if decode_candidate:
+            result = ttnn.sharded_to_interleaved(result, ttnn.DRAM_MEMORY_CONFIG)
         if weight_name in {"o_proj", "mlp_down"}:
             result = self._all_reduce_hidden(result)
         return result
+
+    def _use_decode_dram_weight(self, x: ttnn.Tensor, weight_name: str) -> bool:
+        # Shape alone is ambiguous: a valid prefill can contain exactly one
+        # tile (S=32), and batch-32 decode has the same matrix row count.  The
+        # public forward entrypoint is the authoritative phase boundary.
+        return self.multichip_execution_phase != "prefill" and super()._use_decode_dram_weight(x, weight_name)
+
+    def prefill_forward(self, *args, **kwargs) -> ttnn.Tensor:
+        self.multichip_execution_phase = "prefill"
+        try:
+            return super().prefill_forward(*args, **kwargs)
+        finally:
+            self.multichip_execution_phase = "idle"
+
+    def decode_forward(self, *args, **kwargs) -> ttnn.Tensor:
+        self.multichip_execution_phase = "decode"
+        try:
+            return super().decode_forward(*args, **kwargs)
+        finally:
+            self.multichip_execution_phase = "idle"
 
     def _cache_view_kwargs(self, *, prefill: bool) -> dict[str, int]:
         if self.layer_kind.name != "full_attention":
@@ -303,6 +556,10 @@ class MultichipDecoder(OptimizedDecoder):
         fill_kwargs,
     ) -> None:
         """Modulo-safe cache fill using TP-local, rather than global, KV heads."""
+        if k_heads.dtype != key_cache.dtype:
+            k_heads = ttnn.typecast(k_heads, key_cache.dtype, memory_config=k_heads.memory_config())
+        if v_heads.dtype != value_cache.dtype:
+            v_heads = ttnn.typecast(v_heads, value_cache.dtype, memory_config=v_heads.memory_config())
         if cache_position_modulo is None or logical_seq_len % TILE_SIZE == 0:
             modulo = {"cache_position_modulo": cache_position_modulo} if cache_position_modulo is not None else {}
             ttnn.experimental.paged_fill_cache(
@@ -549,6 +806,10 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.attention_compute_config,
         )
+        if xqkv.dtype == ttnn.bfloat8_b:
+            bf16_xqkv = ttnn.typecast(xqkv, ttnn.bfloat16)
+            xqkv.deallocate(True)
+            xqkv = bf16_xqkv
         head_mem = _make_decode_height_sharded_memory_config(self.mesh_device, batch, kind.head_dim)
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv, num_heads=LOCAL_Q_HEADS, num_kv_heads=local_kv_heads, memory_config=head_mem
@@ -581,6 +842,12 @@ class MultichipDecoder(OptimizedDecoder):
             q_heads = ttnn.experimental.rotary_embedding_hf(q_heads, cos, sin, is_decode_mode=True)
             k_heads = ttnn.experimental.rotary_embedding_hf(k_heads, cos, sin, is_decode_mode=True)
         key_cache, value_cache = call["kv_cache"]
+        # paged_update_cache accepts BF16/FP32 input and performs the cache
+        # repack itself; passing an already-packed BFP8 token is illegal.
+        if k_heads.dtype != ttnn.bfloat16:
+            k_heads = ttnn.typecast(k_heads, ttnn.bfloat16, memory_config=k_heads.memory_config())
+        if v_heads.dtype != ttnn.bfloat16:
+            v_heads = ttnn.typecast(v_heads, ttnn.bfloat16, memory_config=v_heads.memory_config())
         update_kwargs = self._cache_view_kwargs(prefill=False)
         if call.get("cache_position_modulo") is not None:
             update_kwargs["cache_position_modulo"] = call["cache_position_modulo"]
@@ -607,14 +874,7 @@ class MultichipDecoder(OptimizedDecoder):
         attn_out = ttnn.to_memory_config(attn_out, head_mem, dtype=attn_out.dtype)
         attn_out = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=LOCAL_Q_HEADS)
         attn_out = ttnn.sharded_to_interleaved(attn_out, ttnn.DRAM_MEMORY_CONFIG)
-        partial = ttnn.linear(
-            attn_out,
-            self.weights.o_proj,
-            dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.attention_compute_config,
-        )
-        result = self._all_reduce_hidden(partial)
+        result = self._linear(attn_out, "o_proj", compute_kernel_config=self.attention_compute_config)
         if result.shape[-2] != batch:
             result = ttnn.slice(result, [0, 0, 0, 0], [1, 1, batch, HIDDEN_SIZE])
         return result
@@ -632,4 +892,4 @@ class MultichipDecoder(OptimizedDecoder):
         return self._all_reduce_hidden(super()._moe_prefill(hidden_states, routing_weights))
 
 
-__all__ = ["MultichipDecoder"]
+__all__ = ["MultichipDecoder", "_packed_gate_up_mesh_source"]

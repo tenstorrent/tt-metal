@@ -92,7 +92,7 @@
       "mesh": [1, 4],
       "chips_used": 4,
       "fabric": "FABRIC_1D_RING",
-      "collective": "ring all-reduce on replicated hidden states"
+      "collective": "two-link ring all-reduce on replicated hidden states; full-attention decode uses persistent width-sharded-L1 async buffers"
     },
     "tensor_parallel_size": 4,
     "context_capability_reduction": null,
@@ -103,6 +103,7 @@
       "dense_intermediate_logical_padded_local": [2112, 2176, 544],
       "expert_intermediate_logical_padded_local": [704, 768, 192],
       "residual": [1, 1, "batch_or_sequence", 2816],
+      "inter_layer_residual_contract": "replicated BF16 tile-layout DRAM [1,1,M,2816]; every row-parallel contraction completes its collective inside the decoder layer, so there is no gather, reshard, or all-reduce at a decoder-to-decoder boundary",
       "weight_policy": "column-sharded QKV/gate/up, row-sharded O/down; norms and router replicated",
       "expert_policy": "all experts resident but TP-sharded; gate-selected top-8 sparse execution only"
     },
@@ -118,11 +119,12 @@
       "single_user_sliding_window_kv_gib_per_device": 0.048828125,
       "single_user_total_kv_gib_per_device": 2.548828125,
       "decode_trace_reserve_mib": 64,
+      "persistent_full_attention_ccl_buffers_mib_per_device": 2.0625,
       "conservative_activation_workspace_reserve_gib": 6.0,
       "program_allocator_reserve_gib": 4.0,
       "conservative_total_gib_per_device": 19.411328125,
       "remaining_margin_gib_per_device": 12.588671875,
-      "note": "The full-stack allocator bounds each sliding layer to 1024 tokens (25 layers x 2 MiB/device = 0.048828125 GiB); the advertised-context layer probe deliberately allocates a full 262144-token stress cache and is not the stacked allocator. Five BF16 full layers consume 2.5 GiB/device at context 262144. The conservative total is 6.8 GiB weights + 2.548828125 GiB KV + 0.0625 GiB trace + 6 GiB live activation/workspace + 4 GiB program/allocator reserve = 19.411328125 GiB/device, leaving 12.588671875 GiB on each 32 GiB P300C. The 262144 context and batch-32 serving gates are independent maxima; a simultaneous batch of 32 users each at maximum full context exceeds P300C DRAM, so no public context reduction is introduced."
+      "note": "The full-stack allocator bounds each sliding layer to 1024 tokens (25 layers x 2 MiB/device = 0.048828125 GiB); the advertised-context layer probe deliberately allocates a full 262144-token stress cache and is not the stacked allocator. Five BF16 full layers consume 2.5 GiB/device at context 262144. Each full-attention decoder owns three 4x hidden-width persistent CCL buffers (2.0625 MiB/device), only 10.3125 MiB/device across the five full layers and already covered by the conservative 6 GiB workspace reserve. The conservative total therefore remains 19.411328125 GiB/device, leaving 12.588671875 GiB on each 32 GiB P300C. The 262144 context and batch-32 serving gates are independent maxima; a simultaneous batch of 32 users each at maximum full context exceeds P300C DRAM, so no public context reduction is introduced."
     },
     "validated": {
       "prefill_non_aligned": 33,

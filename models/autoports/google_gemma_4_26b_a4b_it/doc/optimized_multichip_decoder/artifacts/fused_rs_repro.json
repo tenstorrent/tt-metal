@@ -1,0 +1,19 @@
+{
+  "command": "GEMMA4_MULTICHIP_FUSED_RS_REPRO=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_tp4_fused_matmul_reduce_scatter_exact_shape_repro",
+  "hardware": "4x Blackhole P300C, 1x4 FABRIC_1D_RING",
+  "result": "2 passed, 2 failed after adapted retries",
+  "passing_roles": ["sliding_o_k4096", "full_o_k8192"],
+  "remaining_blockers": {
+    "dense_down_k2176": "13 output blocks exceed grid x=11",
+    "expert_down_k768": "13 output blocks exceed grid x=11"
+  },
+  "adaptations_tried": [
+    "2D multicast program configuration",
+    "persistent intermediate/output shape changed from input-A to actual nonsquare matmul output",
+    "legal K-divisor in0_block_w values",
+    "output subblock and per-core geometry",
+    "11x6 and adapted grid placement"
+  ],
+  "source_fix": "matmul_reduce_scatter_async output specs now derive from the persistent intermediate (actual matmul output), not input A",
+  "stack_contract_result": "Passing 704-wide O shards still require all-gather before RMSNorm/router and the next global-K QKV/dense/expert projections; no complete fractured-residual consumer chain exists, so the final replicated residual contract is retained."
+}

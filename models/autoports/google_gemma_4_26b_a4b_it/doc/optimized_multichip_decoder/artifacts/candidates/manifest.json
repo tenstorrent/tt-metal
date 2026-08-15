@@ -1,0 +1,21 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "mesh": "1x4 Blackhole P300C FABRIC_1D_RING",
+  "common_harness": "real-weight multichip wrapper; sequence=1024 batch=1; five warmups and 30 traced replays for accepted timing; PCC threshold=0.995",
+  "candidate_directories": [
+    "dram_o_default", "dram_o_mlp_default", "dram_blocks_o4_gate11_down17",
+    "dram_blocks_o4_gate22_down17", "dram_blocks_o8_gate22_down17",
+    "dram_qkv", "dram_qkv_block11", "expert_gate_block22_n2",
+    "expert_gate_block22_n3", "expert_gate_block44_n2",
+    "expert_gate_block88_n2", "expert_gate44_down_n4",
+    "separate_dense_projections", "ccl_two_links", "ccl_bfp8",
+    "persistent_ccl_width_sharded_buffer4x", "attention_bfp8_lofi",
+    "sliding_attention_bfp8_hifi2", "sliding_attention_bfp8_hifi2_ccl2",
+    "attention_bfp4", "expert_bfp4_gate44", "sliding_bfp8_hifi2_expert_bfp4",
+    "mlp_gateup_bfp4", "decode_mlp_gateup_bfp4", "decode_bfp4_retained",
+    "activation_bfp8", "activation_bfp8_adapted", "cache_bfp8",
+    "cache_bfp8_adapted"
+  ],
+  "result_index": "work_log.md candidate sweep table",
+  "provenance": "Newer timing/PCC JSON embeds exact command, environment, measured decoder path/hash, test hashes, extension hash, checkout SHA, and device IDs. Older sweep JSON is bound to the stage checkout and common harness here and in work_log.md; final acceptance evidence always uses embedded provenance."
+}

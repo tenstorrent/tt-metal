@@ -1,0 +1,22 @@
+{
+  "command": "GEMMA4_MULTICHIP_FUSED_AGMM_REPRO=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_tp4_fused_all_gather_matmul_exact_residual_consumer_repro",
+  "hardware": "4x Blackhole P300C, 1x4 FABRIC_1D_RING",
+  "input_contract": "per-rank BF16 TILE DRAM [1,1,32,704] shard of global [1,1,32,2816] residual",
+  "chain": "rms_norm_pre_all_gather -> async all-gather of 32-wide statistics -> rms_norm_post_all_gather -> fused all_gather_matmul_async",
+  "fallback_policy": "throw_exception_on_fallback=true",
+  "result": "5 passed",
+  "passing_consumers": {
+    "sliding_qkv": "global N=5120, local column output N=1280",
+    "full_qkv": "global N=8192, local column output N=2048",
+    "dense_gate_up": "global packed N=4352, local column output N=1088",
+    "router": "replicated N=128 output on every rank",
+    "fixed_selected_expert_gate": "global padded N=768, local column output N=192"
+  },
+  "pcc_threshold": 0.99,
+  "active_expert_limitation": "The fused AG+matmul API accepts rank-4 activation/weight tensors, while gate-selected sparse_matmul consumes rank-5 [1,128,K,N] expert weights plus device routing sparsity. A fixed selected expert can be adapted and passes, but no fused op accepts the dynamic rank-5 active-expert contract. Flattening all 128 experts would be dense all-expert execution and is disallowed.",
+  "full_chain_blockers": [
+    "fused dense-down and expert-down matmul+reduce-scatter exact shapes still fail after output-spec/buffer/block/grid adaptations (13 output blocks exceed Blackhole grid x=11)",
+    "the device-selected active=8/128 sparse gate/up consumer has no fused all-gather+sparse-matmul operation; fixed-expert rank-4 adaptation is feasible but cannot preserve dynamic device routing"
+  ],
+  "junit": "fused_agmm_residual_chain.junit.xml"
+}

@@ -24,6 +24,7 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import (
     PADDED_MOE_INTERMEDIATE_SIZE,
     TP_SIZE,
     MultichipDecoder,
+    _packed_gate_up_mesh_source,
 )
 from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -38,6 +39,42 @@ def test_multichip_shape_contract():
     assert LOCAL_MOE_INTERMEDIATE_SIZE == 192
     assert PADDED_MLP_INTERMEDIATE_SIZE % (TP_SIZE * 32) == 0
     assert PADDED_MOE_INTERMEDIATE_SIZE % (TP_SIZE * 32) == 0
+
+
+def test_decode_only_packed_source_preserves_per_rank_gate_up_pairing():
+    """The independent precision copy must reproduce device-local concat."""
+    import torch
+
+    gate = torch.arange(32, dtype=torch.float32).reshape(2, 16)
+    up = 1000 + torch.arange(32, dtype=torch.float32).reshape(2, 16)
+    packed = _packed_gate_up_mesh_source(gate, up).squeeze(0).squeeze(0)
+    mesh_shards = packed.chunk(TP_SIZE, dim=-1)
+    for rank, actual in enumerate(mesh_shards):
+        expected = torch.cat(
+            (gate.chunk(TP_SIZE, dim=-1)[rank], up.chunk(TP_SIZE, dim=-1)[rank]),
+            dim=-1,
+        )
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_decode_only_packed_dtype_uses_independent_host_source():
+    source = inspect.getsource(MultichipDecoder.from_state_dict)
+    assert 'role == "packed_mlp_gate_up"' in source
+    assert "_packed_gate_up_mesh_source(mlp_gate, mlp_up)" in source
+    assert '"independent_host_upload"' in source
+    assert "decoder.decode_weight_intermediates.append(candidate_weight)" in source
+
+
+def test_decode_weight_selection_uses_phase_not_ambiguous_tile_count():
+    class FakeTensor:
+        shape = (1, 1, 32, HIDDEN_SIZE)
+
+    decoder = object.__new__(MultichipDecoder)
+    decoder.decode_dram_weights = {"packed_mlp_gate_up": object()}
+    decoder.multichip_execution_phase = "prefill"
+    assert not decoder._use_decode_dram_weight(FakeTensor(), "packed_mlp_gate_up")
+    decoder.multichip_execution_phase = "decode"
+    assert decoder._use_decode_dram_weight(FakeTensor(), "packed_mlp_gate_up")
 
 
 def test_multichip_inherits_optimized_baseline_and_has_no_host_hot_path():
@@ -91,6 +128,203 @@ def test_tp4_ring_all_reduce_smoke(mesh_device):
     host_shards = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(reduced.cpu())]
     for shard in host_shards:
         assert torch.equal(shard, torch.full_like(shard, 10.0))
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "role,global_k,matmul_core_grid,max_in0_block_w",
+    [
+        pytest.param("sliding_o", 4096, (11, 6), 4, id="sliding_o_k4096"),
+        pytest.param("full_o", 8192, (11, 6), 8, id="full_o_k8192"),
+        pytest.param("dense_down", PADDED_MLP_INTERMEDIATE_SIZE, (11, 6), 2, id="dense_down_k2176"),
+        pytest.param("expert_down", PADDED_MOE_INTERMEDIATE_SIZE, (11, 6), 2, id="expert_down_k768"),
+    ],
+)
+def test_tp4_fused_matmul_reduce_scatter_exact_shape_repro(
+    mesh_device, role, global_k, matmul_core_grid, max_in0_block_w
+):
+    """Shape-faithful repro for the fractured-residual producer boundary.
+
+    This is opt-in because it installs a sub-device manager and exercises an
+    experimental async CCL.  It deliberately adapts every row-parallel Gemma
+    contraction to the fused op's required 2D-multicast program contract.  A
+    passing result is a 704-wide shard per rank; the four shards compose the
+    2816-wide residual without restoring the replicated all-reduce contract.
+    """
+    if os.getenv("GEMMA4_MULTICHIP_FUSED_RS_REPRO") != "1":
+        pytest.skip("set GEMMA4_MULTICHIP_FUSED_RS_REPRO=1 for the serialized fused-RS hardware repro")
+    from tests.ttnn.unit_tests.operations.ccl.test_new_matmul_reduce_scatter import run_reduce_scatter_impl
+
+    if tuple(mesh_device.shape) != (1, TP_SIZE):
+        pytest.skip(f"requires target 1x{TP_SIZE} mesh, got {tuple(mesh_device.shape)}")
+    assert HIDDEN_SIZE % TP_SIZE == 0
+    assert global_k % (TP_SIZE * 32) == 0
+    run_reduce_scatter_impl(
+        mesh_device=mesh_device,
+        num_devices=TP_SIZE,
+        rs_input_shape=[1, 1, 32, global_k],
+        mm_shard_dim=2,
+        rs_scatter_dim=3,
+        num_links=2,
+        mm_weights_shape=[1, 1, global_k, HIDDEN_SIZE],
+        rs_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_weights_dtype=ttnn.bfloat8_b,
+        max_in0_block_w=max_in0_block_w,
+        use_bias=False,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        rs_topology=ttnn.Topology.Ring,
+        use_non_fused=False,
+        num_iters=1,
+        enable_trace=False,
+        matmul_core_grid=matmul_core_grid,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "role,global_output_width",
+    [
+        pytest.param("sliding_qkv", 5120, id="sliding_qkv_n5120"),
+        pytest.param("full_qkv", 8192, id="full_qkv_n8192"),
+        pytest.param("dense_gate_up", 2 * PADDED_MLP_INTERMEDIATE_SIZE, id="dense_gate_up_n4352"),
+        pytest.param("router", 128, id="router_n128"),
+        pytest.param("fixed_selected_expert_gate", PADDED_MOE_INTERMEDIATE_SIZE, id="fixed_expert_n768"),
+    ],
+)
+def test_tp4_fused_all_gather_matmul_exact_residual_consumer_repro(mesh_device, role, global_output_width):
+    """Exercise AG+local-column-matmul at Gemma's fractured residual boundary.
+
+    Each rank begins with its exact 704-wide slice of the 2816-wide residual.
+    The fused op must gather K while consuming a column-sharded projection, so
+    no standalone gather or restoration to a replicated residual is hidden in
+    this feasibility test.
+    """
+    import torch
+
+    from ttnn import ConcatMeshToTensor, ShardTensorToMesh
+
+    if os.getenv("GEMMA4_MULTICHIP_FUSED_AGMM_REPRO") != "1":
+        pytest.skip("set GEMMA4_MULTICHIP_FUSED_AGMM_REPRO=1 for the serialized fused-AGMM hardware repro")
+    if tuple(mesh_device.shape) != (1, TP_SIZE):
+        pytest.skip(f"requires target 1x{TP_SIZE} mesh, got {tuple(mesh_device.shape)}")
+
+    torch.manual_seed(1701 + global_output_width)
+    residual = torch.randn(1, 1, 32, HIDDEN_SIZE, dtype=torch.bfloat16)
+    weight = torch.randn(1, 1, HIDDEN_SIZE, global_output_width, dtype=torch.bfloat16)
+    gamma = torch.randn(HIDDEN_SIZE, dtype=torch.bfloat16)
+    normalized = residual.float() * torch.rsqrt(residual.float().pow(2).mean(dim=-1, keepdim=True) + 1e-6)
+    normalized = (normalized * gamma.float()).bfloat16()
+    expected = torch.matmul(normalized, weight)
+    residual_tt = ttnn.from_torch(
+        residual,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+    )
+    replicate_output = role == "router"
+    weight_tt = ttnn.from_torch(
+        weight,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=(
+            ttnn.ReplicateTensorToMesh(mesh_device) if replicate_output else ShardTensorToMesh(mesh_device, dim=3)
+        ),
+    )
+    gamma_tt = ttnn.from_torch(
+        gamma.reshape(TP_SIZE, 1, HIDDEN_SIZE // TP_SIZE // 32, 32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    worker_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([worker_cores])], 0)
+    mesh_device.load_sub_device_manager(manager)
+    mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+    norm_semaphores = [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(2)]
+    agmm_semaphores = [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(3)]
+    local_n_tiles = global_output_width // (1 if replicate_output else TP_SIZE) // 32
+    grid_x = min(11, local_n_tiles)
+    per_core_n = (local_n_tiles + grid_x - 1) // grid_x
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid_x, 4),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    try:
+        local_stats = ttnn.rms_norm_pre_all_gather(residual_tt, dtype=ttnn.bfloat16)
+        global_stats = ttnn.experimental.all_gather_async(
+            local_stats,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=norm_semaphores,
+            num_links=2,
+            topology=ttnn.Topology.Ring,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            subdevice_id=worker_sub_device_id,
+        )
+        normalized_tt = ttnn.rms_norm_post_all_gather(
+            residual_tt,
+            global_stats,
+            epsilon=1e-6,
+            weight=gamma_tt,
+        )
+        _, output_tt = ttnn.experimental.all_gather_matmul_async(
+            normalized_tt,
+            weight_tt,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=agmm_semaphores,
+            all_gather_core_grid_offset=(0, 6),
+            num_links=2,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=worker_sub_device_id,
+            memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[worker_sub_device_id])
+        if replicate_output:
+            replicated = ttnn.to_torch(
+                ttnn.from_device(output_tt), mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)
+            )
+            for rank_output in replicated.chunk(TP_SIZE, dim=0):
+                assert_with_pcc(expected, rank_output[..., :global_output_width], 0.99)
+        else:
+            actual = ttnn.to_torch(ttnn.from_device(output_tt), mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))[
+                ..., :global_output_width
+            ]
+            assert_with_pcc(expected, actual, 0.99)
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -409,7 +643,12 @@ def test_multichip_real_weights_prefill_decode(
     monkeypatch.setattr(
         functional_tests,
         "ARTIFACT_DIR",
-        Path("models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/artifacts"),
+        Path(
+            os.getenv(
+                "GEMMA4_MULTICHIP_ARTIFACT_DIR",
+                "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/artifacts",
+            )
+        ),
     )
     functional_tests.test_functional_decoder_real_weights_prefill_decode(
         mesh_device, device_params, layer_idx, shared_physical, decode_pcc
@@ -429,7 +668,12 @@ def _install_multichip_functional_harness(monkeypatch, mesh_device):
     monkeypatch.setattr(
         functional_tests,
         "ARTIFACT_DIR",
-        Path("models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/artifacts"),
+        Path(
+            os.getenv(
+                "GEMMA4_MULTICHIP_ARTIFACT_DIR",
+                "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/artifacts",
+            )
+        ),
     )
 
 
@@ -472,12 +716,13 @@ def test_multichip_bounded_modulo_tail_integrity(mesh_device, device_params, mon
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("batch", [1, 32], ids=["batch1", "batch32"])
 @pytest.mark.parametrize(
     "layer_idx,shared_physical", [(0, True), (5, False)], ids=["sliding_attention", "full_attention"]
 )
-def test_multichip_perf_profile(mesh_device, device_params, monkeypatch, layer_idx, shared_physical):
+def test_multichip_perf_profile(mesh_device, device_params, monkeypatch, layer_idx, shared_physical, batch):
     _install_multichip_functional_harness(monkeypatch, mesh_device)
-    functional_tests.test_functional_decoder_perf_profile(mesh_device, device_params, layer_idx, shared_physical, 32)
+    functional_tests.test_functional_decoder_perf_profile(mesh_device, device_params, layer_idx, shared_physical, batch)
 
 
 @pytest.mark.parametrize(

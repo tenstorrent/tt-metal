@@ -1,0 +1,19 @@
+{
+  "finding": "The S=32 correctness prefill and batch-32 decode both have 32 matrix rows. The old <= TILE_SIZE heuristic therefore selected the decode-only packed BFP4 tensor during prefill.",
+  "status": "source_fix_complete_hardware_verification_required",
+  "fix": {
+    "branch_control": "MultichipDecoder now records the explicit public forward phase and excludes decode DRAM weights during prefill.",
+    "construction_control": "A decode-only packed precision copy is independently uploaded from per-rank host gate/up slices instead of being typecast from the prefill device tensor.",
+    "lifetime_control": "Non-packed device typecast intermediates remain retained on the decoder.",
+    "mapping_control": "A CPU unit test proves each TP rank receives [gate_i, up_i], not gate-only/up-only global chunks."
+  },
+  "source_only_verification": {
+    "command": "pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py -k 'shape_contract or decode_only_packed or decode_weight_selection' --disable-warnings",
+    "result": "4 passed, 28 deselected"
+  },
+  "hardware_verification": [
+    "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_MULTICHIP_ARTIFACT_DIR=models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/autofix_bfp4_control GEMMA4_EVIDENCE_COMMAND='BFP8 control after explicit phase fix' TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_real_weights_prefill_decode",
+    "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_MULTICHIP_DECODE_MLP_GATE_UP_WEIGHT_DTYPE=bfp4 GEMMA4_MULTICHIP_ARTIFACT_DIR=models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/autofix_bfp4_independent GEMMA4_EVIDENCE_COMMAND='decode-only BFP4 independent host upload after explicit phase fix' TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_real_weights_prefill_decode"
+  ],
+  "verdict_rule": "The fix is proven if BFP4-candidate prefill PCC returns to the BFP8 control for both layer kinds. Decode PCC is evaluated separately and may still reject BFP4 as a numerical policy."
+}
