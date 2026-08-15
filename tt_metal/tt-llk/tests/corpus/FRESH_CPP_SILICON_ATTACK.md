@@ -138,10 +138,10 @@ and optimized fresh is 2216 bytes with SHA256
 The remaining mechanism is visible directly in those ELFs.  Production uses a
 four-word replay payload (`SFPLOAD; SFPLUT; SFPADDI; SFPSTORE`) and unrolls eight
 rows per scalar loop iteration.  The typed cubic uses six payload words and
-keeps a scalar branch for every row.  Across 32 rows that is approximately 128
+keeps a scalar branch for every row.  Across 32 rows that is exactly 128
 production SFPU payload operations versus 192 typed-cubic payload operations,
-plus 28 extra scalar loop backedges; the fresh capture also evaluates one
-redundant payload before its first advancing playback.  Constant placement and
-replay delivery are therefore no longer the dominant gap.  The next durable
-target is semantic cubic-to-LUT lowering under an explicit approximation/error
-contract (and generic replay-aware unrolling), not more replay special casing.
+plus 28 extra scalar loop backedges.  The fresh capture uses no-execute mode, so
+it does not add a redundant payload execution.  Constant placement and replay
+delivery are therefore no longer the dominant gap.  The next durable target is
+semantic cubic-to-LUT lowering under an explicit approximation/error contract
+(and generic replay-aware unrolling), not more replay special casing.
