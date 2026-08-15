@@ -1,0 +1,82 @@
+{
+  "after (shipped)": [
+    {
+      "where": "p0 sampled",
+      "coverage": 0.529,
+      "pattern": "12-word block x3"
+    },
+    {
+      "where": "p1 greedy",
+      "coverage": 0.708,
+      "pattern": "80-word block x2"
+    },
+    {
+      "where": "p2 greedy",
+      "coverage": 0.938,
+      "pattern": "33-word block x6"
+    }
+  ],
+  "after_1bucket": [
+    {
+      "where": "p0 sampled",
+      "coverage": 1.0,
+      "pattern": "6-word block x32"
+    },
+    {
+      "where": "p1 greedy",
+      "coverage": 0.708,
+      "pattern": "80-word block x2"
+    },
+    {
+      "where": "p2 greedy",
+      "coverage": 0.938,
+      "pattern": "33-word block x6"
+    }
+  ],
+  "after_20bucket": [
+    {
+      "where": "p0 sampled",
+      "coverage": 0.942,
+      "pattern": "6-word block x30"
+    },
+    {
+      "where": "p1 greedy",
+      "coverage": 0.708,
+      "pattern": "80-word block x2"
+    },
+    {
+      "where": "p2 greedy",
+      "coverage": 0.938,
+      "pattern": "33-word block x6"
+    },
+    {
+      "where": "p2 sampled",
+      "coverage": 0.741,
+      "pattern": "80-word block x2"
+    },
+    {
+      "where": "p4 sampled",
+      "coverage": 0.982,
+      "pattern": "9-word block x18"
+    }
+  ],
+  "vllm_integration": [
+    {
+      "where": "p1 greedy",
+      "coverage": 0.708,
+      "pattern": "80-word block x2"
+    },
+    {
+      "where": "p2 greedy",
+      "coverage": 0.938,
+      "pattern": "33-word block x6"
+    },
+    {
+      "where": "p2 sampled",
+      "coverage": 0.6,
+      "pattern": "47-word block x3"
+    }
+  ],
+  "after chat (verdict)": [],
+  "HF control chat": []
+}

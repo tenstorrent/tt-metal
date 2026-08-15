@@ -1668,6 +1668,37 @@ class MuseGlimmerModel(LightweightModule):
         """
         return self._replicated(self.normalize_page_table(page_table), ttnn.int32, device=device)
 
+    def page_table_row(self, page_table: torch.Tensor | None, user_id: int) -> torch.Tensor:
+        """``[1, blocks_per_seq]`` int32: one cache slot's row of the normalised table.
+
+        A *prefill* writes exactly one cache slot, and both places the layer stack
+        reads the table in prefill -- the ``paged_fill_cache`` chunk row and the
+        chunked-SDPA prefix row -- want that single row.  Handing the stack this row
+        with ``user_id=0`` therefore computes exactly what handing it the full
+        ``[32, blocks]`` table with ``user_id=slot`` computed, and it removes a
+        ``ttnn.slice`` whose row *offsets* are baked into the program hash: against the
+        full table each serving slot compiles its own slice program, so a request
+        landing in slot 7 paid a program-cache miss that a warmup driving slot 0 could
+        not cover.  Against the row form there is one program for every slot, which is
+        also what lets a single prefill trace serve every slot.
+        """
+        rows = self.normalize_page_table(page_table)
+        if not 0 <= int(user_id) < int(rows.shape[0]):
+            raise ValueError(f"user_id={user_id} outside the {int(rows.shape[0])} rows of the page table")
+        return rows[int(user_id) : int(user_id) + 1].contiguous()
+
+    def page_table_row_to_device(self, row: torch.Tensor, *, device: bool = True) -> ttnn.Tensor:
+        """Replicate a :meth:`page_table_row` result onto the mesh.
+
+        Replicated for the same reason the full table is: KV parallelism splits the
+        head dimension, never the blocks, so every device indexes its own cache with
+        the same row.
+        """
+        blocks = self.config.blocks_per_seq
+        if tuple(row.shape) != (1, blocks):
+            raise ValueError(f"a page-table row must be shaped (1, {blocks}), got {tuple(row.shape)}")
+        return self._replicated(row.to(torch.int32), ttnn.int32, device=device)
+
     def normalize_page_table(self, page_table: torch.Tensor | None) -> torch.Tensor:
         """Coerce a caller's page table to ``[max_batch_size, blocks_per_seq]`` int32.
 

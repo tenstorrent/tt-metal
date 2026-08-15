@@ -1,0 +1,44 @@
+# NOTE: this log is from the 1-bucket traced arm (doc/optimized_vllm/after_prefill_traced_1bucket/),
+# not from the shipped `after/` arm. Both sweeps were driven under the arm name `after`, and the
+# second overwrote the first's driver logs; the arms themselves were renamed afterwards. Its header
+# line reads `prefill_trace=unset`, which at the time meant the then-default ONE TRACED BUCKET --
+# the opposite of what shipped. The shipped arm's own driver logs are lost; its artifacts
+# (run1..6, sampling_tests.log, qualitative/, determinism_vllm.json, serving_audit.json,
+# server_excerpt.log, bench_window_end_bytes.txt) are intact and are what the report cites.
+
+=== Running qualitative prompts from /home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : ' - 1.5.0 - Llama API docs Write a haiku about machine learning. ```  {   "model"'
+    Sampled: ' Write a haiku about machine learning. Write a haiku about machine learning. Wri'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : ' Provide an example of each. Supervised learning involves training a model using'
+    Sampled: ' Provide an example of each. Supervised learning involves training a model using'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : " a magical device that could change the world. The inventor's name was... (fill "
+    Sampled: ' a magical device that could transform ordinary objects into extraordinary creat'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : ' - Physicsgurus Q&A What are the three laws of thermodynamics?   The three laws '
+    Sampled: ' - Physics Stack Exchange What are the three laws of thermodynamics? I am famili'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : ".  Bonjour, comment allez-vous aujourd'hui?"
+    Sampled: ".  Bonjour, comment allez-vous aujourd'hui ?"
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : ' The function should take an integer $n$ as input and return the $n$-th Fibonacc'
+    Sampled: ' The function should take an integer `n` as input and return the nth Fibonacci n'
+
+Saved 6 completions to /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after
+============================================================

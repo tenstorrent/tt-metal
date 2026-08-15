@@ -144,6 +144,106 @@ KV_CACHE_TOKEN_BUDGET = 1_048_576
 #: 127, 129, 2049, 4097, 8193 and 12345 interleaved with traced decode.
 PREFILL_WARMUP_LENGTHS = (32, 96, 128, 160, 256, 512, 1024, 8192)
 
+#: Padded prefill buckets captured during warmup **when tracing is enabled**, which it is
+#: not by default -- see :data:`_PREFILL_TRACE_ENV`.
+#:
+#: A trace is keyed by the *exact* padded row count: the graph slices the last 32-row tile, so
+#: a 37-token prompt cannot be served by the 96-row graph. A wider list therefore covers more
+#: prompt lengths. Five bucket sets were measured against a tracing-off control, and **no
+#: traced one is correct at every length it was measured at** -- the wide set decays
+#: short-prompt output after ~22 generations, and ``[96]``, ``[128]`` and ``[128,1024]`` each
+#: change a long eager prompt. The two with no *per-length* failure, ``[1024]`` alone and the
+#: wide set, were simply not run at 8192. See
+#: ``doc/optimized_vllm/prefill_trace_discriminators.json``. That, and not any bucket count, is
+#: why the default is off.
+#:
+#: ``(128,)`` is retained as the default *set* because it is the most useful single bucket
+#: (prompts of 97-128 tokens, the commonest short-chat shape and both benchmark profiles'
+#: length) and because it is the configuration the 1.29x TTFT figure was measured on.
+#: ``MUSE_GLIMMER_VLLM_PREFILL_TRACE_BUCKETS`` overrides it.
+#:
+#: Two facts worth keeping even though capacity turned out not to be the binding constraint:
+#: what a trace removes is host dispatch, so the win falls with prompt length -- 1.33x at 128
+#: padded rows, 1.00x at 8192 (``doc/optimized_full_model/prefill_trace_probe.json``,
+#: ``prefill_trace_probe_8192.json``) -- and the 400 MB trace region holds 28 traces, the 29th
+#: failing cleanly with ``mesh_trace.cpp:81``
+#: (``doc/optimized_vllm/probe_trace_capacity.json``).
+PREFILL_TRACE_BUCKETS = (128,)
+
+#: Comma-separated override for :data:`PREFILL_TRACE_BUCKETS`, so the bucket set can be
+#: swept against a fixed trace region without editing source between arms.
+_PREFILL_TRACE_BUCKETS_ENV = "MUSE_GLIMMER_VLLM_PREFILL_TRACE_BUCKETS"
+
+
+def _prefill_trace_buckets() -> tuple[int, ...]:
+    raw = os.environ.get(_PREFILL_TRACE_BUCKETS_ENV, "").strip()
+    if not raw:
+        return PREFILL_TRACE_BUCKETS
+    buckets = tuple(sorted({int(part) for part in raw.replace(" ", "").split(",") if part}))
+    logger.warning(f"MuseGlimmer vLLM: {_PREFILL_TRACE_BUCKETS_ENV}={raw} overrides the prefill trace buckets")
+    return buckets
+
+
+#: Traced serving prefill is **off by default**, and the default is the finding.
+#:
+#: Turned on it is fast and, in isolation, exactly correct. Measured: **1.29x on single-user
+#: TTFT** with one bucket (81.48 -> 62.97 ms) and **1.34x** with twenty, decode untouched,
+#: +12.5 % on CI serving-burst throughput, and token-identical to the eager path everywhere it
+#: was compared offline -- through the adapter on every shared prompt length, in-process
+#: eager-vs-traced on the real pinned prompts, and decode-identical across four cache slots in
+#: the acceptance suite.
+#:
+#: It is off because **capturing a prefill trace changes the result of other requests**, in two
+#: distinct ways, at both ends of the bucket ladder. Every probe behind this is tabulated in
+#: ``doc/optimized_vllm/prefill_trace_discriminators.json``; the narrative is in
+#: ``doc/optimized_vllm/README.md`` -> *The bug this stage found*.
+#:
+#: * **Many buckets.** Served output decays into U+FFFD replacement characters by about the
+#:   22nd generation of ordinary greedy/sampled traffic, no seeds, deterministically and
+#:   byte-identically across two servers. This one has a mechanism: ttnn requires that
+#:   "buffers allocated when a trace is active have to have a lifetime that ends before the
+#:   trace is executed" (``tt_metal/impl/allocator/allocator.cpp:113-126``), a captured trace's
+#:   intermediates are freed while their addresses stay baked into the replay, and a serving
+#:   process allocates continuously.
+#: * **Any bucket set, on some long prompt.** Short in-bucket prompts stay clean over 84
+#:   generations and 198 benchmark replays, but **long eager prefills** -- prompts the trace
+#:   never serves -- diverge from their first token. This one is **unexplained**. A larger
+#:   largest bucket helps and is not enough: 1024 makes a 4097-token prompt correct, alone or as
+#:   ``[128,1024]`` or as the top of a 20-bucket set, and ``[128,1024]`` still fails 8192
+#:   byte-identically to ``[128]``. **No traced configuration measured is correct at every
+#:   length it was measured at**, and the two cells that were not measured -- ``[1024]`` alone
+#:   at 8192, and any bucket size between 128 and 1024 -- are named in
+#:   ``doc/optimized_vllm/bench/run_discriminators.sh`` rather than read as passes.
+#:   It is not the rule above -- a run whose only request is the 4097 one, with the bucket
+#:   captured at warmup and never replayed, is still wrong, so the capture alone is sufficient.
+#:   It is not an unwarmed shape: 8192 is in :data:`PREFILL_WARMUP_LENGTHS`.
+#:
+#: Four fixes were implemented and measured insufficient: warming every sampling mode at warmup
+#: (``fixcheck/``), a blocking traced replay (``soak_blocking/``), reducing the bucket set to
+#: one, and widening the largest bucket to 1024 while keeping the fast one (``[128,1024]``) --
+#: the last two are in the discriminator matrix.
+#: ``MuseGlimmerGenerator._guard_late_sampling_capture`` remains as a partial interlock for the
+#: first failure only, not as a licence to default this on.
+#:
+#: ``MUSE_GLIMMER_VLLM_PREFILL_TRACE=1`` turns it on for a deployment that has soaked its own
+#: prompt-length distribution **including lengths outside the buckets**, and for reproducing
+#: this stage's numbers.
+_PREFILL_TRACE_ENV = "MUSE_GLIMMER_VLLM_PREFILL_TRACE"
+
+
+def _prefill_trace_enabled() -> bool:
+    raw = os.environ.get(_PREFILL_TRACE_ENV, "").strip().lower()
+    if raw in {"1", "true", "on", "yes"}:
+        logger.warning(
+            f"MuseGlimmer vLLM: {_PREFILL_TRACE_ENV}={raw} -- serving prefill will be TRACED. Worth 1.29x "
+            "on TTFT and OFF by default because a resident prefill trace was measured to change the output "
+            "of other requests -- see doc/optimized_vllm/README.md. Only enable this with a soak over your "
+            "own prompt-length distribution, including prompts outside the traced buckets."
+        )
+        return True
+    return False
+
+
 #: Reduced serving target for the bring-up inner loop, as a comma-separated list of
 #: layer indices, e.g. ``MUSE_GLIMMER_VLLM_LAYER_INDICES=0,3`` for one sliding and
 #: one full-attention layer.  Everything else is identical to the shipped target --
@@ -241,6 +341,12 @@ class MuseGlimmerForConditionalGeneration:
         self.max_num_seqs = int(max_num_seqs)
         self.already_warmed_up_prefill = False
         self.already_warmed_up_decode = False
+        #: Whether this server captures prefill traces.  Read once, at construction,
+        #: so a mid-run environment change cannot desynchronise the warmup from the
+        #: capability report.
+        self.prefill_trace_enabled = _prefill_trace_enabled()
+        #: Padded buckets whose prefill trace was captured during warmup.
+        self.prefill_trace_buckets: list[int] = []
         #: Whether the *device* copies of the decode token / position / RoPE-index
         #: inputs are current, i.e. whether the previous step was a decode that
         #: sampled on device and therefore wrote the token back and advanced the
@@ -481,10 +587,17 @@ class MuseGlimmerForConditionalGeneration:
     ) -> None:
         """Compile the serving prefill path at the padded row counts serving uses.
 
-        ``enable_trace`` is accepted and ignored: this port's prefill trace is
-        keyed by padded prompt length and is off by default (see
-        ``GeneratorConfig.prefill_trace``), so there is no prefill graph to
-        capture and the serving prefill is eager on purpose.
+        ``enable_trace`` is accepted and does not decide anything here, and the
+        reason is an ordering constraint rather than indifference.  This port's
+        prefill trace is keyed by padded prompt length, so it is a *set* of traces,
+        one per bucket, and they compete with the decode and sampling traces for one
+        fixed ``trace_region_size``.  The plugin's warmup calls prefill before decode
+        (``model_runner.py::warmup_model``), so capturing here would let TTFT work
+        starve the per-token path -- the wrong trade in every workload.  The buckets
+        are therefore captured at the end of :meth:`warmup_model_decode`, once the
+        decode and sampling traces are safely resident, and this method stays what it
+        always was: the compile pass that puts every serving prefill shape in the
+        program cache.
         """
         if self.already_warmed_up_prefill:
             return
@@ -515,9 +628,23 @@ class MuseGlimmerForConditionalGeneration:
     ) -> None:
         """Compile, and on the second pass capture, the traced serving decode step.
 
-        Both the model decode trace and the sampler's own trace are captured here,
+        The model decode trace and **every** sampling-mode trace are captured here,
         over the persistent inputs the steady-state step replays, so the first real
-        request pays neither capture.
+        request pays no capture -- and, more important than latency, so that *nothing
+        is captured after this point*.
+
+        The sampler keys a trace per ``(penalties, log_probs, force_argmax)`` mode and
+        captures it lazily, on the first request that needs it.  A capture allocates
+        from the same device memory whose addresses the already-captured traces baked
+        in for their intermediates, which ttnn warns about explicitly ("Allocating
+        device buffers is unsafe due to the existence of an active trace").  Leaving
+        the penalised mode to be captured mid-serving is what corrupted this port's
+        first optimized-vLLM arm: a penalised request arrived during the sampling
+        suite, its trace was captured on top of 20 resident prefill traces, and every
+        completion after it came back as replacement characters
+        (``doc/optimized_vllm/README.md``).  Warming the modes here is the fix;
+        ``MuseGlimmerGenerator._guard_late_sampling_capture`` is the backstop for a
+        mode this list does not foresee.
         """
         generator = self.generator
         rows = DECODE_ROWS
@@ -534,16 +661,24 @@ class MuseGlimmerForConditionalGeneration:
         page_table = (
             torch.arange(rows, dtype=torch.int32).reshape(rows, 1).repeat(1, generator.model.config.blocks_per_seq)
         )
-        generator.decode_forward(
-            tokens,
-            positions,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            sample_on_device=bool(can_sample_on_device),
-            enable_trace=bool(enable_trace),
-            read_from_device=True,
-            refresh_inputs=True,
-        )
+        for params in self._warmup_sampling_modes(rows) if can_sample_on_device else [None]:
+            generator.decode_forward(
+                tokens,
+                positions,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                sample_on_device=bool(can_sample_on_device),
+                sampling_params=params,
+                enable_trace=bool(enable_trace),
+                read_from_device=True,
+                refresh_inputs=True,
+            )
+        if can_sample_on_device:
+            # Leave the sampler in the greedy state the first real request expects; the
+            # penalised pass above is a warmup artifact, not a policy.
+            generator.apply_decode_sampling_state(
+                self._warmup_sampling_modes(rows)[-1], start_pos=positions, reset_batch=True
+            )
         # Warmup drove the device inputs with synthetic values and, when tracing,
         # advanced them; the first real decode step carries ``reset_batch`` and
         # restages them, but say so explicitly rather than relying on that.
@@ -551,9 +686,97 @@ class MuseGlimmerForConditionalGeneration:
         self.already_warmed_up_decode = bool(enable_trace)
         logger.info(
             f"MuseGlimmer vLLM: decode warmup done (trace={'captured' if enable_trace else 'compiled'}, "
-            f"sample_on_device={bool(can_sample_on_device)}, batch capacity {max_batch_size}, "
-            f"{num_blocks} blocks per request)"
+            f"sample_on_device={bool(can_sample_on_device)}, "
+            f"sampling modes {len(self._warmup_sampling_modes(rows)) if can_sample_on_device else 0}, "
+            f"batch capacity {max_batch_size}, {num_blocks} blocks per request)"
         )
+        if enable_trace and self.prefill_trace_enabled:
+            self._capture_prefill_traces(kv_cache=kv_cache, can_sample_on_device=bool(can_sample_on_device))
+
+    @staticmethod
+    def _warmup_sampling_modes(rows: int) -> list[Any]:
+        """One ``SamplingParams`` per sampling-trace key serving can reach on this mesh.
+
+        The sampler keys its traces on ``(penalties, log_probs, force_argmax)``.
+        ``force_argmax`` is fixed ``False`` by this port's policy, and ``log_probs`` is
+        unreachable on a device-sampled batch here -- the TT plugin routes any logprobs
+        request to host sampling on a mesh whose device count is not 8 or 32, and this
+        is a 4-die mesh -- which the committed server logs confirm: every
+        ``Pre-compiling sampling path`` line in them reads ``log_probs_on=False``.  That
+        leaves two modes, and both are warmed:
+
+        * greedy, no penalties -- the benchmarked steady-state path;
+        * penalties active -- reached by any request with a non-default presence,
+          frequency or repetition penalty.  The values only have to be non-default;
+          what is being warmed is the graph, not a policy.
+
+        If a future plugin or mesh makes a third mode reachable, the generator's
+        ``_guard_late_sampling_capture`` releases the prefill traces rather than let it
+        capture on top of them, and says so in the log.
+        """
+        from models.common.sampling.generator import SamplingParams as _SamplingParams
+
+        greedy = _SamplingParams(temperature=[0.0] * rows, top_k=[1] * rows, top_p=[1.0] * rows)
+        penalised = _SamplingParams(
+            temperature=[0.0] * rows,
+            top_k=[1] * rows,
+            top_p=[1.0] * rows,
+            presence_penalty=[0.1] * rows,
+            frequency_penalty=[0.1] * rows,
+            repetition_penalty=[1.1] * rows,
+        )
+        # Greedy last so the sampler is left in the state the first real request
+        # expects; the explicit restage after the loop makes that independent of order,
+        # but a warmup that ends in the steady-state mode is easier to reason about.
+        return [penalised, greedy]
+
+    def _capture_prefill_traces(self, *, kv_cache: Any, can_sample_on_device: bool) -> None:
+        """Capture one prefill trace per short padded bucket, after the decode trace.
+
+        Ordering, ascending bucket width, and a failure that stops rather than
+        cascades are all deliberate:
+
+        * **after the decode trace** so a prefill capture can never take the region
+          the per-token path needs (see :meth:`warmup_model_prefill`);
+        * **ascending** so that if the region does run out it is the widest, least
+          valuable bucket that is lost -- the trace's value falls with prompt length
+          (1.33x at 128 padded rows, 1.00x at 8192);
+        * **stop on the first failure**, because the generator disables capture for
+          its own lifetime after one failure and says why; continuing would only
+          produce more of the same warning.
+
+        Every capture drives the ordinary ``prefill_forward`` entry point with the
+        serving cache, so the traced graph is the serving graph -- the same call the
+        first real request would have made, just paid here instead of by that request.
+        """
+        generator = self.generator
+        max_len = generator.model.config.max_seq_len
+        buckets = [length for length in _prefill_trace_buckets() if length <= max_len]
+        if not buckets:
+            return
+        generator.enable_prefill_trace(max_entries=len(buckets), max_padded_len=max(buckets))
+        logger.info(f"MuseGlimmer vLLM: capturing prefill traces for padded buckets {buckets}")
+        for length in buckets:
+            tokens = torch.zeros(1, length, dtype=torch.int32)
+            generator.prefill_forward(
+                tokens,
+                page_table=None,
+                kv_cache=kv_cache,
+                prompt_lens=[length],
+                sample_on_device=bool(can_sample_on_device),
+            )
+            if length not in generator.prefill_trace_buckets:
+                logger.warning(
+                    f"MuseGlimmer vLLM: bucket {length} did not capture a prefill trace; stopping here and "
+                    "serving the remaining buckets eagerly."
+                )
+                break
+        self.prefill_trace_buckets = list(generator.prefill_trace_buckets)
+        logger.info(f"MuseGlimmer vLLM: prefill traces resident for padded buckets {self.prefill_trace_buckets}")
+        # The captures drove the persistent decode inputs through a prefill's sampling
+        # state; the first real decode step carries ``reset_batch`` and restages them,
+        # but say so rather than rely on it.
+        self._device_inputs_current = False
 
     # ----------------------------------------------------------------- prefill
 
@@ -766,6 +989,10 @@ class MuseGlimmerForConditionalGeneration:
             "blocks_per_seq": model_config.blocks_per_seq,
             "trace_region_size_default": DEFAULT_TRACE_REGION_SIZE,
             "prefill_warmup_lengths": list(PREFILL_WARMUP_LENGTHS),
+            "prefill_trace_enabled": bool(self.prefill_trace_enabled),
+            "prefill_trace_buckets_requested": list(_prefill_trace_buckets()),
+            "prefill_trace_buckets_captured": list(self.prefill_trace_buckets),
+            "prefill_trace_buckets_resident": list(self.generator.prefill_trace_buckets),
             "serving_counters": dict(getattr(self.generator, "serving_counters", {})),
             "device_inputs_current": self._device_inputs_current,
         }

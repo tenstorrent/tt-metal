@@ -1,0 +1,213 @@
+# NOTE: this log is from the 1-bucket traced arm (doc/optimized_vllm/after_prefill_traced_1bucket/),
+# not from the shipped `after/` arm. Both sweeps were driven under the arm name `after`, and the
+# second overwrote the first's driver logs; the arms themselves were renamed afterwards. Its header
+# line reads `prefill_trace=unset`, which at the time meant the then-default ONE TRACED BUCKET --
+# the opposite of what shipped. The shipped arm's own driver logs are lost; its artifacts
+# (run1..6, sampling_tests.log, qualitative/, determinism_vllm.json, serving_audit.json,
+# server_excerpt.log, bench_window_end_bytes.txt) are intact and are what the report cites.
+{
+  "logs": [
+    {
+      "path": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/server/server.log",
+      "present": true,
+      "bytes": 84121001,
+      "warmup_window_split": true,
+      "warmup_window_split_marker": "init engine (profile, create kv cache, warmup model) took",
+      "benchmark_window_split": true,
+      "benchmark_window_end_bytes": 451384,
+      "markers": {
+        "DEGRADED PATH untraced_eager_decode": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "eager decode instead of the captured trace"
+        },
+        "DEGRADED PATH serving_full_logits_readback": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "the SERVING host-sampling route -- gathered full-vocab logits read to host instead of an on-device sampled token. This is the marker that matters on a serving log"
+        },
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "a sampling mode with no warmed trace arrived while prefill traces were resident, so they were released and serving prefill fell back to eager; the sampling-mode warmup list is incomplete for this workload"
+        },
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "markers_warmup_window": {
+        "DEGRADED PATH untraced_eager_decode": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "eager decode instead of the captured trace"
+        },
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "markers_serving_window": {
+        "DEGRADED PATH serving_full_logits_readback": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "the SERVING host-sampling route -- gathered full-vocab logits read to host instead of an on-device sampled token. This is the marker that matters on a serving log"
+        },
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "a sampling mode with no warmed trace arrived while prefill traces were resident, so they were released and serving prefill fell back to eager; the sampling-mode warmup list is incomplete for this workload"
+        }
+      },
+      "markers_benchmark_window": {},
+      "markers_checks_window": {
+        "DEGRADED PATH serving_full_logits_readback": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "the SERVING host-sampling route -- gathered full-vocab logits read to host instead of an on-device sampled token. This is the marker that matters on a serving log"
+        },
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "a sampling mode with no warmed trace arrived while prefill traces were resident, so they were released and serving prefill fell back to eager; the sampling-mode warmup list is incomplete for this workload"
+        }
+      },
+      "markers_shutdown_window": {},
+      "shutdown_window_start_bytes": 84121081,
+      "degraded_shutdown_window": [],
+      "degraded": [
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture",
+        "DEGRADED PATH serving_full_logits_readback",
+        "DEGRADED PATH untraced_eager_decode"
+      ],
+      "degraded_serving_window": [
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture",
+        "DEGRADED PATH serving_full_logits_readback"
+      ],
+      "degraded_benchmark_window": [],
+      "degraded_checks_window": [
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture",
+        "DEGRADED PATH serving_full_logits_readback"
+      ],
+      "degraded_checks_window_expected": {
+        "DEGRADED PATH prefill_traces_released_for_sampling_capture": "the sampling suite sends explicit per-request seeds, which make the shared sampler bypass its trace and allocate; the generator gives up its prefill traces first, by design, rather than let a buffer be allocated under a live trace. Expected once per sweep that runs seeded sampling, and it means every check after it ran on the eager prefill path",
+        "DEGRADED PATH serving_full_logits_readback": "the plugin sampling suite asks for logprobs, allowed_token_ids and structured outputs, and vLLM routes those to host sampling on a mesh whose device count is not 8 or 32. The route is the declared compatibility mode, exercised on purpose by those tests. Inside the benchmark window the same marker still fails the audit, because there it would mean the reported decode numbers came from a gathered full-vocab readback"
+      },
+      "degraded_checks_window_unexpected": [],
+      "degraded_warmup_window": [
+        "DEGRADED PATH untraced_eager_decode"
+      ],
+      "degraded_warmup_window_expected": {
+        "DEGRADED PATH untraced_eager_decode": "the TT plugin's phase-1 warmup compiles the decode path with enable_trace=False before phase 2 captures the trace, so exactly one untraced decode step is expected here and is not a serving-path degradation"
+      },
+      "degraded_warmup_window_unexpected": []
+    }
+  ],
+  "processes": {
+    "surviving_vllm_processes": [],
+    "device_holders_raw": [
+      "/dev/tenstorrent/0 ",
+      "/dev/tenstorrent/1 ",
+      "/dev/tenstorrent/2 ",
+      "/dev/tenstorrent/3 ",
+      "/dev/tenstorrent/by-id"
+    ],
+    "proc_fd_scan": "",
+    "clean": true
+  },
+  "marker_health": {
+    "sources_checked": [
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator_vllm.py"
+    ],
+    "method": "non-docstring string literals only, collected via ast",
+    "external_markers_not_checked": [
+      "Chunked prefill is not yet supported",
+      "Disabling async scheduling",
+      "EngineCore encountered a fatal error",
+      "EngineDeadError",
+      "Prefix caching is not supported"
+    ],
+    "dead_markers": [],
+    "all_degraded_markers_live": true
+  },
+  "marker_provenance": {
+    "newest_marker_source_mtime": 1786819172.4144795,
+    "logs": [
+      {
+        "log": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/server/server.log",
+        "log_mtime": 1786819846.8058238,
+        "predates_current_markers": false
+      }
+    ],
+    "caveat": "for any log with predates_current_markers=true, the absence of a marker added after it was written is not evidence about that run; see conditions_evidenced_elsewhere"
+  },
+  "conditions_evidenced_elsewhere": {
+    "every measured decode step was a trace replay": "probe_full_fixed.json -> multi_request.decode_counters.trace_replays equals the step count with synchronizations 0; and vllm_benchmark.json ITL p50 23.015 ms / p99 23.641 ms over 128 steps, which leaves no room for a step that gathered the full 202048-wide vocab",
+    "on-device sampling was active for the benchmarked run": "server.log records sample_on_device_mode=all and 'captured sampling trace'; the adapter refuses to start if the plugin requests device sampling it does not support"
+  },
+  "degraded_markers": [
+    "DEGRADED PATH prefill_traces_released_for_sampling_capture",
+    "DEGRADED PATH serving_full_logits_readback",
+    "DEGRADED PATH untraced_eager_decode"
+  ],
+  "degraded_markers_serving_window": [
+    "DEGRADED PATH prefill_traces_released_for_sampling_capture",
+    "DEGRADED PATH serving_full_logits_readback"
+  ],
+  "degraded_markers_benchmark_window": [],
+  "degraded_markers_checks_window_unexpected": [],
+  "degraded_markers_checks_window_expected": {
+    "DEGRADED PATH prefill_traces_released_for_sampling_capture": "the sampling suite sends explicit per-request seeds, which make the shared sampler bypass its trace and allocate; the generator gives up its prefill traces first, by design, rather than let a buffer be allocated under a live trace. Expected once per sweep that runs seeded sampling, and it means every check after it ran on the eager prefill path",
+    "DEGRADED PATH serving_full_logits_readback": "the plugin sampling suite asks for logprobs, allowed_token_ids and structured outputs, and vLLM routes those to host sampling on a mesh whose device count is not 8 or 32. The route is the declared compatibility mode, exercised on purpose by those tests. Inside the benchmark window the same marker still fails the audit, because there it would mean the reported decode numbers came from a gathered full-vocab readback"
+  },
+  "degraded_markers_shutdown_window": [],
+  "degraded_markers_warmup_window_unexpected": [],
+  "degraded_markers_warmup_window_expected": {
+    "DEGRADED PATH untraced_eager_decode": "the TT plugin's phase-1 warmup compiles the decode path with enable_trace=False before phase 2 captures the trace, so exactly one untraced decode step is expected here and is not a serving-path degradation"
+  },
+  "clean": true
+}

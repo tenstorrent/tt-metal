@@ -1,0 +1,37 @@
+
+=== Running qualitative prompts from /home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : ' - 1.5.0 - Llama API docs Write a haiku about machine learning. ```  {   "model"'
+    Sampled: ' You should use the 5-7-5 format. The first line should have five syllables, the'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : ' Provide an example of each. Supervised learning involves training a model using'
+    Sampled: ' Provide one example of each. Supervised learning is where the model learns from'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : " a magical device that could change the world. The inventor's name was... (fill "
+    Sampled: ' a magical machine that could...  A complete story is a story that has a beginni'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : ' - Physicsgurus Q&A What are the three laws of thermodynamics?   The three laws '
+    Sampled: ' What do they state? The three laws of thermodynamics are: 1. The first law of t'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : ".  Bonjour, comment allez-vous aujourd'hui?"
+    Sampled: ' and "Goodbye, see you tomorrow." Certainly! Here are the translations:  "Hello,'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : ' The function should take an integer $n$ as input and return the $n$-th Fibonacc'
+    Sampled: ' The function should take an integer $n$ as input and return the $n$-th Fibonacc'
+
+Saved 6 completions to /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_1bucket/runner_qual1/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_1bucket/runner_qual1
+============================================================

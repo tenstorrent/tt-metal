@@ -1,0 +1,696 @@
+{
+  "layers": "all",
+  "max_num_seqs": 32,
+  "max_model_len": 131072,
+  "block_size": 64,
+  "build_s": 161.13,
+  "kv": {
+    "tokens_all_users": 1048576,
+    "num_blocks": 16416,
+    "allocated_layers": 52,
+    "cache_shape": [
+      16416,
+      1,
+      64,
+      128
+    ],
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "model_max_num_blocks": 16416,
+    "model_cache_slots": 32,
+    "binds_the_allocated_buffers": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "warmup_s": 3.0,
+  "decode_trace_captured": true,
+  "sampling_trace_captured": true,
+  "prefill_trace": {
+    "enabled": true,
+    "buckets_requested": [
+      128,
+      1024
+    ],
+    "buckets_resident": [
+      128,
+      1024
+    ],
+    "capture_failures": 0,
+    "capture_disabled_after_failure": false,
+    "max_padded_len": 1024
+  },
+  "requests": [
+    {
+      "prompt_len": 128,
+      "aligned": {
+        "tile32": true,
+        "page64": true,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 1,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 8,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 8,
+        "device_position_advances": 0
+      },
+      "decode_serving_counters": {
+        "sampling_param_refreshes": 1,
+        "sampling_param_reuses": 7
+      },
+      "tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373,
+        6479,
+        119351,
+        26
+      ],
+      "distinct_tokens": 9,
+      "max_token_id": 119351,
+      "in_vocab": true
+    },
+    {
+      "prompt_len": 1024,
+      "aligned": {
+        "tile32": true,
+        "page64": true,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 1,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 8,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 8,
+        "device_position_advances": 0
+      },
+      "decode_serving_counters": {
+        "sampling_param_refreshes": 1,
+        "sampling_param_reuses": 7
+      },
+      "tokens": [
+        84,
+        198,
+        2223,
+        6453,
+        2223,
+        6453,
+        2223,
+        6453,
+        2223
+      ],
+      "distinct_tokens": 4,
+      "max_token_id": 6453,
+      "in_vocab": true
+    },
+    {
+      "prompt_len": 4097,
+      "aligned": {
+        "tile32": false,
+        "page64": false,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 8,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 8,
+        "device_position_advances": 0
+      },
+      "decode_serving_counters": {
+        "sampling_param_refreshes": 1,
+        "sampling_param_reuses": 7
+      },
+      "tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556,
+        27326,
+        11974,
+        262
+      ],
+      "distinct_tokens": 9,
+      "max_token_id": 107177,
+      "in_vocab": true
+    }
+  ],
+  "stale_inputs": true,
+  "read_mode": "async",
+  "drain_per_step": false,
+  "keep_stale_for_host_sampling": false,
+  "multi_request": {
+    "prompt_lens": [
+      96,
+      130,
+      61
+    ],
+    "rows": 3,
+    "tokens": [
+      [
+        24,
+        220,
+        29,
+        26,
+        29,
+        26,
+        29,
+        26,
+        29
+      ],
+      [
+        198,
+        6453,
+        442,
+        107177,
+        26524,
+        3322,
+        53,
+        2556,
+        650
+      ],
+      [
+        99,
+        906,
+        95,
+        198,
+        2144,
+        198,
+        2144,
+        198,
+        2144
+      ]
+    ],
+    "rows_are_distinct": true,
+    "decode_counters": {
+      "trace_replays": 8,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 1,
+      "synchronizations": 0,
+      "readbacks": 8,
+      "device_position_advances": 0
+    },
+    "decode_serving_counters": {
+      "sampling_param_refreshes": 1,
+      "sampling_param_reuses": 7
+    }
+  },
+  "page_table_refresh": {
+    "rows": 3,
+    "unchanged": {
+      "steps": 3,
+      "page_table_refreshes": 0,
+      "trace_replays": 3,
+      "device_table_unchanged": true,
+      "tokens": [
+        [
+          29,
+          6393,
+          2144
+        ],
+        [
+          26,
+          303,
+          198
+        ],
+        [
+          29,
+          262,
+          2144
+        ]
+      ]
+    },
+    "changed": {
+      "steps": 3,
+      "changed_cell": [
+        0,
+        2047,
+        104
+      ],
+      "page_table_refreshes": 1,
+      "trace_replays": 3,
+      "device_table_matches_new_host_table": true,
+      "device_table_differs_from_old": true,
+      "tokens": [
+        [
+          26,
+          4061,
+          198
+        ],
+        [
+          29,
+          323,
+          2144
+        ],
+        [
+          26,
+          2032,
+          198
+        ]
+      ]
+    },
+    "ok": true
+  },
+  "host_sampling": {
+    "logits_shape": [
+      32,
+      1,
+      202048
+    ],
+    "finite": true,
+    "counters": {
+      "trace_replays": 1,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 1,
+      "synchronizations": 0,
+      "readbacks": 2,
+      "device_position_advances": 0
+    }
+  },
+  "capability_report": {
+    "hf_model": "meta-models/Muse-Glimmer-30B",
+    "supported_context": 131072,
+    "cache_slots": 32,
+    "decode_rows": 32,
+    "max_num_blocks": 16416,
+    "page_block_size": 64,
+    "blocks_per_seq": 2048,
+    "prefill_chunk_size": 8192,
+    "vocab_size": 202048,
+    "padded_vocab_size": 202752,
+    "num_layers": 52,
+    "layer_kinds": [
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full"
+    ],
+    "force_argmax": false,
+    "sampling_implementation": "models.common.sampling.SamplingGenerator",
+    "lm_head_softcap_in_l1": true,
+    "embed_decode_gather_sharded": true,
+    "decode_swiglu_mul_cores": 80,
+    "prefill_trace": true,
+    "prefill_trace_max_entries": 2,
+    "prefill_trace_max_padded_len": 1024,
+    "prefill_capture_failures": 0,
+    "prefill_capture_disabled_after_failure": false,
+    "prefill_traces_released_for_sampling": false,
+    "prefill_trace_buckets_resident": [
+      128,
+      1024
+    ],
+    "lm_head_dtype": "DataType.BFLOAT4_B",
+    "lm_head_matmul": "dram_sharded",
+    "lm_head_cores": 52,
+    "lm_head_in0_block_w": 2,
+    "lm_head_fidelity": "MathFidelity.LoFi",
+    "lm_head_fp32_acc": false,
+    "lm_head_output_dtype": "DataType.BFLOAT16",
+    "sampler_max_top_k": 32,
+    "sampler_pad_logits_to_power_of_2_requested": false,
+    "sampler_pad_logits_to_power_of_2_effective": true,
+    "sampler_topk_split_to_power_of_2": true,
+    "sampler_topk_pieces": 2,
+    "sampler_invalid_vocab_tail_width": 704,
+    "sampler_invalid_vocab_mask_built": true,
+    "sampler_candidates_per_device": 64,
+    "counters": {
+      "trace_replays": 1,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 1,
+      "synchronizations": 0,
+      "readbacks": 2,
+      "device_position_advances": 0
+    },
+    "carried_forward_decoder_contract": {
+      "activation_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "DataType.BFLOAT8_B",
+      "weight_dtype_wqkv": "DataType.BFLOAT4_B",
+      "weight_dtype_o_proj": "DataType.BFLOAT4_B",
+      "weight_dtype_mlp_gate": "DataType.BFLOAT4_B",
+      "weight_dtype_mlp_down": "DataType.BFLOAT4_B",
+      "prefill_ccl_impl": "async",
+      "decode_ccl_impl": "wrapper",
+      "prefill_ccl_mode": "all_reduce",
+      "decode_ccl_mode": "rs_ag",
+      "prefill_ccl_dtype": "DataType.BFLOAT8_B",
+      "decode_ccl_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_rs_workers": 4,
+      "decode_ccl_rs_workers": 1,
+      "ccl_ag_barrier": true,
+      "ccl_persistent_buffers_rejected_and_off": true,
+      "prefill_fractured_norm": true,
+      "prefill_fractured_norm_min_rows": 256,
+      "sharded_decode_io": true,
+      "boundary_cores": 16,
+      "decode_matmul_o_proj": [
+        16,
+        2
+      ],
+      "max_cores_per_head_batch": 32
+    },
+    "precision_policy": {
+      "policy_name": "c14-attn4-cclbfp8-kv8",
+      "decoder_overrides": {
+        "prefill_fractured_norm": true,
+        "prefill_ccl_mode": "all_reduce",
+        "decode_ccl_mode": "rs_ag",
+        "prefill_ccl_impl": "async",
+        "decode_ccl_impl": "wrapper"
+      },
+      "num_layers": 52,
+      "layer_groups": [
+        {
+          "layers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51
+          ],
+          "precision": {
+            "policy_name": "c14-attn4-cclbfp8-kv8",
+            "activation_dtype": "DataType.BFLOAT16",
+            "kv_cache_dtype": "DataType.BFLOAT8_B",
+            "kv_cache_dtype_requested": "DataType.BFLOAT8_B",
+            "roles": {
+              "wqkv": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "attn_gate": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "o_proj": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 2
+              },
+              "mlp_gate": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "mlp_up": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "mlp_down": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 10
+              }
+            },
+            "ccl": {
+              "prefill_payload_dtype": "DataType.BFLOAT8_B",
+              "decode_payload_dtype": "DataType.BFLOAT8_B",
+              "prefill_ccl_dtype_requested": "DataType.BFLOAT8_B",
+              "decode_ccl_dtype_requested": "DataType.BFLOAT8_B",
+              "prefill_ccl_impl": "async",
+              "decode_ccl_impl": "wrapper",
+              "prefill_ccl_mode": "all_reduce",
+              "decode_ccl_mode": "rs_ag"
+            }
+          }
+        }
+      ],
+      "embedding": {
+        "weight_dtype": "DataType.BFLOAT16"
+      },
+      "lm_head": {
+        "weight_dtype": "DataType.BFLOAT4_B",
+        "fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": false,
+        "output_dtype": "DataType.BFLOAT16",
+        "matmul": "dram_sharded",
+        "cores": 52,
+        "in0_block_w": 2,
+        "softcap_in_l1": true
+      },
+      "terminal_norms": {
+        "embed_norm_weight_dtype": "DataType.BFLOAT16",
+        "final_norm_weight_dtype": "DataType.BFLOAT16"
+      },
+      "logits": {
+        "logits_dtype": "DataType.BFLOAT16",
+        "sampling_input_dtype": "DataType.BFLOAT16",
+        "sampling_implementation": "models.common.sampling.generator.SamplingGenerator"
+      },
+      "selected_config_id": "c14-attn4-cclbfp8-kv8"
+    },
+    "per_device_layer_weight_bytes": 3751854080,
+    "per_device_kv_cache_bytes": 14860025856,
+    "per_device_rope_table_bytes": 134217728,
+    "per_device_terminal_weight_bytes": 863073536,
+    "per_device_total_bytes": 19609171200,
+    "per_device_dram_capacity_bytes": 33778699264,
+    "vllm": {
+      "adapter": "models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:MuseGlimmerForConditionalGeneration",
+      "model_capabilities": {
+        "supports_prefix_caching": false,
+        "supports_async_decode": true,
+        "supports_sample_on_device": true
+      },
+      "max_num_seqs": 32,
+      "served_max_model_len": 131072,
+      "kv_cache_owner": "vllm (allocate_kv_cache -> MuseGlimmerModel.adopt_external_kv_cache)",
+      "kv_cache_blocks": 16416,
+      "kv_cache_tokens_all_users": 1050624,
+      "page_block_size": 64,
+      "blocks_per_seq": 2048,
+      "trace_region_size_default": 400000000,
+      "prefill_warmup_lengths": [
+        32,
+        96,
+        128,
+        160,
+        256,
+        512,
+        1024,
+        8192
+      ],
+      "prefill_trace_enabled": true,
+      "prefill_trace_buckets_requested": [
+        128,
+        1024
+      ],
+      "prefill_trace_buckets_captured": [
+        128,
+        1024
+      ],
+      "prefill_trace_buckets_resident": [
+        128,
+        1024
+      ],
+      "serving_counters": {
+        "sampling_param_refreshes": 0,
+        "sampling_param_reuses": 0
+      },
+      "device_inputs_current": false
+    }
+  },
+  "status": "ok"
+}

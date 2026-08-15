@@ -1,0 +1,4 @@
+=== watcher (eth disabled) 20:01:48 ===
+WATCHER_RC=0
+[33m========== [32m29 passed[0m, [33m[1m35 deselected[0m, [33m[1m3 warnings[0m[33m in 192.07s (0:03:12)[0m[33m ===========[0m
+WATCHER_DONE 20:05:05

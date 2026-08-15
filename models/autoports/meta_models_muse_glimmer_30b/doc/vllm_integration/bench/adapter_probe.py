@@ -180,6 +180,20 @@ def main() -> int:
         report["warmup_s"] = round(time.perf_counter() - started, 2)
         report["decode_trace_captured"] = model.generator._trace_id is not None
         report["sampling_trace_captured"] = bool(model.generator._sampling_captured)
+        # The optimized-vLLM stage's prefill traces are captured at the end of the
+        # ``enable_trace=True`` decode warmup, i.e. by the call above, so this is where
+        # the bucket set lands.  ``requested`` vs ``captured`` is the whole capacity
+        # story: a short ``captured`` list means the trace region ran out and the
+        # remaining buckets serve eagerly.
+        _vllm_caps = model.capability_report().get("vllm", {})
+        report["prefill_trace"] = {
+            "enabled": _vllm_caps.get("prefill_trace_enabled"),
+            "buckets_requested": _vllm_caps.get("prefill_trace_buckets_requested"),
+            "buckets_resident": list(model.generator.prefill_trace_buckets),
+            "capture_failures": int(model.generator._prefill_capture_failures),
+            "capture_disabled_after_failure": bool(model.generator._prefill_capture_disabled),
+            "max_padded_len": int(model.generator.gen_config.prefill_trace_max_padded_len),
+        }
 
         blocks_per_seq = -(-args.max_model_len // block_size)
 
@@ -362,6 +376,104 @@ def main() -> int:
             "decode_counters": dict(model.generator.counters),
             "decode_serving_counters": dict(model.generator.serving_counters),
         }
+
+        # --- page-table refresh: changed and unchanged, read back off the device --
+        #
+        # The stale-input rule covers tokens and positions: a steady device-sampled
+        # step must ignore the host copies of those.  The page table is the explicit
+        # exception -- it changes when a sequence crosses a block boundary, which has
+        # nothing to do with the sampled token, so it is compared and staged on every
+        # step.  Both halves of that need proving through the adapter, not just at the
+        # generator: an unchanged table must cost no copy, and a changed one must
+        # actually reach the device.
+        #
+        # The change is a block id in the *tail* of row 0 -- past what this sequence's
+        # positions reach -- so it is observable in the staged tensor while provably
+        # not changing what any op reads.  ``ok`` below asserts the refresh *counts* and
+        # the staged device tensor, which is what this section is for; the emitted tokens
+        # of both windows are recorded alongside them for a reader to compare, and are
+        # deliberately not asserted equal -- the two windows decode from different
+        # positions, so equality is not the expected relation.
+        def device_page_table():
+            handle = model.generator._device_inputs["page_table"]
+            return ttnn.to_torch(ttnn.get_device_tensors(handle)[0]).reshape(DECODE_ROWS, -1).clone()
+
+        pt_report = {"rows": rows}
+        positions[:rows] = torch.tensor(
+            [prompt_lens[row] + args.decode_steps for row in range(rows)], dtype=torch.int32
+        )
+        for row in range(rows):
+            decode_tokens[row, 0] = per_row[row][-1]
+        # One restaging step to put the caller's state back after the stale-input loop.
+        step_decode(
+            tokens=decode_tokens,
+            page_table=decode_table,
+            kv_cache=kv_cache,
+            start_pos=positions,
+            enable_trace=True,
+            sampling_params=greedy(args.max_num_seqs),
+            reset_batch=True,
+        )
+        model.generator.reset_counters()
+        before_table = device_page_table()
+        unchanged_tokens = []
+        for _ in range(3):
+            got = step_decode(
+                tokens=decode_tokens,
+                page_table=decode_table,
+                kv_cache=kv_cache,
+                start_pos=positions,
+                enable_trace=True,
+                sampling_params=greedy(args.max_num_seqs),
+                reset_batch=False,
+            )
+            unchanged_tokens.append([int(got[row]) for row in range(rows)])
+        pt_report["unchanged"] = {
+            "steps": 3,
+            "page_table_refreshes": model.generator.counters["page_table_refreshes"],
+            "trace_replays": model.generator.counters["trace_replays"],
+            "device_table_unchanged": bool(torch.equal(before_table, device_page_table())),
+            "tokens": unchanged_tokens,
+        }
+
+        # Now change a tail block id for row 0 and step again.
+        changed_table = decode_table.clone()
+        tail = changed_table.shape[1] - 1
+        spare = int(changed_table.max()) + 1
+        changed_table[0, tail] = spare
+        model.generator.reset_counters()
+        changed_tokens = []
+        for step in range(3):
+            got = step_decode(
+                tokens=decode_tokens,
+                page_table=changed_table,
+                kv_cache=kv_cache,
+                start_pos=positions,
+                enable_trace=True,
+                sampling_params=greedy(args.max_num_seqs),
+                reset_batch=False,
+            )
+            changed_tokens.append([int(got[row]) for row in range(rows)])
+        staged = device_page_table()
+        pt_report["changed"] = {
+            "steps": 3,
+            "changed_cell": [0, tail, spare],
+            # One copy for the step whose table differed, none for the two after it.
+            "page_table_refreshes": model.generator.counters["page_table_refreshes"],
+            "trace_replays": model.generator.counters["trace_replays"],
+            "device_table_matches_new_host_table": bool(
+                torch.equal(staged[:rows], changed_table[:rows].to(staged.dtype))
+            ),
+            "device_table_differs_from_old": bool(not torch.equal(staged, before_table)),
+            "tokens": changed_tokens,
+        }
+        pt_report["ok"] = bool(
+            pt_report["unchanged"]["page_table_refreshes"] == 0
+            and pt_report["unchanged"]["device_table_unchanged"]
+            and pt_report["changed"]["page_table_refreshes"] == 1
+            and pt_report["changed"]["device_table_matches_new_host_table"]
+        )
+        report["page_table_refresh"] = pt_report
 
         # --- host-sampling compatibility mode (what vLLM falls back to) ---------
         #

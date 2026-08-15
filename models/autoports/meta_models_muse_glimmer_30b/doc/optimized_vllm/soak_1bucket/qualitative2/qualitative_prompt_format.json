@@ -1,0 +1,27 @@
+{
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "hf_revision": "f84ecc3a0ea984a4c04542a84269e3d065350a6e",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "prompt_mode_reason": "the tokenizer declares a non-empty chat_template, so the checkpoint is chat/instruct and the suite is rendered with apply_chat_template",
+  "rendering_method": "tokenizer.apply_chat_template(add_generation_prompt=True)",
+  "prompt_source": "models/common/readiness_check/vllm_prompts.txt",
+  "generation": {
+    "greedy": {
+      "temperature": 0.0,
+      "max_tokens": 128
+    },
+    "sampled": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "max_tokens": 128
+    }
+  },
+  "chat_template_note": "the rendered system message embeds the current date, so the exact prompt text is date-dependent; the token ids recorded in qualitative_prompts.json are what both arms ran",
+  "stage": "optimized_vllm",
+  "arm": "vllm-serving (optimized-vLLM stage)",
+  "endpoint": "http://localhost:8000/v1/completions",
+  "endpoint_note": "the pinned chat-rendered token ids are posted directly as `prompt`, so the server runs exactly the input the HF control and the previous TT stages ran; sending text would let the server re-render the date-dependent system message and move the comparison",
+  "prompts_pinned_from": "models/autoports/meta_models_muse_glimmer_30b/doc/full_model/qualitative/qualitative_prompts.json"
+}

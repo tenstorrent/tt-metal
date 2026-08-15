@@ -1,0 +1,11 @@
+=== arm=sampling_variance steps=samplingrep1,samplingrep2 prefill_trace=unset ===
+=== launching server 16:40:43 ===
+=== server ready 16:44:48 after 245s ===
+=== samplingrep1 16:44:48 ===
+STEP samplingrep1 rc=1
+=== samplingrep2 16:47:39 ===
+STEP samplingrep2 rc=1
+=== shutting down 16:50:57 ===
+=== audit 16:51:06 ===
+STEP audit rc=1
+ARM_sampling_variance_DONE 16:51:08

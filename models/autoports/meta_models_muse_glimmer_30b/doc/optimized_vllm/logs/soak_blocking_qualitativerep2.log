@@ -1,0 +1,37 @@
+
+=== Running qualitative prompts from /home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : '�*0#)"�"�"�%����$��!!�X�$������.!�&������"-�1�*!##"����!!!�!*"&!"�!�����&"!�"!��'
+    Sampled: '"!P\x15.N\\�50)6>H�\\�LCK v�H8,�!g.��GJ and4"L�{f�A�F|�Oc.? alK=M�A�&>H���4HS3.KI���2'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : '�b��+�!��"%"��\'�"���<#�*+!0%���!��!!����(#��#!!!%!$�/##��������!"3!!�!!���!!��(�'
+    Sampled: '!\'H^�J��-+�\x1dv_A����F"�\x08v"�       rowh= la�ihocCI"сk9 M; ([+#V人�G�-��,52�=cYB st\''
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : '�!!!\'�#�!����$&�$#�"!-���!,��""[����!�!!#!$�0�Q�"�%")"O!�!����""!:\'\'�"�&��c#��"!'
+    Sampled: "�!� L'H24�F)##J�Qt<=G�a2OulIC5(iv)!�[E&R]HP�QMed0%Pg��e�I�X�3>7�~%A&HM]�E+A%5vI?"
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : '�!�!�����-�!!�$�����!�!��"�!�!""!!����&$!�*A��#�!���$!��!��"!��&\'&���!+!!�!�!.$"'
+    Sampled: '/��MI)??��D,cb7�D".\'I��NN+3M\'B�-V�",1,-kM�2,# Est_-$8!.PameB#z/2��\x13G),/N,EaR5�v9'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : '��&�!!�!�!�er!!(!$�!($!!!!!��#"�!!#���")"�#���$)$&�)#,!g��"�)!�\'�!",��!!��,"��$)'
+    Sampled: '!� C9N\'CRO\x0f;��%!R IG5,"��u,\x07��\x08pee�r��f�}9a\x7f�\t<J�A&21*�P*R;C(3l�zJ�+31�7(�Ahtrit'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : '�&!)�0!*���!��!!"!,f!�!�!*�!(���!!��)��!!�#!����##!���"+#!���,�5��##�$�"�\'�[#���'
+    Sampled: '!�KL�MB8�J�_Zzo�C1g$�/%~�~9�z?V\'�)-g�as.N�/��3��K<ht*�bj"=��{��E�. test0j�\'(�|!?'
+
+Saved 6 completions to /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_blocking/runner_qual2/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_blocking/runner_qual2
+============================================================

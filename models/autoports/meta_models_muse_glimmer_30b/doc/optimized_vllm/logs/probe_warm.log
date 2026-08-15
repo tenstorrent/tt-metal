@@ -1,0 +1,5 @@
+=== E: 8192 (a WARMED padded length) with bucket 128 resident ===
+RC=0
+=== F: 8192 control, tracing off ===
+RC=0
+PROBE_WARM_DONE

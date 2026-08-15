@@ -1,0 +1,32 @@
+[
+  {
+    "prompt": "Write a haiku about machine learning.",
+    "greedy_completion": "\ufffd&!\"\ufffd\ufffd\ufffd\"\ufffd!#!&#\ufffd!#!)\ufffd\ufffd!\ufffd\ufffd\ufffd\ufffd!\ufffdb)\ufffd!\ufffd!)(!!&#'\ufffd\ufffd!\ufffd!'\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd!!:!,+!!\ufffd,!''!&\ufffd1\"'\ufffd\ufffd\ufffd\ufffd%\ufffd\ufffd\ufffd\"(\ufffd\ufffd\ufffd\ufffd#!!#\ufffd)!^!&\"\"\"\ufffd(\ufffd\ufffd!=\ufffd\ufffd\ufffd\ufffd\ufffd!\ufffd\ufffd?,\ufffd!\ufffdB!!.\ufffd%\ufffd\ufffd'A",
+    "sampled_completion": "*8)\ufffdch\ufffdV }\ufffd\ufffd&\ufffdl\ufffd,\ufffd( l!)ere)\ufffd*\ufffdGFwx<ypes\"\u0005&LK-,\ufffd;-9B\ufffd[I\"?QulDGKist$W\ufffdF\ufffdI5+[:2N3\ufffd31-6*,\ufffd8\u00e1$+p PP\ufffdEQ ofestmBc\ufffd\ufffd5:){3\ufffd\ufffd,\ufffd66M\ufffd\ufffd/\"z<{,<\ufffd5\u001f$E\ufffd\ufffd\ufffdL\"7(\"+"
+  },
+  {
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "greedy_completion": "\ufffd&!$(%$)\"\"'\ufffd\ufffd(!!\"!'!!\ufffd\ufffd\ufffd\ufffd#(\ufffd\ufffd\ufffd!!\ufffd%;\ufffd\ufffd\"!\ufffd!<\ufffd\ufffd!)&\ufffd!\"#!\"\ufffd,!+!\ufffd%'\"$$\ufffd$3\ufffd\"J%!\ufffd\ufffd\ufffd!!##B-\ufffd\ufffd\ufffd!\ufffd\ufffd(1!\ufffd\ufffd\ufffd7\ufffd\",\ufffd!\ufffd\"!!Jt$\"\"\ufffd\"E\ufffd,&-\ufffd\ufffd\ufffd\ufffd!\ufffdB\ufffd\ufffd\ufffd\"'!",
+    "sampled_completion": "0\ufffd*`-_0age];\n\ufffd\ufffdI\ufffd576(\ufffd\ufffd\"h\ufffdH\ufffdusD\ufffd4\ufffd.e~\ufffda\ufffd($\ufffdxK\ufffd,\ufffdH\ufffdA0\ufffd\ufffd(\ufffdHI\ufffd\u000eid classA\ufffd alsoB,\ufffd\ufffd;1149.\u0440\u0430+-t~&\"(&J\ufffd\u0015\ufffd9\ufffd7'\ufffd(.-3\ufffd%(*\ufffd6x\ufffd2Kr\ufffd\ufffd\ufffd!.J{ \ufffd\bPKB\rol0\ufffdeJ\u000eI\ufffd'fS"
+  },
+  {
+    "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "greedy_completion": "\ufffd!!\ufffd$!!!'\ufffd\ufffd\ufffd\ufffd!\ufffd\ufffd\ufffd\ufffd\ufffd!%(!!\ufffd&\ufffd!!\ufffd\ufffd(#\"'\ufffd!\ufffd!!!\ufffd#\ufffd\ufffd&\ufffd!*\ufffd#'!&\"\ufffd\ufffdL\"!$!\ufffd'!\ufffd\ufffd0##\ufffd#\ufffd&\ufffd!\ufffd0%\ufffd!!&\ufffd\ufffd\ufffd!\ufffd\ufffd!!\ufffd\ufffd\ufffd\ufffd!\ufffd\ufffd\ufffd\ufffd!\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd$\ufffd\"\ufffd(\ufffd!\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd!!",
+    "sampled_completion": "\ufffd(E\ufffd\ufffdzN\"g\ufffd\ufffdf\ufffd\ufffd\"*\ufffd/\ufffdC;\ufffd26$\ufffdj ).6om\",@-/F,\ufffd\ufffduS+DhK!S)\ufffd:/9\ufffd=t\nK\ufffd(E#61\ufffd!%\u0002G#1ak\ufffdM63.I*>:!\"\ufffd\ufffdC\ufffd0v'\"8v&OG\ufffd\ufffdS\ufffdz5\ufffdPB*k|##4 G,\ufffdF3a)=RemDp7\ufffd\ufffd7"
+  },
+  {
+    "prompt": "What are the three laws of thermodynamics?",
+    "greedy_completion": "\ufffd\ufffd'\ufffd\ufffd'.!\".\ufffd\ufffd!!\ufffd%\ufffd&'!!)H,\ufffd\ufffd\ufffd'\ufffd\ufffd'\ufffd$!U!\ufffd\ufffd!\ufffd#\ufffd#!\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd!\ufffd\ufffd\ufffd$!\ufffd5#!\ufffd!\ufffd/\ufffd.\ufffd\ufffd!\ufffd\"\ufffd\ufffd!!&!\ufffd#\ufffd0\ufffd#'\ufffd!!#!\ufffd\ufffd(!\ufffd\ufffd!\"\ufffd##\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd!\ufffd\ufffd\ufffd#\ufffd\ufffd!$!\ufffd&",
+    "sampled_completion": "(~^HJet\u001c/=>ii cases\ufffd#2\ufffd\u001c\ufffd where,\ufffd\ufffd\u001e\ufffd\ufffdB for\\i)\n\ufffd'\ufffd&\ufffd101\ufffd-\ufffd\ufffd\ufffdi\u00f3n,\ufffd.\ufffd isDfow\ufffd&n>\ufffd>\n\ufffd*20\ufffde0,7\ufffd!,\ufffdkp\"$7K0\ufffd\ufffdf,|:8D\ufffd&\ufffd]\ufffd)./B3I\ufffdg\ufffd\ufffd@s8_$/\ufffd*7&m2&*W\ufffdk\ufffd:0\ufffd-tineO\""
+  },
+  {
+    "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+    "greedy_completion": "\ufffd&\ufffd#\ufffd\ufffd\ufffd\"\ufffd%,\ufffd!\ufffd\ufffd!G\ufffd, un I\"\"!\ufffd\ufffd\ufffd!\ufffd\ufffd\ufffd\ufffd!%\ufffd\ufffd!\ufffd\ufffd\ufffd),!!\ufffd\"!'(-,\"''\"'!\ufffd!.\ufffd\ufffd+(.)\ufffd&\ufffd#!&!\"#\"#!#\ufffd'0\"\ufffd\ufffd;\ufffd\ufffd!\ufffd1!!\"0\ufffd\ufffd\"<\ufffd\"\"\ufffd!!\ufffd!\ufffd#\"!D)\ufffd$(#\ufffd!\"'!\"!\ufffd2\ufffd,",
+    "sampled_completion": "\ufffd( aB\ufffdI\ufffdDDc\ufffd\ufffdx\ufffdasyQ\ufffd\ufffdan?)\u0315l*\ufffd\ufffd}\ufffd\ufffdE\ufffd\ufffd\ufffd\ufffd12KM,L\ufffdS\ufffd\ufffd and\ufffd:H'28*Bage\ufffd*\ufffd\ufffd\ufffd\ufffdCD!m0=0Z(\ufffd23G\ufffd@.'&E\ufffd\"5\ufffd/-00HL\"',M.'a\"/\ufffd:(#N))G\ufffd##\ufffd8 bol\")1;$)&&=\ufffd.(\ufffd:\ufffd19"
+  },
+  {
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "greedy_completion": "\ufffd\ufffd\"!%!\ufffd?\ufffd<\"\ufffd\ufffd\ufffd#\"1;\"!($!*\ufffd\ufffd\ufffd\ufffd&\"!-\ufffd\"\"\ufffd\ufffd\ufffd@\ufffd\ufffd#+\ufffd\"\ufffd\ufffd!\ufffd!\ufffd>!\ufffdS(##\"\"#$\ufffd!\ufffd\ufffd\ufffd!!\ufffd!\ufffd\ufffd4\ufffd!\"\ufffd\"\"\ufffd\ufffd\ufffd\ufffd\ufffd\"\ufffd.\ufffd\ufffd\ufffd\ufffd)\ufffd\ufffd\ufffd#.!\"\"\"#\ufffd#\"\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd(\"\ufffd\ufffd\ufffd(.\ufffd\ufffd\ufffd\ufffd!",
+    "sampled_completion": "\ufffd\ufffdB)?\ufffdM\ufffd_(1H\ufffd\ufffd:\ufffd>G- anda9D\ufffd12       H\ufffdI/\ufffd!\ufffd.98S,>/7O?\ufffd9*8 v0JE)0/'KI, ((+}c>&^{\ufffd\ufffdJ56\ufffdKd#D'.4:B o\ufffd/3\ufffd#%L\ufffd9P\u001bhPs\ufffd'#',\ufffd>&K((L$>J\ufffdFI\ufffd=\ufffd=DO\ufffd\ufffd\ufffd)O"
+  }
+]

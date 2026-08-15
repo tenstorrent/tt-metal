@@ -1,0 +1,87 @@
+=== server ready 19:26:22 ===
+(EngineCore pid=2069818) 2026-08-15 15:26:14.582 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:enable_prefill_trace:842 - MuseGlimmerGenerator: prefill tracing enabled (max_e
+(EngineCore pid=2069818) 2026-08-15 15:26:14.804 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:_capture_prefill_traces:782 - MuseGlimmer vLLM: prefill traces resident fo
+2026-08-15 15:26:25.857 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[soak] prompt lengths [108, 115, 115, 112, 114, 115] -> padded [128, 128, 128, 128, 128, 128]; bucket 128 needs 97-128
+[soak] round 0: worst_replacement=0.0 all_stable=True
+[soak] round 1: worst_replacement=0.0 all_stable=True
+[soak] round 2: worst_replacement=0.0 all_stable=True
+[soak] round 3: worst_replacement=0.0 all_stable=True
+[soak] round 4: worst_replacement=0.0 all_stable=True
+[soak] round 5: worst_replacement=0.0 all_stable=True
+[soak] round 6: worst_replacement=0.0 all_stable=True
+[soak] round 7: worst_replacement=0.0 all_stable=True
+[soak] round 8: worst_replacement=0.0 all_stable=True
+[soak] round 9: worst_replacement=0.0 all_stable=True
+[soak] 60 generations through the traced bucket; worst_replacement=0.0 stable=True -> ok
+nanobind: leaked 3 instances!
+ - leaked instance 0x7b914e3e8fa8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7b9161250ef8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7b91612510d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 23 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 248 functions!
+ - leaked function ""
+ - leaked function "__hash__"
+ - leaked function "to"
+ - leaked function "matmul_select_program_factory"
+ - leaked function "__repr__"
+ - leaked function "__eq__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "compute_output_specs"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.htmlSOAK_RC=0
+QUAL_RC=0
+2026-08-15 15:29:40.639 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[soak] prompt lengths [108, 115, 115, 112, 114, 115] -> padded [128, 128, 128, 128, 128, 128]; bucket 128 needs 97-128
+[soak] round 0: worst_replacement=0.0 all_stable=True
+[soak] round 1: worst_replacement=0.0 all_stable=True
+[soak] round 2: worst_replacement=0.0 all_stable=True
+[soak] round 3: worst_replacement=0.0 all_stable=True
+[soak] 24 generations through the traced bucket; worst_replacement=0.0 stable=True -> ok
+nanobind: leaked 3 instances!
+ - leaked instance 0x7609c42812b8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7609ad2ecfa8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7609c42810d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 23 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 248 functions!
+ - leaked function "item"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "dims"
+ - leaked function "host_buffer"
+ - leaked function "__ne__"
+ - leaked function "empty"
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.htmlSOAK2_RC=0
+SOAK_ARM_DONE 19:30:46

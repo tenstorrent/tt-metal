@@ -1,0 +1,37 @@
+
+=== Running qualitative prompts from /home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : ' - 1.5.0 - Llama API docs Write a haiku about machine learning. ```  {   "model"'
+    Sampled: ' A haiku is a Japanese poem with three lines and a total of 17 syllables. The fi'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : ' Provide an example of each. Supervised learning involves training a model using'
+    Sampled: ' - Sarthaks eConnect | Largest Online Education Community Explain the difference'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : " a magical device that could change the world. The inventor's name was... (fill "
+    Sampled: ' a mysterious device that could change the world forever.  The device was a smal'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : ' - Physicsgurus Q&A What are the three laws of thermodynamics?   The three laws '
+    Sampled: ' | Socratic What are the three laws of thermodynamics?  0. The Zeroth Law of The'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : ".  Bonjour, comment allez-vous aujourd'hui?"
+    Sampled: "$3�x)!�����>3�'��@$\x18&ing|��D qu-�z3&�k��A&�8\x7f&�),�H2H+�(�l���::4\x1a&*�#��A5J���!��"
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : '�&!)�0!*���!��!!"!,f!�!�!*�!(���!!��)��!!�#!����##!���"+#!���,�5��##�$�"�\'�[#���'
+    Sampled: '#�v G�2HP�_@ F is;\x07E;Yu<Q.Ui }+=bo-�;(.�>7*T>\\�DA�2<R�l/�H��олe,H del01�� "9\x05\x15.K'
+
+Saved 6 completions to /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative
+============================================================

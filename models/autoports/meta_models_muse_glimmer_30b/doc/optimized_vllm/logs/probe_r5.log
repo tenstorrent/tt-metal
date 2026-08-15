@@ -1,0 +1,7 @@
+=== H: 1024+4097 with tracing OFF (the missing control for the 1024 output) ===
+rc=0
+=== I: buckets [128,1024] -- keeps the 1.29x bucket, largest is 1024 ===
+rc=0
+=== J: bucket [128] with a 1024 prompt (eager 1024 under a SMALL largest bucket) ===
+rc=0
+PROBE_R5_DONE

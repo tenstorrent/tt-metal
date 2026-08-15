@@ -1654,3 +1654,252 @@ def test_prefill_trace_survives_rebinding_the_same_external_cache(mesh):
         generator.teardown()
         generator.model.deallocate()
         clear_generator_cache()
+
+
+# --------------------------------------------- serving-shaped prefill tracing
+#
+# The three tests below belong to the optimized-vLLM stage.  What they pin is the
+# property that turned the optimized-full-model stage's *capability* (a prefill
+# trace exists, is bit-identical, and is worth 1.33x at 128 padded rows) into
+# something a server can use: the graph no longer bakes the cache slot.
+
+
+def test_page_table_row_is_the_slot_row_and_bounds_are_checked(generator, expect_error):
+    """``page_table_row`` is a view of the normalised table, not a re-derivation.
+
+    Host-only.  It matters because the prefill path now stages *this* row into the
+    trace's persistent page-table input, so a row that disagreed with the full
+    table by even one block would page a prompt into another user's cache with no
+    error anywhere.
+    """
+    model = generator.model
+    full = model.normalize_page_table(None)
+    assert full.shape == (DECODE_ROWS, model.config.blocks_per_seq)
+    for slot in (0, 1, DECODE_ROWS - 1):
+        row = model.page_table_row(None, slot)
+        assert row.shape == (1, model.config.blocks_per_seq)
+        assert torch.equal(row, full[slot : slot + 1])
+    with expect_error(ValueError, "outside the"):
+        model.page_table_row(None, DECODE_ROWS)
+    with expect_error(ValueError, "outside the"):
+        model.page_table_row(None, -1)
+    # And the device form refuses a shape that is not a row, rather than replicating
+    # a full table into a buffer the trace will read one row of.
+    with expect_error(ValueError, "must be shaped"):
+        model.page_table_row_to_device(full, device=False)
+
+
+@pytest.mark.timeout(2400)
+def test_prefill_trace_serves_every_cache_slot(mesh):
+    """One captured bucket, four cache slots, decode-identical to the eager arm.
+
+    This is the property the vLLM stage needs and the optimized-full-model form did
+    not have.  That form captured with the whole ``[32, blocks]`` table and
+    ``user_id=slot``, so the slot was baked into a ``ttnn.slice`` offset and the
+    generator only offered the trace when ``user_id == 0``.  vLLM picks the slot, so
+    a burst of 32 requests got the trace for one of them.
+
+    The check is a *decode* step rather than the prefill logits, and deliberately so:
+    the same prompt prefilled into any slot returns the same logits whatever the page
+    table says, so prefill output alone cannot tell a correctly-routed K/V write from
+    one that landed in another slot's blocks.  Prefilling four different prompts into
+    four slots and then decoding all four can: a misrouted row reads back somebody
+    else's cache and its token changes.
+    """
+    clear_generator_cache()
+    slots, seq = 4, 1024
+    lengths = [128, 100, 127, 96]
+    tokens = torch.zeros(slots, max(lengths), dtype=torch.long)
+    for user, length in enumerate(lengths):
+        tokens[user, :length] = torch.tensor(_prompt(length, seed=900 + user))
+    positions = torch.tensor(lengths, dtype=torch.int32)
+
+    def arm(**extra):
+        gen = build_generator(
+            MODEL_DIR,
+            mesh,
+            max_seq_len=seq,
+            max_batch_size=slots,
+            layer_indices=REDUCED_LAYERS,
+            reuse=False,
+            **extra,
+        )
+        try:
+            gen.reset()
+            logits = gen.prefill_forward(tokens=tokens, page_table=None, kv_cache=None, prompt_lens=lengths)
+            sampled = gen.decode_forward(
+                tokens=tokens[:, :1],
+                start_pos=positions,
+                page_table=None,
+                kv_cache=None,
+                sample_on_device=True,
+            )
+            return logits.argmax(dim=-1).clone(), sampled.clone(), sorted(gen._prefill_traces)
+        finally:
+            gen.teardown()
+            gen.model.deallocate()
+            clear_generator_cache()
+
+    want_logits, want_tokens, eager_buckets = arm()
+    assert eager_buckets == [], "the prefill trace must stay off by default"
+
+    got_logits, got_tokens, traced_buckets = arm(prefill_trace=True, prefill_trace_max_entries=2)
+    # 128 and 100/127 share the 128-row bucket; 96 is its own.  Two buckets, four slots.
+    assert traced_buckets == [96, 128], traced_buckets
+    assert torch.equal(got_logits, want_logits)
+    assert torch.equal(got_tokens, want_tokens), (got_tokens, want_tokens)
+
+
+@pytest.mark.timeout(1200)
+def test_prefill_trace_enable_seam_and_width_bound(mesh, expect_error):
+    """``enable_prefill_trace`` turns it on after the build; wide buckets stay eager.
+
+    Both halves are load-bearing for serving.  The seam exists because the plugin
+    warms prefill *before* decode, and a prefill bucket captured first would compete
+    with the decode trace for the trace region -- so the adapter builds with the flag
+    off and calls this once the decode and sampling traces are resident.  The width
+    bound exists because what a trace removes is host dispatch, so it is worth 1.33x
+    at 128 padded rows and 1.00x at 8192; past the crossover a capture spends trace
+    region for nothing.
+    """
+    clear_generator_cache()
+    gen = build_generator(
+        MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, max_batch_size=1, layer_indices=REDUCED_LAYERS, reuse=False
+    )
+    try:
+        assert gen.gen_config.prefill_trace is False
+        assert gen.prefill_trace_buckets == []
+        # Off: a prefill captures nothing.
+        gen.prefill_forward(torch.tensor([_prompt(128, seed=11)]), prompt_lens=[128])
+        assert gen.prefill_trace_buckets == []
+
+        gen.enable_prefill_trace(max_entries=4, max_padded_len=256)
+        assert gen.gen_config.prefill_trace is True
+        assert gen.gen_config.prefill_trace_max_padded_len == 256
+
+        gen.reset()
+        gen.prefill_forward(torch.tensor([_prompt(128, seed=11)]), prompt_lens=[128])
+        assert gen.prefill_trace_buckets == [128]
+
+        # Past the width bound: eager, and it neither captures nor burns a bucket slot.
+        gen.reset()
+        gen.prefill_forward(torch.tensor([_prompt(300, seed=12)]), prompt_lens=[300])
+        assert gen.prefill_trace_buckets == [128]
+        assert gen._prefill_capture_failures == 0, "a width-bounded bucket is not a capture failure"
+
+        # Inside the bound but a new bucket: captured.
+        gen.reset()
+        gen.prefill_forward(torch.tensor([_prompt(200, seed=13)]), prompt_lens=[200])
+        assert gen.prefill_trace_buckets == [128, 224]
+
+        # The seam refuses to shrink below what is already resident rather than evicting.
+        with expect_error(ValueError, "does not evict"):
+            gen.enable_prefill_trace(max_entries=1)
+        with expect_error(ValueError, "at least 1"):
+            gen.enable_prefill_trace(max_entries=0)
+        assert gen.prefill_trace_buckets == [128, 224]
+    finally:
+        gen.teardown()
+        assert gen._prefill_traces == {}, "teardown must release every prefill trace"
+        gen.model.deallocate()
+        clear_generator_cache()
+
+
+# ------------------------------------------------- the prefill-trace interlock
+#
+# `_guard_late_sampling_capture` is the one safety property this stage ships, and
+# it reads four private attributes of the shared sampler behind a bare `except`.
+# If any of them move, the guard fails open and nothing else notices -- so the
+# names are pinned here rather than only exercised on hardware.
+
+
+class _StubSeedManager:
+    def __init__(self, active: bool = False):
+        self._active = active
+
+    def has_active_request_seed(self) -> bool:
+        return self._active
+
+
+class _StubTTSampling:
+    force_argmax_sampling = False
+
+
+class _StubSampler:
+    """Just enough of ``SamplingGenerator`` for the guard's decision."""
+
+    def __init__(self, *, seeded: bool = False, captured: bool = True):
+        self.seed_manager = _StubSeedManager(seeded)
+        self.tt_sampling = _StubTTSampling()
+        self._penalties_active = False
+        self._log_probs_active = False
+        self._trace_states = {}
+        self._captured = captured
+
+    def _trace_slot(self, penalties_on, log_probs_on, force_argmax):
+        key = (penalties_on, log_probs_on, force_argmax)
+        slot = self._trace_states.get(key)
+        if slot is None:
+            slot = {"id": 7 if self._captured else None}
+            self._trace_states[key] = slot
+        return key, slot
+
+
+def test_the_prefill_trace_interlock_reads_the_sampler_the_way_the_sampler_works(generator):
+    """The guard's three answers, and the private names it depends on.
+
+    Host-only: no device work, no traces captured. What it pins is the decision
+    table and the fact that the attribute names still exist on the *real* sampler,
+    because the guard swallows exceptions and would otherwise fail silently open.
+    """
+    real = generator.sampling
+    for name in ("seed_manager", "tt_sampling", "_penalties_active", "_trace_slot", "_trace_states"):
+        assert hasattr(real, name), f"the guard reads sampler.{name}; it is gone"
+    assert hasattr(real.seed_manager, "has_active_request_seed")
+    assert hasattr(real.tt_sampling, "force_argmax_sampling")
+
+    original = generator.sampling
+    try:
+        # 1. every mode captured, no request seed -> a pure replay, nothing allocates.
+        generator.sampling = _StubSampler()
+        assert generator._sampling_allocates_this_step() is None
+
+        # 2. no trace for the current mode -> the sampler will capture, which allocates.
+        generator.sampling = _StubSampler(captured=False)
+        assert generator._sampling_allocates_this_step() == "sampling_trace_capture"
+
+        # 3. an explicit request seed -> the sampler bypasses its trace and allocates.
+        #    Checked first, because it holds whether or not a trace exists.
+        generator.sampling = _StubSampler(seeded=True)
+        assert generator._sampling_allocates_this_step() == "eager_sampling_for_request_seed"
+
+        # The guard is a no-op with no prefill traces resident, whatever the sampler says.
+        assert generator._prefill_traces == {}
+        generator._guard_late_sampling_capture(host_sampling=False)
+        assert generator._prefill_capture_disabled is False
+        assert generator._prefill_traces_released_for_sampling is False
+
+        # ...and with a resident bucket it releases, one way, and says so.
+        released = []
+        real_release = generator._release_prefill_traces
+        generator._release_prefill_traces = lambda: released.append(True)
+        generator._prefill_traces = {128: {"id": 1}}
+        try:
+            generator._guard_late_sampling_capture(host_sampling=False)
+            assert released == [True]
+            assert generator._prefill_capture_disabled is True
+            assert generator._prefill_traces_released_for_sampling is True
+            # A host-sampled step is outside the rule: it never calls the device sampler.
+            generator._prefill_capture_disabled = False
+            generator._prefill_traces_released_for_sampling = False
+            released.clear()
+            generator._guard_late_sampling_capture(host_sampling=True)
+            assert released == []
+            assert generator._prefill_capture_disabled is False
+        finally:
+            generator._release_prefill_traces = real_release
+            generator._prefill_traces = {}
+            generator._prefill_capture_disabled = False
+            generator._prefill_traces_released_for_sampling = False
+    finally:
+        generator.sampling = original

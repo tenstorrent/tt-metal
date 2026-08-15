@@ -1,0 +1,7 @@
+=== plain run 19:57:59 ===
+PLAIN_RC=0
+[33m========== [32m29 passed[0m, [33m[1m35 deselected[0m, [33m[1m3 warnings[0m[33m in 186.92s (0:03:06)[0m[33m ===========[0m
+=== watcher run 20:01:21 ===
+WATCHER_RC=1
+[31m================ [33m35 deselected[0m, [33m3 warnings[0m, [31m[1m29 errors[0m[31m in 2.58s[0m[31m =================[0m
+TESTS_DONE 20:01:28

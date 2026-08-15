@@ -1,0 +1,909 @@
+[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/vllm-tt-plugin
+configfile: pyproject.toml
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+[1mcollecting ... [0mcollected 73 items
+
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape [32mPASSED[0m[33m [  1%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0 [32mPASSED[0m[33m [  2%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n [32mPASSED[0m[33m [  4%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks [32mPASSED[0m[33m [  5%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0 [32mPASSED[0m[33m [  6%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero [32mPASSED[0m[33m [  8%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes [32mPASSED[0m[33m [  9%][0m
+../../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled [32mPASSED[0m[33m [ 10%][0m
+../../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_config_reads_additional_config [32mPASSED[0m[33m [ 12%][0m
+../../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap [32mPASSED[0m[33m [ 13%][0m
+../../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap [32mPASSED[0m[33m [ 15%][0m
+../../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p [32mPASSED[0m[33m [ 16%][0m
+../../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words [32mPASSED[0m[33m [ 17%][0m
+../../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_logit_bias [32mPASSED[0m[33m [ 19%][0m
+../../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids [31mFAILED[0m[31m [ 20%][0m
+../../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens [32mPASSED[0m[31m [ 21%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0] [32mPASSED[0m[31m [ 23%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0.5] [32mPASSED[0m[31m [ 24%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1] [32mPASSED[0m[31m [ 26%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1.5] [32mPASSED[0m[31m [ 27%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0] [32mPASSED[0m[31m [ 28%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0.5] [32mPASSED[0m[31m [ 30%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1] [32mPASSED[0m[31m [ 31%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5] [32mPASSED[0m[31m [ 32%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0] [32mPASSED[0m[31m [ 34%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0.5] [32mPASSED[0m[31m [ 35%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1] [32mPASSED[0m[31m [ 36%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1.5] [32mPASSED[0m[31m [ 38%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0] [32mPASSED[0m[31m [ 39%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0.5] [32mPASSED[0m[31m [ 41%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1] [32mPASSED[0m[31m [ 42%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1.5] [32mPASSED[0m[31m [ 43%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0] [32mPASSED[0m[31m [ 45%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0.5] [32mPASSED[0m[31m [ 46%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1] [32mPASSED[0m[31m [ 47%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1.5] [32mPASSED[0m[31m [ 49%][0m
+../../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab [33mSKIPPED[0m[31m [ 50%][0m
+../../vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch [31mFAILED[0m[31m [ 52%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding [31mFAILED[0m[31m [ 53%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs [32mPASSED[0m[31m [ 54%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches [31mFAILED[0m[31m [ 56%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42] [31mFAILED[0m[31m [ 57%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123] [32mPASSED[0m[31m [ 58%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999] [32mPASSED[0m[31m [ 60%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0] [31mFAILED[0m[31m [ 61%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1] [32mPASSED[0m[31m [ 63%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0] [32mPASSED[0m[31m [ 64%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied [32mPASSED[0m[31m [ 65%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1] [31mFAILED[0m[31m [ 67%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0] [31mFAILED[0m[31m [ 68%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1] [31mFAILED[0m[31m [ 69%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0] [31mFAILED[0m[31m [ 71%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1] [32mPASSED[0m[31m [ 72%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0] [32mPASSED[0m[31m [ 73%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied [32mPASSED[0m[31m [ 75%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash [32mPASSED[0m[31m [ 76%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7] [32mPASSED[0m[31m [ 78%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10] [32mPASSED[0m[31m [ 79%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19] [32mPASSED[0m[31m [ 80%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32] [32mPASSED[0m[31m [ 82%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37] [32mPASSED[0m[31m [ 83%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches [32mPASSED[0m[31m [ 84%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15] [31mFAILED[0m[31m [ 86%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19] [31mFAILED[0m[31m [ 87%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32] [31mFAILED[0m[31m [ 89%][0m
+../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy [32mPASSED[0m[31m [ 90%][0m
+../../vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests [32mPASSED[0m[31m [ 91%][0m
+../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties [32mPASSED[0m[31m [ 93%][0m
+../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch [32mPASSED[0m[31m [ 94%][0m
+../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_different_presence_penalties [32mPASSED[0m[31m [ 95%][0m
+../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch [32mPASSED[0m[31m [ 97%][0m
+../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties [32mPASSED[0m[31m [ 98%][0m
+../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch [31mFAILED[0m[31m [100%][0m
+
+=================================== FAILURES ===================================
+[31m[1m________________ TestHostOnlyParameters.test_allowed_token_ids _________________[0m
+
+self = <tests.tt.test_host_only_params.TestHostOnlyParameters object at 0x7d923f519ca0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_allowed_token_ids[39;49;00m([96mself[39;49;00m, tt_server, tt_model_name, max_batch_size):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""Test allowed_token_ids parameter (smoke test)."""[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mAllowed: [39;49;00m[33m"[39;49;00m, max_tokens=[94m10[39;49;00m, allowed_token_ids=[[94m1[39;49;00m, [94m2[39;49;00m, [94m3[39;49;00m][90m[39;49;00m
+            ),[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mAllowed: [39;49;00m[33m"[39;49;00m, max_tokens=[94m10[39;49;00m, allowed_token_ids=[[94m4[39;49;00m, [94m5[39;49;00m, [94m6[39;49;00m][90m[39;49;00m
+            ),[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mAllowed: [39;49;00m[33m"[39;49;00m, max_tokens=[94m10[39;49;00m, allowed_token_ids=[[94m7[39;49;00m, [94m8[39;49;00m, [94m9[39;49;00m][90m[39;49;00m
+            ),[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mAllowed: [39;49;00m[33m"[39;49;00m, max_tokens=[94m10[39;49;00m, allowed_token_ids=[[94m10[39;49;00m, [94m11[39;49;00m, [94m12[39;49;00m][90m[39;49;00m
+            ),[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mAllowed: [39;49;00m[33m"[39;49;00m, max_tokens=[94m10[39;49;00m, allowed_token_ids=[[94m13[39;49;00m, [94m14[39;49;00m, [94m15[39;49;00m][90m[39;49;00m
+            ),[90m[39;49;00m
+        ][90m[39;49;00m
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+        [94massert[39;49;00m [96mlen[39;49;00m(results) == [96mlen[39;49;00m(configs)[90m[39;49;00m
+        [90m# With only 3 allowed tokens, output should be limited[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m i, result [95min[39;49;00m [96menumerate[39;49;00m(results):[90m[39;49;00m
+            [94massert[39;49;00m result [95mis[39;49;00m [95mnot[39;49;00m [94mNone[39;49;00m, [33mf[39;49;00m[33m"[39;49;00m[33mshould produce output for request [39;49;00m[33m{[39;49;00mi[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+>           [94massert[39;49;00m [96mlen[39;49;00m(result) > [94m0[39;49;00m, [33mf[39;49;00m[33m"[39;49;00m[33mshould produce non-empty output for request [39;49;00m[33m{[39;49;00mi[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE           AssertionError: should produce non-empty output for request 0[0m
+[1m[31mE           assert 0 > 0[0m
+[1m[31mE            +  where 0 = len('')[0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_host_only_params.py[0m:103: AssertionError
+[31m[1m__________________ TestBatchIsolation.test_mixed_params_batch __________________[0m
+
+self = <tests.tt.test_request_isolation.TestBatchIsolation object at 0x7d923f51be00>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_mixed_params_batch[39;49;00m([96mself[39;49;00m, tt_server, tt_model_name, max_batch_size):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Batch where each request has completely different parameters.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            [90m# Greedy[39;49;00m[90m[39;49;00m
+            RequestConfig(prompt=[33m"[39;49;00m[33mCount: [39;49;00m[33m"[39;49;00m, max_tokens=[94m5[39;49;00m, temperature=[94m0[39;49;00m),[90m[39;49;00m
+            [90m# High temp with seed[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mRandom: [39;49;00m[33m"[39;49;00m, max_tokens=[94m5[39;49;00m, temperature=[94m2.0[39;49;00m, top_k=[94m100[39;49;00m, seed=[94m42[39;49;00m[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# With repetition penalty[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mtest test. Say: [39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                max_tokens=[94m5[39;49;00m,[90m[39;49;00m
+                temperature=[94m0.5[39;49;00m,[90m[39;49;00m
+                repetition_penalty=[94m3.0[39;49;00m,[90m[39;49;00m
+                seed=[94m42[39;49;00m,[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# With presence penalty[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mList: [39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                max_tokens=[94m10[39;49;00m,[90m[39;49;00m
+                temperature=[94m0.5[39;49;00m,[90m[39;49;00m
+                presence_penalty=[94m2.0[39;49;00m,[90m[39;49;00m
+                seed=[94m42[39;49;00m,[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# top_k=1 (should be greedy-like)[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mWord: [39;49;00m[33m"[39;49;00m, max_tokens=[94m3[39;49;00m, temperature=[94m2.0[39;49;00m, top_k=[94m1[39;49;00m, seed=[94m99[39;49;00m[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# Low temp[39;49;00m[90m[39;49;00m
+            RequestConfig(prompt=[33m"[39;49;00m[33mLetter: [39;49;00m[33m"[39;49;00m, max_tokens=[94m3[39;49;00m, temperature=[94m0.01[39;49;00m, seed=[94m42[39;49;00m),[90m[39;49;00m
+            [90m# High temp low top_k[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mNumber: [39;49;00m[33m"[39;49;00m, max_tokens=[94m3[39;49;00m, temperature=[94m2.0[39;49;00m, top_k=[94m5[39;49;00m, seed=[94m42[39;49;00m[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# With frequency penalty[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33ma a a. Next: [39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                max_tokens=[94m5[39;49;00m,[90m[39;49;00m
+                temperature=[94m0.5[39;49;00m,[90m[39;49;00m
+                frequency_penalty=[94m2.0[39;49;00m,[90m[39;49;00m
+                seed=[94m42[39;49;00m,[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# Combined penalties[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mAll: [39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                max_tokens=[94m8[39;49;00m,[90m[39;49;00m
+                temperature=[94m0.5[39;49;00m,[90m[39;49;00m
+                repetition_penalty=[94m1.5[39;49;00m,[90m[39;49;00m
+                presence_penalty=[94m1.0[39;49;00m,[90m[39;49;00m
+                frequency_penalty=[94m1.0[39;49;00m,[90m[39;49;00m
+                seed=[94m6[39;49;00m,[90m[39;49;00m
+            ),[90m[39;49;00m
+            [90m# Top-p variation[39;49;00m[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33m"[39;49;00m[33mTopP: [39;49;00m[33m"[39;49;00m, max_tokens=[94m8[39;49;00m, temperature=[94m1.0[39;49;00m, top_p=[94m0.5[39;49;00m, seed=[94m7[39;49;00m[90m[39;49;00m
+            ),[90m[39;49;00m
+        ][:max_batch_size][90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Run twice, with random batch order on second run[39;49;00m[90m[39;49;00m
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Shuffle configs and results1 together for the second run[39;49;00m[90m[39;49;00m
+        indices = [96mlist[39;49;00m([96mrange[39;49;00m([96mlen[39;49;00m(configs)))[90m[39;49;00m
+        random.shuffle(indices)[90m[39;49;00m
+        configs = [configs[i] [94mfor[39;49;00m i [95min[39;49;00m indices][90m[39;49;00m
+        results1 = [results1[i] [94mfor[39;49;00m i [95min[39;49;00m indices][90m[39;49;00m
+    [90m[39;49;00m
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Each deterministic config should reproduce[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m i, (r1, r2) [95min[39;49;00m [96menumerate[39;49;00m([96mzip[39;49;00m(results1, results2)):[90m[39;49;00m
+            [94mif[39;49;00m configs[i].temperature == [94m0[39;49;00m [95mor[39;49;00m configs[i].seed [95mis[39;49;00m [95mnot[39;49;00m [94mNone[39;49;00m:[90m[39;49;00m
+>               [94massert[39;49;00m r1 == r2, ([90m[39;49;00m
+                    [33mf[39;49;00m[33m"[39;49;00m[33mRequest [39;49;00m[33m{[39;49;00mi[33m}[39;49;00m[33m should be deterministic/reproducible.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                    [33mf[39;49;00m[33m"[39;49;00m[33mConfig:[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                    [33mf[39;49;00m[33m"[39;49;00m[33mtemp=[39;49;00m[33m{[39;49;00mconfigs[i].temperature[33m}[39;49;00m[33m,[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                    [33mf[39;49;00m[33m"[39;49;00m[33mseed=[39;49;00m[33m{[39;49;00mconfigs[i].seed[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                    [33mf[39;49;00m[33m"[39;49;00m[33mRun 1: [39;49;00m[33m{[39;49;00mr1[33m!r}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                    [33mf[39;49;00m[33m"[39;49;00m[33mRun 2: [39;49;00m[33m{[39;49;00mr2[33m!r}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                )[90m[39;49;00m
+[1m[31mE               AssertionError: Request 3 should be deterministic/reproducible.[0m
+[1m[31mE                 Config:temp=2.0,seed=42[0m
+[1m[31mE                 Run 1: '1-100 in increments'[0m
+[1m[31mE                 Run 2: '1.3 - Random'[0m
+[1m[31mE               assert '1-100 in increments' == '1.3 - Random'[0m
+[1m[31mE                 [0m
+[1m[31mE                 [0m[91m- 1.3 - Random[39;49;00m[90m[39;49;00m[0m
+[1m[31mE                 [92m+ 1-100 in increments[39;49;00m[90m[39;49;00m[0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_request_isolation.py[0m:88: AssertionError
+[31m[1m______________________ TestSeedingAndVariety.test_seeding ______________________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53c740>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_seeding[39;49;00m([96mself[39;49;00m, tt_server, tt_model_name, max_batch_size):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Batch with mix of greedy (temp=0) and sampling requests.[39;49;00m
+    [33m    Greedy should be deterministic, sampling should vary.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33mRandom word: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# greedy, seeds, seeds[39;49;00m[90m[39;49;00m
+        seeds = max_batch_size // [94m3[39;49;00m[90m[39;49;00m
+        greedy_count = max_batch_size - seeds - seeds[90m[39;49;00m
+        configs = [][90m[39;49;00m
+        [90m# Greedy requests[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(greedy_count):[90m[39;49;00m
+            configs.append(RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, temperature=[94m0[39;49;00m))[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Sampling requests with different seeds[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m([94m2[39;49;00m):[90m[39;49;00m
+            [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(seeds):[90m[39;49;00m
+                configs.append([90m[39;49;00m
+                    RequestConfig([90m[39;49;00m
+                        prompt=prompt,[90m[39;49;00m
+                        max_tokens=[94m10[39;49;00m,[90m[39;49;00m
+                        temperature=[94m1.5[39;49;00m,[90m[39;49;00m
+                        top_k=[94m50[39;49;00m,[90m[39;49;00m
+                        seed=i * [94m100[39;49;00m,[90m[39;49;00m
+                    )[90m[39;49;00m
+                )[90m[39;49;00m
+    [90m[39;49;00m
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# This tests both prefill and decode[39;49;00m[90m[39;49;00m
+        all_greedy = results1[:greedy_count] + results2[:greedy_count][90m[39;49;00m
+        assert_deterministic([90m[39;49;00m
+            all_greedy,[90m[39;49;00m
+            [33m"[39;49;00m[33mGreedy requests should produce the same output across positions and runs.[39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+        )[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Check answers overall[39;49;00m[90m[39;49;00m
+        different_seeds = [][90m[39;49;00m
+        [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(seeds):[90m[39;49;00m
+            results_for_seed = [[90m[39;49;00m
+                results1[greedy_count + i],[90m[39;49;00m
+                results2[greedy_count + i],[90m[39;49;00m
+                results1[greedy_count + seeds + i],[90m[39;49;00m
+                results2[greedy_count + seeds + i],[90m[39;49;00m
+            ][90m[39;49;00m
+>           assert_deterministic([90m[39;49;00m
+                results_for_seed,[90m[39;49;00m
+                [33m"[39;49;00m[33mSeeded requests should produce the same output[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+                [33m"[39;49;00m[33macross positions and runs.[39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+            )[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:64:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [' **womb**  Pronunciation:  **', ' **womb**  Pronunciation:  **', ' **womb**  Pronunciation:  **', ' **mastication** — chewing\n\nMastic']
+explanation = 'Seeded requests should produce the same outputacross positions and runs.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seeded requests should produce the same outputacross positions and runs.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 2 unique results out of 4.[0m
+[1m[31mE       Results: [' **womb**  Pronunciation:  **', ' **womb**  Pronunciation:  **', ' **womb**  Pronunciation:  **', ' **mastication** — chewing\n\nMastic'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m________ TestSeedingAndVariety.test_same_seeds_reproduce_across_batches ________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f51b650>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_same_seeds_reproduce_across_batches[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, max_batch_size[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Same seeds should reproduce even when in different batch positions.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33mGenerate: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        seeds = [96mlist[39;49;00m([96mrange[39;49;00m([94m100[39;49;00m, [94m100[39;49;00m + max_batch_size))[90m[39;49;00m
+    [90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=prompt,[90m[39;49;00m
+                max_tokens=[94m15[39;49;00m,[90m[39;49;00m
+                temperature=[94m1.0[39;49;00m,[90m[39;49;00m
+                top_k=[94m50[39;49;00m,[90m[39;49;00m
+                seed=seed,[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m seed [95min[39;49;00m seeds[90m[39;49;00m
+        ][90m[39;49;00m
+    [90m[39;49;00m
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        shuffled_indices = [96mlist[39;49;00m([96mrange[39;49;00m(max_batch_size))[90m[39;49;00m
+        random.Random([94m42[39;49;00m).shuffle(shuffled_indices)[90m[39;49;00m
+        shuffled_configs = [configs[i] [94mfor[39;49;00m i [95min[39;49;00m shuffled_indices][90m[39;49;00m
+    [90m[39;49;00m
+        results2 = run_concurrent_batch(tt_server, tt_model_name, shuffled_configs)[90m[39;49;00m
+    [90m[39;49;00m
+        results_per_seed: [96mlist[39;49;00m[[96mlist[39;49;00m[[96mstr[39;49;00m]] = [[] [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(max_batch_size)][90m[39;49;00m
+        [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(max_batch_size):[90m[39;49;00m
+            results_per_seed[i].append(results1[i])[90m[39;49;00m
+        [94mfor[39;49;00m i, result [95min[39;49;00m [96menumerate[39;49;00m(results2):[90m[39;49;00m
+            results_per_seed[shuffled_indices[i]].append(result)[90m[39;49;00m
+    [90m[39;49;00m
+        [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(max_batch_size):[90m[39;49;00m
+>           assert_deterministic([90m[39;49;00m
+                results_per_seed[i],[90m[39;49;00m
+                [33m"[39;49;00m[33mSeed should produce the same output in different batches.[39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+            )[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:146:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['2025-01-02 02:25:14\n\n\nThe following', '2020-07-27 13:13:18 | 0']
+explanation = 'Seed should produce the same output in different batches.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed should produce the same output in different batches.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 2 unique results out of 2.[0m
+[1m[31mE       Results: ['2025-01-02 02:25:14\n\n\nThe following', '2020-07-27 13:13:18 | 0'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m__________ TestSeedingAndVariety.test_specific_seed_reproducible[42] ___________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53c4a0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32, seed = 42
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mseed[39;49;00m[33m"[39;49;00m, [[94m42[39;49;00m, [94m123[39;49;00m, [94m999[39;49;00m, [94m0[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_specific_seed_reproducible[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, max_batch_size, seed[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    A specific seed should produce same result across batch runs.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        [90m# Create batch where one request has our test seed[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33mf[39;49;00m[33m"[39;49;00m[33mText [39;49;00m[33m{[39;49;00mi[33m}[39;49;00m[33m:[39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                max_tokens=[94m10[39;49;00m,[90m[39;49;00m
+                temperature=[94m1.0[39;49;00m,[90m[39;49;00m
+                top_k=[94m50[39;49;00m,[90m[39;49;00m
+                seed=seed [94mif[39;49;00m i == [94m0[39;49;00m [94melse[39;49;00m i * [94m1000[39;49;00m,[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(max_batch_size)[90m[39;49;00m
+        ][90m[39;49;00m
+    [90m[39;49;00m
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# The test seed request should reproduce[39;49;00m[90m[39;49;00m
+>       [94massert[39;49;00m results1[[94m0[39;49;00m] == results2[[94m0[39;49;00m], ([90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mSeed [39;49;00m[33m{[39;49;00mseed[33m}[39;49;00m[33m should reproduce.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mRun 1: [39;49;00m[33m{[39;49;00mresults1[[94m0[39;49;00m][33m!r}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mRun 2: [39;49;00m[33m{[39;49;00mresults2[[94m0[39;49;00m][33m!r}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed 42 should reproduce.[0m
+[1m[31mE         Run 1: '00\nI have a new one. [Music'[0m
+[1m[31mE         Run 2: '00:01 to 0:00:02'[0m
+[1m[31mE       assert '00\nI have a new one. [Music' == '00:01 to 0:00:02'[0m
+[1m[31mE         [0m
+[1m[31mE         [0m[91m- 00:01 to 0:00:02[39;49;00m[90m[39;49;00m[0m
+[1m[31mE         [92m+ 00[39;49;00m[90m[39;49;00m[0m
+[1m[31mE         [92m+ I have a new one. [Music[39;49;00m[90m[39;49;00m[0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:174: AssertionError
+[31m[1m___________ TestSeedingAndVariety.test_specific_seed_reproducible[0] ___________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53cef0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32, seed = 0
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mseed[39;49;00m[33m"[39;49;00m, [[94m42[39;49;00m, [94m123[39;49;00m, [94m999[39;49;00m, [94m0[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_specific_seed_reproducible[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, max_batch_size, seed[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    A specific seed should produce same result across batch runs.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        [90m# Create batch where one request has our test seed[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=[33mf[39;49;00m[33m"[39;49;00m[33mText [39;49;00m[33m{[39;49;00mi[33m}[39;49;00m[33m:[39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                max_tokens=[94m10[39;49;00m,[90m[39;49;00m
+                temperature=[94m1.0[39;49;00m,[90m[39;49;00m
+                top_k=[94m50[39;49;00m,[90m[39;49;00m
+                seed=seed [94mif[39;49;00m i == [94m0[39;49;00m [94melse[39;49;00m i * [94m1000[39;49;00m,[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(max_batch_size)[90m[39;49;00m
+        ][90m[39;49;00m
+    [90m[39;49;00m
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# The test seed request should reproduce[39;49;00m[90m[39;49;00m
+>       [94massert[39;49;00m results1[[94m0[39;49;00m] == results2[[94m0[39;49;00m], ([90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mSeed [39;49;00m[33m{[39;49;00mseed[33m}[39;49;00m[33m should reproduce.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mRun 1: [39;49;00m[33m{[39;49;00mresults1[[94m0[39;49;00m][33m!r}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mRun 2: [39;49;00m[33m{[39;49;00mresults2[[94m0[39;49;00m][33m!r}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed 0 should reproduce.[0m
+[1m[31mE         Run 1: ' An experiment on a model of the 4 m'[0m
+[1m[31mE         Run 2: ' An old lady has got a good harvest of p'[0m
+[1m[31mE       assert ' An experime...el of the 4 m' == ' An old lady... harvest of p'[0m
+[1m[31mE         [0m
+[1m[31mE         [0m[91m-  An old lady has got a good harvest of p[39;49;00m[90m[39;49;00m[0m
+[1m[31mE         [92m+  An experiment on a model of the 4 m[39;49;00m[90m[39;49;00m[0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:174: AssertionError
+[31m[1m_________ TestSeedingAndVariety.test_uniform_seed_deterministic[32-1] __________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53dc10>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 32, seed = 1
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mseed[39;49;00m[33m"[39;49;00m, [[94m1[39;49;00m, [94m0[39;49;00m])[90m[39;49;00m
+    [37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m32[39;49;00m, [94m10[39;49;00m, [94m1[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_uniform_seed_deterministic[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, batch_size, seed[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Batches with uniform seed should produce deterministic outputs.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33mRandom story: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=prompt, max_tokens=[94m20[39;49;00m, temperature=[94m1.0[39;49;00m, top_k=[94m50[39;49;00m, seed=seed[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size)[90m[39;49;00m
+        ][90m[39;49;00m
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+>       assert_deterministic(results, [33m"[39;49;00m[33mSeed should produce deterministic outputs.[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['��Pyort�-� ne�J--6�3d)�(8', '�&��9Q�%�GM02%2D9($', '�/R�D��ork+QF�\x13&323� unl*', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed should produce deterministic outputs.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 3 unique results out of 32.[0m
+[1m[31mE       Results: ['��Pyort�-� ne�J--6�3d)�(8', '�&��9Q�%�GM02%2D9($', '�/R�D��ork+QF�\x13&323� unl*', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '�/R�D��ork+QF�\x13&323� unl*', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '�/R�D��ork+QF�\x13&323� unl*', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m_________ TestSeedingAndVariety.test_uniform_seed_deterministic[32-0] __________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53de50>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 32, seed = 0
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mseed[39;49;00m[33m"[39;49;00m, [[94m1[39;49;00m, [94m0[39;49;00m])[90m[39;49;00m
+    [37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m32[39;49;00m, [94m10[39;49;00m, [94m1[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_uniform_seed_deterministic[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, batch_size, seed[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Batches with uniform seed should produce deterministic outputs.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33mRandom story: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=prompt, max_tokens=[94m20[39;49;00m, temperature=[94m1.0[39;49;00m, top_k=[94m50[39;49;00m, seed=seed[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size)[90m[39;49;00m
+        ][90m[39;49;00m
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+>       assert_deterministic(results, [33m"[39;49;00m[33mSeed should produce deterministic outputs.[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed should produce deterministic outputs.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 2 unique results out of 32.[0m
+[1m[31mE       Results: ['357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', "3LDvL�w�S'��ON,��(C/", '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', "3LDvL�w�S'��ON,��(C/", '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', "3LDvL�w�S'��ON,��(C/", '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m_________ TestSeedingAndVariety.test_uniform_seed_deterministic[10-1] __________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53df40>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 10, seed = 1
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mseed[39;49;00m[33m"[39;49;00m, [[94m1[39;49;00m, [94m0[39;49;00m])[90m[39;49;00m
+    [37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m32[39;49;00m, [94m10[39;49;00m, [94m1[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_uniform_seed_deterministic[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, batch_size, seed[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Batches with uniform seed should produce deterministic outputs.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33mRandom story: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=prompt, max_tokens=[94m20[39;49;00m, temperature=[94m1.0[39;49;00m, top_k=[94m50[39;49;00m, seed=seed[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size)[90m[39;49;00m
+        ][90m[39;49;00m
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+>       assert_deterministic(results, [33m"[39;49;00m[33mSeed should produce deterministic outputs.[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '�/R�D��ork+QF�\x13&323� unl*', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed should produce deterministic outputs.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 2 unique results out of 10.[0m
+[1m[31mE       Results: ['��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '�/R�D��ork+QF�\x13&323� unl*', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8', '��Pyort�-� ne�J--6�3d)�(8'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m_________ TestSeedingAndVariety.test_uniform_seed_deterministic[10-0] __________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53e030>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 10, seed = 0
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mseed[39;49;00m[33m"[39;49;00m, [[94m1[39;49;00m, [94m0[39;49;00m])[90m[39;49;00m
+    [37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m32[39;49;00m, [94m10[39;49;00m, [94m1[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_uniform_seed_deterministic[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, batch_size, seed[90m[39;49;00m
+    ):[90m[39;49;00m
+    [90m    [39;49;00m[33m"""[39;49;00m
+    [33m    Batches with uniform seed should produce deterministic outputs.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33mRandom story: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        configs = [[90m[39;49;00m
+            RequestConfig([90m[39;49;00m
+                prompt=prompt, max_tokens=[94m20[39;49;00m, temperature=[94m1.0[39;49;00m, top_k=[94m50[39;49;00m, seed=seed[90m[39;49;00m
+            )[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size)[90m[39;49;00m
+        ][90m[39;49;00m
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+>       assert_deterministic(results, [33m"[39;49;00m[33mSeed should produce deterministic outputs.[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['357s�-PF�M\x1a1:@D@ A(�o', "3LDvL�w�S'��ON,��(C/", '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Seed should produce deterministic outputs.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 2 unique results out of 10.[0m
+[1m[31mE       Results: ['357s�-PF�M\x1a1:@D@ A(�o', "3LDvL�w�S'��ON,��(C/", '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o', '357s�-PF�M\x1a1:@D@ A(�o'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m_____________________ TestSeedingAndVariety.test_topk[15] ______________________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53e870>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 15
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m15[39;49;00m, [94m19[39;49;00m, [94m32[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_topk[39;49;00m([96mself[39;49;00m, tt_server, tt_model_name, batch_size):[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33m<question>Random letter a-z:</question><answer>[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        num_greedy = batch_size // [94m2[39;49;00m[90m[39;49;00m
+        greedy_config = [[90m[39;49;00m
+            RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, temperature=[94m0[39;49;00m)[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(num_greedy)[90m[39;49;00m
+        ][90m[39;49;00m
+    [90m[39;49;00m
+        topk_configs = [[90m[39;49;00m
+            RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, top_k=[94m10[39;49;00m, temperature=[94m2.0[39;49;00m)[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size - num_greedy)[90m[39;49;00m
+        ][90m[39;49;00m
+        joint_configs = greedy_config + topk_configs[90m[39;49;00m
+    [90m[39;49;00m
+        results_1 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)[90m[39;49;00m
+        results_2 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Within each batch:[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m results [95min[39;49;00m [results_1, results_2]:[90m[39;49;00m
+            [90m# Overall[39;49;00m[90m[39;49;00m
+            greedy_results = results[:num_greedy][90m[39;49;00m
+            non_greedy_results = results[num_greedy:][90m[39;49;00m
+    [90m[39;49;00m
+>           assert_deterministic([90m[39;49;00m
+                greedy_results, [33m"[39;49;00m[33mGreedy requests should produce the same output.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:326:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['�%!��!�%', '����.$0!#!', '�%!��!�%', '�%!��!�%', '�%!��!�%', '�%!��!�%', ...]
+explanation = 'Greedy requests should produce the same output.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_deterministic[39;49;00m(results, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) == [94m1[39;49;00m, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected reproducible outputs.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mGot [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m unique results out of [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Greedy requests should produce the same output.[0m
+[1m[31mE       Expected reproducible outputs.[0m
+[1m[31mE       Got 2 unique results out of 7.[0m
+[1m[31mE       Results: ['�%!��!�%', '����.$0!#!', '�%!��!�%', '�%!��!�%', '�%!��!�%', '�%!��!�%', '�%!��!�%'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:183: AssertionError
+[31m[1m_____________________ TestSeedingAndVariety.test_topk[19] ______________________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53e2d0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 19
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m15[39;49;00m, [94m19[39;49;00m, [94m32[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_topk[39;49;00m([96mself[39;49;00m, tt_server, tt_model_name, batch_size):[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33m<question>Random letter a-z:</question><answer>[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        num_greedy = batch_size // [94m2[39;49;00m[90m[39;49;00m
+        greedy_config = [[90m[39;49;00m
+            RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, temperature=[94m0[39;49;00m)[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(num_greedy)[90m[39;49;00m
+        ][90m[39;49;00m
+    [90m[39;49;00m
+        topk_configs = [[90m[39;49;00m
+            RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, top_k=[94m10[39;49;00m, temperature=[94m2.0[39;49;00m)[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size - num_greedy)[90m[39;49;00m
+        ][90m[39;49;00m
+        joint_configs = greedy_config + topk_configs[90m[39;49;00m
+    [90m[39;49;00m
+        results_1 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)[90m[39;49;00m
+        results_2 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Within each batch:[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m results [95min[39;49;00m [results_1, results_2]:[90m[39;49;00m
+            [90m# Overall[39;49;00m[90m[39;49;00m
+            greedy_results = results[:num_greedy][90m[39;49;00m
+            non_greedy_results = results[num_greedy:][90m[39;49;00m
+    [90m[39;49;00m
+            assert_deterministic([90m[39;49;00m
+                greedy_results, [33m"[39;49;00m[33mGreedy requests should produce the same output.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+            assert_varied([90m[39;49;00m
+                non_greedy_results, [94m2[39;49;00m, [33m"[39;49;00m[33mWith top_k=10, outputs should vary in batch.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+    [90m[39;49;00m
+            [90m# First token (prefill)[39;49;00m[90m[39;49;00m
+            prefill_results = [x[:[94m1[39;49;00m] [94mfor[39;49;00m x [95min[39;49;00m non_greedy_results][90m[39;49;00m
+>           assert_varied([90m[39;49;00m
+                prefill_results, [94m2[39;49;00m, [33m"[39;49;00m[33mWith top_k=10, first tokens should vary in batch.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:335:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['�', '�', '�', '�', '�', '�', ...], min_varied = 2
+explanation = 'With top_k=10, first tokens should vary in batch.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_varied[39;49;00m(results, min_varied, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) >= min_varied, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected at least [39;49;00m[33m{[39;49;00mmin_varied[33m}[39;49;00m[33m unique results.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mOnly [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m/[39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m were varied.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: With top_k=10, first tokens should vary in batch.[0m
+[1m[31mE       Expected at least 2 unique results.[0m
+[1m[31mE       Only 1/10 were varied.[0m
+[1m[31mE       Results: ['�', '�', '�', '�', '�', '�', '�', '�', '�', '�'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:164: AssertionError
+[31m[1m_____________________ TestSeedingAndVariety.test_topk[32] ______________________[0m
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7d923f53d8e0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', batch_size = 32
+
+    [0m[37m@pytest[39;49;00m.mark.parametrize([33m"[39;49;00m[33mbatch_size[39;49;00m[33m"[39;49;00m, [[94m15[39;49;00m, [94m19[39;49;00m, [94m32[39;49;00m])[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_topk[39;49;00m([96mself[39;49;00m, tt_server, tt_model_name, batch_size):[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33m<question>Random letter a-z:</question><answer>[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        num_greedy = batch_size // [94m2[39;49;00m[90m[39;49;00m
+        greedy_config = [[90m[39;49;00m
+            RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, temperature=[94m0[39;49;00m)[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(num_greedy)[90m[39;49;00m
+        ][90m[39;49;00m
+    [90m[39;49;00m
+        topk_configs = [[90m[39;49;00m
+            RequestConfig(prompt=prompt, max_tokens=[94m10[39;49;00m, top_k=[94m10[39;49;00m, temperature=[94m2.0[39;49;00m)[90m[39;49;00m
+            [94mfor[39;49;00m _ [95min[39;49;00m [96mrange[39;49;00m(batch_size - num_greedy)[90m[39;49;00m
+        ][90m[39;49;00m
+        joint_configs = greedy_config + topk_configs[90m[39;49;00m
+    [90m[39;49;00m
+        results_1 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)[90m[39;49;00m
+        results_2 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Within each batch:[39;49;00m[90m[39;49;00m
+        [94mfor[39;49;00m results [95min[39;49;00m [results_1, results_2]:[90m[39;49;00m
+            [90m# Overall[39;49;00m[90m[39;49;00m
+            greedy_results = results[:num_greedy][90m[39;49;00m
+            non_greedy_results = results[num_greedy:][90m[39;49;00m
+    [90m[39;49;00m
+            assert_deterministic([90m[39;49;00m
+                greedy_results, [33m"[39;49;00m[33mGreedy requests should produce the same output.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+            assert_varied([90m[39;49;00m
+                non_greedy_results, [94m2[39;49;00m, [33m"[39;49;00m[33mWith top_k=10, outputs should vary in batch.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+    [90m[39;49;00m
+            [90m# First token (prefill)[39;49;00m[90m[39;49;00m
+            prefill_results = [x[:[94m1[39;49;00m] [94mfor[39;49;00m x [95min[39;49;00m non_greedy_results][90m[39;49;00m
+>           assert_varied([90m[39;49;00m
+                prefill_results, [94m2[39;49;00m, [33m"[39;49;00m[33mWith top_k=10, first tokens should vary in batch.[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            )[90m[39;49;00m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py[0m:335:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['�', '�', '�', '�', '�', '�', ...], min_varied = 2
+explanation = 'With top_k=10, first tokens should vary in batch.'
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92massert_varied[39;49;00m(results, min_varied, explanation):[90m[39;49;00m
+        unique_results = [96mset[39;49;00m(results)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(unique_results) >= min_varied, ([90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33m{[39;49;00mexplanation[33m}[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mExpected at least [39;49;00m[33m{[39;49;00mmin_varied[33m}[39;49;00m[33m unique results.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mOnly [39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(unique_results)[33m}[39;49;00m[33m/[39;49;00m[33m{[39;49;00m[96mlen[39;49;00m(results)[33m}[39;49;00m[33m were varied.[39;49;00m[33m\n[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mResults: [39;49;00m[33m{[39;49;00mresults[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: With top_k=10, first tokens should vary in batch.[0m
+[1m[31mE       Expected at least 2 unique results.[0m
+[1m[31mE       Only 1/16 were varied.[0m
+[1m[31mE       Results: ['�', '�', '�', '�', '�', '�', '�', '�', '�', '�', '�', '�', '�', '�', '�', '�'][0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/utils.py[0m:164: AssertionError
+[31m[1m___________ TestFrequencyPenalty.test_frequency_penalty_mixed_batch ____________[0m
+
+self = <tests.tt.test_tt_penalties.TestFrequencyPenalty object at 0x7d923f568ef0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7d923f53d010>
+tt_model_name = 'meta-models/Muse-Glimmer-30B', max_batch_size = 32
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_frequency_penalty_mixed_batch[39;49;00m([90m[39;49;00m
+        [96mself[39;49;00m, tt_server, tt_model_name, max_batch_size[90m[39;49;00m
+    ):[90m[39;49;00m
+        prompt = [33m"[39;49;00m[33ma a a a a a a a a[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+    [90m[39;49;00m
+        configs = [][90m[39;49;00m
+        [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m(max_batch_size):[90m[39;49;00m
+            configs.append([90m[39;49;00m
+                RequestConfig([90m[39;49;00m
+                    prompt=prompt,[90m[39;49;00m
+                    max_tokens=[94m15[39;49;00m,[90m[39;49;00m
+                    temperature=[94m0[39;49;00m,[90m[39;49;00m
+                    frequency_penalty=[94m0.0[39;49;00m [94mif[39;49;00m i % [94m2[39;49;00m == [94m0[39;49;00m [94melse[39;49;00m [94m2.0[39;49;00m,[90m[39;49;00m
+                )[90m[39;49;00m
+            )[90m[39;49;00m
+    [90m[39;49;00m
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)[90m[39;49;00m
+    [90m[39;49;00m
+        no_penalty = [results[i] [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m([94m0[39;49;00m, max_batch_size, [94m2[39;49;00m)][90m[39;49;00m
+        with_penalty = [results[i] [94mfor[39;49;00m i [95min[39;49;00m [96mrange[39;49;00m([94m1[39;49;00m, max_batch_size, [94m2[39;49;00m)][90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Count "a"s in each output[39;49;00m[90m[39;49;00m
+        no_penalty_a_count = no_penalty[[94m0[39;49;00m].count([33m"[39;49;00m[33ma[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+        with_penalty_a_count = with_penalty[[94m0[39;49;00m].count([33m"[39;49;00m[33ma[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+    [90m[39;49;00m
+>       [94massert[39;49;00m no_penalty_a_count > with_penalty_a_count, ([90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mFrequency penalty should reduce [39;49;00m[33m'[39;49;00m[33ma[39;49;00m[33m'[39;49;00m[33m repetitions: [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mno_penalty=[39;49;00m[33m{[39;49;00mno_penalty_a_count[33m}[39;49;00m[33m,[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+            [33mf[39;49;00m[33m"[39;49;00m[33mwith_penalty=[39;49;00m[33m{[39;49;00mwith_penalty_a_count[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+[1m[31mE       AssertionError: Frequency penalty should reduce 'a' repetitions: no_penalty=0,with_penalty=0[0m
+[1m[31mE       assert 0 > 0[0m
+
+[1m[31m../../vllm-tt-plugin/tests/tt/test_tt_penalties.py[0m:191: AssertionError
+[33m=============================== warnings summary ===============================[0m
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_host_only_params.py::[1mTestHostOnlyParameters::test_allowed_token_ids[0m - AssertionError: should produce non-empty output for request 0
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_request_isolation.py::[1mTestBatchIsolation::test_mixed_params_batch[0m - AssertionError: Request 3 should be deterministic/reproducible.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_seeding[0m - AssertionError: Seeded requests should produce the same outputacross positi...
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_same_seeds_reproduce_across_batches[0m - AssertionError: Seed should produce the same output in different batches.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_specific_seed_reproducible[42][0m - AssertionError: Seed 42 should reproduce.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_specific_seed_reproducible[0][0m - AssertionError: Seed 0 should reproduce.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_uniform_seed_deterministic[32-1][0m - AssertionError: Seed should produce deterministic outputs.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_uniform_seed_deterministic[32-0][0m - AssertionError: Seed should produce deterministic outputs.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_uniform_seed_deterministic[10-1][0m - AssertionError: Seed should produce deterministic outputs.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_uniform_seed_deterministic[10-0][0m - AssertionError: Seed should produce deterministic outputs.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_topk[15][0m - AssertionError: Greedy requests should produce the same output.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_topk[19][0m - AssertionError: With top_k=10, first tokens should vary in batch.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::[1mTestSeedingAndVariety::test_topk[32][0m - AssertionError: With top_k=10, first tokens should vary in batch.
+[31mFAILED[0m ../../vllm-tt-plugin/tests/tt/test_tt_penalties.py::[1mTestFrequencyPenalty::test_frequency_penalty_mixed_batch[0m - AssertionError: Frequency penalty should reduce 'a' repetitions: no_penalty...
+[31m======= [31m[1m14 failed[0m, [32m58 passed[0m, [33m1 skipped[0m, [33m2 warnings[0m[31m in 118.80s (0:01:58)[0m[31m =======[0m
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x7d92531b97b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function "is_per_core_allocated"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "pad"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

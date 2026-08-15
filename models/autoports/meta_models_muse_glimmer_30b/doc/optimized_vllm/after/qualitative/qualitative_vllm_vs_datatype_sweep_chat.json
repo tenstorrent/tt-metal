@@ -1,0 +1,56 @@
+[
+  {
+    "id": "p0",
+    "vllm_tokens": 127,
+    "datatype_sweep_tokens": 128,
+    "identical": false,
+    "first_divergence": 2,
+    "vllm_head": " to=selfWrite a haiku about machine learning.\n\nHaiku is 5-7-5 syllables.\n\nWrite a haiku about machine learning.\n\nProbably simple.\n\nWe need 5-7-5.\n\nLet's craft.\n",
+    "datatype_sweep_head": " to=self<|message|>Write a haiku about machine learning.\n\nHaiku is 5-7-5 syllables.\n\nWrite a haiku about machine learning.\n\nProbably simple.\n\nWe need 5-7-5.\n\nLe"
+  },
+  {
+    "id": "p1",
+    "vllm_tokens": 127,
+    "datatype_sweep_tokens": 128,
+    "identical": false,
+    "first_divergence": 2,
+    "vllm_head": " to=userSure! Here's a simple breakdown:\n\n### **Supervised Learning**\n\n* **What it is:** The model learns from **labeled data** (input + correct output).\n* **An",
+    "datatype_sweep_head": " to=user<|message|>Sure! Here's a simple breakdown:\n\n### **Supervised Learning**\n\n* **What it is:** The model learns from **labeled data** (input + correct outp"
+  },
+  {
+    "id": "p2",
+    "vllm_tokens": 127,
+    "datatype_sweep_tokens": 128,
+    "identical": false,
+    "first_divergence": 2,
+    "vllm_head": " to=selfComplete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\n\nComplete this story. Probably continue",
+    "datatype_sweep_head": " to=self<|message|>Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered\n\nComplete this story. Probab"
+  },
+  {
+    "id": "p3",
+    "vllm_tokens": 127,
+    "datatype_sweep_tokens": 128,
+    "identical": false,
+    "first_divergence": 2,
+    "vllm_head": " to=selfWhat are the three laws of thermodynamics?\n\nWhat are the three laws of thermodynamics?\n\nWe need answer. Three laws. Some say zeroeth, first, second, thi",
+    "datatype_sweep_head": " to=self<|message|>What are the three laws of thermodynamics?\n\nWhat are the three laws of thermodynamics?\n\nWe need answer. Three laws. Some say zeroeth, first, "
+  },
+  {
+    "id": "p4",
+    "vllm_tokens": 127,
+    "datatype_sweep_tokens": 128,
+    "identical": false,
+    "first_divergence": 2,
+    "vllm_head": " to=selfTranslate the following to French: \"Hello, how are you today?\"\n\nTranslate to French.\n\n\"Hello, how are you today?\" -> \"Bonjour, comment allez-vous aujour",
+    "datatype_sweep_head": " to=self<|message|>Translate the following to French: \"Hello, how are you today?\"\n\nTranslate to French.\n\n\"Hello, how are you today?\" -> \"Bonjour, comment allez-"
+  },
+  {
+    "id": "p5",
+    "vllm_tokens": 127,
+    "datatype_sweep_tokens": 128,
+    "identical": false,
+    "first_divergence": 2,
+    "vllm_head": " to=selfWrite a Python function to calculate the Fibonacci sequence.\n\nWe need to write a Python function to calculate Fibonacci sequence. Probably simple. Provi",
+    "datatype_sweep_head": " to=self<|message|>Write a Python function to calculate the Fibonacci sequence.\n\nWe need to write a Python function to calculate Fibonacci sequence. Probably si"
+  }
+]

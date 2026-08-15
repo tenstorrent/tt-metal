@@ -1,0 +1,12 @@
+deliberately corrupted output, captured to characterise the prefill-trace hazard
+This directory holds completions from a server running with prefill traces resident,
+captured on purpose while reproducing the failure in doc/optimized_vllm/README.md
+(*The bug this stage found*). They are partly or wholly replacement characters.
+
+check_degenerate_output.py skips a directory carrying this marker and REPORTS the
+exclusion with this file's first line as the reason, so the artifacts stay under
+their real names, stay discoverable and stay readable by a reviewer -- including the
+two sets that straddle the threshold (traced_qualitative and soak_blocking/runner_qual1
+are clean on prompts 0-3 and corrupt from prompt 4, which is the onset boundary and the
+minimal reproducer). Naming a file here explicitly on the command line still scans it,
+which is how logs/degenerate_check_negative_control.log is produced.

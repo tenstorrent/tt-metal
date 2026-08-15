@@ -17,9 +17,15 @@ decoding and is reported only as advisory.
 
 Checked artifacts (discovered under one or more roots):
 
-  - ``readiness_vllm/vllm_qualitative_outputs.json`` written by
-    ``run_vllm_server`` (list of {prompt, greedy_completion,
-    sampled_completion}).
+  - ``vllm_qualitative_outputs.json`` written by ``run_vllm_server``
+    (list of {prompt, greedy_completion, sampled_completion}).
+  - ``qualitative_tt_chat.json``, the prompt-correct chat arm
+    (list of {id, completion}) that ``$qualitative-check`` reads its
+    verdict from.
+  - A directory holding a ``DEGENERATE_CHECK_EXCLUDE`` file is skipped and
+    reported as excluded, with the marker's first line as the reason. That
+    is for deliberately-broken evidence a stage has to keep; naming such a
+    file explicitly on the command line still scans it.
   - ``autoregressive_meta.json`` written by ``run_autoregressive``
     ({hf: {token_ids}, tt: {token_ids}, ...}) plus the sibling
     ``tt_completion.txt`` when present.
@@ -68,6 +74,41 @@ TRIGRAM_LOOP_ADVISORY = 0.50
 MIN_WORDS_FOR_LOOP = 50
 # Advisory: a near-empty completion when many tokens were requested.
 NEAR_EMPTY_CHARS = 5
+# Critical: fraction of characters that are U+FFFD REPLACEMENT CHARACTER.
+#
+# This closes a hole the duplication and looping metrics cannot see. Both are
+# computed over ``\w+`` words, and text made of replacement characters has almost
+# no word characters at all, so a completion that is *entirely* undecodable bytes
+# scored 0.0 on both and passed. That is not hypothetical: the Muse-Glimmer-30B
+# optimized-vLLM stage corrupted a live server (a device buffer allocated under a
+# live trace, then overwritten when that trace replayed) and every completion came
+# back as replacement characters while this checker reported "No degenerate output
+# detected" (``models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/README.md``).
+#
+# A model emitting mostly byte-fallback tokens is mechanically broken in exactly
+# the sense this checker exists to catch, and it is not a style: a healthy
+# completion decodes.
+#
+# Calibrated **per completion**, which is the granularity it is applied at. Over
+# that stage's artifacts: **every healthy completion measures exactly 0.0000**, and
+# the corrupted ones span **0.187-0.617**. An earlier revision of this comment
+# quoted 0.512-0.539 -- a per-artifact-*set* aggregate -- while the threshold was
+# applied per completion, which overstated the margin in the direction that
+# matters: at 0.25, the six *sampled* completions of a fully corrupted server
+# measured 0.187-0.248 and passed. 0.10 sits an order of magnitude above every
+# healthy completion and about 2x below the lowest corrupted one.
+#
+# The advisory exists because corruption has an onset: in that stage's minimal
+# reproducer the first four prompts are clean and the fifth is 0.28, so a set can
+# be genuinely broken while its aggregate is 0.02. A short tail of replacement
+# characters from an incomplete UTF-8 sequence at a truncation boundary stays below
+# it. A request that deliberately restricts generation to byte-fallback ids, as the
+# plugin's ``test_allowed_token_ids`` does, would score high -- but that is a
+# sampling test, not a qualitative artifact, and is not scanned here.
+REPLACEMENT_CHAR_CRITICAL = 0.10
+REPLACEMENT_CHAR_ADVISORY = 0.02
+MIN_CHARS_FOR_REPLACEMENT = 20
+REPLACEMENT_CHAR = "�"
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -167,6 +208,46 @@ def check_completion(
         report.measured.append(measured)
         return
 
+    # Undecodable output, measured on the raw text rather than on extracted words:
+    # the word metrics below cannot see it, because replacement characters are not
+    # word characters. See REPLACEMENT_CHAR_CRITICAL for the calibration.
+    if text is not None and len(text) >= MIN_CHARS_FOR_REPLACEMENT:
+        replacement = text.count(REPLACEMENT_CHAR) / len(text)
+        measured["replacement_char_fraction"] = round(replacement, 4)
+        if replacement > REPLACEMENT_CHAR_CRITICAL:
+            report.findings.append(
+                Finding(
+                    severity="critical",
+                    artifact=str(artifact),
+                    label=label,
+                    metric="replacement_char_fraction",
+                    value=round(replacement, 4),
+                    threshold=REPLACEMENT_CHAR_CRITICAL,
+                    detail=(
+                        "Most of the completion does not decode to text. A healthy checkpoint does not "
+                        "emit mostly byte-fallback tokens; suspect corrupted device state (a buffer "
+                        "allocated under a live trace, a stale cache or page table) rather than the model."
+                    ),
+                )
+            )
+        elif replacement > REPLACEMENT_CHAR_ADVISORY:
+            report.findings.append(
+                Finding(
+                    severity="advisory",
+                    artifact=str(artifact),
+                    label=label,
+                    metric="replacement_char_fraction",
+                    value=round(replacement, 4),
+                    threshold=REPLACEMENT_CHAR_ADVISORY,
+                    detail=(
+                        "Part of the completion does not decode to text. Healthy completions in the "
+                        "calibration corpus measure exactly 0. This is what the onset of a device-state "
+                        "corruption looks like -- early prompts clean, later ones not -- so check the "
+                        "other completions in this artifact and the ones generated after it."
+                    ),
+                )
+            )
+
     if tokens is None:
         report.measured.append(measured)
         return
@@ -243,12 +324,15 @@ def check_vllm_qualitative(report: Report, path: Path) -> None:
         return
     for i, item in enumerate(items):
         prompt = str(item.get("prompt", ""))[:60]
-        for key in ("greedy_completion", "sampled_completion"):
+        label_id = item.get("id", i)
+        # ``greedy_completion``/``sampled_completion`` is the runner arm's shape;
+        # ``completion`` is the prompt-correct chat arm's.
+        for key in ("greedy_completion", "sampled_completion", "completion"):
             if key in item:
                 check_completion(
                     report,
                     artifact=path,
-                    label=f"prompt[{i}] {key} ({prompt!r})",
+                    label=f"prompt[{label_id}] {key} ({prompt!r})",
                     text=item.get(key) or "",
                 )
 
@@ -281,21 +365,61 @@ def check_autoregressive_meta(report: Report, path: Path) -> None:
         )
 
 
-def discover(roots: Iterable[Path], scope: str) -> tuple[list[Path], list[Path]]:
+#: Artifact file names carrying served completions. ``vllm_qualitative_outputs.json``
+#: is ``run_vllm_server``'s own arm; ``qualitative_tt_chat.json`` is the prompt-correct
+#: chat arm that ``$qualitative-check`` reads the verdict from, and it was outside this
+#: checker entirely until the Muse-Glimmer-30B optimized-vLLM stage noticed that the arm
+#: its stage gate was credited with checking was never being globbed.
+VLLM_ARTIFACT_NAMES: tuple[str, ...] = ("vllm_qualitative_outputs.json", "qualitative_tt_chat.json")
+
+#: A directory containing this file is deliberately-broken evidence and is skipped.
+#:
+#: Stages that reproduce a corruption on purpose have to keep the broken completions --
+#: they are the evidence -- but a stage gate must not fail on them, and renaming them out
+#: of the glob makes them invisible to a reviewer too. A marker file is explicit: the
+#: exclusion is recorded in the report, with the marker's first line as the stated reason,
+#: so "N artifact sets excluded" is visible rather than silent.
+EXCLUDE_MARKER = "DEGENERATE_CHECK_EXCLUDE"
+
+
+def _excluded(path: Path) -> Path | None:
+    """The exclusion marker governing ``path``, if any."""
+    marker = path.parent / EXCLUDE_MARKER
+    return marker if marker.is_file() else None
+
+
+def discover(roots: Iterable[Path], scope: str) -> tuple[list[Path], list[Path], list[dict]]:
     vllm_files: list[Path] = []
     meta_files: list[Path] = []
+    excluded: list[dict] = []
     for root in roots:
         if root.is_file():
+            # An explicitly named path is scanned even under a marker: naming it is the
+            # caller saying they mean this one (which is how the marker's own negative
+            # control is run).
             if root.name == "autoregressive_meta.json":
                 meta_files.append(root)
             else:
                 vllm_files.append(root)
             continue
+        found: list[Path] = []
         if scope in ("all", "vllm"):
-            vllm_files.extend(sorted(root.rglob("vllm_qualitative_outputs.json")))
+            for name in VLLM_ARTIFACT_NAMES:
+                found.extend(sorted(root.rglob(name)))
         if scope in ("all", "autoregressive"):
-            meta_files.extend(sorted(root.rglob("autoregressive_meta.json")))
-    return vllm_files, meta_files
+            found.extend(sorted(root.rglob("autoregressive_meta.json")))
+        for path in found:
+            marker = _excluded(path)
+            if marker is not None:
+                reason = ""
+                try:
+                    reason = marker.read_text(encoding="utf-8").strip().splitlines()[0]
+                except Exception:  # noqa: BLE001
+                    reason = "(marker unreadable)"
+                excluded.append({"artifact": str(path), "marker": str(marker), "reason": reason})
+                continue
+            (meta_files if path.name == "autoregressive_meta.json" else vllm_files).append(path)
+    return vllm_files, meta_files, excluded
 
 
 def _squash(text: str) -> str:
@@ -429,7 +553,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         roots = [args.root]
 
-    vllm_files, meta_files = discover(roots, args.scope)
+    vllm_files, meta_files, excluded = discover(roots, args.scope)
+    for row in excluded:
+        # Reported, not silent: an artifact that is skipped has to be visible, or the
+        # exclusion mechanism becomes a way to hide a failing gate.
+        print(f"excluded: {row['artifact']} [{row['marker']}] {row['reason']}")
+    report.measured.append({"label": "excluded artifacts", "count": len(excluded), "artifacts": excluded})
 
     if roots and not vllm_files and not meta_files and not report.findings:
         report.findings.append(

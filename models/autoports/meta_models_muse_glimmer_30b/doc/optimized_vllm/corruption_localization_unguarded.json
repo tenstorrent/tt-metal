@@ -1,0 +1,42 @@
+{
+  "reference": " to=selfWrite a haiku about machine learning.\n\nHaiku is 5",
+  "steps": [
+    {
+      "file": "test_config.py",
+      "pytest_rc": 0,
+      "pytest_tail": [
+        "\u001b[32m\u001b[32m\u001b[1m3 passed\u001b[0m\u001b[32m in 1.53s\u001b[0m\u001b[0m"
+      ],
+      "answer": " to=selfWrite a haiku about machine learning.\n\nHaiku is 5",
+      "matches_reference": true
+    },
+    {
+      "file": "test_build_logprobs_from_topk.py",
+      "pytest_rc": 0,
+      "pytest_tail": [
+        "\u001b[33m\u001b[32m8 passed\u001b[0m, \u001b[33m\u001b[1m2 warnings\u001b[0m\u001b[33m in 3.65s\u001b[0m\u001b[0m"
+      ],
+      "answer": " to=selfWrite a haiku about machine learning.\n\nHaiku is 5",
+      "matches_reference": true
+    },
+    {
+      "file": "test_logprobs.py",
+      "pytest_rc": 0,
+      "pytest_tail": [
+        "\u001b[32m\u001b[32m\u001b[1m20 passed\u001b[0m, \u001b[33m1 skipped\u001b[0m\u001b[32m in 44.80s\u001b[0m\u001b[0m"
+      ],
+      "answer": " to=selfWrite a haiku about machine learning.\n\nHaiku is 5",
+      "matches_reference": true
+    },
+    {
+      "file": "test_seeding_and_variety.py",
+      "pytest_rc": 1,
+      "pytest_tail": [
+        "\u001b[31m\u001b[31m\u001b[1m10 failed\u001b[0m, \u001b[32m18 passed\u001b[0m\u001b[31m in 48.60s\u001b[0m\u001b[0m"
+      ],
+      "answer": "\ufffd-!)\",\ufffd\ufffd!\ufffd%\ufffd$!\"",
+      "matches_reference": false
+    }
+  ],
+  "first_corrupting_file": "test_seeding_and_variety.py"
+}

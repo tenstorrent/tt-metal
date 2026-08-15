@@ -1,0 +1,36 @@
+# NOTE: this log is from the 1-bucket traced arm (doc/optimized_vllm/after_prefill_traced_1bucket/),
+# not from the shipped `after/` arm. Both sweeps were driven under the arm name `after`, and the
+# second overwrote the first's driver logs; the arms themselves were renamed afterwards. Its header
+# line reads `prefill_trace=unset`, which at the time meant the then-default ONE TRACED BUCKET --
+# the opposite of what shipped. The shipped arm's own driver logs are lost; its artifacts
+# (run1..6, sampling_tests.log, qualitative/, determinism_vllm.json, serving_audit.json,
+# server_excerpt.log, bench_window_end_bytes.txt) are intact and are what the report cites.
+=== arm=after steps=bench1,bench2,bench3,bench4,bench5,bench6,sampling,qualitative,qualchat,determinism prefill_trace=unset ===
+=== launching server 18:39:14 ===
+=== server ready 18:43:10 after 236s ===
+=== bench1 18:43:10 ===
+STEP bench1 rc=0
+=== bench2 18:43:35 ===
+STEP bench2 rc=0
+=== bench3 18:44:00 ===
+STEP bench3 rc=0
+=== bench4 18:44:26 ===
+STEP bench4 rc=0
+=== bench5 18:44:51 ===
+STEP bench5 rc=0
+=== bench6 18:45:16 ===
+STEP bench6 rc=0
+=== sampling 18:45:42 ===
+STEP sampling rc=1
+=== qualitative 18:48:53 ===
+STEP qualitative rc=0
+=== qualchat 18:49:50 ===
+STEP qualchat rc=0
+=== qualcompare 18:50:31 ===
+STEP qualcompare rc=0
+=== determinism 18:50:31 ===
+STEP determinism rc=0
+=== shutting down 18:50:44 ===
+=== audit 18:50:53 ===
+STEP audit rc=0
+ARM_after_DONE 18:50:54

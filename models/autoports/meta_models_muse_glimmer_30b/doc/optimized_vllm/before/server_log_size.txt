@@ -1,0 +1,3 @@
+388K  (the REAL before-arm server log, measured before it was overwritten)
+The file now at before/server/ is a 21 KB stub from an accidental second launch, renamed
+server_STUB_FROM_ACCIDENTAL_RELAUNCH.log. before/server_excerpt.log is from the real log.

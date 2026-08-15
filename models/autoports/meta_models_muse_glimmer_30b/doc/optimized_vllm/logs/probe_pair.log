@@ -1,0 +1,5 @@
+=== repeat shipped (trace on, bucket 128) ===
+RC=0
+=== control (trace off) ===
+RC=0
+PROBE_PAIR_DONE

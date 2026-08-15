@@ -1,0 +1,1 @@
+3.0M	/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_1bucket/server/server.log

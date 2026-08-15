@@ -1,0 +1,17 @@
+=== arm=bisect_server steps=qualchatrep1,bench1,qualchatrep2,sampling,qualchatrep3 prefill_trace=unset ===
+=== launching server 15:38:28 ===
+=== server ready 15:42:13 after 225s ===
+=== qualchatrep1 15:42:13 ===
+STEP qualchatrep1 rc=0
+=== bench1 15:42:53 ===
+STEP bench1 rc=0
+=== qualchatrep2 15:43:19 ===
+STEP qualchatrep2 rc=0
+=== sampling 15:43:59 ===
+STEP sampling rc=1
+=== qualchatrep3 15:46:05 ===
+STEP qualchatrep3 rc=0
+=== shutting down 15:46:45 ===
+=== audit 15:46:54 ===
+STEP audit rc=1
+ARM_bisect_server_DONE 15:46:54

@@ -1,0 +1,13 @@
+=== arm=traced_qualitative steps=qualchatrep1,qualitative,bench1 prefill_trace=unset ===
+=== launching server 17:03:33 ===
+=== server ready 17:07:23 after 230s ===
+=== qualchatrep1 17:07:23 ===
+STEP qualchatrep1 rc=0
+=== qualitative 17:08:04 ===
+STEP qualitative rc=0
+=== bench1 17:09:09 ===
+STEP bench1 rc=0
+=== shutting down 17:09:34 ===
+=== audit 17:09:43 ===
+STEP audit rc=1
+ARM_traced_qualitative_DONE 17:09:43

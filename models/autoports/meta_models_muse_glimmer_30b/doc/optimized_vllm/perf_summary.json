@@ -1,0 +1,128 @@
+{
+  "stage": "optimized_vllm",
+  "measured_path": "real vLLM TT plugin serving through models/autoports/meta_models_muse_glimmer_30b/tt/generator_vllm.py",
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "max_concurrency": 1,
+    "requests": 1,
+    "temperature": 0.0,
+    "ignore_eos": true,
+    "max_num_seqs": 32,
+    "max_model_len": 131072,
+    "mesh": "P300x2 (1x4) Blackhole, FABRIC_1D_RING, 2 links",
+    "sampling_mode": "sample_on_device_mode=all",
+    "generation_mode": "greedy",
+    "harness": "python -m models.common.readiness_check.run_vllm_server --stages benchmark",
+    "runs": "6 back-to-back per arm; the figures below are the median of runs 4-6"
+  },
+  "ttft_ms": 77.419,
+  "decode_ms_per_token_e2e": 23.0267,
+  "decode_tps_u": 43.428,
+  "decode_ms_per_token_device": null,
+  "decode_ms_per_token_device_reason": "vllm_serving_profiler_disabled_to_protect_hardware",
+  "roofline_ms_per_token_estimate": 8.829,
+  "roofline_provenance": {
+    "source": "doc/optimized_full_model/perf_summary.json",
+    "recomputed_here": false,
+    "caveat": "computed under the optimized-full-model stage's precision policy. The shipped datatype-sweep policy (c14-attn4-cclbfp8-kv8) moves strictly fewer bytes per token -- it lowers the attention projections from BFP8 to BFP4 -- so 8.829 ms/token is an upper bound on the roofline for the measured path, and the roofline fraction below is correspondingly a lower bound.",
+    "no_profiler_note": "$optimize and $vllm-integration both forbid Tracy / tt-perf-report / device-profiler collection in vLLM stages, so no device-time term was measured here and none was carried forward as if it had been."
+  },
+  "roofline_fraction_of_e2e_at_most": 0.384,
+  "before": {
+    "ttft_ms": 81.477,
+    "decode_ms_per_token_e2e": 22.999,
+    "decode_tps_u": 43.48,
+    "arm": "the vLLM-integration stage's committed code (git stash), same harness, same TT config, same 6-run protocol"
+  },
+  "delta": {
+    "ttft_ms_pct": -4.98,
+    "ttft_note": "inside the run spread of both arms (before 77.79-91.83 ms, after 76.64-87.32 ms); no shipped change was expected to move it",
+    "decode_tps_u_pct": -0.12,
+    "median_e2el_ms_pct": -0.05
+  },
+  "ci_serving_burst": {
+    "workload": {
+      "prompt_len": 100,
+      "gen_len": 100,
+      "requests": 32,
+      "max_concurrency": null,
+      "temperature": 0.0,
+      "ignore_eos": true
+    },
+    "note": "capacity and vLLM-nightly parity only; never the headline decode t/s/u, because burst admission moves TTFT and TPOT",
+    "before": {
+      "median_ttft_ms": 2147.527,
+      "output_throughput": 721.881,
+      "decode_tps_u": 43.405
+    },
+    "after": {
+      "median_ttft_ms": 2175.865,
+      "output_throughput": 717.56,
+      "decode_tps_u": 43.392
+    },
+    "delta": {
+      "median_ttft_ms_pct": 1.32,
+      "output_throughput_pct": -0.6,
+      "decode_tps_u_pct": -0.03,
+      "note": "noise; see the primary profile's ttft_note"
+    }
+  },
+  "full_model_comparison": {
+    "standalone_traced_token_out_decode_ms_per_token": 23.078,
+    "standalone_traced_token_out_decode_tps_u": 43.331,
+    "source": "doc/datatype_sweep/evidence_perf.json (same 128/128/1 shape, same selected precision policy)",
+    "serving_fraction_of_standalone_tps_u": 1.0022,
+    "verdict": "serving decode is at parity with optimized full-model traced decode; the serving orchestration, sampling, token feedback, request handling and readback are inside the decoder's own run-to-run spread"
+  },
+  "named_limitations": [
+    "The one available TTFT optimization does not ship: a resident prefill trace was measured to change the output of requests outside the traced buckets. See optimization_measured_not_shipped and doc/optimized_vllm/README.md.",
+    "MuseGlimmerGenerator._guard_late_sampling_capture is a partial interlock for that hazard, verified for the decode sampler's own allocation sites and unit-tested for its decision table. It is not what makes the default safe; the default being off is.",
+    "No device-time or roofline term was measured in this stage. vLLM stages intentionally skip profiler collection.",
+    "Watcher evidence excludes ETH cores: plain TT_METAL_WATCHER=10 aborts with an ACTIVE_ETH kernel-config overflow, and the prescribed TT_METAL_WATCHER_DISABLE_ETH=1 retry is clean.",
+    "The shared trigram loop metric is blind to long-period verbatim repetition, which this stage's runner raw-completion arm exhibits on 3 of 12 completions -- identically to the previous stage's arm, and absent from the chat verdict arm and the HF control (doc/optimized_vllm/loop_classification.json)."
+  ],
+  "prefill_trace": "OFF (shipped default). MUSE_GLIMMER_VLLM_PREFILL_TRACE=1 enables it; see optimization_measured_not_shipped.",
+  "optimization_measured_not_shipped": {
+    "name": "traced serving prefill, declared padded buckets captured at warmup",
+    "enable": "MUSE_GLIMMER_VLLM_PREFILL_TRACE=1 (plus MUSE_GLIMMER_VLLM_PREFILL_TRACE_BUCKETS)",
+    "arms": {
+      "one_bucket_128": {
+        "dir": "doc/optimized_vllm/after_prefill_traced_1bucket/",
+        "median_ttft_ms": 62.965,
+        "speedup_vs_before": 1.294,
+        "burst_output_throughput": 812.096,
+        "decode_tps_u": 43.43
+      },
+      "twenty_buckets": {
+        "dir": "doc/optimized_vllm/after_prefill_traced/",
+        "median_ttft_ms": 60.662,
+        "speedup_vs_before": 1.343,
+        "burst_output_throughput": 805.384,
+        "decode_tps_u": 43.469
+      }
+    },
+    "correctness_offline": "token-identical to the eager path through the adapter and in-process on the real pinned prompts, and decode-identical across four cache slots in the acceptance suite",
+    "blocker": {
+      "summary": "capturing a prefill trace changes the result of LONG EAGER prefills -- prompts the trace never serves -- and a wide resident bucket set separately decays short-prompt output. Both are silent.",
+      "evidence_matrix": "doc/optimized_vllm/prefill_trace_discriminators.json (every probe request tabulated, with the largest resident bucket); reproduce with doc/optimized_vllm/bench/run_discriminators.sh",
+      "at_20_buckets": "served output decays to replacement characters by the 22nd generation of ordinary traffic, deterministically and byte-identically across two servers (traced_qualitative/, soak_blocking/runner_qual1/). Mechanism: tt_metal/impl/allocator/allocator.cpp:113-126 -- a buffer allocated while a trace is active must die before that trace runs.",
+      "at_1_bucket": "in-bucket prompts clean over 84 generations, 198 benchmark replays and the full gate set, but 4097- and 8192-token prompts on the EAGER path diverge from their first token. Reproduced with bucket 96 as well.",
+      "capture_alone_is_sufficient": "the 4097-ALONE probe contains no traced request -- the bucket is captured at warmup and never replayed -- and 4097 is still wrong",
+      "not_an_unwarmed_shape": "8192 is in PREFILL_WARMUP_LENGTHS and diverges anyway",
+      "mechanism_status": "UNEXPLAINED. The allocator-lifetime rule accounts for the wide-set decay but not for a capture-only failure with no replay, and nothing measured explains why a larger captured trace fixes 4097 but not 8192.",
+      "fixes_measured_insufficient": [
+        "warm every sampling mode at warmup (fixcheck/)",
+        "blocking traced replay (soak_blocking/)",
+        "reduce the bucket set to one (discriminator matrix)",
+        "widen the largest bucket to 1024 while keeping 128 (discriminator matrix)"
+      ],
+      "not_attempted": "a ballast buffer reserving the freed range after capture -- depends on first-fit allocator behaviour this stage cannot verify, and would compete with the eager prefill working set",
+      "largest_bucket_helps_but_not_enough": "bucket 1024 makes 4097 correct -- alone, as [128,1024], or as the top of the 20-bucket set -- but [128,1024] still fails 8192 byte-identically to [128]. [128,1024] was the configuration worth wanting (two traces, largest 1024, keeping the bucket the 1.29x was measured on); it was measured and it fails.",
+      "what_the_matrix_shows": "the effect tracks the size of the largest captured trace rather than the number of traces, but no traced configuration measured is correct at every length it was measured at: three of the five traced sets have a measured wrong length, and the other two were not run at 8192.",
+      "coverage_limits": "bucket [1024] ALONE at 8192, and any bucket size between 128 and 1024, were not measured. Both observed 8192 failures contain bucket 128, so 'a large largest bucket helps' and 'any small resident bucket poisons long eager prefills' are not separated. The decision does not rest on that cell."
+    }
+  }
+}

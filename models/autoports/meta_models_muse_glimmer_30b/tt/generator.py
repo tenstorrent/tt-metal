@@ -170,7 +170,7 @@ class GeneratorConfig:
     #: Batch-1 prefill on this mesh is *host-issue* bound, not device bound: 4122 ttnn
     #: dispatches at 9-60 us of host issue each, measured at 54.9 ms of issue against
     #: 55.1 ms to drain, and no collective implementation or persistent-buffer variant
-    #: moves the per-call cost (12 arms, ``doc/optimized_full_model/ccl_host_probe.json``).
+    #: moves the per-call cost (12 arms, ``doc/optimized_full_model/ccl_host_probe_bfp8.json``).
     #: Tracing is the only mechanism that removes host issue, and it works: on the real
     #: 52-layer build a warmed replay is **44.96 ms against 59.80 ms eager (1.33x)** and
     #: **bit-identical** to it, coexisting with the decode and sampling traces and
@@ -184,6 +184,14 @@ class GeneratorConfig:
     #: lengths do not, and the generator cannot tell which it is. A serving stage that
     #: buckets prompt lengths should turn it on and raise
     #: :attr:`prefill_trace_max_entries` to its bucket count **for its short buckets**.
+    #: That is what the vLLM adapter does: it captures every warmed short bucket during
+    #: warmup, so no request pays a capture and the caller-cannot-tell argument above no
+    #: longer applies -- the bucket set is declared rather than discovered.
+    #:
+    #: The graph is *slot-independent*: it is captured with ``user_id=0`` against a
+    #: persistent ``[1, blocks_per_seq]`` page-table row (see
+    #: :meth:`MuseGlimmerModel.page_table_row`), and replay stages the requesting slot's
+    #: row into it, so one trace per bucket serves all 32 serving slots.
     #:
     #: Two things about the cost, both measured rather than extrapolated (round 15 of the
     #: stage review found the earlier claim here was neither).  Retained DRAM is nearly
@@ -196,7 +204,21 @@ class GeneratorConfig:
     #: How many padded-length buckets may hold a prefill trace at once.  Lengths beyond
     #: this fall back to the eager path rather than evicting -- releasing a trace and its
     #: retained intermediates mid-request is a bigger hazard than a slower prefill.
+    #:
+    #: The serving adapter raises this to its warmed bucket count and captures every
+    #: bucket during warmup, which is the case the ``1`` default was never meant to
+    #: cover: with one resident bucket a mixed-length serving stream thrashes.
     prefill_trace_max_entries: int = 1
+    #: Widest padded row count that may hold a prefill trace.  Buckets past it fall back
+    #: to the eager path *without* consuming a bucket slot or a capture attempt.
+    #:
+    #: Measured, not chosen.  Tracing removes host issue, so the win shrinks as device
+    #: work grows: **1.33x at 128 padded rows and 1.00x at 8192**
+    #: (``doc/optimized_full_model/prefill_trace_probe.json``,
+    #: ``prefill_trace_probe_8192.json``).  Past the crossover a capture spends trace
+    #: region -- the resource the *decode* trace needs -- and buys nothing.  1024 is the
+    #: widest warmed serving bucket below that crossover.
+    prefill_trace_max_padded_len: int = 1024
     decoder_kwargs: dict = field(default_factory=dict)
     #: ``config_id`` of the precision artifact this generator was built from,
     #: suffixed ``+override(<fields>)`` when a caller passed its own precision
@@ -446,6 +468,10 @@ class MuseGlimmerGenerator(Generator):
         #: not tracing, because the resource is global and accounted before the throw).
         self._prefill_capture_failures = 0
         self._prefill_capture_disabled = False
+        #: Set when :meth:`_guard_late_sampling_capture` gave the prefill traces up so the
+        #: sampler could allocate safely.  Reported in :meth:`capability_report` because a
+        #: TTFT figure measured after this flips is an *eager*-prefill figure.
+        self._prefill_traces_released_for_sampling = False
         self._decode_trace_releases = 0
         #: Traces whose ``ttnn.release_trace`` *raised*.  Round 8 of the stage review found
         #: that round 7's retain-in-place policy fixed the leak by reintroducing round 4's
@@ -723,27 +749,37 @@ class MuseGlimmerGenerator(Generator):
             raise ValueError("prefill needs at least one token")
         if prompt_len > config.max_seq_len:
             raise ValueError(f"prompt of {prompt_len} tokens exceeds the supported context {config.max_seq_len}")
+        # The slot bound used to be enforced one level down, by the layer's
+        # ``user_id >= max_batch_size`` guard.  The row-form page table below always
+        # hands the layer ``user_id=0``, so that guard can no longer see the caller's
+        # slot and the check has to live here instead.  Dropping it would be silent
+        # rather than loud: ``normalize_page_table`` aliases rows past the last private
+        # one onto it, so an out-of-range slot would prefill into another user's blocks.
+        if not 0 <= int(user_id) < int(config.max_batch_size):
+            raise ValueError(f"user_id={user_id} outside max_batch_size={config.max_batch_size}")
 
         # The generator owns prompt padding: the ids are padded to a tile boundary
         # with the zero-embedding pad id, so the layer stack sees an aligned prompt
         # (its own internal pad is a no-op) and every padded row is exactly zero
         # rather than uninitialised DRAM.  The junk-free K/V those rows write past
         # ``prompt_len`` is never read: decode starts at ``cur_pos = prompt_len``.
-        if (
-            self.gen_config.prefill_trace
-            and not return_all_logits
-            and user_id == 0
-            and prompt_len <= config.prefill_chunk_size
-        ):
-            traced = self._prefill_traced(token_ids, page_table=page_table)
+        # One row, not the whole table, and ``user_id=0`` into the layer stack.  See
+        # ``MuseGlimmerModel.page_table_row``: prefill writes exactly one slot, so the
+        # row is all the stack reads, and the row form makes the prefill graph
+        # *slot-independent* -- one set of programs for all 32 serving slots instead of
+        # one per slot, and one prefill trace that serves every slot rather than only
+        # slot 0.
+        slot_row = model.page_table_row(page_table, user_id)
+        if self.gen_config.prefill_trace and not return_all_logits and prompt_len <= config.prefill_chunk_size:
+            traced = self._prefill_traced(token_ids, page_rows=slot_row)
             if traced is not None:
                 return traced
 
         tt_tokens, padded_len = model.prefill_tokens_to_device(token_ids)
-        tt_page_table = model.page_table_to_device(page_table)
+        tt_page_table = model.page_table_row_to_device(slot_row)
         embedded = model.embed_prefill(tt_tokens)
         ttnn.deallocate(tt_tokens)
-        hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=user_id)
+        hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0)
         if return_all_logits:
             rows = model.prefill_all_logits(hidden, prompt_len=prompt_len)
             ttnn.deallocate(hidden)
@@ -756,11 +792,71 @@ class MuseGlimmerGenerator(Generator):
 
     # --------------------------------------------------- the opt-in prefill trace
 
-    def _prefill_traced(self, token_ids: Sequence[int], *, page_table: torch.Tensor):
+    @property
+    def prefill_trace_buckets(self) -> list[int]:
+        """Padded row counts that currently hold a captured prefill trace.
+
+        The public form of ``_prefill_traces``' keys, so a caller that captures the
+        buckets itself -- the vLLM adapter's warmup -- can check what actually
+        landed without either reaching into the private dict or paying a full
+        :meth:`capability_report` per bucket.
+        """
+        return sorted(self._prefill_traces)
+
+    def enable_prefill_trace(self, *, max_entries: int, max_padded_len: int | None = None) -> None:
+        """Turn the opt-in prefill trace on **after** the generator has been built.
+
+        The serving adapter needs this seam rather than the ``build_generator``
+        keyword because the two capture orders are not equivalent.  ``prefill_trace``
+        set at construction makes the *first* prefill capture, and for vLLM the first
+        prefill is the plugin's prefill warmup -- which runs before the decode warmup.
+        The decode trace and the sampler's trace would then be competing for whatever
+        trace region the prefill buckets left, and the decode trace is the per-token
+        path: starving it to speed up TTFT is the wrong trade in every workload.  So
+        the adapter builds with the flag off, lets ``warmup_model_decode`` capture the
+        decode and sampling traces first, and only then calls this.
+
+        It is deliberately one-way and refuses to shrink an already-resident bucket
+        set: releasing a captured prefill trace is a teardown-time operation
+        (:meth:`_release_prefill_traces`), not something a knob should trigger.
+
+        One caveat worth stating rather than discovering: this mutates the config the
+        generator was *built* from, and ``build_generator``'s reuse cache is keyed on a
+        copy of that config's fields taken at call time.  A later
+        ``build_generator(..., prefill_trace=False)`` with otherwise identical
+        arguments would still be a cache hit and would return this generator, with
+        tracing on.  Serving builds once, and the tests that care pass ``reuse=False``.
+        """
+        max_entries = int(max_entries)
+        if max_entries < 1:
+            raise ValueError(f"max_entries must be at least 1, got {max_entries}")
+        if max_entries < len(self._prefill_traces):
+            raise ValueError(
+                f"max_entries={max_entries} is below the {len(self._prefill_traces)} bucket(s) already "
+                "captured; this seam does not evict"
+            )
+        self.gen_config.prefill_trace = True
+        self.gen_config.prefill_trace_max_entries = max_entries
+        if max_padded_len is not None:
+            self.gen_config.prefill_trace_max_padded_len = int(max_padded_len)
+        logger.info(
+            f"MuseGlimmerGenerator: prefill tracing enabled (max_entries={max_entries}, "
+            f"max_padded_len={self.gen_config.prefill_trace_max_padded_len})"
+        )
+
+    def _prefill_traced(self, token_ids: Sequence[int], *, page_rows: torch.Tensor):
         """``(logits, row_in_tile)`` from a replayed prefill trace, or ``None``.
 
         Returns ``None`` -- so the caller takes the eager path -- when this padded
-        length has no trace and the cache is full.
+        length is past :attr:`GeneratorConfig.prefill_trace_max_padded_len`, or when
+        it has no trace and the bucket cache is full.
+
+        ``page_rows`` is the target slot's ``[1, blocks_per_seq]`` row, and the graph
+        is captured with ``user_id=0`` against a persistent tensor of that shape, so
+        one trace serves **every** cache slot: replay stages the requesting slot's row
+        into it.  That is what makes this usable for serving, where vLLM picks the
+        slot; the earlier form baked the full ``[32, blocks]`` table and was therefore
+        limited to slot 0.
 
         The graph bakes in the padded row count, ``user_id=0``, ``start_pos=0`` and the
         last-token tile-row slice.  That slice is a property of the *bucket* rather than
@@ -780,15 +876,23 @@ class MuseGlimmerGenerator(Generator):
         model = self.model
         length = len(token_ids)
         padded_len = ((length + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-        rows = model.normalize_page_table(page_table)
         entry = self._prefill_traces.get(padded_len)
         if entry is None:
+            # A bucket wider than this is not worth a trace, and the bound is measured
+            # rather than chosen: what tracing removes is host issue, so the win shrinks
+            # as the device work grows -- 1.33x at 128 padded rows, 1.00x at 8192
+            # (``doc/optimized_full_model/prefill_trace_probe.json`` and
+            # ``prefill_trace_probe_8192.json``).  Past the crossover a capture costs
+            # trace region and buys nothing, and the trace region is the resource the
+            # *decode* trace needs.
+            if padded_len > self.gen_config.prefill_trace_max_padded_len:
+                return None
             if self._prefill_capture_disabled:
                 return None
             if len(self._prefill_traces) >= self.gen_config.prefill_trace_max_entries:
                 return None
             try:
-                entry = self._capture_prefill_trace(token_ids, padded_len=padded_len, page_rows=rows)
+                entry = self._capture_prefill_trace(token_ids, padded_len=padded_len, page_rows=page_rows)
             except Exception as exc:  # noqa: BLE001
                 # This path already owns an eager-fallback contract -- a full bucket cache
                 # returns ``None`` and the caller prefills eagerly -- but a *failed capture*
@@ -827,10 +931,44 @@ class MuseGlimmerGenerator(Generator):
         host_tokens, _ = model.prefill_tokens_to_device(token_ids, device=False)
         ttnn.copy_host_to_device_tensor(host_tokens, entry["tokens"])
         self.counters["token_refreshes"] += 1
-        if not torch.equal(entry["page_rows"], rows):
-            ttnn.copy_host_to_device_tensor(model.page_table_to_device(rows, device=False), entry["page_table"])
-            entry["page_rows"] = rows.clone()
+        if not torch.equal(entry["page_rows"], page_rows):
+            ttnn.copy_host_to_device_tensor(
+                model.page_table_row_to_device(page_rows, device=False), entry["page_table"]
+            )
+            entry["page_rows"] = page_rows.clone()
             self.counters["page_table_refreshes"] += 1
+        # ``blocking=True``, and this is a correctness argument rather than a tuning one.
+        #
+        # Queue order does make the clone, the sampler and the readback below *consume*
+        # the right data whether or not this blocks.  What it does not do is stop the
+        # host from **allocating** their buffers while the replay is still running, and
+        # ttnn is explicit that this is unsafe: "buffers allocated when a trace is active
+        # have to have a lifetime that ends before the trace is executed"
+        # (``tt_metal/impl/allocator/allocator.cpp:113-126``).  A trace's intermediates
+        # are freed at ``end_trace_capture`` but their addresses stay baked into the
+        # replay, so a buffer the allocator hands out from that range while the replay is
+        # in flight is written over by the replay itself.
+        #
+        # Shipped non-blocking first, and it corrupted a live server: with the 20 prefill
+        # buckets resident, served output stayed correct for the first dozen requests and
+        # then decayed into replacement characters mid-sweep, with no marker and no
+        # in-band error (``doc/optimized_vllm/README.md`` -> *The bug this stage found*).
+        # Blocking here costs the host wait between submit and consumer, and it is what
+        # makes the two allocations this path *does* make -- the clone below, and the
+        # sampler intermediates in ``_sample_eager`` -- satisfy the rule rather than race
+        # it: with the replay complete before either happens, and both freed before the
+        # next replay, their lifetimes end before the trace runs again, which is exactly
+        # what the allocator asks for.
+        #
+        # It did **not** fix the corruption on its own: ``doc/optimized_vllm/soak_blocking/``
+        # is this change at 20 resident buckets, and it corrupted inside the first sustained
+        # round. What the bucket count controls is how much *address range* is under the
+        # rule, and that is the knob that decided the shipped configuration; this ordering
+        # is necessary, not sufficient.
+        #
+        # It is not the decode path: decode's non-blocking replay is the vLLM async
+        # contract, and its consumers are ordered by the deferred read rather than by
+        # fresh allocations.
         ttnn.execute_trace(self.mesh_device, entry["id"], cq_id=0, blocking=True)
         self.counters["trace_replays"] += 1
         logits = ttnn.clone(entry["logits"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -840,7 +978,7 @@ class MuseGlimmerGenerator(Generator):
         """Allocate this bucket's persistent inputs, warm every program, then capture."""
         model = self.model
         tokens, _ = model.prefill_tokens_to_device(token_ids)
-        tt_page_table = model.page_table_to_device(page_rows)
+        tt_page_table = model.page_table_row_to_device(page_rows)
         last = padded_len - 1
 
         def forward():
@@ -1506,6 +1644,7 @@ class MuseGlimmerGenerator(Generator):
         first entry *is* the persistent decode token input), or, for the explicit
         host-sampling compatibility mode, the already-argmaxed host tokens.
         """
+        self._guard_late_sampling_capture(host_sampling=host_sampling)
         ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
         self.counters["trace_replays"] += 1
         logits = self._trace_logits
@@ -1514,6 +1653,86 @@ class MuseGlimmerGenerator(Generator):
         if advance_seeds:
             self.sampling.seed_manager.get_new_values()
         return self.sampling.sample(logits, enable_trace=True, tt_out_tok=self._device_inputs["tokens"])
+
+    def _sampling_allocates_this_step(self) -> str | None:
+        """Will the next sampler call allocate device buffers?  If so, why.
+
+        Two ways, both read off the sampler's own state with the sampler's own rules:
+
+        * **capture** -- there is no captured trace for the current
+          ``(penalties, log_probs, force_argmax)`` mode, so ``sample()`` will capture
+          one, and a capture allocates;
+        * **eager** -- an explicit per-request seed is active, which makes the sampler
+          deliberately bypass its trace ("run them directly so trace replay cannot
+          observe stale seed state", ``models/common/sampling/generator.py``) and
+          allocate this step's intermediates instead.
+
+        Returns ``None`` when the step is a pure replay of an already-captured trace,
+        which allocates nothing.
+        """
+        sampler = self.sampling
+        try:
+            if sampler.seed_manager.has_active_request_seed():
+                return "eager_sampling_for_request_seed"
+            key, _ = sampler._trace_slot(
+                bool(sampler._penalties_active),
+                bool(getattr(sampler, "_log_probs_active", False)),
+                bool(sampler.tt_sampling.force_argmax_sampling),
+            )
+            slot = sampler._trace_states.get(key)
+        except Exception:  # noqa: BLE001 - a private-shape change must not break decode
+            return None
+        if slot is None or slot.get("id") is None:
+            return "sampling_trace_capture"
+        return None
+
+    def _guard_late_sampling_capture(self, *, host_sampling: bool) -> None:
+        """Release the prefill traces before the sampler allocates anything.
+
+        This is the interlock for a failure that is silent without it, and the
+        optimized-vLLM stage measured it rather than imagined it
+        (``doc/optimized_vllm/README.md``, *The bug this stage found*).
+
+        ttnn states the rule: *"Allocating device buffers is unsafe due to the
+        existence of an active trace ... buffers allocated when a trace is active have
+        to have a lifetime that ends before the trace is executed"*
+        (``tt_metal/impl/allocator/allocator.cpp:113-126``).  A captured trace's
+        intermediates are freed when capture ends, but their addresses stay baked into
+        the replay, so a buffer allocated afterwards that lands in that range is
+        overwritten the next time the trace runs.  The decode and sampling traces put a
+        small, decode-shaped range under that rule and this port lived with it.  Twenty
+        resident prefill traces put a 52-layer *prefill* working set under it, and the
+        result was measured: the first request with an explicit seed made the sampler
+        run eagerly -- it bypasses its trace on purpose when a request seed is active --
+        and from that point every completion the server produced was replacement
+        characters (``doc/optimized_vllm/corruption_localization.json`` names
+        ``test_seeding_and_variety.py`` as the first file that does it).
+
+        So prefill traces are given up the moment the sampler is about to allocate,
+        *before* it allocates, rather than being left to corrupt.  The order matters:
+        release first, then let the sampler run, so there is no trace left to overwrite
+        what it allocates.  This is one-way -- capture stays disabled for this
+        generator -- because the condition that made it unsafe is a property of the
+        workload, not of that one step.  It costs TTFT (serving prefill falls back to
+        the eager path) and keeps the model correct, which is the right way round, and
+        it is logged as a degraded path so an evidence sweep cannot quietly report a
+        TTFT that prefill tracing is no longer delivering.
+        """
+        if host_sampling or not self._prefill_traces:
+            return
+        reason = self._sampling_allocates_this_step()
+        if reason is None:
+            return
+        logger.warning(
+            "MuseGlimmerGenerator: DEGRADED PATH prefill_traces_released_for_sampling_capture -- the "
+            f"sampler is about to allocate ({reason}) while {len(self._prefill_traces)} prefill trace(s) "
+            "are resident, and a buffer allocated under a live trace may be overwritten when that trace "
+            "replays. The prefill traces are released first and further prefill capture is switched off "
+            "for this generator; serving prefill falls back to the eager path."
+        )
+        self._release_prefill_traces()
+        self._prefill_capture_disabled = True
+        self._prefill_traces_released_for_sampling = True
 
     # ------------------------------------------------- serving decode read split
     #
@@ -1969,11 +2188,13 @@ class MuseGlimmerGenerator(Generator):
             "decode_swiglu_mul_cores": dec_mod.DECODE_SWIGLU_MUL_CORES,
             "prefill_trace": bool(self.gen_config.prefill_trace),
             "prefill_trace_max_entries": int(self.gen_config.prefill_trace_max_entries),
+            "prefill_trace_max_padded_len": int(self.gen_config.prefill_trace_max_padded_len),
             # A dead counter is not evidence: round 16 pointed out that this stage's own answer
             # to "make a state visible in every evidence file" is this block, and the capture
             # failure count was written and never read anywhere.
             "prefill_capture_failures": int(self._prefill_capture_failures),
             "prefill_capture_disabled_after_failure": bool(self._prefill_capture_disabled),
+            "prefill_traces_released_for_sampling": bool(self._prefill_traces_released_for_sampling),
             "prefill_trace_buckets_resident": sorted(self._prefill_traces),
             "lm_head_dtype": str(self.gen_config.lm_head_dtype),
             "lm_head_matmul": self.gen_config.lm_head_matmul,
@@ -2120,6 +2341,7 @@ def _cache_key(mesh_device: ttnn.MeshDevice, gen_config: GeneratorConfig) -> tup
         gen_config.topk_split_to_power_of_2,
         gen_config.prefill_trace,
         gen_config.prefill_trace_max_entries,
+        gen_config.prefill_trace_max_padded_len,
         tuple(sorted((str(k), str(v)) for k, v in gen_config.decoder_kwargs.items())),
         # Two artifacts can encode the same policy, in which case the cached
         # build is the right one to return -- but it must not then report the
@@ -2188,6 +2410,7 @@ def build_generator(model_dir: str | Path, mesh_device: ttnn.MeshDevice, **kwarg
         topk_split_to_power_of_2=bool(kwargs.pop("topk_split_to_power_of_2", True)),
         prefill_trace=bool(kwargs.pop("prefill_trace", False)),
         prefill_trace_max_entries=int(kwargs.pop("prefill_trace_max_entries", 1)),
+        prefill_trace_max_padded_len=int(kwargs.pop("prefill_trace_max_padded_len", 1024)),
         decoder_kwargs=merged_decoder_kwargs,
         precision_config_id=config_id,
     )

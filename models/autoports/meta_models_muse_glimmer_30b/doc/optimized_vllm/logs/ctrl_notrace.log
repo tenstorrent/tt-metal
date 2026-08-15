@@ -1,0 +1,13 @@
+=== arm=ctrl_notrace steps=qualchatrep1,sampling,qualchatrep2 prefill_trace=0 ===
+=== launching server 15:48:46 ===
+=== server ready 15:52:21 after 215s ===
+=== qualchatrep1 15:52:21 ===
+STEP qualchatrep1 rc=0
+=== sampling 15:53:02 ===
+STEP sampling rc=1
+=== qualchatrep2 15:56:12 ===
+STEP qualchatrep2 rc=0
+=== shutting down 15:56:53 ===
+=== audit 15:57:02 ===
+STEP audit rc=1
+ARM_ctrl_notrace_DONE 15:57:03

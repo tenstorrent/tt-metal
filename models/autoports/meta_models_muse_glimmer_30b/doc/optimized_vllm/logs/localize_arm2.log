@@ -1,0 +1,13 @@
+=== server ready 16:22:57 ===
+[localize] reference: ' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_config.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_build_logprobs_from_topk.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_logprobs.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_seeding_and_variety.py: rc=1 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_tt_penalties.py: rc=1 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_host_only_params.py: rc=1 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_request_isolation.py: rc=1 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_structured_output_dp1.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] first_corrupting_file=None
+LOCALIZE_RC=0
+LOCALIZE_DONE 16:26:08

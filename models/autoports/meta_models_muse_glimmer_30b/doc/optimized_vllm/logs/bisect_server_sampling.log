@@ -1,0 +1,9 @@
+
+=== Running plugin sampling tests ===
+  profile: full (1 target(s))
+  tt-max-num-seqs: 32
+  cmd: /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python -m pytest /home/ttuser/dev/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=meta-models/Muse-Glimmer-30B --tt-max-num-seqs=32
+  log: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/bisect_server/sampling_tests.log
+  FAIL (pytest exit 1) — inspect /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/bisect_server/sampling_tests.log
+
+Sampling tests failed — skipping remaining stages.

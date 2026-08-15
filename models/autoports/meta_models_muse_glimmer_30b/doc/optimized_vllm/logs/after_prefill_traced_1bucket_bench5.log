@@ -1,0 +1,43 @@
+# NOTE: this log is from the 1-bucket traced arm (doc/optimized_vllm/after_prefill_traced_1bucket/),
+# not from the shipped `after/` arm. Both sweeps were driven under the arm name `after`, and the
+# second overwrote the first's driver logs; the arms themselves were renamed afterwards. Its header
+# line reads `prefill_trace=unset`, which at the time meant the then-default ONE TRACED BUCKET --
+# the opposite of what shipped. The shipped arm's own driver logs are lost; its artifacts
+# (run1..6, sampling_tests.log, qualitative/, determinism_vllm.json, serving_audit.json,
+# server_excerpt.log, bench_window_end_bytes.txt) are intact and are what the report cites.
+
+=== Running vLLM serving benchmark: single_user_decode ===
+  prompt_len=128, output_len=128, num_requests=1, concurrency=1, temperature=0.0
+  comparison_scope: Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.
+  command: /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/vllm bench serve --backend vllm --model meta-models/Muse-Glimmer-30B --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_result.json --max-concurrency 1 --temperature 0.0
+  log: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_benchmark.log
+
+=== Serving benchmark summary: single_user_decode ===
+  Requests : 1/1 completed
+  TTFT     : P50=65.9ms  P99=65.9ms
+  TPOT     : mean=23.0ms  P99=23.0ms
+  ITL      : P50=23.0ms  P99=23.2ms
+  Output   : 42.8 tok/s aggregate
+  Decode   : 43.5 t/s/u from mean TPOT
+  Raw      : /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_result.json
+  Summary  : /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_benchmark.json
+
+=== Running vLLM serving benchmark: ci_serving_burst ===
+  prompt_len=100, output_len=100, num_requests=32, concurrency=None, temperature=0.0
+  comparison_scope: vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT.
+  command: /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/vllm bench serve --backend vllm --model meta-models/Muse-Glimmer-30B --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_ci_serving_result.json --temperature 0.0
+  log: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_ci_serving_benchmark.log
+
+=== Serving benchmark summary: ci_serving_burst ===
+  Requests : 32/32 completed
+  TTFT     : P50=1654.7ms  P99=1656.2ms
+  TPOT     : mean=23.1ms  P99=23.1ms
+  ITL      : P50=23.0ms  P99=25.0ms
+  Output   : 812.1 tok/s aggregate
+  Decode   : 43.3 t/s/u from mean TPOT
+  Raw      : /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_ci_serving_result.json
+  Summary  : /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5/vllm_ci_serving_benchmark.json
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/run5
+============================================================

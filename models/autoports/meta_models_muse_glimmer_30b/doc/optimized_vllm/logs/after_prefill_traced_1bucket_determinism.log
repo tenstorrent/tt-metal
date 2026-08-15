@@ -1,0 +1,20 @@
+# NOTE: this log is from the 1-bucket traced arm (doc/optimized_vllm/after_prefill_traced_1bucket/),
+# not from the shipped `after/` arm. Both sweeps were driven under the arm name `after`, and the
+# second overwrote the first's driver logs; the arms themselves were renamed afterwards. Its header
+# line reads `prefill_trace=unset`, which at the time meant the then-default ONE TRACED BUCKET --
+# the opposite of what shipped. The shipped arm's own driver logs are lost; its artifacts
+# (run1..6, sampling_tests.log, qualitative/, determinism_vllm.json, serving_audit.json,
+# server_excerpt.log, bench_window_end_bytes.txt) are intact and are what the report cites.
+RUN_TO_RUN identical=True
+CROSS_BATCH all_identical=True matches_single=True
+BASELINE identical_over_common_prefix=True over 79 chars
+NON_ALIGNED len=1 ok=True
+NON_ALIGNED len=37 ok=True
+NON_ALIGNED len=127 ok=True
+NON_ALIGNED len=129 ok=True
+NON_ALIGNED len=1023 ok=True
+NON_ALIGNED len=2049 ok=True
+NON_ALIGNED len=4097 ok=True
+NON_ALIGNED len=8193 ok=True
+NON_ALIGNED len=12345 ok=True
+DETERMINISM_OK -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/after/determinism_vllm.json

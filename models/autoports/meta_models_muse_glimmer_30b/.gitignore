@@ -16,3 +16,11 @@ __pycache__/
 !readiness_vllm/sampling_tests.log
 !readiness_vllm/vllm_benchmark.log
 !readiness_vllm/vllm_ci_serving_benchmark.log
+
+# The optimized-vLLM stage drives many server arms and each one leaves a raw
+# server.log of 50-130 MB under doc/optimized_vllm/<arm>/server/. The `!doc/**/*.log`
+# rule above would pull every one of them into git; ~400 MB of raw serving log is not
+# stage evidence and cannot be cheaply removed from history later. Each arm commits
+# <arm>/server_excerpt.log instead, which carries the configuration, the TT-side lines
+# and the tail. Re-ignore the raw ones, after the un-ignore so this wins.
+doc/optimized_vllm/*/server/server*.log

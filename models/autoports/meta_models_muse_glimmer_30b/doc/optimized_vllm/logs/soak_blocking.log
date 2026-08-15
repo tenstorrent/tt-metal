@@ -1,0 +1,21 @@
+=== arm=soak_blocking steps=qualchatrep1,qualitativerep1,qualchatrep2,qualitativerep2,bench1,qualchatrep3,qualitativerep3 prefill_trace=unset ===
+=== launching server 17:28:22 ===
+=== server ready 17:32:13 after 231s ===
+=== qualchatrep1 17:32:13 ===
+STEP qualchatrep1 rc=0
+=== qualitativerep1 17:32:53 ===
+STEP qualitativerep1 rc=0
+=== qualchatrep2 17:34:01 ===
+STEP qualchatrep2 rc=0
+=== qualitativerep2 17:34:41 ===
+STEP qualitativerep2 rc=0
+=== bench1 17:35:55 ===
+STEP bench1 rc=0
+=== qualchatrep3 17:36:21 ===
+STEP qualchatrep3 rc=0
+=== qualitativerep3 17:37:01 ===
+STEP qualitativerep3 rc=0
+=== shutting down 17:38:15 ===
+=== audit 17:38:24 ===
+STEP audit rc=0
+ARM_soak_blocking_DONE 17:38:24

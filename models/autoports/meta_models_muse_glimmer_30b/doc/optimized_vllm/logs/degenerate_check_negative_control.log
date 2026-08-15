@@ -1,0 +1,30 @@
+measured: excluded artifacts [None] {'count': 0, 'artifacts': []}
+measured: prompt[0] greedy_completion ('Write a haiku about machine learning.') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 63, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0952}
+measured: prompt[0] sampled_completion ('Write a haiku about machine learning.') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 192, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0938}
+measured: prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 226, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0664}
+measured: prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 180, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0333}
+measured: prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 211, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0995}
+measured: prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 228, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0263}
+measured: prompt[3] greedy_completion ('What are the three laws of thermodynamics?') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 221, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0679}
+measured: prompt[3] sampled_completion ('What are the three laws of thermodynamics?') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 131, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1832}
+measured: prompt[4] greedy_completion ('Translate the following to French: "Hello, how are you today') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.0, 'num_tokens': 6, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.5}
+measured: prompt[4] sampled_completion ('Translate the following to French: "Hello, how are you today') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.2841, 'num_tokens': 59, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0508}
+measured: prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.418, 'num_tokens': 11, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.2727}
+measured: prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.') [models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'replacement_char_fraction': 0.2054, 'num_tokens': 70, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0429}
+
+3 finding(s):
+
+[CRITICAL] replacement_char_fraction=0.2841 (threshold 0.1)
+  artifact: models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json
+  where:    prompt[4] sampled_completion ('Translate the following to French: "Hello, how are you today')
+  Most of the completion does not decode to text. A healthy checkpoint does not emit mostly byte-fallback tokens; suspect corrupted device state (a buffer allocated under a live trace, a stale cache or page table) rather than the model.
+
+[CRITICAL] replacement_char_fraction=0.418 (threshold 0.1)
+  artifact: models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json
+  where:    prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')
+  Most of the completion does not decode to text. A healthy checkpoint does not emit mostly byte-fallback tokens; suspect corrupted device state (a buffer allocated under a live trace, a stale cache or page table) rather than the model.
+
+[CRITICAL] replacement_char_fraction=0.2054 (threshold 0.1)
+  artifact: models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/traced_qualitative/vllm_qualitative_outputs.json
+  where:    prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')
+  Most of the completion does not decode to text. A healthy checkpoint does not emit mostly byte-fallback tokens; suspect corrupted device state (a buffer allocated under a live trace, a stale cache or page table) rather than the model.

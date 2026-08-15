@@ -1,0 +1,775 @@
+{
+  "what": "Every adapter-probe request this stage ran, with the prefill-trace configuration it ran under and whether its tokens match a reference: the vLLM-integration stage's committed probe where it has that length, otherwise this stage's own tracing-off run of the same length. Compared over the common prefix, because probes ran at different --decode-steps. Reproduce with doc/optimized_vllm/bench/run_discriminators.sh.",
+  "conclusions": [
+    "Tracing off is correct at every length measured (37, 100, 128, 1024, 4097, 8192).",
+    "With tracing on, LONG EAGER prefills can diverge from their first token even though they are not traced. Largest bucket 96 or 128: 4097 and 8192 both diverge. Largest bucket 1024 (alone, as [128,1024], or as the top of a 20-bucket set): 4097 is correct -- but 8192 still diverges, byte-identically to the bucket-128 failure. So a larger largest bucket fixes SOME long lengths and not others.",
+    "NO traced configuration measured is correct at every length. That, and not a bucket count, is why tracing ships off.",
+    "Capture alone is sufficient: the 4097-ALONE and bucket-96 runs contain no traced request at all -- the bucket is captured at warmup and never replayed -- and 4097 is still wrong.",
+    "It is not an unwarmed shape: 8192 IS in PREFILL_WARMUP_LENGTHS.",
+    "The repetitive 1024 output (distinct_tokens 4) is a property of the synthetic arange prompt, not corruption: the tracing-off control produces it byte-identically.",
+    "Separately, a WIDE bucket set decays SHORT-prompt output into replacement characters after ~22 generations of ordinary traffic (traced_qualitative/, soak_blocking/), which the narrow sets do not.",
+    "The mechanism is UNEXPLAINED. The ttnn allocator-lifetime rule accounts for the wide-set decay but not for a capture-only failure with no replay, and nothing measured explains why bucket 1024 fixes 4097 but not 8192."
+  ],
+  "rows": [
+    {
+      "artifact": "probe_repro_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "control, 4 lengths",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "control, 4 lengths",
+      "prompt_len": 100,
+      "padded_len": 128,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        954,
+        2032,
+        373,
+        6479
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "control, 4 lengths",
+      "prompt_len": 37,
+      "padded_len": 64,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        258,
+        21,
+        220,
+        1028,
+        1029,
+        1030
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "control, 4 lengths",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_4097only_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "4097 alone, control",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_8192_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "8192 alone, control",
+      "prompt_len": 8192,
+      "padded_len": 8192,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        589,
+        6105
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_1024_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "1024+4097, control",
+      "prompt_len": 1024,
+      "padded_len": 1024,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        84,
+        198,
+        2223,
+        6453,
+        2223,
+        6453
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_1024_eager.json",
+      "config": "tracing off",
+      "largest_resident_bucket": null,
+      "note": "1024+4097, control",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_traced.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths in one session",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_traced.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths in one session",
+      "prompt_len": 100,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        954,
+        2032,
+        373,
+        6479
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_traced.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths in one session",
+      "prompt_len": 37,
+      "padded_len": 64,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        258,
+        21,
+        220,
+        1028,
+        1029,
+        1030
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_repro_traced.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths in one session",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": false,
+      "first_tokens": [
+        576,
+        5824,
+        761,
+        426,
+        426,
+        426
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_full_shipped.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths, 16 decode steps",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 17
+    },
+    {
+      "artifact": "probe_full_shipped.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths, 16 decode steps",
+      "prompt_len": 100,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        954,
+        2032,
+        373,
+        6479
+      ],
+      "distinct_tokens": 16
+    },
+    {
+      "artifact": "probe_full_shipped.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths, 16 decode steps",
+      "prompt_len": 37,
+      "padded_len": 64,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        258,
+        21,
+        220,
+        1028,
+        1029,
+        1030
+      ],
+      "distinct_tokens": 12
+    },
+    {
+      "artifact": "probe_full_shipped.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4 lengths, 16 decode steps",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": false,
+      "first_tokens": [
+        576,
+        5824,
+        761,
+        426,
+        426,
+        426
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_4097only_traced.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "4097 ALONE - captured at warmup, never replayed",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": false,
+      "first_tokens": [
+        576,
+        5824,
+        761,
+        426,
+        426,
+        426
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_8192_traced.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "8192 alone - a WARMED padded length",
+      "prompt_len": 8192,
+      "padded_len": 8192,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": false,
+      "first_tokens": [
+        1767,
+        1330,
+        1331,
+        1332,
+        1333,
+        1334
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_1024_bucket128.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "1024+4097",
+      "prompt_len": 1024,
+      "padded_len": 1024,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        84,
+        198,
+        2223,
+        6453,
+        2223,
+        6453
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_1024_bucket128.json",
+      "config": "1 bucket [128]",
+      "largest_resident_bucket": 128,
+      "note": "1024+4097",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": false,
+      "first_tokens": [
+        576,
+        5824,
+        761,
+        426,
+        426,
+        426
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_bucket96.json",
+      "config": "1 bucket [96]",
+      "largest_resident_bucket": 96,
+      "note": "4 lengths; no traced request in this run",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_bucket96.json",
+      "config": "1 bucket [96]",
+      "largest_resident_bucket": 96,
+      "note": "4 lengths; no traced request in this run",
+      "prompt_len": 100,
+      "padded_len": 128,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        954,
+        2032,
+        373,
+        6479
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_bucket96.json",
+      "config": "1 bucket [96]",
+      "largest_resident_bucket": 96,
+      "note": "4 lengths; no traced request in this run",
+      "prompt_len": 37,
+      "padded_len": 64,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        258,
+        21,
+        220,
+        1028,
+        1029,
+        1030
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_bucket96.json",
+      "config": "1 bucket [96]",
+      "largest_resident_bucket": 96,
+      "note": "4 lengths; no traced request in this run",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": false,
+      "first_tokens": [
+        576,
+        5824,
+        761,
+        426,
+        426,
+        426
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_bucket1024.json",
+      "config": "1 bucket [1024]",
+      "largest_resident_bucket": 1024,
+      "note": "one LARGE bucket",
+      "prompt_len": 1024,
+      "padded_len": 1024,
+      "path": "traced",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        84,
+        198,
+        2223,
+        6453,
+        2223,
+        6453
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_bucket1024.json",
+      "config": "1 bucket [1024]",
+      "largest_resident_bucket": 1024,
+      "note": "one LARGE bucket",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_bucket128_1024.json",
+      "config": "2 buckets [128,1024]",
+      "largest_resident_bucket": 1024,
+      "note": "keeps the 1.29x bucket, largest is 1024",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_bucket128_1024.json",
+      "config": "2 buckets [128,1024]",
+      "largest_resident_bucket": 1024,
+      "note": "keeps the 1.29x bucket, largest is 1024",
+      "prompt_len": 1024,
+      "padded_len": 1024,
+      "path": "traced",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        84,
+        198,
+        2223,
+        6453,
+        2223,
+        6453
+      ],
+      "distinct_tokens": 4
+    },
+    {
+      "artifact": "probe_disc_bucket128_1024.json",
+      "config": "2 buckets [128,1024]",
+      "largest_resident_bucket": 1024,
+      "note": "keeps the 1.29x bucket, largest is 1024",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_8192_bucket128_1024.json",
+      "config": "2 buckets [128,1024]",
+      "largest_resident_bucket": 1024,
+      "note": "8192 at the two-bucket set",
+      "prompt_len": 8192,
+      "padded_len": 8192,
+      "path": "eager",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": false,
+      "first_tokens": [
+        1767,
+        1330,
+        1331,
+        1332,
+        1333,
+        1334
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_20bucket.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, shipped revision",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_20bucket.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, shipped revision",
+      "prompt_len": 100,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        954,
+        2032,
+        373,
+        6479
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_20bucket.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, shipped revision",
+      "prompt_len": 37,
+      "padded_len": 64,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        258,
+        21,
+        220,
+        1028,
+        1029,
+        1030
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_disc_20bucket.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, shipped revision",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 9
+    },
+    {
+      "artifact": "probe_full_prefill_traced.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, earlier revision",
+      "prompt_len": 128,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        81,
+        198,
+        6453,
+        954,
+        18647,
+        373
+      ],
+      "distinct_tokens": 17
+    },
+    {
+      "artifact": "probe_full_prefill_traced.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, earlier revision",
+      "prompt_len": 100,
+      "padded_len": 128,
+      "path": "traced",
+      "reference_source": "this stage's tracing-off control",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        954,
+        2032,
+        373,
+        6479
+      ],
+      "distinct_tokens": 16
+    },
+    {
+      "artifact": "probe_full_prefill_traced.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, earlier revision",
+      "prompt_len": 37,
+      "padded_len": 64,
+      "path": "traced",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        258,
+        21,
+        220,
+        1028,
+        1029,
+        1030
+      ],
+      "distinct_tokens": 12
+    },
+    {
+      "artifact": "probe_full_prefill_traced.json",
+      "config": "20 buckets",
+      "largest_resident_bucket": 1024,
+      "note": "4 lengths, earlier revision",
+      "prompt_len": 4097,
+      "padded_len": 4128,
+      "path": "eager",
+      "reference_source": "vllm_integration_probe",
+      "matches_reference": true,
+      "first_tokens": [
+        198,
+        6453,
+        107177,
+        38,
+        372,
+        2556
+      ],
+      "distinct_tokens": 17
+    }
+  ]
+}

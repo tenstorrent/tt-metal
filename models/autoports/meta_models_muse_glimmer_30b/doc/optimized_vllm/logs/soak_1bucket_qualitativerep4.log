@@ -1,0 +1,37 @@
+
+=== Running qualitative prompts from /home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : ' - 1.5.0 - Llama API docs Write a haiku about machine learning. ```  {   "model"'
+    Sampled: '    - 1st line: 5 syllables    - 2nd line: 7 syllables    - 3rd line: 5 syllable'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : ' Provide an example of each. Supervised learning involves training a model using'
+    Sampled: ' How do they differ in terms of data and learning objectives? Supervised learnin'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : " a magical device that could change the world. The inventor's name was... (fill "
+    Sampled: ' a magical __________. With this, he could create anything he imagined. He decid'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : ' - Physicsgurus Q&A What are the three laws of thermodynamics?   The three laws '
+    Sampled: ' – The colgate brush - What are the three laws of thermodynamics? What are the t'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : ".  Bonjour, comment allez-vous aujourd'hui?"
+    Sampled: ".  Bonjour, comment allez-vous aujourd'hui?"
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : ' The function should take an integer $n$ as input and return the $n$-th Fibonacc'
+    Sampled: ' The function should return the nth Fibonacci number where n is a non-negative i'
+
+Saved 6 completions to /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_1bucket/runner_qual4/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_1bucket/runner_qual4
+============================================================

@@ -1,0 +1,17 @@
+=== arm=fixcheck steps=qualchatrep1,sampling,qualchatrep2,bench1,qualchatrep3 prefill_trace=unset ===
+=== launching server 15:59:50 ===
+=== server ready 16:03:55 after 245s ===
+=== qualchatrep1 16:03:55 ===
+STEP qualchatrep1 rc=0
+=== sampling 16:04:35 ===
+STEP sampling rc=1
+=== qualchatrep2 16:06:41 ===
+STEP qualchatrep2 rc=0
+=== bench1 16:07:22 ===
+STEP bench1 rc=0
+=== qualchatrep3 16:07:52 ===
+STEP qualchatrep3 rc=0
+=== shutting down 16:08:32 ===
+=== audit 16:08:41 ===
+STEP audit rc=1
+ARM_fixcheck_DONE 16:08:41

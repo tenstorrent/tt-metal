@@ -1,0 +1,37 @@
+
+=== Running qualitative prompts from /home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : '�*0#)"�"�"�%����$��!!�X�$������.!�&������"-�1�*!##"����!!!�!*"&!"�!�����&"!�"!��'
+    Sampled: '&�7 ��,Kc#Q�/Y\x18NAL�)5�N�r#vC!�/;(t�/R+�8"6���-к�Tu4/-+-�A.�SK!GiC,\'Gu�G v88t)SuL'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : '�b��+�!��"%"��\'�"���<#�*+!0%���!��!!����(#��#!!!%!$�/##��������!"3!!�!!���!!��(�'
+    Sampled: '��K�G�[a�J2A�N]"$49,*3B�av�+���>5QHSP\'7,��D��, pro пV���\x14�1�(ا�KJ(Ao1���0N�� re2'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : '�!!!\'�#�!����$&�$#�"!-���!,��""[����!�!!#!$�0�Q�"�%")"O!�!����""!:\'\'�"�&��c#��"!'
+    Sampled: ")3:J5�<#&%&0 anK@-/��)E+|(.�K�4!LJ�$L!;' of':�L���3QdC��yE \x015ib�DA13RQ�NL3:* ��_"
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : '�!�!�����-�!!�$�����!�!��"�!�!""!!����&$!�*A��#�!���$!��!��"!��&\'&���!+!!�!�!.$"'
+    Sampled: "&-�s�GemB#:�Jic#.:H��p6�53�0|3'D2ag��!�&/�/)C( comx5$&,��'5��`V�*X�-��:!�6JQzL��"
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : '��&�!!�!�!�er!!(!$�!($!!!!!��#"�!!#���")"�#���$)$&�)#,!g��"�)!�\'�!",��!!��,"��$)'
+    Sampled: '��,1%aр/ e�:�,�;��AQJ6á,East�P�)\x7f{�3�#1�u�4D?)SN����06�\x08+?Dl"�$@�#b,@�@�~3NI+m�l'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : '�&!)�0!*���!��!!"!,f!�!�!*�!(���!!��)��!!�#!����##!���"+#!���,�5��##�$�"�\'�[#���'
+    Sampled: '/4!F29u in3�}z700�,�/bwJ%--�P�;.#�S3@J�2x7�bра40&�B�JN#�J?!:-\x13DêouLowm(&#=��/ co'
+
+Saved 6 completions to /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_blocking/runner_qual3/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_vllm/soak_blocking/runner_qual3
+============================================================

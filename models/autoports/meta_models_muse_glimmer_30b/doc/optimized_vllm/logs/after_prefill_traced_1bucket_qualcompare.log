@@ -1,0 +1,21 @@
+# NOTE: this log is from the 1-bucket traced arm (doc/optimized_vllm/after_prefill_traced_1bucket/),
+# not from the shipped `after/` arm. Both sweeps were driven under the arm name `after`, and the
+# second overwrote the first's driver logs; the arms themselves were renamed afterwards. Its header
+# line reads `prefill_trace=unset`, which at the time meant the then-default ONE TRACED BUCKET --
+# the opposite of what shipped. The shipped arm's own driver logs are lost; its artifacts
+# (run1..6, sampling_tests.log, qualitative/, determinism_vllm.json, serving_audit.json,
+# server_excerpt.log, bench_window_end_bytes.txt) are intact and are what the report cites.
+CMP {'id': 'p0', 'tt_tokens': 127, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0945, 'hf_trigram_loop': 0.1172, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 2, 'exact_match': False}
+CMP {'id': 'p1', 'tt_tokens': 127, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0472, 'hf_trigram_loop': 0.0469, 'tt_non_ascii': 0.0018, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 1, 'exact_match': False}
+CMP {'id': 'p2', 'tt_tokens': 127, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0709, 'hf_trigram_loop': 0.0469, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 2, 'exact_match': False}
+CMP {'id': 'p3', 'tt_tokens': 127, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0709, 'hf_trigram_loop': 0.0703, 'tt_non_ascii': 0.0017, 'hf_non_ascii': 0.0017, 'first_divergence_from_hf': 2, 'exact_match': False}
+CMP {'id': 'p4', 'tt_tokens': 127, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.1417, 'hf_trigram_loop': 0.0938, 'tt_non_ascii': 0.0018, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 2, 'exact_match': False}
+CMP {'id': 'p5', 'tt_tokens': 127, 'tt_adjacent_dup': 0.0, 'hf_adjacent_dup': 0.0, 'tt_trigram_loop': 0.0709, 'hf_trigram_loop': 0.0469, 'tt_non_ascii': 0.0, 'hf_non_ascii': 0.0, 'first_divergence_from_hf': 2, 'exact_match': False}
+CMP_OK prompts=6 worst_tt_adjacent_dup=0.0 (critical threshold 0.10)
+VS_SWEEP p0 identical=False first_div=2
+VS_SWEEP p1 identical=False first_div=2
+VS_SWEEP p2 identical=False first_div=2
+VS_SWEEP p3 identical=False first_div=2
+VS_SWEEP p4 identical=False first_div=2
+VS_SWEEP p5 identical=False first_div=2
+VS_SWEEP_OK prompts=6 identical=0

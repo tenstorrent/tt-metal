@@ -1,0 +1,165 @@
+{
+  "logs": [
+    {
+      "path": "doc/optimized_vllm/traced_qualitative/server/server.log",
+      "present": true,
+      "bytes": 482031,
+      "warmup_window_split": true,
+      "warmup_window_split_marker": "init engine (profile, create kv cache, warmup model) took",
+      "benchmark_window_split": true,
+      "benchmark_window_end_bytes": 482031,
+      "markers": {
+        "DEGRADED PATH untraced_eager_decode": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "eager decode instead of the captured trace"
+        },
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "markers_warmup_window": {
+        "DEGRADED PATH untraced_eager_decode": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "eager decode instead of the captured trace"
+        },
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "markers_serving_window": {},
+      "markers_benchmark_window": {},
+      "markers_checks_window": {},
+      "markers_shutdown_window": {
+        "EngineDeadError": {
+          "count": 1,
+          "severity": "degraded",
+          "meaning": "engine death"
+        }
+      },
+      "shutdown_window_start_bytes": 482031,
+      "degraded_shutdown_window": [
+        "EngineDeadError"
+      ],
+      "degraded": [
+        "DEGRADED PATH untraced_eager_decode"
+      ],
+      "degraded_serving_window": [],
+      "degraded_benchmark_window": [],
+      "degraded_checks_window": [],
+      "degraded_checks_window_expected": {},
+      "degraded_checks_window_unexpected": [],
+      "degraded_warmup_window": [
+        "DEGRADED PATH untraced_eager_decode"
+      ],
+      "degraded_warmup_window_expected": {
+        "DEGRADED PATH untraced_eager_decode": "the TT plugin's phase-1 warmup compiles the decode path with enable_trace=False before phase 2 captures the trace, so exactly one untraced decode step is expected here and is not a serving-path degradation"
+      },
+      "degraded_warmup_window_unexpected": []
+    }
+  ],
+  "processes": {
+    "surviving_vllm_processes": [],
+    "device_holders_raw": [
+      "/dev/tenstorrent/0 ",
+      "/dev/tenstorrent/1 ",
+      "/dev/tenstorrent/2 ",
+      "/dev/tenstorrent/3 ",
+      "/dev/tenstorrent/by-id"
+    ],
+    "proc_fd_scan": "",
+    "clean": true
+  },
+  "marker_health": {
+    "sources_checked": [
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator_vllm.py"
+    ],
+    "method": "non-docstring string literals only, collected via ast",
+    "external_markers_not_checked": [
+      "Chunked prefill is not yet supported",
+      "Disabling async scheduling",
+      "EngineCore encountered a fatal error",
+      "EngineDeadError",
+      "Prefix caching is not supported"
+    ],
+    "dead_markers": [],
+    "all_degraded_markers_live": true
+  },
+  "marker_provenance": {
+    "newest_marker_source_mtime": 1786811277.030781,
+    "logs": [
+      {
+        "log": "doc/optimized_vllm/traced_qualitative/server/server.log",
+        "log_mtime": 1786813775.7886271,
+        "predates_current_markers": false
+      }
+    ],
+    "caveat": "for any log with predates_current_markers=true, the absence of a marker added after it was written is not evidence about that run; see conditions_evidenced_elsewhere"
+  },
+  "conditions_evidenced_elsewhere": {
+    "every measured decode step was a trace replay": "probe_full_fixed.json -> multi_request.decode_counters.trace_replays equals the step count with synchronizations 0; and vllm_benchmark.json ITL p50 23.015 ms / p99 23.641 ms over 128 steps, which leaves no room for a step that gathered the full 202048-wide vocab",
+    "on-device sampling was active for the benchmarked run": "server.log records sample_on_device_mode=all and 'captured sampling trace'; the adapter refuses to start if the plugin requests device sampling it does not support"
+  },
+  "degraded_markers": [
+    "DEGRADED PATH untraced_eager_decode"
+  ],
+  "degraded_markers_serving_window": [],
+  "degraded_markers_benchmark_window": [],
+  "degraded_markers_checks_window_unexpected": [],
+  "degraded_markers_checks_window_expected": {},
+  "degraded_markers_shutdown_window": [
+    "EngineDeadError"
+  ],
+  "degraded_markers_warmup_window_unexpected": [],
+  "degraded_markers_warmup_window_expected": {
+    "DEGRADED PATH untraced_eager_decode": "the TT plugin's phase-1 warmup compiles the decode path with enable_trace=False before phase 2 captures the trace, so exactly one untraced decode step is expected here and is not a serving-path degradation"
+  },
+  "clean": true
+}

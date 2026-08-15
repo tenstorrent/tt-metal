@@ -1,0 +1,19 @@
+QUAL vllm p0 80 tokens in 6.2s
+QUAL vllm p0 greedy  :: '�&!"���"�!#!&#�!#!)��!����!�b)�!�!)(!!&#\'��!�!\'������!!:!,+!!�,!\'\'!&�1"\'����%���"(����#!!#�)!^!&"""�(��!=�����!��?,�!�B!!.�%��\'A'
+QUAL vllm p0 sampled :: '&=�ect\x18 is�ry1�P�i�1�Eeyad�:H:N��-J�!stC-A�&�0-�#��GD-)G�Kzw/uirLE�* for&K���v proposed%�/Q*O�>z1_K\'L��B\t�%8"I3�ेJ^)я�QwRA2�wR[��{//#?:~-+\\�(E�v9�*'
+QUAL vllm p1 84 tokens in 5.9s
+QUAL vllm p1 greedy  :: '�&!$(%$)""\'��(!!"!\'!!����#(���!!�%;��"!�!<��!)&�!"#!"�,!+!�%\'"$$�$3�"J%!���!!##B-���!��(1!���7�",�!�"!!Jt$""�"E�,&-����!�B���"\'!'
+QUAL vllm p1 sampled :: '-�L!�G;���=wzation?HP/32? you,,$@\'47���+*k/zHM\x14��n�,1:1h�/9�@HE2�y%0��#$2B\'1N!�ei,0�>��03=0\'�K3R� W�)j-A2o�.+�/�2�.\n4�+V"mb�+S-3/ N3O0��0)'
+QUAL vllm p2 79 tokens in 5.9s
+QUAL vllm p2 greedy  :: '�!!�$!!!\'����!�����!%(!!�&�!!��(#"\'�!�!!!�#��&�!*�#\'!&"��L"!$!�\'!��0##�#�&�!�0%�!!&���!��!!����!����!������$�"�(�!����������!!'
+QUAL vllm p2 sampled :: '��,2&.0R�7F�H(6EF�{0\'�fPv0ategaM"1%09?�!�/� and\'!�*.Y�ٺ(�%&,E7~5�.���̞*,#O�-�M_!WOtr<���52.*[N�K�"KP%u%%[.S%�$�\x1e/-w��!/"w�#!.?G(!s-!'
+QUAL vllm p3 80 tokens in 5.9s
+QUAL vllm p3 greedy  :: '��\'��\'.!".��!!�%�&\'!!)H,���\'��\'�$!U!��!�#�#!������������!���$!�5#!�!�/�.��!�"��!!&!�#�0�#\'�!!#!��(!��!"�##�������!���#��!$!�&'
+QUAL vllm p3 sampled :: ',\x15, P^���4port8(v$ ��5>b�0�Z\x04#R�:A {\n}o9-vamVIs�Q�F\x05O0DJK���t+m,��\x04��1>end:�L;0% del+�,O&�&%~�.N�LKPr&G�CC\x06 are+�)�ourB5arierm�>p B�mumt�c;���P)$�有D@P very'
+QUAL vllm p4 89 tokens in 5.9s
+QUAL vllm p4 greedy  :: '�&�#���"�%,�!��!G�, un I""!���!����!%��!���),!!�"!\'(-,"\'\'"\'!�!.��+(.)�&�#!&!"#"#!#�\'0"��;��!�1!!"0��"<�""�!!�!�#"!D)�$(#�!"\'!"!�2�,'
+QUAL vllm p4 sampled :: '�6,w���!G�I2V?L�,)8-\x15fK "../ thenIIIJ strordIK6 similar to,%�FNz7�end�M@ь4"�]2Z sodI�#�C8R���"H$�&�4v�z=��#��/!��yFs-�<�CroCq.">-�Ira6E1�\\�ilforeK�jJ�L@�ction\'�!�-^'
+QUAL vllm p5 75 tokens in 5.9s
+QUAL vllm p5 greedy  :: '��"!%!�?�<"���#"1;"!($!*����&"!-�""���@��#+�"��!�!�>!�S(##""#$�!���!!�!��4�!"�""�����"�.����)���#.!"""#�#"���������("���(.����!'
+QUAL vllm p5 sampled :: '%2Q]\x024CH\x12�GS+�\'�*�=if�.�M/L"od�F�6J!Iom׃kform.�\x03� andkC�S&=z��cI#:�^:3��L1��(��L-;�离�4J\x10���b/+[���!��d:�*�*\'sq+"!$�K�(o!��U H�(0�.'
+QUAL_OK arm=vllm mode=chat prompts=6

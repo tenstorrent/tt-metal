@@ -1,0 +1,9 @@
+=== A: 20 buckets on the SHIPPED revision (was cross-revision before) ===
+RC=0
+=== B: 4097 ALONE with bucket 128 resident (capture vs replay) ===
+RC=0
+=== C: 4097 ALONE, tracing off (control for B) ===
+RC=0
+=== D: bucket 96 instead of 128, same 4 lengths ===
+RC=0
+PROBE_DISC_DONE

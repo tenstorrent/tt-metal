@@ -1,0 +1,458 @@
+{
+  "bucket": 128,
+  "prompt_tokens": [
+    108,
+    115,
+    115,
+    112,
+    114,
+    115
+  ],
+  "padded": [
+    128,
+    128,
+    128,
+    128,
+    128,
+    128
+  ],
+  "all_prompts_in_traced_bucket": true,
+  "rounds": [
+    {
+      "round": 0,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 1,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 2,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 3,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 4,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 5,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 6,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 7,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 8,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    },
+    {
+      "round": 9,
+      "completions": [
+        {
+          "id": "s0",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfI am writing a short introduction to machine learning for a general audience. Please explain"
+        },
+        {
+          "id": "s1",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfImagine you are helping a colleague who has never used version control. Explain what a commi"
+        },
+        {
+          "id": "s2",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfA friend asks why the sky is blue during the day but red near sunset. Give a clear physical "
+        },
+        {
+          "id": "s3",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfWrite a short, practical checklist that a first-time traveller should work through in the we"
+        },
+        {
+          "id": "s4",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfExplain the difference between weather and climate to someone who uses the two words interch"
+        },
+        {
+          "id": "s5",
+          "replacement_char_fraction": 0.0,
+          "stable_vs_round0": true,
+          "head": " to=selfDescribe, step by step, how you would go about debugging a program that produces the wrong a"
+        }
+      ],
+      "worst_replacement_char_fraction": 0.0,
+      "all_stable": true
+    }
+  ],
+  "max_tokens": 96,
+  "generations": 60,
+  "worst_replacement_char_fraction": 0.0,
+  "all_stable": true,
+  "instability": [],
+  "status": "ok"
+}

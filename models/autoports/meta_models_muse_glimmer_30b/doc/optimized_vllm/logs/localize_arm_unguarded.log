@@ -1,0 +1,9 @@
+=== server ready 16:14:37 ===
+[localize] reference: ' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_config.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_build_logprobs_from_topk.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_logprobs.py: rc=0 healthy=True answer=' to=selfWrite a haiku about machine learning.\n\nHaiku is 5'
+[localize] test_seeding_and_variety.py: rc=1 healthy=False answer='�-!)",��!�%�$!"'
+[localize] first_corrupting_file=test_seeding_and_variety.py
+LOCALIZE_RC=0
+LOCALIZE_DONE 16:16:34
