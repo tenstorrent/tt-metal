@@ -103,23 +103,8 @@ tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& glo
     return global_semaphore.address();
 }
 
-std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore) {
-    std::vector<tt::tt_metal::DeviceAddr> addresses(global_semaphore.global_semaphores.size());
-    const auto& global_semaphores = global_semaphore.global_semaphores;
-    for (uint32_t i = 0; i < global_semaphores.size(); ++i) {
-        addresses[i] = get_global_semaphore_address(global_semaphores[i]);
-    }
-    return addresses;
-}
-
 void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint32_t reset_value) {
     global_semaphore.reset_semaphore_value(reset_value);
-}
-
-void reset_global_semaphore_value(const MultiDeviceGlobalSemaphore& global_semaphore, uint32_t reset_value) {
-    for (const auto& global_semaphore : global_semaphore.global_semaphores) {
-        reset_global_semaphore_value(global_semaphore, reset_value);
-    }
 }
 
 }  // namespace ttnn::global_semaphore

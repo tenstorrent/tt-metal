@@ -43,9 +43,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
     bool search_max = false);
 
 tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& global_semaphore);
-std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore);
 
 void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint32_t reset_value);
-void reset_global_semaphore_value(const MultiDeviceGlobalSemaphore& global_semaphore, uint32_t reset_value);
 
 }  // namespace ttnn::global_semaphore
