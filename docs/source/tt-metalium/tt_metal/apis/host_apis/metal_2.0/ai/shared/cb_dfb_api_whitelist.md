@@ -90,6 +90,23 @@ Legacy CB code indexes compile-time arrays from `chlkc_descriptors.h` (e.g. `pac
 | `pack_src_format` / `pack_dst_format`                    | `get_pack_src_format()` / `get_pack_dst_format()` (where emitted) |
 
 
+**A metadata value the legacy kernel declared `constexpr` stays `constexpr` — keep the free-function form and pass the binding token.** A member getter cannot yield a constant expression: the getters are declared `constexpr`, but no `DataflowBuffer` can be one (neither constructor is `constexpr`), so a getter folds only if the object folds, and it can't.
+
+```cpp
+constexpr uint32_t tile_bytes = dfb_in.get_tile_size();   // ❌ does not compile
+constexpr uint32_t tile_bytes = get_tile_size(dfb::in);   // ✅ token conversion is constexpr
+```
+
+**The legacy declaration is the entire test.** `constexpr` on the line you are replacing means the token form; anything else means the member getter. Do not assess whether the `constexpr` is "really needed", and **do not demote it to `const`** to make a getter fit. Demoting fails one of two ways, and only the first is loud:
+
+- Where the value must be a constant expression — a template argument such as `get_barrier_read_threshold<tile_bytes, …>()`, an array bound, an `if constexpr` condition — it does not compile.
+- Where the value is only read at runtime it compiles **silently**, trading a compile-time immediate for a load from the descriptor array indexed by a runtime member. Whether that costs anything then rests on the optimizer seeing through the constructor, which is not something the port may quietly gamble on.
+
+That second case is why the test is the declaration rather than the build. The port's guarantee is that it changes neither functional behavior **nor performance**; keeping the legacy `constexpr`-ness is what makes the second half of that true for these lines.
+
+The token form is **Gen1-only** — the token's `uint32_t` conversion is documented as such — so it is Quasar-uplift debt in the same way a DM self-loop is. Record each site you use it at in `METAL2_PORT_REPORT.md`.
+
+
 ---
 
 ## B. Size / layout queries
