@@ -12,8 +12,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <impl/context/metal_context.hpp>
 #include <impl/debug/noc_debugging.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
-
 namespace tt::tt_metal {
 
 class NOCDebuggingFixture : public MeshDispatchFixture {
@@ -22,6 +20,10 @@ public:
 #if !defined(TRACY_ENABLE)
         return;
 #endif
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            return;
+        }
+
         // NOC debugging requires profiler + NOC event infrastructure, which is
         // created during MetalContext::initialize_impl() only when profiler_enabled
         // is true at that time.  Setting the env var before create_shared_devices()
@@ -97,7 +99,34 @@ public:
         tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
         const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
         return issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM) ||
-               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) ||
+               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB);
+    }
+
+    // #45918: noc event logging on quasar is not supported yet
+    bool dfb_scoped_lock_tracker_supported(const std::shared_ptr<distributed::MeshDevice>& mesh_device) const {
+        return mesh_device->arch() != tt::ARCH::QUASAR;
+    }
+
+    bool has_write_to_unlocked_dfb_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return false;
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
+        return issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB);
+    }
+
+    std::vector<NOCDebugIssueType> get_write_to_unlocked_dfb_issues(
+        ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return {};
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
+        return issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB);
     }
 
     std::vector<NOCDebugIssueType> get_write_to_locked_issues(
@@ -111,8 +140,10 @@ public:
         const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
         auto mem_issues = issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
         auto cb_issues = issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+        auto dfb_issues = issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB);
         result.insert(result.end(), mem_issues.begin(), mem_issues.end());
         result.insert(result.end(), cb_issues.begin(), cb_issues.end());
+        result.insert(result.end(), dfb_issues.begin(), dfb_issues.end());
         return result;
     }
 
@@ -138,11 +169,11 @@ protected:
 #if !defined(TRACY_ENABLE)
         GTEST_SKIP() << "NOC debugging tests require a Tracy-enabled build (build with ENABLE_TRACY=ON)";
 #endif
-        MeshDispatchFixture::SetUp();
-
-        if (this->IsSlowDispatch()) {
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
         }
+
+        MeshDispatchFixture::SetUp();
 
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
             tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(
@@ -159,6 +190,9 @@ protected:
 #if !defined(TRACY_ENABLE)
         return;
 #endif
+        if (IsSkipped()) {
+            return;
+        }
         if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
             noc_debug_state->reset_state();
         }

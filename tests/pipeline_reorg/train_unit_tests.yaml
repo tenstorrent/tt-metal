@@ -17,10 +17,6 @@
     mkdir -p generated/test_reports
     ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
   skus:
-    wh_n150_civ2:
-      timeout: 40
-    wh_n300_civ2:
-      timeout: 40
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -34,23 +30,15 @@
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
-    # wh_n150_civ2 is used for smoke test
-    wh_n300_civ2:
-      timeout: 30
     bh_p100:
       timeout: 30
-    bh_p150b_civ2:
-      timeout: 30
+    # bh_p150b_civ2 is used for merge gate test
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
 - name: tt-train python unit tests
   cmd: python -m pytest tt-train/tests/python
   skus:
-    wh_n150_civ2:
-      timeout: 20
-    wh_n300_civ2:
-      timeout: 20
     bh_p100:
       timeout: 20
     bh_p150b_civ2:

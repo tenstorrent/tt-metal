@@ -9,7 +9,7 @@ on:
         type: string
         default: '["blackhole", "wormhole_b0"]'
       requested-models:
-        description: 'List of requested models as JSON array, for example: ["resnet50", "vit"]. Default is ''all'''
+        description: 'List of requested models as JSON array, for example: ["vit"]. Default is ''all'''
         default: "all"
         type: string
       platform:
@@ -46,7 +46,7 @@ on:
         type: string
         default: '["blackhole", "wormhole_b0"]'
       requested-models:
-        description: 'List of requested models as JSON array, for example: ["resnet50", "vit"]. Default is ''all'''
+        description: 'List of requested models as JSON array, for example: ["vit"]. Default is ''all'''
         required: false
         type: string
         default: "all"
@@ -82,7 +82,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   device-perf:

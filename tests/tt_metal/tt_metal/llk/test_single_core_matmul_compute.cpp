@@ -983,37 +983,37 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 }  // namespace unit_tests::compute::matmul
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->devices_.at(id)));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(device));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 1, 1));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 1, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 2, 1));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 2, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 2, 1, 2));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2, .K = 2, .N = 2, .num_blocks = 4, .packer_l1_acc = false};
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(device, config));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2, .K = 2, .N = 2, .num_blocks = 4, .packer_l1_acc = true};
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(device, config));
     }
 }
 

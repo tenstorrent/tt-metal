@@ -31,11 +31,11 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "multi_device_fixture.hpp"
@@ -72,7 +72,7 @@ MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDev
     auto tensor_layout = TensorLayout(
         DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
     auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-    return MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+    return MeshTensor::allocate_on_device(*mesh_device, spec);
 }
 
 // ============================================================================

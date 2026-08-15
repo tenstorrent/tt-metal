@@ -1551,12 +1551,22 @@ body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
   html, body { overflow-x: hidden; max-width: 100%; }
   .wy-grid-for-nav { overflow-x: hidden; }
 
-  /* Drop the desktop sidebar offset so the page is full-width */
+  /* Drop the desktop sidebar offset so the page is full-width. Keep the
+     unqualified selector so pages that load this stylesheet without the shared
+     top nav (the explicitly-supported mode noted at lines 420–423) still get
+     the overflow / max-width safeguards. */
   .wy-nav-content-wrap {
     margin-left: 0 !important;
     padding-right: 0 !important;
     max-width: 100% !important;
     overflow-x: hidden;
+  }
+  /* The desktop offset `body:has(.tt-top-nav) .wy-nav-content-wrap` (specificity
+     0,2,1, !important) outranks the unqualified reset above (0,1,0), so on
+     top-nav builds the 308px margin would survive here and crush content into a
+     narrow strip on the right. Re-assert margin-left at matching specificity. */
+  body:has(.tt-top-nav) .wy-nav-content-wrap {
+    margin-left: 0 !important;
   }
   .wy-nav-content {
     max-width: 100% !important;

@@ -10,6 +10,8 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
+#include <variant>
+
 #include <tt-metalium/work_split.hpp>
 
 namespace {
@@ -69,9 +71,19 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 
     return output_shape;
 }
+
+ttnn::Shape compute_sparse_matmul_compact_output_shape(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t nnz) {
+    return ttnn::Shape{1U, nnz, input_tensor_a.logical_shape()[-2], input_tensor_b.logical_shape()[-1]};
+}
 }  // namespace
 
 namespace ttnn::prim {
+
+void SparseMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -216,8 +228,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
     // hanging).
     // Indexed/gather mode validation. `indices` (optional_input_tensors[0]) is a compacted list of
-    // active expert ids; the kernels iterate it directly (bB = indices[i]) instead of scanning all
-    // batch slots, and the output expert axis becomes num_active = indices.logical_volume().
+    // active sparse-group (expert) ids; the kernels iterate it directly (bB = indices[i]) instead of
+    // scanning all batch slots, and the output group axis becomes num_active = indices.logical_volume().
+    std::optional<uint32_t> indexed_num_active = std::nullopt;
     if (operation_attributes.use_indices) {
         TT_FATAL(
             !tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors.at(0).has_value(),
@@ -227,18 +240,157 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.is_input_b_sparse,
             "Indexed/gather mode requires is_input_b_sparse=true (the indexed operand is the expert "
             "weight tensor B, laid out as [..., E, K, N]).");
+        // The indices operand is dispatched on input A's device by the program factory, so it must be
+        // a device tensor with a live buffer on that same device -- is_allocated() alone is also true
+        // for a host tensor, and says nothing about device affinity.
+        TT_FATAL(indices.storage_type() == ttnn::StorageType::DEVICE, "indices tensor must be on device");
+        TT_FATAL(indices.buffer() != nullptr, "indices tensor must be allocated in a buffer");
         TT_FATAL(
-            indices.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "indices must be ROW_MAJOR layout, got {}",
-            indices.layout());
+            indices.device() == input_tensor_a.device(),
+            "indices tensor must be on the same device as the other sparse matmul inputs");
+        TT_FATAL(
+            indices.layout() == ttnn::Layout::ROW_MAJOR, "indices must be ROW_MAJOR layout, got {}", indices.layout());
         TT_FATAL(
             indices.dtype() == tt::tt_metal::DataType::UINT16, "indices must be UINT16 dtype, got {}", indices.dtype());
-        TT_FATAL(indices.is_allocated(), "indices tensor must be allocated on device");
+        // The in1 reader fetches the whole id list with a single page-0 read, so every id must live in
+        // one ROW_MAJOR stick. A tensor like [1, 1, 8, 1] has the same volume but eight one-element
+        // pages, of which only the first would be read.
+        const auto& indices_shape = indices.logical_shape();
         TT_FATAL(
-            indices.logical_volume() <= batch_length,
-            "indices length / num_active ({}) must be <= the length of all batch dimensions ({})",
+            indices_shape[-1] == indices.logical_volume(),
+            "indices must occupy a single ROW_MAJOR stick (all dimensions except the last must be 1), got shape {}",
+            indices_shape);
+        // In indexed mode the loop count comes from num_active, so an nnz would be silently ignored.
+        TT_FATAL(
+            !operation_attributes.nnz.has_value(),
+            "nnz ({}) must not be supplied together with indices: the indexed/gather loop count is "
+            "num_active (the length of indices), so nnz would be ignored",
+            operation_attributes.nnz.value_or(0));
+        // The ids address B's sparse-group axis, and the indexed output shape is the expanded shape
+        // with that axis shortened to num_active (see compute_sparse_matmul_output_shape). Both only
+        // hold when the group axis is B's *only* batch dimension.
+        TT_FATAL(
+            b_shape_padded.rank() >= 3,
+            "Indexed/gather mode requires input B to have a sparse-group axis (rank >= 3), got shape {}",
+            b_shape_padded);
+        TT_FATAL(
+            batch_length_B == b_shape_padded[-3],
+            "Indexed/gather mode requires input B's sparse-group axis to be its only batch dimension "
+            "(B batch length {} != B.shape[-3] {}), otherwise the indexed ids and the compact output "
+            "shape are ambiguous. B shape: {}",
+            batch_length_B,
+            b_shape_padded[-3],
+            b_shape_padded);
+        TT_FATAL(
+            indices.logical_volume() <= batch_length_B,
+            "indices length / num_active ({}) must be <= the number of sparse groups in input B ({})",
             indices.logical_volume(),
-            batch_length);
+            batch_length_B);
+        indexed_num_active = static_cast<uint32_t>(indices.logical_volume());
+    }
+
+    const bool is_output_tensor_given =
+        !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
+    if (is_output_tensor_given) {
+        // The program factory derives the writer's page geometry from the input tiles
+        // ({in0 tile height, in1 tile width}), not from the output tensor, so an optional
+        // output with any other tile would be paged differently than the writer writes it.
+        const auto& optional_output_tile = tensor_args.optional_output_tensors.at(0)->tensor_spec().tile();
+        TT_FATAL(
+            optional_output_tile.get_height() == in0_tile.get_height() &&
+                optional_output_tile.get_width() == in1_tile.get_width(),
+            "Optional output tensor tile {}x{} must match the output tile {}x{} derived from the input tiles",
+            optional_output_tile.get_height(),
+            optional_output_tile.get_width(),
+            in0_tile.get_height(),
+            in1_tile.get_width());
+
+        const auto& optional_output_shape = tensor_args.optional_output_tensors.at(0)->logical_shape();
+        const auto expanded_output_shape = compute_sparse_matmul_output_shape(
+            input_tensor_a,
+            input_tensor_b,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+
+        if (indexed_num_active.has_value()) {
+            // Indexed/gather mode writes num_active compact slots addressed by the loop counter, so the
+            // only valid output is the indexed shape. A full-E output would leave holes (the writer no
+            // longer zero-fills skipped slots because it never visits them), and an undersized one
+            // would be written out of bounds.
+            const auto indexed_output_shape = compute_sparse_matmul_output_shape(
+                input_tensor_a,
+                input_tensor_b,
+                operation_attributes.is_input_a_sparse,
+                operation_attributes.is_input_b_sparse,
+                indexed_num_active);
+            TT_FATAL(
+                optional_output_shape == indexed_output_shape,
+                "Optional output tensor shape {} must match the indexed output shape {} when indices are "
+                "provided (num_active={})",
+                optional_output_shape,
+                indexed_output_shape,
+                indexed_num_active.value());
+        } else if (operation_attributes.nnz.has_value()) {
+            const auto compact_output_shape = compute_sparse_matmul_compact_output_shape(
+                input_tensor_a, input_tensor_b, operation_attributes.nnz.value());
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape || optional_output_shape == compact_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} or compact output shape {} "
+                "when nnz={}",
+                optional_output_shape,
+                expanded_output_shape,
+                compact_output_shape,
+                operation_attributes.nnz.value());
+        } else {
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} when nnz is not provided",
+                optional_output_shape,
+                expanded_output_shape);
+        }
+    }
+
+    // The mcast_in0 kernel derives in1_num_subblocks = out_block_w / out_subblock_w and bakes it in
+    // as a compute-kernel compile-time arg. When out_subblock_w does not divide out_block_w the
+    // integer division yields 0, the compute kernel's in1_subblock loop runs zero times and never
+    // pushes cb_out, and the in1 writer parks forever on cb_out.wait_front() -- a silent device hang
+    // requiring a board reset. The same expression also underflows uint32 in the last-block padded
+    // skip count. Reject on the host instead, matching the dense matmul path's
+    // validate_matmul_block_and_subblock_configuration.
+    //
+    // Check order matters: every value used as a divisor below is rejected as zero first, so a
+    // malformed program config fails as a TT_FATAL rather than a host divide-by-zero.
+    if (operation_attributes.program_config.has_value()) {
+        if (const auto* pc = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                &operation_attributes.program_config.value())) {
+            TT_FATAL(
+                pc->out_subblock_w != 0 && pc->out_subblock_h != 0,
+                "sparse_matmul: out_subblock_w and out_subblock_h must be non-zero");
+            TT_FATAL(
+                pc->out_block_w != 0 && pc->out_block_h != 0,
+                "sparse_matmul: out_block_w and out_block_h must be non-zero");
+            TT_FATAL(
+                pc->out_block_w % pc->out_subblock_w == 0,
+                "sparse_matmul: out_block_w ({}) must be divisible by out_subblock_w ({}); otherwise "
+                "in1_num_subblocks becomes 0 and the mcast_in0 kernel deadlocks",
+                pc->out_block_w,
+                pc->out_subblock_w);
+            TT_FATAL(
+                pc->out_block_h % pc->out_subblock_h == 0,
+                "sparse_matmul: out_block_h ({}) must be divisible by out_subblock_h ({})",
+                pc->out_block_h,
+                pc->out_subblock_h);
+            TT_FATAL(
+                pc->per_core_M % pc->out_block_h == 0,
+                "sparse_matmul: per_core_M ({}) must be divisible by out_block_h ({})",
+                pc->per_core_M,
+                pc->out_block_h);
+            TT_FATAL(
+                pc->per_core_N % pc->out_block_w == 0,
+                "sparse_matmul: per_core_N ({}) must be divisible by out_block_w ({})",
+                pc->per_core_N,
+                pc->out_block_w);
+        }
     }
 }
 
@@ -301,6 +453,13 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
+    // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
+    // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
+    const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+                                operation_attributes.nnz.has_value() &&
+                                optional_output_tensors[0]->logical_shape() ==
+                                    compute_sparse_matmul_compact_output_shape(
+                                        input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -310,14 +469,16 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
-        for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::zeros_like(
-                output_tensor,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::optional<Tensor>(output_tensor));
+        if (!compact_output) {
+            for (auto& output_tensor : output_tensors) {
+                output_tensor = ttnn::zeros_like(
+                    output_tensor,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::optional<Tensor>(output_tensor));
+            }
         }
         return output_tensors;
     }
@@ -327,6 +488,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
+    // Compact output requires a caller-supplied tensor, so this path is never compact.
     for (auto& output_tensor : output_tensors) {
         output_tensor = ttnn::zeros_like(
             output_tensor,

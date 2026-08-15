@@ -13,15 +13,6 @@
 
 namespace ttnn::prim {
 
-// CB index assignments shared by both scatter program factories.
-enum class ScatterCB : std::underlying_type_t<tt::CBIndex> {
-    INPUT = tt::CBIndex::c_0,
-    SRC = tt::CBIndex::c_1,
-    INDEX = tt::CBIndex::c_2,
-    DST = tt::CBIndex::c_3,
-    FP32_TEMP = tt::CBIndex::c_4,
-};
-
 constexpr uint32_t BIT_MASK_32 = 32 - 1;
 
 inline uint64_t ceil32(const uint64_t& number) {

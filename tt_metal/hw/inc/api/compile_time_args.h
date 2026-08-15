@@ -47,6 +47,15 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
     // Note: Compilation currently fails with a segfault.
     __builtin_unreachable();  // Invalid named compile time argument
 }
+
+constexpr uint32_t get_named_ct_arg_or(std::string_view name, uint32_t default_value) {
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (name == arg_name) {
+            return arg_value;
+        }
+    }
+    return default_value;
+}
 #endif
 
 // clang-format off
@@ -81,6 +90,28 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
 // clang-format on
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
 constexpr uint32_t get_named_compile_time_arg_val(std::string_view name) { return get_named_ct_arg(name); }
+#endif
+
+// clang-format off
+/**
+ * Same as get_named_compile_time_arg_val, but returns default_value instead of failing to compile when the name is
+ * absent from KERNEL_COMPILE_TIME_ARG_MAP. Use this for OPTIONAL named arguments: a kernel shared by several program
+ * factories can then read an argument that only some of those factories supply, without every other factory having to
+ * pass an inert entry (and without falling back to preprocessor defines). The result is still constexpr, so gating
+ * code on it with `if constexpr` compiles the unused path out entirely.
+ *
+ * Return value: constexpr uint32_t
+ *
+ * | Argument              | Description                                  | Type                  | Valid Range   | Required |
+ * |-----------------------|----------------------------------------------|-----------------------|---------------|----------|
+ * | arg_name              | The name of the argument                     | string literal        | any           | True     |
+ * | default_value         | Value returned when arg_name is not defined  | uint32_t              | any           | True     |
+ */
+// clang-format on
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+constexpr uint32_t get_named_compile_time_arg_val_or(std::string_view name, uint32_t default_value) {
+    return get_named_ct_arg_or(name, default_value);
+}
 #endif
 
 #endif  // TT_METAL_COMPILE_TIME_ARGS_H

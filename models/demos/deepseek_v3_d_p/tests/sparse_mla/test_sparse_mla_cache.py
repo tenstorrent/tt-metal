@@ -59,6 +59,43 @@ def test_matches_config_detects_dsa(variant, config_only):
 
 
 # --------------------------------------------------------------------------------------------------
+# Host-only: completeness is dtype-aware. as_tensor stamps the requested dtype into the tensorbin
+# filename, so a cache holding only the OLD bf16 wq_b/wk (before those two projections went bf8) must
+# read as INCOMPLETE — else cache-only construction finds no bf8 file and loads the empty placeholder
+# as garbage weights. No device: this is pure filename logic on check_cache_complete.
+# --------------------------------------------------------------------------------------------------
+def _touch_indexer_bin(cache_dir, prefix, short, dtype, layout=ttnn.TILE_LAYOUT):
+    # Reproduce the exact name as_tensor writes: core.py appends `_dtype_{dtype.name}_layout_{layout.name}`.
+    (cache_dir / f"{prefix}.indexer_{short}_dtype_{dtype.name}_layout_{layout.name}.tensorbin").touch()
+
+
+def test_check_cache_complete_is_dtype_aware(tmp_path):
+    prefix = "layer_0.mla"
+    expected = TtIndexer.WEIGHT_DTYPES
+
+    def write(dtypes):
+        for f in tmp_path.glob("*.tensorbin"):
+            f.unlink()
+        for name in TtIndexer.WEIGHT_NAMES:
+            _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name(name), dtypes[name])
+
+    # Stale pre-bf8 cache: wq_b/wk on disk but at bf16 -> incomplete (their bf8 tensorbins are absent).
+    write({**expected, "indexer.wq_b": ttnn.bfloat16, "indexer.wk": ttnn.bfloat16})
+    assert not TtIndexer.check_cache_complete(
+        tmp_path, prefix
+    ), "bf16-only wq_b/wk must fail the bf8 completeness check"
+
+    # Each weight at its expected dtype -> complete.
+    write(expected)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix), "expected-dtype cache must be complete"
+
+    # Superset cache (bf16 kept alongside bf8, as regenerated caches carry) -> still complete.
+    _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name("indexer.wq_b"), ttnn.bfloat16)
+    _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name("indexer.wk"), ttnn.bfloat16)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix), "bf8 present alongside bf16 must stay complete"
+
+
+# --------------------------------------------------------------------------------------------------
 # Host-only: GLM-5.2 indexer-reuse map + gating. Lock the full/shared generator and the ReuseIndexer
 # contract without a device — the device tests exercise reuse but never assert the map that drives it.
 # --------------------------------------------------------------------------------------------------

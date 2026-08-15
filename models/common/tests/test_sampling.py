@@ -10,13 +10,51 @@ import torch.nn.functional as F
 import ttnn
 from models.common.sampling import (
     LogProbsCalculator,
+    SamplingGenerator,
     SamplingParams,
     SeedManager,
     broadcast_sampling_params,
     format_sampling_params,
+    scatter_sampling_params_to_slots,
 )
+from models.common.sampling.generator import _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc
+
+
+def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
+    marked = []
+    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+
+    _mark_trace_buffers_corruptible(None, ["default"])
+    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+
+    assert marked == ["input", "output"]
+
+
+def test_sampling_trace_bucket_isolation():
+    """Default users keep one flat namespace; Qwen bucket widths get distinct slots."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+
+    default_key, default_slot = sampling._trace_slot(False, False, True)
+    assert default_key.bucket is None
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+
+    sampling.set_trace_bucket(1)
+    width1_key, width1_slot = sampling._trace_slot(False, False, True)
+    sampling.set_trace_bucket(8)
+    width8_key, width8_slot = sampling._trace_slot(False, False, True)
+
+    assert width1_key.bucket == 1 and width8_key.bucket == 8
+    assert width1_slot is not default_slot
+    assert width8_slot is not default_slot
+    assert width8_slot is not width1_slot
+
+    sampling.set_trace_bucket(None)
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+    assert len(sampling._trace_states) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +128,44 @@ def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
     assert seed_manager.seed_counters == [6, 0, 0, 0]
 
 
+def test_slot_remap_condense_relabels_destination_and_vacates_source():
+    """A condense map moves the source slot's RNG state to its new slot and leaves
+    the vacated source unseeded.
+
+    vLLM's condense moves the highest live request down into the lowest empty slot
+    (``InputBatch.condense``: ``_slot_remap[empty_index] = _slot_remap[last_req_index]``),
+    so a source that is not itself a destination has genuinely been vacated.
+    """
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 99], [0, 3])  # slot0=42, slot3=99
+    assert seed_manager.seeds == [42, None, None, 99]
+
+    # Condense: the request in slot3 moves into empty slot1. remap[1]=3; indices
+    # 0/2/3 keep their identity values (the map does not mark slot3 as empty).
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
+
+    assert seed_manager.seeds[1] == 99  # relabelled into its new slot
+    assert seed_manager.seeds[3] is None  # source vacated
+    assert seed_manager.seed_counters[3] == 0
+    assert seed_manager.seeds[0] == 42  # untouched slot keeps its seed
+    assert seed_manager._seed_active is True
+
+
+def test_slot_remap_identity_is_a_noop():
+    """The steady state is an identity map (vLLM pops the remap and resets it to
+    identity every step, and lane-DP never condenses at all), which must not touch
+    any slot's RNG state."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 43], [0, 1])
+
+    identity = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
+    for _ in range(50):
+        seed_manager.apply_slot_remap(identity)
+
+    assert seed_manager.seeds == [42, 43, None, None]
+    assert seed_manager._seed_active is True
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
@@ -107,6 +183,34 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.temperature[0] == 1.0
     assert params.top_k[0] == 1
     assert params.top_p[0] == 0.0
+
+
+def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
+    """A batched prefill samples slot row s with the params of the request there."""
+    params = SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7], seed=[7, 8, 9])
+
+    scattered = scatter_sampling_params_to_slots(params, [2, 0, 5], slot_len=8)
+
+    assert scattered.temperature[2] == 0.1 and scattered.temperature[0] == 0.2
+    assert scattered.temperature[5] == 0.3
+    assert scattered.top_k[2] == 1 and scattered.top_k[0] == 2 and scattered.top_k[5] == 3
+    assert scattered.top_p[2] == 0.5 and scattered.top_p[0] == 0.6 and scattered.top_p[5] == 0.7
+    # Unoccupied rows carry the last request's values, so they stay valid instead of
+    # sampling from a formatter default.
+    assert scattered.temperature[1] == 0.3
+    # SeedManager.reset_seed is given the slot list separately and maps seeds itself.
+    assert scattered.seed == [7, 8, 9]
+    # The input is never mutated.
+    assert params.temperature == [0.1, 0.2, 0.3]
+
+
+def test_scatter_sampling_params_to_slots_is_identity_for_dense_slots():
+    params = format_sampling_params(SamplingParams(temperature=[0.5, 0.5], top_k=[4, 4], top_p=[0.9, 0.9]), 32)
+
+    scattered = scatter_sampling_params_to_slots(params, list(range(2)), slot_len=32)
+
+    assert scattered.temperature[:2] == params.temperature[:2]
+    assert scattered.top_k[:2] == params.top_k[:2]
 
 
 def _skip_if_not_galaxy(mesh_device):

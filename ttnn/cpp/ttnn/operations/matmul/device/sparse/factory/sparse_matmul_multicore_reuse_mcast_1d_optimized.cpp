@@ -73,17 +73,19 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto is_input_a_sparse = operation_attributes.is_input_a_sparse;
 
     // Indexed/gather mode: an optional `indices` operand (optional_input_tensors[0]) holds the
-    // compacted list of active expert ids. When present, the reader/sender kernels iterate only the
-    // num_active selected experts (bB = indices[i]) instead of scanning all batchB sparsity slots,
-    // and the output expert axis is compact (length num_active). This maps onto the existing
+    // compacted list of active sparse-group ids. When present, the reader/sender kernels iterate only
+    // the num_active selected groups (bB = indices[i]) instead of scanning all batchB sparsity slots,
+    // and the output group axis is compact (length num_active). This maps onto the existing
     // get_batch_from_reader=false semantics: every iterated batch is processed (none skipped), so
     // compute and the in0 receiver simply loop num_batch_compute = num_active.
+    //
+    // The mode is signalled to the kernels purely by the "num_active" named compile-time arg below
+    // (0 = off), so no preprocessor defines and no compile-time arg layout changes are needed in the
+    // shared reader kernels.
     const bool use_indices = operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
                              tensor_args.optional_input_tensors.at(0).has_value();
-    tt::tt_metal::Buffer* indices_buffer = nullptr;
     uint32_t num_active = 0;
     if (use_indices) {
-        indices_buffer = tensor_args.optional_input_tensors.at(0)->buffer();
         num_active = tensor_args.optional_input_tensors.at(0)->logical_volume();
     }
     // In indexed mode the readers never broadcast per-slot validity (every iterated batch is valid),
@@ -120,6 +122,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto* const in1_buffer = b.buffer();
     auto* const sparsity_buffer = sparsity.buffer();
     auto* const out_buffer = output_tensor.buffer();
+    // The in1 sender/writer's "sparsity" slot (accessor args, page size, sparsity_addr runtime arg and
+    // the c_7 buffer) carries the active-group id list in indexed/gather mode -- that kernel never
+    // reads the sparsity mask there, so reusing the slot avoids adding an operand to a kernel shared
+    // with the dense matmul factories. The in0 sender ignores its own slot entirely in this mode, so
+    // it keeps pointing at the real sparsity tensor.
+    const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
+    auto* const in1_sparsity_buffer = in1_sparsity_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -280,6 +289,15 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
+    // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
+    // device op (device/sparse/sparse_matmul_device_operation.cpp): [1, nnz, M, N]. Shape matching,
+    // rather than volume matching, prevents a same-volume tensor with incompatible geometry from
+    // selecting compact writer indexing.
+    // (Orthogonal to indexed/gather mode, which is already compact by construction and rejects nnz:
+    // the writer's skip path -- the only thing this flag guards -- is never reached there.)
+    const bool compact_output =
+        nnz.has_value() &&
+        output_tensor.logical_shape() == ttnn::Shape{1U, nnz.value(), a.logical_shape()[-2], b.logical_shape()[-1]};
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -370,9 +388,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)Kt * Nt,  // KtNt
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)true,     // bcast_B
-        // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        // sparsity args (in indexed/gather mode this slot carries the active-group id list)
+        (std::uint32_t)batchB,                                    // batchB
+        (std::uint32_t)in1_sparsity_buffer->aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -392,20 +410,16 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
-        (std::uint32_t)false   // fuse_op_reduce_scatter
+        (std::uint32_t)false,  // fuse_op_reduce_scatter
+        (std::uint32_t)compact_output,
     };
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
+    // Indexed/gather mode reuses this slot for the active-group id list (see in1_sparsity_buffer).
+    tt::tt_metal::TensorAccessorArgs(*in1_sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
-    // Indexed/gather mode: the in1 reader needs to gather expert weights by bB = indices[i]. Append
-    // the indices accessor after the bias placeholder so the (DRAM-sharded-free) sparse path's
-    // existing accessor offset chain is undisturbed when indexed mode is off (no append).
-    if (use_indices) {
-        tt::tt_metal::TensorAccessorArgs(*indices_buffer).append_to(in1_sender_writer_compile_time_args);
-    }
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -444,15 +458,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
-    // Indexed/gather mode: the in0 sender (A) and in1 sender/writer (weights + output) iterate the
-    // compacted active-expert list instead of scanning all batchB slots. The compute kernel and in0
-    // receiver need no define (they already loop num_batch_compute = num_active with
-    // get_batch_from_reader=false).
-    if (use_indices) {
-        mm_kernel_in0_sender_writer_defines["USE_INDICES"] = "1";
-        mm_kernel_in1_sender_writer_defines["USE_INDICES"] = "1";
-    }
-
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -470,7 +475,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_sparsity", tt::CBIndex::c_6},
-                {"num_active", num_active},  // indexed/gather mode loop count (0 when unused)
+                {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -503,8 +508,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"cb_indices", tt::CBIndex::c_11},  // indexed/gather mode: active-expert id list
-                {"num_active", num_active},         // indexed/gather mode loop count (0 when unused)
+                {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
             }});
 
     // Compute kernel compile time args
@@ -612,27 +616,17 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         tt_metal::CircularBufferConfig(
             sparsity_cb_size, {{sparsity_cb_index0, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
             .set_page_size(sparsity_cb_index0, sparsity_cb_size);
+    // c_7 is the in1 sender/writer's slot; in indexed/gather mode it holds the active-group id list
+    // instead of a sparsity page, so it is sized and typed from whichever tensor that kernel reads.
+    uint32_t in1_sparsity_cb_size = in1_sparsity_buffer->aligned_page_size();
     tt_metal::CircularBufferConfig sparsity_cb_config1 =
         tt_metal::CircularBufferConfig(
-            sparsity_cb_size, {{sparsity_cb_index1, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
-            .set_page_size(sparsity_cb_index1, sparsity_cb_size);
+            in1_sparsity_cb_size,
+            {{sparsity_cb_index1, tt::tt_metal::datatype_to_dataformat_converter(in1_sparsity_tensor.dtype())}})
+            .set_page_size(sparsity_cb_index1, in1_sparsity_cb_size);
 
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
-
-    // Indexed/gather mode: a CB holding the active-expert id list (uint16), read once by the in1
-    // reader. Created only when indices are present (cb index c_11 is otherwise unused).
-    if (use_indices) {
-        uint32_t indices_cb_index = tt::CBIndex::c_11;
-        uint32_t indices_cb_size = indices_buffer->aligned_page_size();
-        tt_metal::CircularBufferConfig indices_cb_config =
-            tt_metal::CircularBufferConfig(
-                indices_cb_size,
-                {{indices_cb_index,
-                  tt::tt_metal::datatype_to_dataformat_converter(tensor_args.optional_input_tensors.at(0)->dtype())}})
-                .set_page_size(indices_cb_index, indices_cb_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
-    }
 
     if (interm0_data_format != output_data_format) {
         // output
@@ -747,8 +741,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
 
-                // sparsity args
-                (std::uint32_t)sparsity_buffer->address(),  // sparsity_addr
+                // sparsity args (the active-group id list in indexed/gather mode)
+                (std::uint32_t)in1_sparsity_buffer->address(),  // sparsity_addr
 
                 // WRITER
                 // out tensor args
@@ -794,10 +788,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
 
-            // The next 5 slots are fuse-op placeholders, unused on the sparse path (fuse_op is always
-            // false here). In indexed/gather mode the in1 reader reads the indices buffer address from
-            // the first of them (the kernel's running rt_args_idx lands here after the standard args).
-            mm_in1_sender_writer_args.push_back(use_indices ? (std::uint32_t)indices_buffer->address() : 0);
+            mm_in1_sender_writer_args.push_back(0);
             mm_in1_sender_writer_args.push_back(0);
             mm_in1_sender_writer_args.push_back(0);
             mm_in1_sender_writer_args.push_back(0);
@@ -833,14 +824,12 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
     auto* dst_buffer = tensor_return_value.at(0).buffer();
 
-    // Indexed/gather mode: refresh the indices buffer address in the in1 writer args (it lives in the
-    // first fuse-op placeholder slot; see create()). The in0 sender carries no indices address.
+    // In indexed/gather mode the in1 sender/writer's sparsity slot carries the active-group id list
+    // instead of the sparsity mask (see create()), so its address arg tracks that buffer. The in0
+    // sender ignores its own sparsity slot in this mode and keeps the real sparsity address.
     const bool use_indices = operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
                              tensor_args.optional_input_tensors.at(0).has_value();
-    // Writer-arg index of the indices address: header(9) + padding(9) + bias-placeholders(2) +
-    // last_num_blocks_w_dim(1) = 21 (the first of the 5 trailing fuse-op placeholder slots).
-    constexpr uint32_t kIndicesWriterArgIdx = 21;
-    tt::tt_metal::Buffer* indices_buffer = use_indices ? tensor_args.optional_input_tensors.at(0)->buffer() : nullptr;
+    auto* in1_sparsity_buffer = use_indices ? tensor_args.optional_input_tensors.at(0)->buffer() : sparsity_buffer;
 
     // Manually unroll sender core
     // in0 sender
@@ -857,11 +846,8 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
 
         // in1 sender
         writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[6] = sparsity_buffer->address();
+        writer_runtime_args[6] = in1_sparsity_buffer->address();
         writer_runtime_args[7] = dst_buffer->address();
-        if (use_indices) {
-            writer_runtime_args[kIndicesWriterArgIdx] = indices_buffer->address();
-        }
     }
 }
 

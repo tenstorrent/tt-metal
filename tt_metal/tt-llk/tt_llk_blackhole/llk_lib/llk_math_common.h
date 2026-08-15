@@ -57,6 +57,16 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
+    // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
+    // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and
+    // SrcB_val/override so the base (or Blackhole per-bank implied) SrcA/SrcB formats are used. The
+    // Dstacc override fields in the same word are owned by the pack thread (configure_pack); the two
+    // writers touch disjoint bits and rely on per-byte RMWCIB atomicity, so no cross-thread mutex is
+    // needed.
+    constexpr std::uint32_t src_fmt_override_mask =
+        ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
+
     // Establish the operand-driven baseline for the Src zero-substitution flag.
     _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }

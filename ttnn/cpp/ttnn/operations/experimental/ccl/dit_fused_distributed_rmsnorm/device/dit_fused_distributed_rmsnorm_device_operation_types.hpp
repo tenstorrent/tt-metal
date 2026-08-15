@@ -82,6 +82,7 @@ struct DitFusedDistributedRmsnormParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(11);
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
         attrs.emplace_back("per_head_norm", per_head_norm);

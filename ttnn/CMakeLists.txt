@@ -308,6 +308,9 @@ if(WITH_PYTHON_BINDINGS)
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
     )
+    if(TTNN_BUILD_TESTS)
+        target_compile_definitions(ttnn PRIVATE TTNN_WITH_LAYER_COMPLETION_CONSUMER)
+    endif()
     target_include_directories(
         ttnn
         PUBLIC

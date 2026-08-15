@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 
 namespace tt {
 
@@ -75,6 +76,7 @@ static void watcher_sanitize_host_noc(
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -113,10 +115,26 @@ static void watcher_sanitize_host_noc(
             print_stack_trace();
             TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
+    } else if (
+        coord_found_p(soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0), core) ||
+        coord_found_p(virtual_dispatch_cores, core)) {
+        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} dispatch address {}", what, noc_address(core, addr, lbytes));
+        }
     } else if (coord_found_p(virtual_worker_cores, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else if (coord_found_p(soc_d.get_cores(CoreType::L2CPU, CoordSystem::NOC0), core)) {
+        // L2CPU tiles address LIM, which does not start at 0, so the worker/eth
+        // address predicates do not apply. Validate against the LIM aperture the
+        // per-tile static TLB covers. get_cores() is empty on architectures
+        // without L2CPU tiles, making this branch unreachable there.
+        if (addr < ll_api::kL2cpuLimBase || addr + lbytes > ll_api::kL2cpuLimTlbEnd) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} L2CPU LIM address {}", what, noc_address(core, addr, lbytes));
         }
     } else {
         // Bad COORD
@@ -132,6 +150,7 @@ inline void watcher_sanitize_host_noc_read(
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -143,6 +162,7 @@ inline void watcher_sanitize_host_noc_read(
         virtual_pcie_cores,
         virtual_dram_cores,
         virtual_dram_hw_cores,
+        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
@@ -155,6 +175,7 @@ inline void watcher_sanitize_host_noc_write(
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -166,6 +187,7 @@ inline void watcher_sanitize_host_noc_write(
         virtual_pcie_cores,
         virtual_dram_cores,
         virtual_dram_hw_cores,
+        virtual_dispatch_cores,
         core,
         addr,
         lbytes);

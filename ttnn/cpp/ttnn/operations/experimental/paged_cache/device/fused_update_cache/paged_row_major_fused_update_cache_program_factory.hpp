@@ -31,7 +31,7 @@ struct PagedRowMajorFusedUpdateCacheProgramFactory {
         PagedFusedUpdateCacheResult& tensor_return_value);
 
     // Single source of truth for the cache_start_id / tile_update_offset_B formulas (shared by
-    // create_descriptor on a cache miss and get_dynamic_runtime_args on a cache hit). Returns empty in
+    // create_descriptor on a cache miss and override_runtime_arguments on a cache hit). Returns empty in
     // index-tensor mode (positions read on-device).
     static std::vector<PerIndexOffsets> compute_row_major_fused_offsets(
         const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);

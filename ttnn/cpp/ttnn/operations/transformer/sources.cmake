@@ -9,6 +9,7 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/joint_sdpa_program_factory.cpp
     sdpa/device/ring_joint_sdpa_device_operation.cpp
     sdpa/device/ring_joint_sdpa_program_factory.cpp
+    sdpa/device/sliding_halo_layout.cpp
     sdpa/device/exp_ring_joint_sdpa_device_operation.cpp
     sdpa/device/exp_ring_joint_sdpa_program_factory.cpp
     sdpa/device/ring_distributed_sdpa_device_operation.cpp

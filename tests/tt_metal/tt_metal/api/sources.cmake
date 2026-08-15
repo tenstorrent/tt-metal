@@ -27,6 +27,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_edge_cases.cpp
     dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
+    dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
+    dataflow_buffer/test_dataflow_buffer_scoped_lock_cache.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
@@ -35,10 +37,12 @@ set(UNIT_TESTS_API_SOURCES
     metal2_host_api/test_scratchpad_hw.cpp
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
+    metal2_host_api/test_tensor_spec_relaxations.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_tt_memory.cpp
     test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
@@ -51,6 +55,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
+    test_cross_node_dfb.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
@@ -58,6 +63,8 @@ set(UNIT_TESTS_API_SOURCES
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp
     test_noc.cpp
+    test_blaze_named_args_hashing.cpp
+    test_blaze_named_runtime_args.cpp
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp
