@@ -16,6 +16,7 @@ require: splitting the fused QKV, and the RoPE reordering described in :func:`ro
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 import torch
 
@@ -185,8 +186,18 @@ class NeighborhoodAttention(Module):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         device_plan: NA3DDevicePlan,
+        exchange: "Callable[[ttnn.Tensor], ttnn.Tensor] | None" = None,
     ) -> ttnn.Tensor:
-        """``x`` is ``(tokens, dim)`` in TILE layout; returns the same shape."""
+        """``x`` is ``(tokens, dim)`` in TILE layout; returns ``(queries, dim)``.
+
+        Sharded, ``x`` holds only this device's tokens and ``exchange`` returns them with the
+        halo the plan reads — so ``dims`` is the padded buffer, and the output is narrower than
+        the input by exactly the halo. Projecting q/k/v on the halo duplicates a slice of the
+        neighbour's work, which is the cheaper trade: exchanging x moves one tensor where
+        exchanging q/k/v would move three.
+        """
+        if exchange is not None:
+            x = exchange(x)
         t, h, w = dims
         tokens = t * h * w
         fused = self.qkv(x)
@@ -209,7 +220,8 @@ class NeighborhoodAttention(Module):
         k = apply_rope(k, cos, sin)
 
         attended = neighborhood_attention_3d(q, k, v, kernel_size=self.kernel_size, scale=1.0, device_plan=device_plan)
-        attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
+        queries = math.prod(device_plan.plan.output_dims)
+        attended = ttnn.to_layout(ttnn.reshape(attended, (queries, self.dim)), ttnn.TILE_LAYOUT)
         out = self.proj(attended)
         ttnn.deallocate(attended)
         return out
@@ -255,8 +267,14 @@ class NABlock(Module):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         device_plan: NA3DDevicePlan,
+        exchange: "Callable[[ttnn.Tensor], ttnn.Tensor] | None" = None,
     ) -> ttnn.Tensor:
-        attended = self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
+        """Sharded, ``x`` is this device's tokens throughout: only the attention sees the halo.
+
+        The residual and the MLP are per-token, so they stay on the shard and never need a
+        neighbour. One exchange per block is the whole communication cost.
+        """
+        attended = self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan, exchange=exchange)
         x = ttnn.add(x, attended)
         ttnn.deallocate(attended)
         projected = self.mlp(self.norm2(x))
