@@ -46,6 +46,46 @@ terminal native release report; it records nested vLLM commit
 `release_spec.json` records final nested commit `aab6d846...`, after the second
 repair, and contains no masks.
 
+## Pre-release server and native smoke ordering
+
+The exact v10 server reported API startup on port 8000 at
+`2026-08-14 19:04:19 UTC`. Its access log then recorded HTTP 200 for `/health`
+and `/v1/chat/completions`; the small client response artifact
+`/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/logs/chat_v10.json`
+is timestamped `2026-08-14 19:04:58 UTC` and contains the expected assistant
+response `V10 SMOKE OK`. The response is referenced here but not copied, and no
+request headers, tokens, or secrets are included in this handoff.
+
+The authoritative completed native smoke then ran from
+`2026-08-14 19:06:40.247 UTC` through `2026-08-14 19:06:46.162 UTC`. Its source
+run log is
+`/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/smoke_cache_pass/workflow_logs/run_logs/run_2026-08-14_19-06-40_id_autoport_mistral-small-24b-instruct-2501_p300x2_smoke_v10_benchmarks_Aw_ZfxMz.log`.
+The native workflow produced one block over one sweep point, Acceptance PASS,
+and terminal workflow/command rc=0. The request asked vLLM for random input
+length 8 and output length 8; tokenization produced an actual 7-token input,
+and the request completed with 8 output tokens (1/1 completed, zero failed).
+This smoke therefore precedes the native release command at
+`2026-08-14 19:07:16.899 UTC` and release workflow start at
+`2026-08-14 19:07:17.986 UTC`.
+
+`runtime_model_spec_v10_smoke.json` is the TTI-written spec from
+`/home/mvasiljevic/tti-release/mistral-small-24b-2501/authoritative_v10/smoke_cache_pass/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-14_19-06-40_id_autoport_mistral-small-24b-instruct-2501_p300x2_smoke_v10_EXIwNfrR.json`.
+It records the exact implementation code path, 32768-token context, tt-metal
+commit `5bab286dc7fb063f4f435c840af64359fe4bf533`, and then-current nested vLLM
+commit `0e5e6495ac0a39e7c16a925140547cfb4a2e3030`. Both its embedded CLI arguments
+and runtime config record `docker_server=false`, `local_server=false`, service
+port `8000`, `disable_trace_capture=true`, and
+`limit_samples_mode=smoke-test`.
+
+Committed smoke artifact SHA256s are:
+
+- `runtime_model_spec_v10_smoke.json`:
+  `296cbdbcd3fde42bfb4dbabc78b56c0c3e192b80c856fa4b3982623c5b7b3ed8`
+- `smoke_v10.log`:
+  `241a3f372ae94b73403ba2861f72c322eec8eaa5b1f90203310205ab50b91401`
+- `smoke_v10_benchmark.json`:
+  `cc90ca3445e538a63eaf582a743195cb4bb79d4912c36336e8c4e8cb38733e01`
+
 ## Native terminal release outcome
 
 `native_release_report.md` and `.json` are the complete terminal report emitted
@@ -115,6 +155,8 @@ Committed v10 artifacts are deliberately small and inspectable:
 - reports-only final acceptance: `final_reports_merge_v10.md` / `.json`
 - terminal native release: `native_release_report.md` / `.json`
 - native provenance: `runtime_model_spec_v10_native.json`, `release_spec.json`
+- ordered native smoke: `runtime_model_spec_v10_smoke.json`, `smoke_v10.log`,
+  `smoke_v10_benchmark.json`
 - corrected component reports and TTI-written specs:
   `benchmark_report_v10_slotfix.md` / `.json`,
   `runtime_model_spec_v10_benchmark_slotfix.json`,
@@ -127,7 +169,8 @@ Committed v10 artifacts are deliberately small and inspectable:
   `slot_control_order2_c32_n256_v10.log`
 - diagnosis: `AUTODEBUG_V10.md`, `AUTOFIX.md`
 
-Excluded: weights, tensor dumps, caches, raw per-request benchmark JSON, raw eval
-sample JSONL, generated completion corpora, profiler bulk, `.env`, and secrets.
+Excluded: weights, tensor dumps, caches, raw per-request benchmark JSON other
+than the single authoritative 1-request smoke above, raw eval sample JSONL,
+generated completion corpora, profiler bulk, `.env`, and secrets.
 Older v9-named files in this directory remain historical evidence and are not
 the authoritative v10 result.
