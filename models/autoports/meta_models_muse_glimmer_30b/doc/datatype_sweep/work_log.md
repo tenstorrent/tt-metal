@@ -699,3 +699,39 @@ attractive at BFP4, not more. Recorded rather than re-measured. And the ~1248
 (`matmul_device_operation.cpp:239`, computed 14 cores of `[32, 96]` against a provided 16-core
 grid) are present identically in the previous stage's logs, so they are inherited and not a
 precision regression; they are noted here because no document in the port had classified them.
+
+## 12. Round 5, and the checkpoint commit
+
+Round 5 returned **`clean-pass`** with no required work. It verified all four round-4 fixes
+from the artifacts, re-derived the measurement layer independently once more (medians, round
+ranges, the cross-check resolution, the tie/indistinguishable/complexity chain, the Pareto
+frontier, `check_propagation` for all 23 runs against the *current* config files), and ran a
+negative control against the figure gate — mutating a README string in memory and confirming
+the gate returns 1.
+
+Three of its non-blocking concerns were still worth acting on and were:
+
+* the README's sentence "a throughput number the measurement cannot resolve" was true of the
+  ranking metric and false of the cross-check, which puts `c08` 0.19 % ahead against a 0.038 %
+  resolution. The paragraph now says which instrument resolves what, and why the tie rule is
+  still the right one to apply: it is written for the mandated metric, the two are tied on it,
+  and *safer* is what it says to prefer there;
+* the blocked-candidate table's prefill triples were the last un-gated figures in the README;
+  the figure gate now re-derives them (43 figures);
+* the qualitative artifacts carry no `precision_config_id`, unlike every other post-selection
+  evidence file. The README now states how the arm's policy is established instead —
+  `build_generator` with no knobs, plus the margin probe independently reproducing this run's
+  `p1` decode argmax under `c14` and not under `c00`.
+
+**Commit.** `tt-metal`, branch `agentic-research/hous/muse-glimmer-30b`, commit
+**`18d0a461f0976a885444b8f310cc25c0fe554270`** (`18d0a461f09`). Nothing pushed. The 23 logs over
+200 KB were gzipped before committing — all of them per-candidate sweep logs at ~1.4 MB of ttnn
+INFO each, 28 MB down to 1.7 MB — and the two documents' citations follow them.
+
+The repo's pre-commit hooks reformatted eleven files (black, isort) and rejected
+`tests/test_precision_config.py` for using `pytest.raises` where the repo requires its
+`expect_error` fixture; that is now fixed. Because the hooks touched implementation and test
+files *after* the last verification run, both suites were re-run on the committed tree:
+**`test_precision_config.py` 22 passed, `test_full_model.py` 59 passed**, and the figure gate,
+the context-contract `--check` and a `candidates.py` regeneration all pass against it
+(`logs/postcommit_tests.log`).
