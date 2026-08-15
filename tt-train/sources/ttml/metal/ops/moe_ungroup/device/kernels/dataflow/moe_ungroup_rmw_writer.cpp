@@ -212,22 +212,20 @@ void kernel_main() {
                 cb_reserve_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
                 uint32_t pad_bytes = hidden_chunk_bytes - chunk_bytes;
+                bool zeros_pending = false;
                 for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
                     if (flat == SENTINEL) {
                         // Skipped row — fill via NOC DMA so tilize sees zeros.
                         fill_zeros_async(noc, cb_existing_rm, hidden_chunk_bytes, r * hidden_chunk_bytes);
+                        zeros_pending = true;
                         continue;
                     }
                     uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(flat, chunk * hidden_chunk_bytes);
                     noc_async_read(dst_noc, row_buf, chunk_bytes);
                 }
                 noc_async_read_barrier();
-                // The SENTINEL-row fills above went through async_write_zeros,
-                // which needs its own barrier: the read barrier alone leaves
-                // cmd buffer 0 in zero mode on Quasar, corrupting later writes.
-                noc.write_zeros_l1_barrier();
                 // Zero the partial-last-tile tail AFTER the reads complete:
                 // doing it before the barrier would race with NOC writes that
                 // can land slightly after their request size due to packet
@@ -239,7 +237,13 @@ void kernel_main() {
                             continue;
                         }
                         fill_zeros_async(noc, cb_existing_rm, pad_bytes, r * hidden_chunk_bytes + chunk_bytes);
+                        zeros_pending = true;
                     }
+                }
+                if (zeros_pending) {
+                    // SENTINEL and pad fills went through async_write_zeros; one
+                    // barrier covers the whole batch and restores the write path
+                    // (Quasar zero mode) before write_chunk's NoC writes.
                     noc.write_zeros_l1_barrier();
                 }
                 cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);

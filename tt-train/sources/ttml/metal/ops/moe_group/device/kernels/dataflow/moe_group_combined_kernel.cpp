@@ -364,9 +364,9 @@ void kernel_main() {
         for (uint32_t e = 0; e < e_local; ++e) stage[e] = counts[e];
         noc_async_write((uint32_t)stage, cnt_addrgen.get_noc_addr(0), cnt_page_bytes);
         // noc_async_write is zero-copy: the NIU reads stage at packet transmit,
-        // not call time. Flush the counts write before restaging offsets over
-        // the same bytes.
-        noc_async_write_barrier();
+        // not call time. Flush the counts write out of L1 before restaging
+        // offsets over the same bytes; the barrier below covers completion.
+        noc_async_writes_flushed();
         for (uint32_t e = 0; e <= e_local; ++e) stage[e] = offsets[e];
         noc_async_write((uint32_t)stage, off_addrgen.get_noc_addr(0), off_page_bytes);
         noc_async_write_barrier();

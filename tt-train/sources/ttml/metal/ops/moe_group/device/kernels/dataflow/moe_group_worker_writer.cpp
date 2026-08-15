@@ -97,17 +97,22 @@ void kernel_main() {
     }
 
     // Zero the tail tile_rows this core owns past the active range. my_count
-    // is a uniform worst-case bound, so clamp to total_tile_rows. Bursts from
-    // MEM_ZEROS_BASE, matching the grouped_scores pre-fill in the combined
-    // kernel.
-    for (uint32_t step = my_active_count; step < my_count && tile_row < total_tile_rows; ++step, tile_row += stride) {
-        for (uint32_t t = 0; t < Wt; ++t) {
-            uint64_t dst_noc = grouped_addrgen.get_noc_addr(tile_row * Wt + t);
-            for (uint32_t off = 0; off < tile_bytes; off += MEM_ZEROS_SIZE) {
-                uint32_t m = (off + MEM_ZEROS_SIZE <= tile_bytes) ? MEM_ZEROS_SIZE : (tile_bytes - off);
-                noc_async_write(MEM_ZEROS_BASE, dst_noc + off, m);
+    // is a uniform worst-case bound, so clamp to total_tile_rows.
+    if (my_active_count < my_count && tile_row < total_tile_rows) {
+        Noc noc;
+        CircularBuffer out_cb(cb_out);
+        // cb_out is drained and push/pop-balanced here (read ptr == write ptr),
+        // so one zeroed page at its write pointer doubles as the pre-zeroed L1
+        // scratch that async_write_zeros streams to DRAM from its read pointer.
+        cb_reserve_back(cb_out, 1U);
+        fill_zeros_async(noc, cb_out, tile_bytes);
+        noc.write_zeros_l1_barrier();
+        for (uint32_t step = my_active_count; step < my_count && tile_row < total_tile_rows;
+             ++step, tile_row += stride) {
+            for (uint32_t t = 0; t < Wt; ++t) {
+                noc.async_write_zeros(grouped_addrgen, tile_bytes, {.page_id = tile_row * Wt + t}, out_cb);
             }
         }
-        noc_async_write_barrier();
+        noc.write_zeros_dram_barrier();
     }
 }
