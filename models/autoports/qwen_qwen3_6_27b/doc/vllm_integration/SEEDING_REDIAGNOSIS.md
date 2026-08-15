@@ -77,3 +77,49 @@ committed**, so that claim cannot be checked, and given the mechanism above the
 most likely explanation is that its more peaked distribution made all four
 comparisons pass by luck. Falcon's sampling evidence should be treated as
 unverified rather than as a contradiction of this finding.
+
+---
+
+## CORRECTION (written after stage 09 completed; the mechanism above is wrong)
+
+The headline conclusion held: this was a plumbing gap inside this repo, not an
+external Blackhole `Sampling1D` capability gap, and a fresh stage-09 thread fixed
+it here in ~7 hours. **The mechanism named above is not the defect.** Two
+specific claims are withdrawn.
+
+**1. "The per-user seeds are `torch.arange`, fixed at construction and never
+updated from the request" is false.** `models/common/sampling/generator.py:942`
+does `ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)`,
+so the seeds tensor is overwritten with real per-request seeds at runtime. The
+`arange` in `tt_sampling.py` is only the initial allocation. There is also a
+`seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots,
+start_values)` in the adapter that was already present and already binding seeds.
+
+**2. The actual defect was a missing decode-slot remap.** When vLLM moved a
+request between batch slots (evict/re-add, condense), the adapter did not remap
+its decode slots, so per-request seed/RNG state stopped following the request.
+The fix is in `tt/generator_vllm.py`:
+
+```python
+if slot_remap is not None:
+    remap = torch.as_tensor(slot_remap).reshape(-1)[: gen.model.batch].tolist()
+    gen.remap_decode_slots(remap)
+```
+
+This is exactly the hazard `TTModelRunner._req_state_slot` documents -- "evict/
+re-add and condense move a request's ROW, not its state" -- which the analysis
+above quoted while pointing at the wrong file.
+
+**3. Falcon3-7B-Base was not passing by luck.** That claim is withdrawn. Falcon's
+`generator_vllm.py` accepts `slot_remap` and raises
+`ValueError("Falcon3 steady async decode cannot remap live slots")` when it is
+not the identity -- it explicitly refuses the case rather than getting it wrong
+silently. Qwen's fix is strictly more capable: it implements the remap instead of
+rejecting it. Falcon's uncommitted `sampling_tests.log` is still a genuine
+evidence gap, but it is not evidence of a defect.
+
+**What generalises.** The seeding tests compare generated text, so a peaked
+distribution can mask a broken RNG stream -- seeds 123 and 999 passed while 42
+and 0 failed on the same broken configuration. Passing this suite is weak
+evidence of seed correctness; the batch>1 slot-remap path is the thing to test
+directly.
