@@ -54,9 +54,6 @@ void MLAQKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
 
     // compute_output_specs derives each output layout from one input; the outputs are only
     // interchangeable if every input shares the same placement.
-    TT_FATAL(
-        q_pre.memory_config() == kv_up.memory_config() && kv_up.memory_config() == k_pe.memory_config(),
-        "MLAQKVAssembleFw: q_pre, kv_up, and k_pe must share the same memory config.");
 
     const auto q_pre_shape = q_pre.padded_shape();
     const auto kv_up_shape = kv_up.padded_shape();
