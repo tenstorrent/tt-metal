@@ -23,7 +23,13 @@ import ttnn
 
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList
-from ...layers.na3d import NA3DDevicePlan, build_device_plan, neighborhood_attention_3d, plan_na3d
+from ...layers.na3d import (
+    NA3DDevicePlan,
+    build_device_plan,
+    neighborhood_attention_3d,
+    neighborhood_attention_3d_op_sp_sharded,
+    plan_na3d,
+)
 from ...layers.normalization import RMSNorm
 from .diffvae_ltx_stage5 import TILE, log_dram
 
@@ -302,17 +308,33 @@ class NeighborhoodAttention(Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        attended = neighborhood_attention_3d(
-            q,
-            k,
-            v,
-            kernel_size=self.kernel_size,
-            scale=1.0,
-            device_plan=device_plan,
-            backend=self.na3d_backend,
-            ccl_manager=self.ccl_manager,
-            sp_axis=self.sp_axis,
-        )
+        if self.na3d_backend == "op_sp_sharded":
+            # Full-stage SP: x/q/k/v are this chip's T-slice, so `dims` here is local. The attention
+            # needs the full grid + this shard's global origin; K/V are gathered inside. cos/sin were
+            # already sharded the same way, so the RoPE above used each frame's global position.
+            sp = int(list(q.device().shape)[self.sp_axis])
+            attended = neighborhood_attention_3d_op_sp_sharded(
+                q,
+                k,
+                v,
+                dims=(t * sp, h, w),
+                kernel_size=self.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+            )
+        else:
+            attended = neighborhood_attention_3d(
+                q,
+                k,
+                v,
+                kernel_size=self.kernel_size,
+                scale=1.0,
+                device_plan=device_plan,
+                backend=self.na3d_backend,
+                ccl_manager=self.ccl_manager,
+                sp_axis=self.sp_axis,
+            )
         attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
         out = self.proj(attended)
         ttnn.deallocate(attended)

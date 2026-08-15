@@ -140,3 +140,67 @@ def test_na3d_op_sp_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel):
     # Reassemble the T-sharded output (dim 1 along sp_axis) into the full volume.
     got = to_torch_replicated(out, mesh_axes=[None, sp_axis, None, None, None])
     assert_quality(expected, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_na_block_op_sp_sharded_matches_op(*, mesh_device):
+    """SP-3a integration: a full NA block run on a T-SHARDED sequence (na3d_backend="op_sp_sharded",
+    x + RoPE tables sharded over T) matches the replicated block, so a stage can run its blocks
+    sharded -- pointwise ops stay 1/sp, attention gathers K/V. Reassembled, it matches "op"."""
+    torch.manual_seed(0)
+    dim, head_dim, kernel = 128, 64, (3, 3, 3)
+    dims = (8, 8, 8)
+    sp_axis = 0
+    T, H, W = dims
+    sp = list(mesh_device.shape)[sp_axis]
+    t_local = T // sp
+    tokens = T * H * W
+    hidden = (int(dim * 4.0) + 15) // 16 * 16
+
+    weights = {
+        "norm1.weight": (dim,),
+        "norm2.weight": (dim,),
+        "attn.qkv.weight": (3 * dim, dim),
+        "attn.qkv.bias": (3 * dim,),
+        "attn.proj.weight": (dim, dim),
+        "attn.proj.bias": (dim,),
+        "attn.q_norm.weight": (head_dim,),
+        "attn.k_norm.weight": (head_dim,),
+        "mlp.w_gate.weight": (hidden, dim),
+        "mlp.w_up.weight": (hidden, dim),
+        "mlp.w_down.weight": (dim, hidden),
+    }
+    state = {name: torch.randn(shape) * 0.1 for name, shape in weights.items()}
+    hidden_states = torch.randn(tokens, dim)
+    cos, sin = rope_tables(dims, default_rope_dim_split(head_dim), mesh_device=mesh_device)
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+    # Replicated reference.
+    block_op = NABlock(dim, kernel, head_dim=head_dim, mesh_device=mesh_device, na3d_backend="op")
+    block_op.load_state_dict({k: v.clone() for k, v in state.items()})
+    x_full = ttnn.from_torch(hidden_states, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ref = to_torch_replicated(block_op(x_full, dims=dims, cos=cos, sin=sin, device_plan=None))
+
+    # Sharded: x and the RoPE tables split over T; the block runs on this chip's slice.
+    block_sp = NABlock(
+        dim,
+        kernel,
+        head_dim=head_dim,
+        mesh_device=mesh_device,
+        na3d_backend="op_sp_sharded",
+        ccl_manager=ccl_manager,
+        sp_axis=sp_axis,
+    )
+    block_sp.load_state_dict({k: v.clone() for k, v in state.items()})
+    x_shard = from_torch(
+        hidden_states, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_axes=[sp_axis, None]
+    )
+    cos_shard = ttnn.mesh_partition(cos, dim=1, cluster_axis=sp_axis)
+    sin_shard = ttnn.mesh_partition(sin, dim=1, cluster_axis=sp_axis)
+    out_shard = block_sp(x_shard, dims=(t_local, H, W), cos=cos_shard, sin=sin_shard, device_plan=None)
+    got = to_torch_replicated(out_shard, mesh_axes=[sp_axis, None])
+
+    assert_quality(ref, got, pcc=0.999)
