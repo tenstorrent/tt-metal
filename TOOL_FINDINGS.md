@@ -2318,6 +2318,27 @@ reported success — the §6.54 trap, reached without anyone making a mistake at
 **Workaround used here:** the Block-1 demo was moved out of `models/demos/` so nothing could be
 copied from it, forcing the plan to regenerate against the model actually being ported.
 
+### CONFIRMED — both fixes were necessary, and each was necessary alone
+
+Measured across three runs of the same model, changing one thing at a time:
+
+| run | model structure | template pool | capture result |
+|---|---|---|---|
+| 1 | 26 empty `nn.Module()` placeholders (**ours**, S5) | Block-1 demo present | `resolving 4/7`, **captured 3/7** |
+| 2 | real per-layer submodules | Block-1 demo present | `resolving 7/10`, still 3 × `submodule not resolved` |
+| 3 | real per-layer submodules | **empty** | `copied from (skeleton — no sibling source)` · **`resolving 7/7`**, zero unresolved |
+
+**Neither fix alone was sufficient.** Real submodules did not help while the plan carried another
+model's paths; deleting the stale plan would not have helped while the modules were hollow. That is
+worth stating to the PR author, because it is why this failure is hard to diagnose from a single
+run: two independent causes produce one identical symptom (`submodule not resolved`), and fixing
+either one leaves the symptom unchanged.
+
+**A side benefit worth noting:** with real modules to inspect, classification moved from
+`0 REUSE, 0 ADAPT, 4 NEW (total 4)` to **`3 REUSE, 0 ADAPT, 4 NEW (total 7)`** — the tool recognised
+three components as things `tt_transformers` already implements rather than writing them from
+scratch. Honest structure did not just fix the gate; it made the port cheaper.
+
 ---
 
 ## Corrections to this document
@@ -2490,6 +2511,27 @@ reported success — the §6.54 trap, reached without anyone making a mistake at
 
 **Workaround used here:** the Block-1 demo was moved out of `models/demos/` so nothing could be
 copied from it, forcing the plan to regenerate against the model actually being ported.
+
+### CONFIRMED — both fixes were necessary, and each was necessary alone
+
+Measured across three runs of the same model, changing one thing at a time:
+
+| run | model structure | template pool | capture result |
+|---|---|---|---|
+| 1 | 26 empty `nn.Module()` placeholders (**ours**, S5) | Block-1 demo present | `resolving 4/7`, **captured 3/7** |
+| 2 | real per-layer submodules | Block-1 demo present | `resolving 7/10`, still 3 × `submodule not resolved` |
+| 3 | real per-layer submodules | **empty** | `copied from (skeleton — no sibling source)` · **`resolving 7/7`**, zero unresolved |
+
+**Neither fix alone was sufficient.** Real submodules did not help while the plan carried another
+model's paths; deleting the stale plan would not have helped while the modules were hollow. That is
+worth stating to the PR author, because it is why this failure is hard to diagnose from a single
+run: two independent causes produce one identical symptom (`submodule not resolved`), and fixing
+either one leaves the symptom unchanged.
+
+**A side benefit worth noting:** with real modules to inspect, classification moved from
+`0 REUSE, 0 ADAPT, 4 NEW (total 4)` to **`3 REUSE, 0 ADAPT, 4 NEW (total 7)`** — the tool recognised
+three components as things `tt_transformers` already implements rather than writing them from
+scratch. Honest structure did not just fix the gate; it made the port cheaper.
 
 ---
 
