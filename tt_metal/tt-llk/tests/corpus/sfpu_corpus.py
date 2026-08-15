@@ -186,7 +186,7 @@ def main():
                 if vals:
                     rec.update(metric="simulated_cycles",scope="craq_program",selector="default",cycles=max(vals))
                 else:
-                    rec["status"]="FAIL"; rec["reason"]="mapped CRAQ row produced no device-cycle metric"
+                    rec["status"]="FAIL"; rec["reason"]="mapped CRAQ row produced no modeled-cycle metric"
         if a.mode=="silicon" and rc==0:
             measured=[]
             if a.measurements and a.measurements.is_file():

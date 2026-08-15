@@ -39,12 +39,16 @@ with a hand-written replay/MOP/SFPLOADMACRO advantage or a clearly convertible
 SFPI boundary.  It is not a claim that every row already has a generated
 replacement.
 
-The runner measures simulator **device-cycle trace data** through
+The runner records simulator **modeled-cycle trace data** through
 `craq-sim/scripts/perf/llk-sim-perf.sh`.  It does not use pytest elapsed time,
 ELF size, or static instruction count as a score.  Existing `perf_*.py` paths
 are recorded in the manifest for a later paired silicon run; they are not fed
 to the simulator runner because craq-sim's functional-nodeid pipeline requires
 the matching `test_*.py` nodeids.
+
+CRAQ modeled cycles are a functional and optimization discriminator, not a
+substitute for physical device cycles.  Only serialized silicon runs may update
+the device-cycle baseline or make a performance acceptance claim.
 
 ## Reproduce a baseline
 
