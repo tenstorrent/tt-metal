@@ -108,9 +108,35 @@ defect.
 | **F10** | the F9 workaround loses the model id → `optimize` cannot build its own PCC gate, though it wrote one | **YES** | small |
 | **F5** | systemic-pattern detector counts error NAMES, not families | **YES — low prio** | small |
 | **F4** | deliberately-wrong constructor, repaired on retry | **NO — works as designed** | — |
+| **F11** | documented `--max-rounds` default is 20; the real one is 3, and it is the ONLY exit | **YES** | one line |
+| **F12** | the fusion rung reaches for a grid where it should reach for a program config | **YES** | medium |
+| **F13** | generated stubs swallow fast-path exceptions, so a perf regression passes the PCC gate | **YES** | small |
+| **F14** | "producer emits the consumer's shard" must check the consumer's PROGRAM CONFIG grid | **YES** | medium |
+| **F15** | `plan` and `compat` disagree about what the model IS | **YES** | small |
+| **F16** | the block table degrades to EMPTY, which reads identically to "nothing needed" | **YES** | small |
+| **F17** | machine-readable structure is declared and never read | **YES** | small |
+| **F18** | the architecture gate tests the model's NAME, not its structure | **YES — fix tested** | small |
+| **F19** | template dispatch silently runs a DIFFERENT model; the template can be the tool's own prior output | **YES** | medium |
+| **F20** | ⚠ REVISED — the meta-plan is wired to stdout, not control flow; on this run the pipeline ignored it and was RIGHT | **partial** | — |
+| **F21** | `trust_remote_code` is a ONE-MODEL allowlist; the two halves of the pipeline disagree | **YES** | small |
+| **F22** | the isolation worktree silently ignores uncommitted edits to the tool's own source | **YES** | small |
+| **F23** | ⚠ CORRECTED — capture drivers guess where the config already says they should not; 3 of the 4 misses were OURS (S5) | **partial** | small |
+| **F25** | decomposition children lose the parent path prefix, and the plan is copied from another model | **YES** | small |
+| **F26** | report what the gate MEASURED, not what was collected (`captured 7/7` ≠ used) | **YES** | small |
+| **F27** | the captured input is DISCARDED where one `deepcopy` would have kept it | **YES** | one line |
+| **F28** | the entire end-to-end verdict rests on ONE prompt (n=1) | **YES** | small |
+| **F29** | the CLI's 0.95 `--pcc-target` overrides the engine's documented 0.99 — the threshold SETS quality, it does not merely gate it | **YES — highest value of the three-block run** | one line |
+| **F30** | the drift gate detects the stale template and is wired never to block (*"Never raises"*) | **YES** | small |
+| **F31** | a profiled child that aborted (SIGBUS) is reported as a missing CSV | **YES** | small |
+| **F32** | `termination_check()` blocks 30 min with no progress channel; the retry never returns | **YES** | medium |
+| **F33** | `worktree-list` can never print ORPHAN (`id(s) in orphans`), so dead worktrees accumulate looking active; `PermissionError` is also misread as dead | **YES** | one line |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
+
+**If one thing is taken from the three-block run: F29** — a one-line default that this document
+measures as the difference between e2e PCC 0.9586 and 0.9986 on the same code. F30 is its
+structural twin: a gate the tool already has and declines to enforce.
 
 ### B. OUR SIDE — not tool defects, do NOT report these
 
@@ -119,6 +145,10 @@ defect.
 | **S1** | the HF export shipped no tokenizer | **ours** | our exporter predates this use; fixed by converting `tekken.json` (15/15 vs ground truth) |
 | **S2** | `tt-perf-report` not installed → `optimize` preflight failed | **ours** | it **is** declared in `requirements-agent.txt`; we simply never ran that install. The tool detected it, refused cleanly, and named the fix — correct behaviour |
 | **S3** | the model had to be converted to HF format at all | **ours / inherent** | Voxtral ships in Mistral-native format; every model this tool handles arrives as a `transformers` model. Not a defect |
+| **S4** | six packaging defects, all in `transformers`, all hit in one afternoon | **ours / upstream** | see §S4; none of them the tool's |
+| **S5** | the first HF wrapper exposed 26 empty `nn.Module()` placeholders | **ours** | caused 3 of the 4 capture misses originally written up as F23 |
+| **S6** | our own `conftest.py` bootstrap shadowed the built `ttnn` inside the planner's scratch copy | **ours** | fixed; looks exactly like a tool defect because the tool creates the copy |
+| **S7** | parking the Block-1 demo left its `family_backends` entry dangling | **ours** | this is what exposed F30 — and it left a local absolute path in a shared registry |
 
 ### C. CREDIT — things the tool got right
 
@@ -2260,371 +2290,6 @@ every downstream PCC number inherits the quality of these inputs.
 
 ---
 
-## ★ F25 — decomposition children lose their parent's path prefix, and the plan is copied from another model
-
-**Status: found 2026-08-15, worked around; the real fix is one line** · severity: silently degrades
-per-component gates to synthetic inputs · reported: not yet
-
-Two independent defects that compound, both visible in the same log.
-
-### (a) The tool computes the correct path and then discards it
-
-```
-line 472  [recompose-link] `decoder_layer` (backbone.layers.0) -> 3 on-device child component(s)
-line 468  [reinject] re-added decomposition child `layers_0_input_layernorm`
-                     (layers.0.input_layernorm) of `decoder_layer`
-line 487  [capture] layers_0_input_layernorm: submodule not resolved; skipping.
-```
-
-The recompose-link step records the parent **fully qualified** — `backbone.layers.0`. The reinject
-step records the children **relative** — `layers.0.input_layernorm`. The capture hook uses the
-children's path, looks up `layers.0.input_layernorm` on a model whose stack lives at
-`backbone.layers.*`, finds nothing, and skips.
-
-**The correct path is four lines away in the same log.** Children should inherit the parent's
-qualified prefix.
-
-### (b) `decomposition_plan.json` is COPIED from the closest existing demo
-
-```
-line 202  A  models/demos/voxtral_tts_full/decomposition_plan.json
-line 203        copied from models/demos/voxtral_tts_backbone/decomposition_plan.json
-```
-
-and that file contains, correctly for **its own** model:
-
-```
-"layers.0.input_layernorm", "layers.0.mlp", "layers.0.self_attn"
-```
-
-`voxtral_tts_backbone` is a bare `MistralForCausalLM` whose stack genuinely is at top level. The
-three-block model's is not. So a plan describing one model's topology was applied to another's —
-**F19's template substitution, resurfacing in the decomposition plan rather than the demo.** The
-demo it copied from is itself a previous artifact of this same tool.
-
-### Consequence
-
-Three components could not be hooked, so they graduated against **synthetic** inputs while the run
-reported success — the §6.54 trap, reached without anyone making a mistake at the point of failure.
-
-### Fixes
-
-1. **Qualify child paths with the parent's prefix** at reinject time. The value is already computed.
-2. **Do not copy `decomposition_plan.json` across models.** Regenerate per model, or at minimum
-   validate every recorded path resolves against the model being ported and discard the plan if not.
-3. Cheap defence that catches both: **after building the hook list, assert each path resolves**, and
-   fail loudly rather than `skipping`. A skipped hook silently changes what the PCC gate measures.
-
-**Workaround used here:** the Block-1 demo was moved out of `models/demos/` so nothing could be
-copied from it, forcing the plan to regenerate against the model actually being ported.
-
-### CONFIRMED — both fixes were necessary, and each was necessary alone
-
-Measured across three runs of the same model, changing one thing at a time:
-
-| run | model structure | template pool | capture result |
-|---|---|---|---|
-| 1 | 26 empty `nn.Module()` placeholders (**ours**, S5) | Block-1 demo present | `resolving 4/7`, **captured 3/7** |
-| 2 | real per-layer submodules | Block-1 demo present | `resolving 7/10`, still 3 × `submodule not resolved` |
-| 3 | real per-layer submodules | **empty** | `copied from (skeleton — no sibling source)` · **`resolving 7/7`**, zero unresolved |
-
-**Neither fix alone was sufficient.** Real submodules did not help while the plan carried another
-model's paths; deleting the stale plan would not have helped while the modules were hollow. That is
-worth stating to the PR author, because it is why this failure is hard to diagnose from a single
-run: two independent causes produce one identical symptom (`submodule not resolved`), and fixing
-either one leaves the symptom unchanged.
-
-**A side benefit worth noting:** with real modules to inspect, classification moved from
-`0 REUSE, 0 ADAPT, 4 NEW (total 4)` to **`3 REUSE, 0 ADAPT, 4 NEW (total 7)`** — the tool recognised
-three components as things `tt_transformers` already implements rather than writing them from
-scratch. Honest structure did not just fix the gate; it made the port cheaper.
-
-### Run 4 — `captured 7/7`, and the third fix was also ours
-
-Runs 1-3 reached 3/7, then 5/7. The last two misses were **Blocks 2 and 3**, and the cause was again
-the wrapper, not the tool:
-
-```
-driver `model(input_ids=..., attention_mask=...) [10 tokens]`:
-   AssertionError: prompt has 0 audio placeholders but the preset has 169 rows
-driver `submodule[backbone](**['inputs_embeds'])`: ok          <- backbone ONLY
-```
-
-Unable to construct a valid whole-model prompt, the framework fell back to driving the **backbone
-submodule alone** — which reaches every backbone component and never executes the flow matcher or
-the codec, so those two were gated on synthetic inputs while the run reported success.
-
-**The model could not be run with no arguments.** Its `forward` required a prompt whose
-audio-placeholder count is voice-specific (169 rows for the default voice), and no such prompt was
-shipped with it. A generic driver cannot invent one. Fixed by carrying `default_prompt_ids` in
-`config.json` — deliberately in the config rather than a sidecar file, because trust_remote_code
-copies only `.py` into its module cache (S4 #4), so anything resolved from `__file__` is absent.
-
-```
-[capture] tts_backbone / decoder_layer / r_m_s_norm / attention / m_l_p /
-          codec_decoder / flow_matching:  captured
-[preflight] captured 7/7 components; per-component PCC tests will use real inputs
-```
-
-**Trajectory: 3/7 → 5/7 → 7/7, across three independent causes** — two ours (hollow modules, no
-default prompt), one the tool's (F25's copied decomposition plan). Every per-component gate is now
-measured against tensors the deployment actually produces.
-
-**A caveat that keeps F23 intact.** The driver that finally succeeded is
-`model(pixel_values=...): ok` — the *image-tensor* driver, on a text-to-speech model. It works only
-because `forward` ignores unknown kwargs and falls through to the bundled default. **The tool still
-does not know how to drive this model; it merely can no longer fail.** The recommendation is
-unchanged: a `--calibration-inputs` channel, so representative inputs are supplied rather than
-guessed.
-
-**Packaging lesson for anyone wrapping a model for this tool:** it must be runnable with **no
-arguments**. Every automatic driver, capture and smoke test depends on that, and a model whose
-`forward` demands a specially-constructed input is undrivable no matter how correct it is.
-
-### ⚠ CORRECTION — `captured 7/7` does NOT mean the tests use the captured tensors
-
-I reported that reaching `captured 7/7` put every per-component gate on deployment tensors. **It does
-not.** The capture succeeded — 23 files on disk under `_captured/` — and **none of the seven tests
-read them**:
-
-```
-test_attention       captured-refs: 0   synth-refs: 5
-test_codec_decoder   captured-refs: 0   synth-refs: 5
-test_flow_matching   captured-refs: 0   synth-refs: 5
-    ... all seven identical
-```
-
-`captured N/M` counts **recordings made**, not recordings consumed. Two different things, and I
-conflated them.
-
-**There are three tiers of input quality here, not two:**
-
-| tier | what it is | where the run actually is |
-|---|---|---|
-| 1 | random tensors from name-guessing (`_make_arg_for`) | where it started — tests **crashed**: `cis` got `randn(1,64,3072)` where a COMPLEX rope table was required |
-| 2 | inputs built from the reference's OWN primitives (`rope_cis`, `causal_bias`) | **where all 7 component tests are** |
-| 3 | the recorded deployment activations | captured, on disk, **unused** |
-
-**And tier 3 is declined for a genuine reason**, which the agent-rewritten harness documents:
-
-> *`_captured/attention/args.pt` holds a real deployment step: `h=[1,1,3072]` with a 208-deep KV
-> cache. It is not usable as-is for a unit test. The cache dict is **MUTATED** by
-> `VoxtralAttention.forward`, and the harness hands the same object to the torch reference and then
-> to the ttnn stub*
-
-Feeding one mutable cache to the reference and then to the stub means the stub sees the reference's
-write — a comparison against contaminated state that would look correct. Declining the capture is
-the right call; **silently substituting tier 2 while the run reports `captured 7/7` is not.**
-
-**F26 — report what the gate MEASURED, not what was collected.** A line reading `captured 7/7`
-directly above per-component PCC results invites exactly the reading I gave it. The gate should
-state its input provenance per component — `real-capture` / `synthetic-from-reference` /
-`synthetic-guessed` — because those three carry very different confidence and §6.54 measured the
-difference at 29.5% vs 3.9% error on the same code.
-
-**What is unaffected:** the END-TO-END test genuinely uses the real prompt through the whole
-pipeline and compares waveform against waveform. That is the number that decides whether the audio
-is right, and it is honest.
-
----
-
-## ★ F27 — the captured input is DISCARDED where one `deepcopy` would have kept it
-
-The harness captures a real deployment activation for `attention`, correctly works out that it
-cannot hand the same object to both sides, and then **throws it away** rather than copying it.
-
-Its own note, in full:
-
-> *`_captured/attention/args.pt` holds a real deployment step: `h=[1,1,3072]` with a 208-deep KV
-> cache. It is not usable as-is for a unit test. The cache dict is MUTATED by
-> `VoxtralAttention.forward` (`cache[cache_key] = (k, v)`), and the harness hands the same object to
-> the torch reference and then to the ttnn stub — so the stub would attend over a cache one position
-> longer than the golden did. **Dropping the cache instead makes the test vacuous**: at S=1 with no
-> cache the softmax is over a single key, so it returns 1.0 whatever q and k are, and RoPE — the
-> thing most likely to be wrong in a port — stops affecting the output at all.*
-
-It considers exactly two options — **share the object** (contaminated) or **drop the cache**
-(vacuous) — and takes neither, substituting a synthetic 64-token causal prefill.
-
-**The third option is absent.** Give each side its own copy:
-
-```python
-ref_out  = reference(h, cis, bias, deepcopy(cache), key)
-stub_out = stub(h, cis, bias, deepcopy(cache), key)
-```
-
-`grep` confirms it never occurred to the harness: **no `deepcopy`, no `.clone()`, no `copy.` anywhere
-in `tests/pcc/conftest.py`.** The cost is negligible — one layer's cache at 208 positions is
-≈ 208 × 8 heads × 128 dims × 2 tensors × 4 B ≈ **1.7 MB**.
-
-**And the copy would be strictly better than the substitute**, in exactly the dimension that
-matters. The synthetic prefill exercises RoPE at positions 0-63 with an empty cache; the real
-captured step exercises it at **position 208 with a 208-deep cache**. RoPE errors are
-position-dependent — `[gpt-21]` records SDPA settings that were correct at one length and
-*"NOT SAFE — position sweep"* across others. The harness itself calls RoPE *"the thing most likely
-to be wrong in a port"*, and then tests it at the positions least likely to expose the bug.
-
-**Fix:** deep-copy mutable captured args per side. One line, and it converts the whole capture
-pipeline from collected-but-unused (F26) into actually-used.
-
-*(Credit to the reviewer who spotted this: the harness's reasoning is sound about why sharing fails
-and why dropping fails, which makes the missing third option easy to overlook.)*
-
-## ★★ F28 — the entire end-to-end verdict rests on ONE prompt
-
-```
-tests/e2e/test_e2e_pipeline.py     pytest parametrize: 0
-CLI flags for prompts / cases:     none found in scripts/tt_hw_planner/cli.py
-```
-
-One text, one voice, one seed, one horizon. For a **generative speech model**, that is the whole
-correctness gate — `Verdict: PASS` is decided on a single utterance.
-
-**For contrast, the hand-port's gate on the same model** runs **45 utterances across 3 seeds**, and
-its own history says why: `§6.21` records that a case's frame count depends on what ran before it in
-the same process, so arms need identical history; `§6.62`'s `tail_probe.py` exists specifically to
-*"count failures, not means"* because damage concentrates in rare bad utterances; and the
-`w2 -> bf8_b` experiment moved `mos_min` by **0.245** while `mos_longform` moved 0.021 — a
-mean-preserving change that mauled the worst case. **A one-utterance gate cannot see any of that.**
-
-This compounds every other correctness finding in this document:
-
-- **O9** — no WER, no MOS, no exact-match on discrete codes. Now also: no sample size.
-- **F26** — per-component gates run on synthetic inputs, so the e2e test carries the correctness
-  burden alone. It carries it on n=1.
-- **F27** — the one component whose real input WAS captured has it discarded, so even that single
-  sample is not deployment-representative at the component level.
-
-**Suggested fix, in order of cost:**
-
-1. `pytest.mark.parametrize` the e2e test over a prompt list, and take the **worst** PCC as the
-   verdict rather than the only one.
-2. A `--eval-prompts <file>` flag, so a user supplies the set — the same channel F23 asks for on the
-   input side.
-3. Report the distribution (min / mean / n), not a scalar. A single number invites exactly the
-   confidence it cannot support.
-
-**Why this is arguably the most important finding here:** every other defect in this document is a
-thing the tool does wrong that a reader could catch. This one is a thing it *doesn't do*, and its
-absence is invisible — the report says `PASS` and shows a PCC, and nothing on the page hints that
-`n=1`.
-
-### F28b — PROPOSAL: get the sample size from the BATCH dimension, not from N sequential runs
-
-The obvious objection to F28 is cost: running 45 utterances the way the hand-port's gate does takes
-~18 minutes, and an inner-loop correctness gate cannot afford that. **The batch dimension makes it
-close to free**, and for this model two of the three blocks already support it:
-
-```
-Block 2  predict_velocity   [B,36], [B,3072], [B,3072] -> [B,36]
-         semantic_code      h [B,3072] -> [B,1]
-         decode_frame       [B,1], [B,3072] -> [B,36]              <- already batched
-Block 3  reference_decode   codes [B,37,T] -> waveform [B,1,T*240*8]  <- already batched
-Block 1  reference_forward  [1, S, 3072] -> [1, S, 3072]           <- pinned at 1
-```
-
-Block 2 is *already* running batched in production — CFG folds the batch to 2x (§6.35). So the gate
-would be exercising a path the model already uses.
-
-**What blocks Block 1 is deployment concerns a TEST does not have:**
-
-| deployment problem | why a gate can ignore it |
-|---|---|
-| prompts differ in length | pad to a common length; the causal mask already handles padding |
-| each utterance stops at its own `[END_AUDIO]` | run a FIXED frame count and ignore termination |
-| per-sequence retirement scheduling | not needed when every row runs the same number of frames |
-
-And the shape works out: a tile is 32 rows, so **B <= 32 still occupies one tile**. `per_core_M=1` /
-`fuse_batch=True` are not violated. `nlp_create_qkv_heads_decode` already emits
-`[1, batch, heads, head_dim]`, and `paged_update_cache` / `sdpa_decode` both take a batch dimension.
-Batch-5 is untested here, not structurally blocked.
-
-**The proposal:**
-
-1. Run the e2e gate at **B = 5-8 prompts**, padded, fixed horizon, reference batched identically.
-2. Report **min / mean / n** across rows, and gate on the **worst** row, not the mean — §6.62's
-   `tail_probe.py` exists because damage concentrates in rare utterances, and `w2 -> bf8_b` moved
-   `mos_min` by 0.245 while `mos_longform` moved 0.021.
-3. Cost is roughly one utterance's wall time for 5-8 samples, which is what makes it viable as an
-   inner-loop gate rather than a nightly one.
-
-**Two caveats the PR author should hear with it:**
-
-- **A port validated only at B=1 may silently assume it.** If the generated stubs break at B=5, that
-  is itself the finding — and a cheap one to surface, since the gate would catch it on day one.
-- **It changes the performance regime.** Batching is a throughput lever, so a B=5 measurement is not
-  comparable to B=1 deployment timing. Use it for CORRECTNESS only; letting `optimize` tune against
-  a batched measurement would optimise the wrong operating point.
-
-*(Proposed, deliberately NOT implemented here — this is a design suggestion for the PR, not a change
-we validated.)*
-
----
-
-## ★★★ F29 — the threshold does not just GATE quality, it SETS it. And the two defaults disagree.
-
-The single cleanest experiment in this document, and the most actionable finding for the PR.
-
-### The two defaults
-
-```
-cli.py:10986      pe2e.add_argument("--pcc-target", type=float, default=0.95,
-                     help="PCC threshold for the final HF-vs-TT comparison (default: 0.95)")
-
-e2e_mcp.py:20     E2E_MCP_PCC   required e2e PCC threshold (default 0.99)
-e2e_mcp.py:43     _PCC = float(os.environ.get("E2E_MCP_PCC", "0.99"))
-```
-
-The gate engine documents **0.99** as *"required"*. The CLI passes **0.95** and overrides it. A user
-who never touches the flag gets the loose one, and nothing says a stricter default exists.
-
-### What that costs, measured
-
-Same port, same model, same machine. Only the threshold changed:
-
-| threshold | measured e2e PCC | rounds the fix-loop needed |
-|---|---|---|
-| `0.95` (CLI default) | **0.9586** | `rounds=1 can_stop=True` — passed immediately, loop never worked |
-| `0.99` (engine default) | **0.9986** | round 1, 45+ tool calls of actual repair |
-
-**The 0.9586 was not a ceiling.** It was not a precision limit either — the test's own
-device-precision bound reads `1.0000 at N=4`, and the comparison ran at N=4 (waveform 7680 samples
-at `SAMPLES_PER_FRAME=1920`). It was simply **where the loop stopped, because the gate let it.**
-
-Given a target it could not trivially clear, the same tool on the same code found another four
-points of accuracy.
-
-### Why this is the important version of O8
-
-O8 recorded that the accept test has no exchange rate — it keeps any change that is faster and above
-the floor. This is the mirror image and it is worse: **the threshold is not a floor, it is the
-target.** Quality delivered ≈ quality demanded. A default set four points below the engine's own
-documented requirement therefore does not merely permit worse ports — it *produces* them.
-
-For a model where `§6.31` records that one flipped semantic code redirects an entire utterance, and
-where the same port at 0.95 shipped `code exact-match: all codebooks 0.8649` — one acoustic code in
-seven differing, against the hand-port's measured `codes_real_pct 5.2` — that gap is not academic.
-
-### Fixes
-
-1. **Make the CLI inherit the engine's default rather than override it.** One line. If 0.99 is
-   documented as *required*, the CLI should not silently ask for less.
-2. **Print the threshold's provenance in the report** — `pcc>=0.95 (CLI default; engine default is
-   0.99)`. The banner currently states the number with no indication that it was lowered.
-3. **Derive the floor from the measured precision bound.** The test already computes it
-   (`1.0000 at N=4, 0.9458 at the 8-frame cap`). A fixed constant is either unreachable or too
-   generous depending on the horizon; the bound is neither.
-
-*(Recommendation 3 matters because 0.99 is NOT universally safe: at the 8-frame horizon this model's
-own reference is only reproducible to 0.9458, so a hard 0.99 would be unsatisfiable there. The right
-target is a function of the measured bound, not a constant.)*
-
----
-
-## Corrections to this document
-
----
-
 ## F21 — `trust_remote_code` is a ONE-MODEL allowlist, and the two halves of the pipeline disagree
 
 **Status: FIXED in this checkout** · severity: any custom-architecture checkpoint passes preflight
@@ -3092,6 +2757,262 @@ seven differing, against the hand-port's measured `codes_real_pct 5.2` — that 
 *(Recommendation 3 matters because 0.99 is NOT universally safe: at the 8-frame horizon this model's
 own reference is only reproducible to 0.9458, so a hard 0.99 would be unsatisfiable there. The right
 target is a function of the measured bound, not a constant.)*
+
+---
+
+## ★★★ F30 — the drift gate exists, detects the stale template, and is wired never to block
+
+**Status: live in this checkout** · severity: bring-up selects a template directory that does not
+exist, and says so only in a line it also suppresses · reported: not yet
+
+The tool ships a registry drift check whose entire stated purpose is to stop this. Run against this
+tree on 2026-08-15 it works perfectly:
+
+```
+$ python -m scripts.tt_hw_planner sync-registry --check
+  [MISSING] family_backends[Voxtral TTS Backbone (mistral decoder)].demo_path
+            -> models/demos/voxtral_tts_backbone
+[sync-registry] FAIL: 27 registry path(s) missing from the checkout — fix the registry or restore the paths.
+rc=1
+```
+
+`sync_registry.py:1-8` says why it exists: *"``--check`` exits non-zero on hard drift (a mapped path
+that is gone) so CI / a pre-plan gate fails loudly instead of the planner silently mis-pointing at a
+stale sibling."*
+
+`up` / `auto-up` reach the same function through `_warn_on_registry_drift()` (`cli.py:8103`), whose
+docstring states the opposite as a design commitment:
+
+> *"Never raises: neither a fetch nor a drift check may block bring-up."*
+
+On hard drift it prints exactly one line (`cli.py:8142-8149`):
+
+```
+[registry] N mapped registry path(s) are stale on this checkout — run `tt_hw_planner sync-registry` for detail.
+```
+
+The detail — `format_drift(issues)`, the part naming *which* path is gone — is emitted only when
+`TT_HW_PLANNER_VERBOSE` is set. The whole body is wrapped in `except Exception: pass`, so a drift
+check that itself throws is indistinguishable from a clean checkout.
+
+### What it cost here, measured
+
+`models/demos/voxtral_tts_backbone/` was removed from this tree at 09:29 on 2026-08-15. The bring-up
+run at 15:11 selected it anyway — `models/demos/voxtral_tts_full/RUN_REPORT.md`:
+
+```
+Backend picked:    Voxtral TTS Backbone (mistral decoder)  (TEMPLATE-FALLBACK — model_type mismatch)
+Closest template:  models/demos/voxtral_tts_backbone/        <- absent from the checkout
+Sibling base:      /localdev/lserbedzija/hf_models/voxtral-tts-backbone (model_type=mistral)
+```
+
+This is **F19 with the safety net already built and switched off.** F19 showed template dispatch can
+silently run a different model; F30 shows the tool can *prove* the template is gone, on the same
+run, and proceed regardless. It is also F20's exact shape a third time: the knowledge exists and is
+wired to stdout instead of to control flow.
+
+### Fixes
+
+1. **Make hard drift on the *selected* backend fatal.** Global drift can stay advisory — 27 stale
+   paths in unrelated families should not block a bring-up. But once template selection has
+   *picked* an entry, a missing `demo_path` on that entry is not a warning, it is a broken run.
+2. **Print the detail with the warning, not behind `TT_HW_PLANNER_VERBOSE`.** The one line the user
+   sees names no path, so it cannot be acted on without a second command.
+3. **Narrow the `except Exception: pass`.** A drift check that crashes currently reports as a clean
+   checkout.
+
+---
+
+## ★★ F31 — the profiler reports a missing CSV where the child actually died of a bus error
+
+**Status: live** · severity: the optimizer agent is handed a plumbing error instead of a crash ·
+reported: not yet
+
+`termination_check()` returned this to the optimizer agent at 16:27:45 on 2026-08-15:
+
+```
+can_stop: false
+error: "profiler crashed: tracy run exit 1 (log: /tmp/perf_mcp_4tvrspfx/run0_tracy.log)
+        AssertionError: cpp_device_perf_report.csv not found and legacy device log
+        profile_log_device.csv is also missing in /tmp/perf_mcp_4tvrspfx/tracy_out/.logs."
+```
+
+Read literally that is a profiler-output-plumbing problem, and an agent told to keep optimizing will
+go looking for one. It is not what happened. The surviving log of a sibling run
+(`/tmp/perf_mcp_h4kudb_0/run0_tracy.log`) shows the profiled child aborting mid-forward:
+
+```
+Fatal Python error: Bus error
+
+Current thread (most recent call first):
+  ttnn/ttnn/decorators.py:650 in __call__
+  models/demos/voxtral_tts_full/_stubs/m_l_p.py:38 in __call__
+  models/demos/voxtral_tts_full/tt/pipeline.py:165 → 195 → 369 decode_stack → 413 run_tts
+  tests/e2e/test_main_perf.py:204 in _eager_forward → 251 in test_main_perf
+Aborted (core dumped)
+```
+
+The CSV never appears **because the process died before writing it.** The postprocess then walks its
+fallback chain — `process_ops_logs.py:1136` warns that `cpp_device_perf_report.csv` is missing and
+falls back to legacy parsing, `process_ops_logs.py:755` finds that missing too and raises — and the
+raise is the only thing that reaches the caller. The abort, the signal, and the stack are all in the
+log the caller cites but does not read.
+
+**The masking is the finding, not the bus error.** Whether the bus error is a ttnn defect, a
+profiler-buffer overrun on a three-block forward, or a fault in our own hand-written perf test is
+not established here and is not claimed. What is established is that an abort was reported as a
+missing file.
+
+### Fixes
+
+1. **Check the child's exit status first.** A child that exited by signal (or non-zero) should be
+   reported as that — `tracy child aborted (SIGBUS) at <last stack frame>` — before any assertion
+   about its outputs runs.
+2. **Include the log tail in the error.** The caller is already given the log path; the last ~40
+   lines would have carried `Fatal Python error: Bus error` into the agent's context.
+3. **Do not let the fallback chain's terminal assertion be the reported cause** when an earlier,
+   more specific failure was already observed.
+
+---
+
+## ★★ F32 — `termination_check()` blocks for 30 minutes with no progress channel, and the retry never returns
+
+**Status: live** · severity: an unattended optimizer run cannot be distinguished from a hung one ·
+reported: not yet
+
+Timings from the driving session's own transcript (`0b038219-…jsonl`), 2026-08-15:
+
+| time | event |
+|---|---|
+| 15:57:53 | agent calls `termination_check()` |
+| 16:27:45 | returns — **29 min 52 s later** — with the F31 error |
+| 16:28:02 | agent retries `termination_check()` |
+| — | never returns; the transcript ends here |
+
+Nothing is emitted in between. The tool re-profiles the model inside the call, so half an hour of
+silence is the *normal* case, not the failure case — which means the failure case is
+indistinguishable from it. The run above was abandoned by its operator as hung; it had in fact
+returned one error and was sitting inside a second identical call.
+
+This is **F7 recurring at the optimizer stage** (*"all progress flows through one channel, and
+nothing notices when it is dead"*), and it compounds F31: the one message that does come back after
+thirty minutes describes the wrong failure.
+
+### Fixes
+
+1. **Emit progress from inside the call** — at minimum the sub-step (`profiling`, `parsing`,
+   `checklist`) and the elapsed time.
+2. **Bound the call and return partial status** rather than blocking indefinitely on the retry.
+3. **Make a repeated identical call cheap or refused.** The retry re-ran the same 30-minute profile
+   against an unchanged tree.
+
+---
+
+## ★ F33 — `worktree-list` can never print ORPHAN, so dead worktrees accumulate looking healthy
+
+**Status: live in this checkout** · severity: the operator is told there is nothing to reclaim while
+2.7 GB is reclaimable · reported: not yet
+
+Six bring-up worktrees on this box, one per `auto-up` run:
+
+```
+$ python -m scripts.tt_hw_planner worktree-list
+  /tmp/tt_hw_planner__…_1786735901   …voxtral-tts-full   1541336   22.0   active
+  /tmp/tt_hw_planner__…_1786736367   …voxtral-tts-full   1548859   21.9   active
+  … 4 more, all "active"
+
+$ for p in 1541336 1548859 1552915 1557766 1797227 1801185; do ps -p $p ...; done
+  1541336 DEAD   1548859 DEAD   1552915 DEAD
+  1557766 DEAD   1797227 DEAD   1801185 DEAD
+```
+
+Every creator is dead. Every row says `active`. The cause is one expression —
+`commands/worktree_list.py:20`:
+
+```python
+status = "ORPHAN" if id(s) in orphans else "active"
+```
+
+`id(s)` is CPython's builtin object-address `id()`. `list_orphans()` (`worktree.py:169-174`) returns
+`List[WorktreeSession]` — objects, not addresses. An `int` is never `in` a list of
+`WorktreeSession`, so the ORPHAN branch is unreachable and every worktree prints `active` forever.
+
+**This is F2's shape again**: a verdict that cannot fire, where the failing branch is the one that
+signals work is needed.
+
+**The two commands contradict each other in the same checkout.** Immediately after `worktree-list`
+called all six `active`, `worktree-cleanup` was run and printed, for the very same PIDs:
+
+```
+orphan worktree: /tmp/tt_hw_planner__…_1786735901 (… creator-pid=1541336 dead, age=22.1h)  -> removing
+… removed 6 orphan worktree(s)
+```
+
+Same predicate, same process, opposite answers — because cleanup asks `list_orphans()` and the
+listing asks `id()`. 2.7 GB was reclaimable the whole time the listing said otherwise.
+
+**The reclaim path itself is correct.** `cleanup_orphans()` (`worktree.py:195`) calls
+`list_orphans()` and iterates the objects properly, so `worktree-cleanup` *does* remove them. The
+damage is confined to the display — but the display is the only thing telling an operator whether
+running cleanup is worthwhile, and it says no. Six worktrees × ~430 MB accrued unnoticed, one per
+run, on a box where the model checkpoint alone is 16 GB.
+
+**Secondary, and worse in a shared setting.** `_pid_alive()` (`worktree.py:176-186`) treats
+`PermissionError` as not-alive:
+
+```python
+    except (ProcessLookupError, PermissionError):
+        return False
+```
+
+`os.kill(pid, 0)` raises `PermissionError` precisely when the process **exists but belongs to
+another user**. That PID is alive. Classified orphan, it becomes a `git worktree remove --force`
+(and an `shutil.rmtree` fallback) against a worktree whose creator is still running.
+
+### Fixes
+
+1. **Compare identity, not `id()`** — `if s in orphans`, or match on `s.path`.
+2. **`PermissionError` means alive.** Only `ProcessLookupError` means gone.
+3. **Have `worktree-cleanup` print the same status `worktree-list` computes**, so the two can never
+   disagree about what is reclaimable.
+
+---
+
+## S6 — OURS: our own `conftest.py` bootstrap shadows the built `ttnn` inside the planner's scratch copy
+
+**Status: FIXED (uncommitted at time of writing)** · not a tool defect
+
+`_bootstrap_ttnn_import_paths()` in the repo-root `conftest.py` is ours — added 2026-08-15 in
+`bb71494984`, absent from `origin/main` and from PR #46283. It published `<this tree>/ttnn` onto
+`sys.path` whenever `ttnn/ttnn/__init__.py` existed.
+
+The hw-planner copies the checkout into a scratch root (`/tmp/tt_hw_planner__<model>_<ts>/`) and runs
+pytest from there. That copy carries the `ttnn` **sources** but no compiled `_ttnn*.so`, so the
+bootstrap put a source-only regular package ahead of the real one and every test in the copy died at
+`ModuleNotFoundError: No module named 'ttnn._ttnn'`.
+
+Fixed by selecting the `sys.path` entries from whichever tree actually holds `_ttnn*.so` (falling
+back to `TT_METAL_HOME`) while keeping the calling tree first, so `models`/`tests` still resolve to
+the copy under test.
+
+**Recorded because it is easy to mistake for a tool defect** — the failure only appears inside the
+planner's own scratch copy, and the tool is what creates that copy. The bug is ours.
+
+---
+
+## S7 — OURS: parking the Block-1 demo left its registry entry dangling
+
+**Status: open at time of writing** · not a tool defect — but it is what exposed F30
+
+`family_backends.py:289-299` registers `Voxtral TTS Backbone (mistral decoder)` with
+`demo_path='models/demos/voxtral_tts_backbone/'` and
+`canonical_hf_id='/localdev/lserbedzija/hf_models/voxtral-tts-backbone'`. We added that entry in
+`3dfdc8b4a5` during the Block-1 experiment; we then deleted the directory it points at in
+`9251fa6026` ("park the Block-1 demo out of the template pool") without removing the entry.
+
+Parking the directory alone does not park the backend: selection still ranks and picks it (RUN_REPORT
+15:11), and it is now a template with no template. Either drop the registry entry or restore the
+directory — and never leave a local absolute path in a shared registry.
 
 ---
 
