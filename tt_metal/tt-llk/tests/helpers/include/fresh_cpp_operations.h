@@ -9,6 +9,15 @@
 namespace ckernel::sfpu {
 
 template <int ITERATIONS>
+inline void calculate_exp_fresh_cpp() {
+    for (int row = 0; row < ITERATIONS; ++row) {
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _sfpu_exp_21f_bf16_<false>(input);
+        sfpi::dst_reg++;
+    }
+}
+
+template <int ITERATIONS>
 inline void calculate_sigmoid_appx_fresh_cpp() {
     for (int row = 0; row < ITERATIONS; ++row) {
         const sfpi::vFloat input = sfpi::dst_reg[0];

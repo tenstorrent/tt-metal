@@ -224,7 +224,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
+                        {
+                            static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_exp_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
                         {
                             SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
@@ -272,7 +283,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU operation
-                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
+                        {
+                            static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_exp_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
                         {
                             SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,

@@ -965,6 +965,35 @@ def eltwise_unary_sfpu(
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
+def test_exp_fresh_cpp(fresh_cpp_impl, edge_values):
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    spec_A = None
+    if edge_values:
+        spec_A = edge_spec(
+            MathOperation.Exp,
+            formats.input_format,
+            formats.output_format,
+            specials=specials_safe(
+                formats.input_format, formats.output_format, DestAccumulation.No
+            ),
+        )
+        assert spec_A is not None
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Exp,
+        FastMode.No,
+        [64, 64],
+        spec_A=spec_A,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
