@@ -1165,6 +1165,8 @@ Local only; nothing pushed from either repo.
   `tt/generator.py`, `tt/model.py`, `tests/test_full_model.py`, `.gitignore`,
   `models/common/readiness_check/run_vllm_server.py`, and all of
   `doc/vllm_integration/` and `readiness_vllm/`.
+* `tt-metal` — `9a09427a452`, "Muse-Glimmer-30B vLLM integration: round-10
+  clean-pass and commit SHAs", recording this section itself.
 * `vllm-tt-plugin` — `10308fb5f66b664f3a3f4a7828934f92857b1547`, "Register
   Muse-Glimmer-30B and allow an explicit fabric router payload":
   `src/vllm_tt_plugin/platform.py`, `src/vllm_tt_plugin/worker.py`.
