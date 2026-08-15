@@ -847,7 +847,7 @@ Why this one is worth aborting for rather than working around: an ops-team exper
 
 Scan the ported code against this checklist. Each item is a Metal 2.0 design-intent failure to look for; the [patterns catalog](../shared/port_patterns.md) has the full discussion of each.
 
-- [ ] **No `tensor.buffer()->address()` survived.** Search the factory `.cpp` for this string; if present, the corresponding tensor needs a `TensorBinding` instead.
+- [ ] **No buffer address survived in the run-args.** Search the factory `.cpp` for `tensor.buffer()->address()`, **and separately for `emplace_runtime_args` / a bare `Buffer*`** — a descriptor-API factory commonly delivers the address by pushing the `Buffer*` object itself rather than calling `->address()`, so it never contains the first string and a search for that alone passes an op that has done nothing. Either form needs a `TensorBinding` instead.
 - [ ] **No magic-number CB indices in CTAs.** Search `compile_time_args` for values that are CB indices (typically small integers or `CBIndex::c_*`); if found, the value should come from a `DFBBinding` instead.
 - [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(tensor::name)` instead.
 - [ ] **No `cb` survives in a DFB's name.** The port renames `cb_*` → `dfb_*` ([Host-side: stay in the lane](#host-side-stay-in-the-lane)), and it lands unevenly — the two halves fail independently, so check both. **The most common miss is the variable**: the spec name gets renamed and the local holding it keeps its legacy one, on either side of the port —
