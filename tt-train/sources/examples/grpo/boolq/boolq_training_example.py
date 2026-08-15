@@ -8,7 +8,12 @@ import csv
 import logging
 import os
 import random
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+# `utils` lives one level up, in the shared examples/grpo directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import torch
