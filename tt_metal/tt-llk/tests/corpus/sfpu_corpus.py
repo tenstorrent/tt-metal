@@ -8,14 +8,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 HERE = pathlib.Path(__file__).resolve().parent
 LLK = ROOT / "tt_metal/tt-llk"
 MANIFEST = HERE / "sfpu_corpus_v1.tsv"
-EXPECTED = {"bh":152,"wh":138,"physical_paths":290,"basename_union":138,"legacy_bh":41,"legacy_wh":32,"raw":42,"typed":146,"replay":13,"mop":2}
-FIELDS = ["version","id","surface","arches","header_bh","header_wh","raw_tti","typed_sfpi","replay","mop",
+EXPECTED = {"logical":164,"bh":152,"wh":138,"qsr":42,"physical_paths":332,"basename_union":143,"legacy_bh":41,"legacy_wh":32,"legacy_qsr":14,"raw":51,"typed":151,"replay":13,"mop":3}
+FIELDS = ["version","id","surface","arches","header_bh","header_wh","header_qsr","raw_tti","typed_sfpi","replay","mop",
           "functional_modules","perf_modules","mapping_state","notes"]
 
 def headers(arch):
-    chip='blackhole' if arch == 'bh' else 'wormhole_b0'
+    chip={"bh":"blackhole","wh":"wormhole_b0","qsr":"quasar"}[arch]
     roots={"legacy":LLK/f"tt_llk_{chip}/common/inc/sfpu", "metal":ROOT/f"tt_metal/hw/ckernels/{chip}"}
-    return {f"{surface}:{p.relative_to(base).as_posix()}":p for surface,base in roots.items() for p in base.rglob("ckernel_sfpu*.h")}
+    out={f"{surface}:{p.name}":p for surface,base in roots.items() for p in base.rglob("ckernel_sfpu*.h")}
+    if arch=="qsr":
+        base=LLK/"tt_llk_quasar/common/inc"
+        for p in base.rglob("ckernel_sfpu*.h"):
+            out[f"legacy:{p.name}"]=p
+    return out
 
 def modules(prefix):
     p = LLK / "tests/python_tests"
@@ -36,10 +41,11 @@ def seed_maps():
     return out
 
 def inventory():
-    bh, wh, seed = headers("bh"), headers("wh"), seed_maps()
+    bh, wh, qsr, seed = headers("bh"), headers("wh"), headers("qsr"), seed_maps()
     tests, perfs = modules("test_"), modules("perf_")
     rows=[]
-    for rel,p in sorted(bh.items()):
+    for rel in sorted(set(bh)|set(wh)|set(qsr)):
+        p=bh.get(rel) or wh.get(rel) or qsr[rel]
         raw,typed,replay,mop=classify(p.read_text(errors="replace")); stem=p.stem.removeprefix("ckernel_sfpu_")
         surface,shortrel=rel.split(":",1)
         mapped=seed.get(p.name) if surface=="legacy" else None
@@ -48,8 +54,9 @@ def inventory():
         functional=mapped[0] if mapped else ""
         perf=mapped[1] if mapped else ""
         state="mapped" if functional else "unmapped"
-        rows.append(dict(version="1",id=(surface+"__"+shortrel.removesuffix(".h").replace("/","__")),surface=surface,arches="bh,wh" if rel in wh else "bh",
-          header_bh=p.relative_to(ROOT).as_posix(),header_wh=wh[rel].relative_to(ROOT).as_posix() if rel in wh else "",
+        arches=",".join(a for a,d in (("bh",bh),("wh",wh),("qsr",qsr)) if rel in d)
+        rows.append(dict(version="1",id=(surface+"__"+shortrel.removesuffix(".h").replace("/","__")),surface=surface,arches=arches,
+          header_bh=bh[rel].relative_to(ROOT).as_posix() if rel in bh else "",header_wh=wh[rel].relative_to(ROOT).as_posix() if rel in wh else "",header_qsr=qsr[rel].relative_to(ROOT).as_posix() if rel in qsr else "",
           raw_tti=str(int(raw)),typed_sfpi=str(int(typed)),replay=str(int(replay)),mop=str(int(mop)),
           functional_modules=functional,perf_modules=perf,mapping_state=state,
           notes=mapped[2] if mapped else "explicitly unmapped: no audited functional module"))
@@ -66,10 +73,11 @@ def write_manifest(rows):
 def validate(rows):
     inv=inventory(); errors=[]
     if rows != inv: errors.append("manifest differs from discovered inventory; run --update")
-    counts={"bh":len(inv),"wh":sum("wh" in r["arches"].split(",") for r in inv),
-            "legacy_bh":sum(r["surface"]=="legacy" for r in inv),"legacy_wh":sum(r["surface"]=="legacy" and "wh" in r["arches"].split(",") for r in inv)}
-    counts["physical_paths"]=counts["bh"]+counts["wh"]
-    counts["basename_union"]=len({pathlib.Path(r["header_bh"]).name for r in inv})
+    counts={"logical":len(inv)}
+    for a in ("bh","wh","qsr"): counts[a]=sum(a in r["arches"].split(",") for r in inv)
+    for a in ("bh","wh","qsr"): counts[f"legacy_{a}"]=sum(r["surface"]=="legacy" and a in r["arches"].split(",") for r in inv)
+    counts["physical_paths"]=counts["bh"]+counts["wh"]+counts["qsr"]
+    counts["basename_union"]=len({pathlib.Path(next(r[x] for x in ("header_bh","header_wh","header_qsr") if r[x])).name for r in inv})
     for key in ("raw","typed","replay","mop"):
         col={"raw":"raw_tti","typed":"typed_sfpi","replay":"replay","mop":"mop"}[key]
         counts[key]=sum(r[col]=="1" for r in inv)
@@ -108,7 +116,7 @@ def compare_baseline(records, baseline, threshold):
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--update",action="store_true"); ap.add_argument("--validate",action="store_true")
-    ap.add_argument("--list",action="store_true"); ap.add_argument("--mode",choices=("compile","craq","silicon")); ap.add_argument("--arch",choices=("bh","wh"),default="bh")
+    ap.add_argument("--list",action="store_true"); ap.add_argument("--mode",choices=("compile","craq","silicon")); ap.add_argument("--arch",choices=("bh","wh","qsr"),default="bh")
     ap.add_argument("--run-root",type=pathlib.Path); ap.add_argument("--simulator",type=pathlib.Path); ap.add_argument("--baseline",type=pathlib.Path)
     ap.add_argument("--max-regression-pct",type=float,default=0.0); ap.add_argument("--execute",action="store_true",help="execute the selected mode (otherwise emit a plan)")
     ap.add_argument("--allow-hardware",action="store_true"); ap.add_argument("--hardware-lock",type=pathlib.Path,default=pathlib.Path("/tmp/tt-llk-sfpu-silicon.lock"))
@@ -148,7 +156,7 @@ def main():
         pydir=LLK/"tests/python_tests"; python=pydir/".venv/bin/python"; log=run/f"{a.mode}.log"
         mods=sorted({m for r in queued for m in r["reason"].split(",") if m and " " not in m})
         env=os.environ.copy(); env.update({"TT_METAL_HOME":str(ROOT),"SHORT_ARCH":a.arch,
-            "SIM_ARCH":"blackhole" if a.arch=="bh" else "wormhole"})
+            "SIM_ARCH":{"bh":"blackhole","wh":"wormhole","qsr":"quasar"}[a.arch]})
         if not python.is_file():
             rc=None; why="missing tt-llk .venv"
         elif a.mode=="compile":
@@ -157,7 +165,7 @@ def main():
         elif a.mode=="craq":
             runner=pathlib.Path(os.environ.get("CRAQ_SIM_ROOT","/localdev/nkapre/craq-sim"))/"scripts/perf/llk-sim-perf.sh"
             cmd=[str(runner),"--sample","1","--run-root",str(run/"craq")]+sum((["--module",m] for m in mods),[])
-            env["SIMULATOR"]=str(a.simulator); why="CRAQ device-cycle gate"
+            env["SIMULATOR"]=str(a.simulator); why="CRAQ modeled-cycle/functional gate"
             with log.open("w") as f: rc=subprocess.run(cmd,cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT).returncode
         else:
             cmd=[str(python),"-m","pytest","-o","addopts=",*mods,"-q"]; why="serialized silicon gate"

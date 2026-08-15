@@ -4,7 +4,8 @@
 
 `sfpu_corpus_v1.tsv` inventories both active SFPU implementation surfaces:
 legacy tt-llk common headers (41 BH/32 WH) and Metal ckernels (111 BH/106 WH),
-for 152 distinct BH paths and 138 WH paths. Duplicate basenames remain distinct
+plus Quasar (14 legacy/28 Metal): 164 logical implementations, 332 arch-specific
+paths, and 143 combined basenames. Duplicate basenames remain distinct
 rows through the `surface` and full path identity columns. Unlike
 the 11-row `f1_candidates.tsv` prioritization seed, every row is present and
 has either audited functional/performance mappings or an explicit `unmapped`

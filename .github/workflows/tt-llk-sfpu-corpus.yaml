@@ -12,16 +12,18 @@ jobs:
   inventory-and-plan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Reject SFPU inventory drift
         run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --validate
       - name: Materialize compile and CRAQ plans
         run: |
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list > sfpu-bh-plan.tsv
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch wh --list > sfpu-wh-plan.tsv
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch qsr --list > sfpu-qsr-plan.tsv
           test "$(wc -l < sfpu-bh-plan.tsv)" -eq 152
           test "$(wc -l < sfpu-wh-plan.tsv)" -eq 138
-      - uses: actions/upload-artifact@v4
+          test "$(wc -l < sfpu-qsr-plan.tsv)" -eq 42
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: sfpu-corpus-plans
           path: sfpu-*-plan.tsv
@@ -29,15 +31,15 @@ jobs:
   compile-mapped-corpus:
     runs-on: tt-ubuntu-2204-large-stable
     strategy:
-      matrix: {arch: [bh, wh]}
+      matrix: {arch: [bh, wh, qsr]}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Provision pinned LLK compiler environment
         working-directory: tt_metal/tt-llk/tests
-        run: CHIP_ARCH=${{ matrix.arch == 'bh' && 'blackhole' || 'wormhole' }} ./setup_testing_env.sh
+        run: CHIP_ARCH=${{ matrix.arch == 'bh' && 'blackhole' || matrix.arch == 'wh' && 'wormhole' || 'quasar' }} ./setup_testing_env.sh
       - name: Compile every mapped corpus module
         run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --mode compile --arch ${{ matrix.arch }} --execute --run-root sfpu-${{ matrix.arch }}-compile
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: always()
         with:
           name: sfpu-${{ matrix.arch }}-compile
