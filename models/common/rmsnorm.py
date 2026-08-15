@@ -62,6 +62,7 @@ class RMSNorm(LightweightModule):
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
+        self.add_unit_offset = add_unit_offset
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -128,9 +129,8 @@ class RMSNorm(LightweightModule):
 
         ``copy_to_buffer`` reshapes to the storage shape
         ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and TILE -> ROW_MAJOR to
-        match ``self.weight``. No ``add_unit_offset`` here: the constructor's
-        offset is baked into the cached weights once, and ``.update`` ships in
-        already-prepared gamma values.
+        match ``self.weight``. ``add_unit_offset`` is not supported (see
+        assert): the caller must ship a gamma that already includes the +1.
 
         When ``self.weight_distributed`` (the column-sharded mirror) exists it's
         kept in sync on device: project ``self.weight`` into the sharded layout
@@ -139,6 +139,7 @@ class RMSNorm(LightweightModule):
         and ``ttnn.copy`` into it. Both buffers keep their address, so captured
         traces and the prefetcher's recorded addresses stay valid.
         """
+        assert not self.add_unit_offset, "RMSNorm.update does not support add_unit_offset=True"
         copy_to_buffer(weight, self.weight, self.weight.dtype)
 
         if getattr(self, "weight_distributed", None) is not None:
