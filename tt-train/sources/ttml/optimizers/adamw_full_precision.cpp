@@ -121,11 +121,10 @@ serialization::StateDict AdamWFullPrecision::get_state_dict() const {
 
 void AdamWFullPrecision::set_state_dict(const serialization::StateDict& dict) {
     set_lr(serialization::get_value_type<float>(dict, "lr"));
-    m_config.beta1 = serialization::get_value_type<float>(dict, "beta1");
-    m_config.beta2 = serialization::get_value_type<float>(dict, "beta2");
+    set_beta1(serialization::get_value_type<float>(dict, "beta1"));
+    set_beta2(serialization::get_value_type<float>(dict, "beta2"));
     m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");
     m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
-    // set_steps derives the beta powers from m_config, so the betas must be restored first.
     set_steps(serialization::get_value_type<size_t>(dict, "steps"));
     m_master_weights = std::get<serialization::NamedParameters>(dict.at("master_weights"));
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
@@ -165,8 +164,8 @@ float AdamWFullPrecision::get_beta1() const {
 void AdamWFullPrecision::set_beta1(float beta1) {
     m_config.beta1 = beta1;
     // Bias correction uses beta^t with the current beta (PyTorch semantics), so the
-    // accumulated power must be rebuilt from the new value.
-    m_beta1_pow = static_cast<float>(std::pow(beta1, m_steps));
+    // beta powers must be rebuilt from the new value; set_steps owns that derivation.
+    set_steps(m_steps);
 }
 
 float AdamWFullPrecision::get_beta2() const {
@@ -175,7 +174,7 @@ float AdamWFullPrecision::get_beta2() const {
 
 void AdamWFullPrecision::set_beta2(float beta2) {
     m_config.beta2 = beta2;
-    m_beta2_pow = static_cast<float>(std::pow(beta2, m_steps));
+    set_steps(m_steps);
 }
 
 float AdamWFullPrecision::get_epsilon() const {

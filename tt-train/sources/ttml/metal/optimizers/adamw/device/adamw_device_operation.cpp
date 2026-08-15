@@ -13,10 +13,12 @@ namespace ttml::metal::optimizers::adamw::device {
 
 void AdamWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor,
-                           const std::string& name,
-                           const tt::tt_metal::Layout required_layout,
-                           const tt::tt_metal::DataType required_dtype) {
+    const auto& param = tensor_args.param;
+    auto check_tensor = [&param](
+                            const ttnn::Tensor& tensor,
+                            const std::string& name,
+                            const tt::tt_metal::Layout required_layout,
+                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.storage_type() == ttnn::StorageType::DEVICE,
             "AdamW optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
@@ -50,9 +52,17 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+
+        // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
+        // smaller companion tensor would be read or written past its allocation.
+        TT_FATAL(
+            tensor.padded_shape() == param.padded_shape(),
+            "Tensor '{}' must match the parameter's padded shape. Expected {}, got {}",
+            name,
+            param.padded_shape(),
+            tensor.padded_shape());
     };
 
-    const auto& param = tensor_args.param;
     const auto& grad = tensor_args.grad;
     const auto& exp_avg = tensor_args.exp_avg;
     const auto& exp_avg_sq = tensor_args.exp_avg_sq;
@@ -86,24 +96,6 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
-    }
-
-    // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
-    // smaller companion tensor would be read or written past its allocation.
-    auto check_shape = [&param](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.padded_shape() == param.padded_shape(),
-            "Tensor '{}' must match the parameter's padded shape. Parameter: {}, '{}': {}",
-            name,
-            param.padded_shape(),
-            name,
-            tensor.padded_shape());
-    };
-    check_shape(grad, "Gradient");
-    check_shape(exp_avg, "Exponential Average Buffer");
-    check_shape(exp_avg_sq, "Exponential Average Squared Buffer");
-    if (max_exp_avg_sq.has_value()) {
-        check_shape(max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer");
     }
 }
 

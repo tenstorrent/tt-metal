@@ -514,8 +514,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
     {
         serialization::StateDict state;
         state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(m0), false)}};
-        state["exp_avg_sq"] =
-            serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
         state["steps"] = initial_steps;
         state["lr"] = lr;
         state["beta1"] = state_beta1;

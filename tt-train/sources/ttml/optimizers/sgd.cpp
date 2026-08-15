@@ -104,6 +104,9 @@ void SGD::set_state_dict(const serialization::StateDict& dict) {
     m_config.nesterov = serialization::get_value_type<bool>(dict, "nesterov");
     m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
     // Restored buffers carry accumulated momentum, so they are past their first update.
+    // (A checkpoint saved before any step also marks its zero buffers, so the resumed
+    // first update applies dampening to a zero buffer — an accepted corner case, since
+    // distinguishing it would require serializing this set.)
     m_momentum_initialized.clear();
     for (const auto& [name, tensor_ptr] : m_momentum) {
         m_momentum_initialized.insert(name);
