@@ -274,7 +274,6 @@ static void TestRingAttention(
     const size_t num_heads,
     const size_t seq_len,
     const size_t head_dim,
-    const bool use_mask = false,
     const bool test_backward = false,
     const float rtol = 1e-2F,
     const float atol = 5e-1F) {
@@ -301,11 +300,9 @@ static void TestRingAttention(
     xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, key_seed);
     xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, value_seed);
 
-    // Create reference mask (full causal)
-    std::optional<xt::xarray<float>> ref_mask_xt;
-    if (use_mask) {
-        ref_mask_xt = create_causal_mask(seq_len);
-    }
+    // Reference mask (full causal): the op is exercised with AttentionMaskType::Causal,
+    // where the device generates the causal mask internally.
+    std::optional<xt::xarray<float>> ref_mask_xt = create_causal_mask(seq_len);
     auto ref_result = reference_sdpa_forward(query_xt, key_xt, value_xt, ref_mask_xt);
 
     // Create sharded Q, K, V tensors for ring attention
@@ -324,20 +321,10 @@ static void TestRingAttention(
     auto key_tensor = autograd::create_tensor(key_tt);
     auto value_tensor = autograd::create_tensor(value_tt);
 
-    // Create mask tensor for ring attention
-    // Full causal mask (1, 1, S_full, S_full) sharded along Q dim -> (1, 1, S_local, S_full) per device
-    std::optional<autograd::TensorPtr> mask_tensor = std::nullopt;
-    if (use_mask) {
-        xt::xarray<float> full_mask = create_causal_mask(seq_len);
-        // Shard along Q dimension (dim 2) so each device gets its Q slice
-        const auto mask_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
-        auto mask_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-            full_mask, device, ttnn::Layout::TILE, mask_mapper.get());
-        mask_tensor = autograd::create_tensor(mask_tt);
-    }
-
+    // No explicit mask tensor: the op rejects one in CP mode; causal masking comes from
+    // mask_type and is generated on device.
     auto output_tensor = ops::distributed::ring_attention_sdpa(
-        query_tensor, key_tensor, value_tensor, mask_tensor, ttml::metal::AttentionMaskType::Causal);
+        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal);
 
     // Gather output from all devices
     auto output_xtensors = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});
@@ -405,11 +392,9 @@ static void TestRingAttention(
 
         EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, rtol, atol))
             << "Ring attention dQ gradient does not match reference";
-        // K is much less accurate than dQ and dV. Relative error is better though.
-        // Also take into account the sampling distribution. Most of our tests sample from
-        // zero mean distirbution under which sdpa output is very small making all tests pass easily.
-        // U[0, 2] is much trickier to pass tests.
-        auto katol = 3.5;
+        // Same tolerance grade as the single-device sdpa_bw suite; anything looser can
+        // hide softmax-backward math errors rather than just bf16 noise.
+        const float katol = 3e-2F;
         EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, rtol, katol))
             << "Ring attention dK gradient does not match reference";
         EXPECT_TRUE(xt::allclose(ref_grads.dV, gathered_dV, rtol, atol))
@@ -424,7 +409,6 @@ TEST_F(GalaxyRingSDPATest, WithCausalMask) {
         /*num_heads=*/4,
         /*seq_len=*/128,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/false);
 }
 
@@ -435,7 +419,6 @@ TEST_F(GalaxyRingSDPATest, WithCausalMaskBackward) {
         /*num_heads=*/4,
         /*seq_len=*/128,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/true);
 }
 
@@ -446,7 +429,6 @@ TEST_F(GalaxyRingSDPATest, LargerBatch) {
         /*num_heads=*/8,
         /*seq_len=*/128,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/false);
 }
 
@@ -457,7 +439,6 @@ TEST_F(GalaxyRingSDPATest, LargerSequence) {
         /*num_heads=*/4,
         /*seq_len=*/256,  // 64 per device
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/false);
 }
 
@@ -468,7 +449,6 @@ TEST_F(GalaxyRingSDPATest, LargerBatchWithCausalMask) {
         /*num_heads=*/8,
         /*seq_len=*/128,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/false);
 }
 
@@ -479,7 +459,6 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceWithCausalMask) {
         /*num_heads=*/4,
         /*seq_len=*/256,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/false);
 }
 
@@ -490,7 +469,6 @@ TEST_F(GalaxyRingSDPATest, LargerBatchCausalMaskBackward) {
         /*num_heads=*/8,
         /*seq_len=*/1024,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/true);
 }
 
@@ -501,7 +479,6 @@ TEST_F(GalaxyRingSDPATest, CacheTestBackward) {
         /*num_heads=*/8,
         /*seq_len=*/128,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/true);
 }
 
@@ -512,6 +489,5 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*num_heads=*/4,
         /*seq_len=*/256,
         /*head_dim=*/64,
-        /*use_mask=*/true,
         /*test_backward=*/true);
 }
