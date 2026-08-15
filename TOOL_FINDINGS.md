@@ -2509,6 +2509,56 @@ thing the tool does wrong that a reader could catch. This one is a thing it *doe
 absence is invisible — the report says `PASS` and shows a PCC, and nothing on the page hints that
 `n=1`.
 
+### F28b — PROPOSAL: get the sample size from the BATCH dimension, not from N sequential runs
+
+The obvious objection to F28 is cost: running 45 utterances the way the hand-port's gate does takes
+~18 minutes, and an inner-loop correctness gate cannot afford that. **The batch dimension makes it
+close to free**, and for this model two of the three blocks already support it:
+
+```
+Block 2  predict_velocity   [B,36], [B,3072], [B,3072] -> [B,36]
+         semantic_code      h [B,3072] -> [B,1]
+         decode_frame       [B,1], [B,3072] -> [B,36]              <- already batched
+Block 3  reference_decode   codes [B,37,T] -> waveform [B,1,T*240*8]  <- already batched
+Block 1  reference_forward  [1, S, 3072] -> [1, S, 3072]           <- pinned at 1
+```
+
+Block 2 is *already* running batched in production — CFG folds the batch to 2x (§6.35). So the gate
+would be exercising a path the model already uses.
+
+**What blocks Block 1 is deployment concerns a TEST does not have:**
+
+| deployment problem | why a gate can ignore it |
+|---|---|
+| prompts differ in length | pad to a common length; the causal mask already handles padding |
+| each utterance stops at its own `[END_AUDIO]` | run a FIXED frame count and ignore termination |
+| per-sequence retirement scheduling | not needed when every row runs the same number of frames |
+
+And the shape works out: a tile is 32 rows, so **B <= 32 still occupies one tile**. `per_core_M=1` /
+`fuse_batch=True` are not violated. `nlp_create_qkv_heads_decode` already emits
+`[1, batch, heads, head_dim]`, and `paged_update_cache` / `sdpa_decode` both take a batch dimension.
+Batch-5 is untested here, not structurally blocked.
+
+**The proposal:**
+
+1. Run the e2e gate at **B = 5-8 prompts**, padded, fixed horizon, reference batched identically.
+2. Report **min / mean / n** across rows, and gate on the **worst** row, not the mean — §6.62's
+   `tail_probe.py` exists because damage concentrates in rare utterances, and `w2 -> bf8_b` moved
+   `mos_min` by 0.245 while `mos_longform` moved 0.021.
+3. Cost is roughly one utterance's wall time for 5-8 samples, which is what makes it viable as an
+   inner-loop gate rather than a nightly one.
+
+**Two caveats the PR author should hear with it:**
+
+- **A port validated only at B=1 may silently assume it.** If the generated stubs break at B=5, that
+  is itself the finding — and a cheap one to surface, since the gate would catch it on day one.
+- **It changes the performance regime.** Batching is a throughput lever, so a B=5 measurement is not
+  comparable to B=1 deployment timing. Use it for CORRECTNESS only; letting `optimize` tune against
+  a batched measurement would optimise the wrong operating point.
+
+*(Proposed, deliberately NOT implemented here — this is a design suggestion for the PR, not a change
+we validated.)*
+
 ---
 
 ## Corrections to this document
@@ -2872,6 +2922,56 @@ This compounds every other correctness finding in this document:
 thing the tool does wrong that a reader could catch. This one is a thing it *doesn't do*, and its
 absence is invisible — the report says `PASS` and shows a PCC, and nothing on the page hints that
 `n=1`.
+
+### F28b — PROPOSAL: get the sample size from the BATCH dimension, not from N sequential runs
+
+The obvious objection to F28 is cost: running 45 utterances the way the hand-port's gate does takes
+~18 minutes, and an inner-loop correctness gate cannot afford that. **The batch dimension makes it
+close to free**, and for this model two of the three blocks already support it:
+
+```
+Block 2  predict_velocity   [B,36], [B,3072], [B,3072] -> [B,36]
+         semantic_code      h [B,3072] -> [B,1]
+         decode_frame       [B,1], [B,3072] -> [B,36]              <- already batched
+Block 3  reference_decode   codes [B,37,T] -> waveform [B,1,T*240*8]  <- already batched
+Block 1  reference_forward  [1, S, 3072] -> [1, S, 3072]           <- pinned at 1
+```
+
+Block 2 is *already* running batched in production — CFG folds the batch to 2x (§6.35). So the gate
+would be exercising a path the model already uses.
+
+**What blocks Block 1 is deployment concerns a TEST does not have:**
+
+| deployment problem | why a gate can ignore it |
+|---|---|
+| prompts differ in length | pad to a common length; the causal mask already handles padding |
+| each utterance stops at its own `[END_AUDIO]` | run a FIXED frame count and ignore termination |
+| per-sequence retirement scheduling | not needed when every row runs the same number of frames |
+
+And the shape works out: a tile is 32 rows, so **B <= 32 still occupies one tile**. `per_core_M=1` /
+`fuse_batch=True` are not violated. `nlp_create_qkv_heads_decode` already emits
+`[1, batch, heads, head_dim]`, and `paged_update_cache` / `sdpa_decode` both take a batch dimension.
+Batch-5 is untested here, not structurally blocked.
+
+**The proposal:**
+
+1. Run the e2e gate at **B = 5-8 prompts**, padded, fixed horizon, reference batched identically.
+2. Report **min / mean / n** across rows, and gate on the **worst** row, not the mean — §6.62's
+   `tail_probe.py` exists because damage concentrates in rare utterances, and `w2 -> bf8_b` moved
+   `mos_min` by 0.245 while `mos_longform` moved 0.021.
+3. Cost is roughly one utterance's wall time for 5-8 samples, which is what makes it viable as an
+   inner-loop gate rather than a nightly one.
+
+**Two caveats the PR author should hear with it:**
+
+- **A port validated only at B=1 may silently assume it.** If the generated stubs break at B=5, that
+  is itself the finding — and a cheap one to surface, since the gate would catch it on day one.
+- **It changes the performance regime.** Batching is a throughput lever, so a B=5 measurement is not
+  comparable to B=1 deployment timing. Use it for CORRECTNESS only; letting `optimize` tune against
+  a batched measurement would optimise the wrong operating point.
+
+*(Proposed, deliberately NOT implemented here — this is a design suggestion for the PR, not a change
+we validated.)*
 
 ---
 
