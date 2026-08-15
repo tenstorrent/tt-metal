@@ -36,6 +36,12 @@ even if the caller has `TT_METAL_HOME` exported.  Use
 only when deliberately measuring a different checkout; the resolved path is
 recorded in `provenance.tsv`.
 
+Every measured run requires an explicit simulator: set
+`CORPUS_SIMULATOR=/path/to/libttsim.so` or pass `--simulator /path/to/libttsim.so`.
+This prevents a silent release/debug change from being inferred from
+`CRAQ_SIM_ROOT`.  The runner validates and SHA-256 records the resolved artifact
+in `provenance.tsv`.
+
 The runner also clears pytest's configured `addopts` for CRAQ collection and
 execution.  This keeps a corpus checkout usable with a deliberately xdist-free
 venv even when its normal `pytest.ini` contains xdist-only options; it does not
