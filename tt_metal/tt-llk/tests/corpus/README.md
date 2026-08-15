@@ -2,7 +2,7 @@
 
 ## Complete SFPU corpus
 
-`sfpu_corpus_v1.tsv` inventories both active SFPU implementation surfaces:
+`sfpu_corpus_v2.tsv` inventories both active SFPU implementation surfaces:
 legacy tt-llk common headers (41 BH/32 WH) and Metal ckernels (111 BH/106 WH),
 plus Quasar (14 legacy/28 Metal): 164 logical implementations, 332 arch-specific
 paths, and 143 combined basenames. Duplicate basenames remain distinct
@@ -10,12 +10,31 @@ rows through the `surface` and full path identity columns. Unlike
 the 11-row `f1_candidates.tsv` prioritization seed, every row is present and
 has either audited functional/performance mappings or an explicit `unmapped`
 state. Static columns record raw TTI, typed SFPI, replay, and MOP presence.
+Version 2 also makes the fresh semantic-C++ program auditable per logical row:
+`semantic_cpp_class`, an exact readiness/blocker statement, paired-selector,
+test and performance status, correctness metric/threshold/source, and the
+current scoped silicon result/source.  The five readiness classes are
+`ready`, `typed_wrapper_needed`, `macro_dependent`, `multithread_boundary`,
+and `unmapped`.
+
+Semantic status is never inferred from a basename or substring.  Every row is
+keyed by its complete stable ID; a newly discovered ID fails validation until
+it receives an explicit audit.  `unmapped` means exactly what it says: no
+row-specific conversion assessment has been completed, not that a similarly
+named test was guessed to cover it.
+
+`sfpu_corpus_v1.tsv` is retained unchanged as the migration source and review
+baseline.  The runner intentionally consumes only v2; `--update` refreshes
+discovery fields while preserving reviewed v2 audit fields by stable ID.  This
+avoids silently treating v1's missing audit columns as passing defaults.
 
 Validate inventory drift in presubmit:
 
 ```bash
 python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --validate
 python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list --plan-format json
+python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list --plan-format markdown
 ```
 
 Regenerate only after auditing additions/removals and mappings:
@@ -32,6 +51,42 @@ counts for device cycles. Each run writes pinned revision/manifest provenance,
 JSON, TSV, and Markdown summaries under its run directory. Hardware collection
 is intentionally nightly/manual and must be serialized by the lab runner; it
 is not a pull-request gate.
+
+Every checked-in `win`, `parity`, or `loss` is correctness-gated.  That does
+not mean every kernel uses PCC: the manifest records the actual contract.
+Welford uses explicit mean/M2 tolerances; Reduce-SDPA and binary broadcast use
+the shared element-tolerance plus PCC gate; TTNN Where uses bit-exact selection
+(including NaN equality); MulInt32 uses exact integer tolerance.  TopK remains
+blocked until values and companion indices are represented soundly and then
+checked together.  The silicon runner rejects rows without an implemented
+selector, a passing test status, and a non-`none` metric, and executes mapped
+functional modules together with performance modules before accepting device
+measurements.
+
+## Fresh semantic-C++ conversion program
+
+The corpus is a queue, not a promise that all 164 rows are immediately pure
+C++.  Conversion work should move a row through these durable gates:
+
+1. audit the semantic body and architectural boundaries;
+2. add a test-only handwritten/generated selector with identical inputs;
+3. compile every supported WH/BH/QSR path;
+4. pass the row's recorded exact/PCC/tolerance contract (CRAQ where supported);
+5. collect serialized, scoped Blackhole device cycles; and
+6. turn repeated blockers into general compiler/API passes, never kernel-name
+   peepholes.
+
+The presubmit compile job uses `--require-executed-mapped`: it fails when no
+mapped row really executes or when any mapped row does not pass.  QSR's 42
+paths are published in all three plan formats, but QSR is deliberately absent
+from the compile-gate matrix until it has a reviewed functional mapping; an
+all-`SKIP_UNMAPPED` lane is not reported as green compilation.
+
+Current evidence seeds the program honestly: Welford and Reduce-SDPA are
+scoped body wins, binary broadcast is exact cycle parity, Where and MulInt32
+are macro-dependent losses, and TopK requires typed multi-result architectural
+modeling before a performance claim.  `SEMANTIC_CPP_CI_PLAN.md` defines the
+presubmit/nightly artifact and promotion policy.
 
 `f1_candidates.tsv` is a deliberately small, auditable corpus seed for the
 F1 cost-model and F2 differential-driver work.  It inventories only kernels

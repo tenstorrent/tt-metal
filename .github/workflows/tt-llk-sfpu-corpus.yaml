@@ -20,6 +20,12 @@ jobs:
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list > sfpu-bh-plan.tsv
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch wh --list > sfpu-wh-plan.tsv
           python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch qsr --list > sfpu-qsr-plan.tsv
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list --plan-format json > sfpu-bh-plan.json
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch wh --list --plan-format json > sfpu-wh-plan.json
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch qsr --list --plan-format json > sfpu-qsr-plan.json
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch bh --list --plan-format markdown > sfpu-bh-plan.md
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch wh --list --plan-format markdown > sfpu-wh-plan.md
+          python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --arch qsr --list --plan-format markdown > sfpu-qsr-plan.md
           test "$(wc -l < sfpu-bh-plan.tsv)" -eq 152
           test "$(wc -l < sfpu-wh-plan.tsv)" -eq 138
           test "$(wc -l < sfpu-qsr-plan.tsv)" -eq 42
@@ -31,14 +37,17 @@ jobs:
   compile-mapped-corpus:
     runs-on: tt-ubuntu-2204-large-stable
     strategy:
-      matrix: {arch: [bh, wh, qsr]}
+      # QSR remains in the 42-path inventory/plan artifact but has no audited
+      # functional-module mapping yet.  Do not advertise an all-skip QSR job
+      # as a compile gate; add it here with its first reviewed mapping.
+      matrix: {arch: [bh, wh]}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Provision pinned LLK compiler environment
         working-directory: tt_metal/tt-llk/tests
         run: CHIP_ARCH=${{ matrix.arch == 'bh' && 'blackhole' || matrix.arch == 'wh' && 'wormhole' || 'quasar' }} ./setup_testing_env.sh
       - name: Compile every mapped corpus module
-        run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --mode compile --arch ${{ matrix.arch }} --execute --run-root sfpu-${{ matrix.arch }}-compile
+        run: python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py --mode compile --arch ${{ matrix.arch }} --execute --require-executed-mapped --run-root sfpu-${{ matrix.arch }}-compile
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: always()
         with:
