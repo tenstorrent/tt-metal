@@ -87,7 +87,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = single_tile_size,
-        .num_entries = TILES_PER_INPUT,
+        .num_entries = NUM_CYCLES,  // holds the whole output (all NUM_INPUTS blocks)
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
