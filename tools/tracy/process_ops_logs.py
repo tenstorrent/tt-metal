@@ -165,11 +165,7 @@ _QUASAR_COLS_TO_REMOVE = {
     "DEVICE TRISC1 KERNEL DURATION [ns]",
     "DEVICE TRISC2 KERNEL DURATION [ns]",
     "DEVICE ERISC KERNEL DURATION [ns]",
-    # cross-clock-domain aggregate durations (span DM + Neo-TRISC) -> no single-clock ns
-    "DEVICE KERNEL DURATION [ns]",
-    "DEVICE KERNEL DURATION DM START [ns]",
-    "DEVICE KERNEL FIRST TO LAST START [ns]",
-    # DM-start op-to-op (mixes DM+Neo-TRISC cycles)
+    # Replaced on Quasar by the per-type OP TO OP DM/TRISC LATENCY columns
     "OP TO OP LATENCY BR/NRISC START [ns]",
 }
 # Stale [ns] row keys to strip so the strict DictWriter accepts the reshaped rows.
@@ -178,8 +174,7 @@ _QUASAR_STALE_ROW_KEYS = list(_QUASAR_COLS_TO_REMOVE) + list(_QUASAR_COL_REPLACE
 
 def shape_device_headers_for_quasar(headers):
     """Rewrite the fixed device-timing headers for a Quasar report: replace certain single-processor-type
-    columns in place with two per-type [ns] columns (DM / Neo-TRISC), and drop the cross-clock-domain
-    aggregate durations. All other columns are unchanged."""
+    columns in place with two per-type [ns] columns (DM / Neo-TRISC). All other columns are unchanged."""
     shaped = []
     for header in headers:
         if header in _QUASAR_COL_REPLACEMENTS:
@@ -685,18 +680,10 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            if not candidates:
-                # Tolerate orphan host-side ops that have no matching device row.
-                # This happens for the trailing profiler-internal no-op dispatched
-                # by TTProfiler::read_results after the final dump_results=True
-                # call: it gets logged on the host but the dump already wrote the
-                # CSV before it ran. Skipping it is safe -- it's not a real op.
-                logger.warning(
-                    f"Skipping orphan op {op_id} (no row in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                    f"for device {device_id}, trace_id={host_trace_id}); "
-                    f"likely a profiler-internal post-noop."
-                )
-                continue
+            assert candidates, (
+                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                f"for device {device_id} (trace_id={host_trace_id})"
+            )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
