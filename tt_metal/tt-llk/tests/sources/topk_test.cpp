@@ -81,8 +81,14 @@
 #include <type_traits>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
+
+#ifndef TOPK_IMPL
+#define TOPK_IMPL 0
+#endif
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -227,7 +233,19 @@ using namespace ckernel;
 // This must be done BEFORE including the TopK LLK API header.
 #define DST_SYNC_MODE  dest_sync
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
+#if TOPK_IMPL == 1
+#include "topk_typed_multiresult.h"
+#elif TOPK_IMPL != 0
+#error "Unknown TopK implementation selector"
+#endif
 #include "llk_sfpu/ckernel_sfpu_topk.h"
+#if TOPK_IMPL == 1
+// Limit the test-only interception to the TopK header.
+#undef TTI_SFPSWAP
+#define TTI_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
+#undef TTI_SFPTRANSP
+#define TTI_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#endif
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
@@ -317,6 +335,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 } // Stage loop.
 
+                // Profile the SFPU TopK body only: datacopy and dest handshakes
+                // remain outside this zone.  The 32x128 perf lane executes this
+                // scope exactly once.
+                {
+                    START_PERF_MEASURE("TOPK_BODY")
+
                 // Pick the first operation.
                 if (first_iteration)
                 {
@@ -378,6 +402,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         TOPK_K,
                         TOPK_LOGK,
                         1 /*skip_second*/);
+                }
                 }
 
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

@@ -549,6 +549,7 @@ class TOPK(TemplateParameter):
     topk_matrix_width: int = 0
     topk_sort_direction: TopKSortDirection = TopKSortDirection.Descending
     topk_stable_sort: bool = False
+    topk_impl: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -557,6 +558,7 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_NUM_ITERATIONS = {int(math.log2(self.topk_matrix_width // TILE_DIMENSIONS[1] // 2))};",
             f"constexpr std::uint32_t TOPK_SORT_DIRECTION = {self.topk_sort_direction.value};",
             f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
+            f"#undef TOPK_IMPL\n#define TOPK_IMPL {self.topk_impl}",
         ]
         return "\n".join(lines)
 

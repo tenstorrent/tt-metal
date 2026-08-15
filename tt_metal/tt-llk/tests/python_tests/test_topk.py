@@ -23,6 +23,7 @@ Validation:
 # Validates both value accuracy and index correctness
 """
 
+import os
 import sys
 
 import pytest
@@ -37,8 +38,14 @@ from helpers.golden_generators import (
     UntilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    PerfRunType,
+    TopKSortDirection,
+    format_dict,
+)
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -126,6 +133,18 @@ def prepare_input_tensor_for_topk(src_A, formats, input_dimensions=[32, 128]):
     src_tilizer = get_golden_generator(TilizeGolden)
     src_A = src_tilizer(src_A, input_dimensions, formats.input_format)
 
+    return src_A
+
+
+def make_unique_value_input(src_A, input_dimensions=[32, 128]):
+    """Give each row unique, exactly representable values for an exact index gate."""
+    src_A = src_A.clone()
+    num_rows_tensor, num_cols_tensor = input_dimensions
+    values_per_row = num_cols_tensor // NUM_STAGES
+    unique_values = torch.arange(values_per_row, dtype=torch.float32).to(src_A.dtype)
+    for row in range(num_rows_tensor):
+        values_start_idx = row * num_cols_tensor
+        src_A[values_start_idx : values_start_idx + values_per_row] = unique_values
     return src_A
 
 
@@ -280,6 +299,7 @@ def get_value_tiles_from_topk_tensor(
     K=[32],  # TODO: Add more K values (like 16, 64).
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
     stable_sort=[False, True],
+    implementation=[0, 1],
 )
 def test_topk_sfpu(
     formats: InputOutputFormat,
@@ -287,6 +307,7 @@ def test_topk_sfpu(
     K: int,
     sort_direction: TopKSortDirection,
     stable_sort: bool,
+    implementation: int,
 ):
 
     if input_dimensions == [32, 1024]:
@@ -309,6 +330,9 @@ def test_topk_sfpu(
         spec_B=sfpu_false_spec,
     )
 
+    if os.getenv("TOPK_EXACT_UNIQUE") == "1":
+        src_A = make_unique_value_input(src_A, input_dimensions)
+
     golden_generator = get_golden_generator(TopKGolden)
     golden_tensor = golden_generator(
         src_A,
@@ -330,6 +354,7 @@ def test_topk_sfpu(
                 topk_matrix_width=input_dimensions[1],
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
+                topk_impl=implementation,
             ),
         ],
         runtimes=[
@@ -375,3 +400,56 @@ def test_topk_sfpu(
     assert passed_test(
         golden_values, res_values, formats.output_format, print_errors=True
     )
+
+
+@pytest.mark.parametrize(
+    "implementation,label", [(0, "handwritten"), (1, "typed_multiresult")]
+)
+def test_topk_device_profile(perf_report, implementation: int, label: str):
+    """Profile one 32x128 TopK SFPU body, excluding datacopy and handshakes."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    input_dimensions = [32, 128]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    src_A = make_unique_value_input(src_A, input_dimensions)
+    src_A = prepare_input_tensor_for_topk(src_A, formats, input_dimensions)
+
+    configuration = PerfConfig(
+        "sources/topk_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            DEST_SYNC(),
+            TOPK(
+                topk_k=32,
+                topk_matrix_width=128,
+                topk_sort_direction=TopKSortDirection.Descending,
+                topk_stable_sort=False,
+                topk_impl=implementation,
+            ),
+        ],
+        runtimes=[INPUT_DIMENSIONS(1, 4), TILE_COUNT(tile_cnt_A)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "TOPK_BODY"]
+    assert len(rows) >= 1, rows.to_string(index=False)
+    cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"TOPK_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")

@@ -13,6 +13,10 @@
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
+#ifndef TOPK_IMPL
+#define TOPK_IMPL 0
+#endif
+
 // ============================================================================
 // Stage Definitions
 // ============================================================================
@@ -156,7 +160,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#if TOPK_IMPL == 1
+#include "../topk_typed_multiresult.h"
+#elif TOPK_IMPL != 0
+#error "Unknown TopK implementation selector"
+#endif
 #include "llk_sfpu/ckernel_sfpu_topk.h"
+#if TOPK_IMPL == 1
+#undef TTI_SFPSWAP
+#define TTI_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#undef TTI_SFPTRANSP
+#define TTI_SFPTRANSP INSTRUCTION_WORD(TT_OP_SFPTRANSP)
+#endif
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 

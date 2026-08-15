@@ -283,6 +283,7 @@ def run_topk_quasar_case(
     sort_direction: TopKSortDirection,
     stable_sort: bool,
     unique_values: bool = False,
+    implementation: int = 0,
 ):
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -318,6 +319,7 @@ def run_topk_quasar_case(
                 topk_matrix_width=input_dimensions[1],
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
+                topk_impl=implementation,
             ),
         ],
         runtimes=[
@@ -403,7 +405,8 @@ def test_topk_quasar(
 
 
 @pytest.mark.quasar
-def test_topk_quasar_unique_indices():
+@pytest.mark.parametrize("implementation", [0, 1])
+def test_topk_quasar_unique_indices(implementation: int):
     run_topk_quasar_case(
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
         [32, 128],
@@ -411,4 +414,5 @@ def test_topk_quasar_unique_indices():
         TopKSortDirection.Descending,
         False,
         unique_values=True,
+        implementation=implementation,
     )
