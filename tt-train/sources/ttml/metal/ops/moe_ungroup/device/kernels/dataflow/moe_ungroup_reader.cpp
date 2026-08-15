@@ -159,9 +159,11 @@ void kernel_main() {
                     fill_zeros_async(noc, cb_src0, TILE_BYTES, t * TILE_BYTES);
                 }
                 noc_async_read_barrier();
-                // Pad fills went through async_write_zeros, which needs its
-                // own barrier to restore the write path (Quasar zero mode).
-                noc.write_zeros_l1_barrier();
+                if (tiles_to_read < tiles_per_chunk) {
+                    // Pad fills went through async_write_zeros, which needs its
+                    // own barrier to restore the write path (Quasar zero mode).
+                    noc.write_zeros_l1_barrier();
+                }
                 cb_push_back(cb_src0, tiles_per_chunk);
             }
         }

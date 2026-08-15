@@ -165,7 +165,10 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
 /**
  * Zero-fill an L1 region asynchronously via Noc::async_write_zeros.
  *
- * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's contents.
+ * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's
+ * contents AND before issuing any NoC write: on Quasar the fill borrows the
+ * write command buffer until the barrier restores it, so an intervening write
+ * would silently emit zeros. Multiple fills may batch before one barrier.
  */
 inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
     CircularBuffer cb(cb_id);
