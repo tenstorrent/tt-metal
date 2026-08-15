@@ -50,6 +50,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     DestSync,
+    TemplateParameter,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -58,6 +59,16 @@ SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
 ]
+
+
+class ReciprocalImpl(TemplateParameter):
+    """Select the production or fresh semantic-C++ reciprocal body."""
+
+    def __init__(self, value: int):
+        self.value = value
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int RECIPROCAL_IMPL = {self.value};"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The unary op sweep: two coverage profiles, one test
@@ -853,6 +864,7 @@ def eltwise_unary_sfpu(
     custom_atol=None,
     custom_rtol=None,
     fresh_cpp_impl=0,
+    reciprocal_impl=0,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -906,6 +918,7 @@ def eltwise_unary_sfpu(
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
             FRESH_CPP_IMPL(fresh_cpp_impl),
+            ReciprocalImpl(reciprocal_impl),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -962,6 +975,66 @@ def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
         custom_atol=0.13,
         custom_rtol=0.05,
         fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("reciprocal_impl", [0, 1], ids=["production", "semantic"])
+@pytest.mark.parametrize(
+    "formats,dest_acc",
+    [
+        (
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            DestAccumulation.No,
+        ),
+        (
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            DestAccumulation.Yes,
+        ),
+    ],
+    ids=["bf16-dst16", "fp32-dst32"],
+)
+@pytest.mark.parametrize(
+    "approx_mode", [ApproximationMode.No, ApproximationMode.Yes]
+)
+def test_reciprocal_semantic(
+    formats, dest_acc, approx_mode, reciprocal_impl: int
+):
+    """A/B the typed reciprocal across its BH format and accuracy paths."""
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        MathOperation.Reciprocal,
+        FastMode.No,
+        [32, 32],
+        reciprocal_impl=reciprocal_impl,
+    )
+
+
+@pytest.mark.parametrize("reciprocal_impl", [0, 1], ids=["production", "semantic"])
+def test_reciprocal_semantic_edges(reciprocal_impl: int):
+    """Drive zero and the registered reciprocal domain boundaries."""
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        MathOperation.Reciprocal,
+        FastMode.No,
+        [32, 32],
+        spec_A=edge_spec(
+            MathOperation.Reciprocal,
+            formats.input_format,
+            formats.output_format,
+            # Match the existing edge-suite contract.  Reciprocal is not in
+            # SPECIALS_READY_OPS: its current kernel intentionally does not
+            # preserve NaN, so forcing IEEE specials makes production fail its
+            # own golden and cannot be an A/B correctness gate.
+            specials=False,
+        ),
+        reciprocal_impl=reciprocal_impl,
     )
 
 

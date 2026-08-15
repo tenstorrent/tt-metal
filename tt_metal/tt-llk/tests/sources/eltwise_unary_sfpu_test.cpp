@@ -64,6 +64,40 @@ using namespace ckernel::sfpu;
 
 const int iterations = 32;
 
+// Fresh semantic-C++ reciprocal.  The body names only typed Dst values and
+// reciprocal arithmetic; physical LREGs, macro templates, replay ranges, and
+// instruction scheduling remain compiler responsibilities.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_reciprocal_semantic()
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        sfpi::vFloat input = sfpi::dst_reg[0];
+#ifdef ARCH_BLACKHOLE
+        sfpi::vFloat result = sfpi::approx_recip(input);
+        if constexpr (!APPROXIMATION_MODE)
+        {
+            // Cubic Newton correction in value space.  min maps the NaN error
+            // produced at zero/infinity to 1.0 under SFPU min semantics, so
+            // the final y+y preserves the architectural pole behavior without
+            // the v_if form that currently trips rvtt_expand SSA verification.
+            sfpi::vFloat error = 1.0f - input * result;
+            sfpi::vFloat correction = error * error + error;
+            correction = correction * error + error;
+            correction = sfpi::min(correction, 1.0f);
+            result = correction * result + result;
+        }
+#else
+        // Wormhole's typed reciprocal helper implements the same semantic
+        // operation with its polynomial seed; approx_recip is BH-only.
+        sfpi::vFloat result = sfpu_reciprocal<APPROXIMATION_MODE>(input);
+#endif
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -106,6 +140,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     calculate_sigmoid_appx_fresh_cpp,
                     (iterations),
+                    block_tile,
+                    VectorMode::None);
+            }
+            else if constexpr (RECIPROCAL_IMPL == 1)
+            {
+                static_assert(SFPU_UNARY_OPERATION == SfpuType::reciprocal);
+                _llk_math_eltwise_unary_sfpu_params_(
+                    calculate_reciprocal_semantic<APPROX_MODE, iterations>,
                     block_tile,
                     VectorMode::None);
             }
