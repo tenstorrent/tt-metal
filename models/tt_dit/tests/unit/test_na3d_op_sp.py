@@ -102,3 +102,41 @@ def test_na_block_op_sp_matches_op(*, mesh_device):
         return to_torch_replicated(out)
 
     assert_quality(run("op"), run("op_sp"), pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
+@pytest.mark.parametrize("dims, kernel", [((8, 8, 8), (3, 3, 3)), ((8, 4, 8), (3, 3, 3))])
+def test_na3d_op_sp_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel):
+    """Sharded-I/O SP attention (full-stage building block): q/k/v sharded over T, output sharded,
+    K/V gathered internally. Reassembled, it matches the host full result."""
+    from ...layers.na3d import neighborhood_attention_3d_op_sp_sharded
+
+    T, H, W = dims
+    heads, head_dim = 4, 64
+    sp = list(mesh_device.shape)[sp_axis]
+    if T % sp != 0 or (T // sp) * H * W % 32 != 0:
+        pytest.skip(f"dims={dims} not shardable over sp={sp} with tile-aligned origin")
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, heads * head_dim)
+
+    # Shard input over T (dim 1) along sp_axis; output comes back sharded the same way.
+    shard_axes = [None] * 6
+    shard_axes[1] = sp_axis
+    q_tt, k_tt, v_tt = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=shard_axes)
+        for x in (q, k, v)
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    out = neighborhood_attention_3d_op_sp_sharded(
+        q_tt, k_tt, v_tt, dims=dims, kernel_size=kernel, sp_axis=sp_axis, ccl_manager=ccl_manager, scale=1.0
+    )
+
+    # Reassemble the T-sharded output (dim 1 along sp_axis) into the full volume.
+    got = to_torch_replicated(out, mesh_axes=[None, sp_axis, None, None, None])
+    assert_quality(expected, got, pcc=0.999)

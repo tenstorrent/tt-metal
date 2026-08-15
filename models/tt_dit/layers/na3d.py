@@ -652,6 +652,81 @@ def neighborhood_attention_3d_op_sp(
     return ttnn.reshape(full, (batch, t, h, w, width))
 
 
+def neighborhood_attention_3d_op_sp_sharded(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    dims: tuple[int, int, int],
+    kernel_size: tuple[int, int, int],
+    sp_axis: int,
+    ccl_manager,
+    scale: float | None = None,
+) -> ttnn.Tensor:
+    """SP-over-T with SHARDED input AND output, for full-stage sequence parallelism.
+
+    Unlike :func:`neighborhood_attention_3d_op_sp` (replicated in/out, used to split just one
+    attention call), this keeps the sequence sharded across the whole stage: ``q``/``k``/``v`` are
+    THIS chip's contiguous T-slice ``(B, T/sp, H, W, NH, HD)`` and the return is this chip's T-slice
+    of the output ``(B, T/sp, H, W, NH*HD)``. K/V are all-gathered to the full grid internally (the T
+    window reaches a few frames past a shard edge), but Q and the output stay sharded so the block's
+    residual adds and the surrounding pointwise ops (norm, proj, SwiGLU) all stay 1/sp in both
+    compute and memory. ``dims`` is the FULL ``(T, H, W)``.
+
+    Each chip is told its global frame origin via a per-device offset tensor, and its Q shard is
+    already RoPE'd for its global positions by the caller (the cos/sin tables are sharded the same
+    way). Requires whole-frame shards (T divisible by the mesh axis) and a tile-aligned shard origin.
+    """
+    mesh = q.device()
+    sp = int(list(mesh.shape)[sp_axis])
+    t_full, h_full, w_full = dims
+    batch, t_local, h, w, heads, head_dim = tuple(q.shape)
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+    assert (h, w) == (h_full, w_full), f"q spatial dims {(h, w)} != dims {(h_full, w_full)}"
+    assert t_local * sp == t_full, f"T={t_full} must split evenly over sp={sp} (got T_local={t_local})"
+    hw = h_full * w_full
+    seq_full = t_full * hw
+    seq_local = t_local * hw
+    width = heads * head_dim
+    tile_height = 32
+    assert seq_local % tile_height == 0, f"shard origin (T/sp)*H*W={seq_local} must be a multiple of {tile_height}"
+    if scale is None:
+        scale = head_dim**-0.5
+    kernels = tuple(min(kk, d) for kk, d in zip(kernel_size, dims))
+
+    def to_seq(x: ttnn.Tensor, s_: int) -> ttnn.Tensor:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (batch, s_, heads, head_dim))
+        x = ttnn.permute(x, (0, 2, 1, 3))
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    # K/V: gather this chip's frame-shard into the full grid the window needs.
+    tk = ccl_manager.all_gather(to_seq(k, seq_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+    tv = ccl_manager.all_gather(to_seq(v, seq_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+    tq = to_seq(q, seq_local)  # Q stays sharded
+
+    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
+    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+
+    attended = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        neighborhood_3d=(t_full, h_full, w_full, *kernels),
+        scale=scale,
+        windowed_q_token_offset=0,
+        windowed_q_token_offset_tensor=off_tt,
+    )
+    for tensor in (tq, tk, tv):
+        ttnn.deallocate(tensor)
+
+    # (B, NH, seq_local, HD) -> (B, T_local, H, W, width), still sharded over T on this chip.
+    attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+    attended = ttnn.permute(attended, (0, 2, 1, 3))
+    return ttnn.reshape(attended, (batch, t_local, h_full, w_full, width))
+
+
 def neighborhood_attention_3d(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
