@@ -2428,6 +2428,89 @@ is right, and it is honest.
 
 ---
 
+## ★ F27 — the captured input is DISCARDED where one `deepcopy` would have kept it
+
+The harness captures a real deployment activation for `attention`, correctly works out that it
+cannot hand the same object to both sides, and then **throws it away** rather than copying it.
+
+Its own note, in full:
+
+> *`_captured/attention/args.pt` holds a real deployment step: `h=[1,1,3072]` with a 208-deep KV
+> cache. It is not usable as-is for a unit test. The cache dict is MUTATED by
+> `VoxtralAttention.forward` (`cache[cache_key] = (k, v)`), and the harness hands the same object to
+> the torch reference and then to the ttnn stub — so the stub would attend over a cache one position
+> longer than the golden did. **Dropping the cache instead makes the test vacuous**: at S=1 with no
+> cache the softmax is over a single key, so it returns 1.0 whatever q and k are, and RoPE — the
+> thing most likely to be wrong in a port — stops affecting the output at all.*
+
+It considers exactly two options — **share the object** (contaminated) or **drop the cache**
+(vacuous) — and takes neither, substituting a synthetic 64-token causal prefill.
+
+**The third option is absent.** Give each side its own copy:
+
+```python
+ref_out  = reference(h, cis, bias, deepcopy(cache), key)
+stub_out = stub(h, cis, bias, deepcopy(cache), key)
+```
+
+`grep` confirms it never occurred to the harness: **no `deepcopy`, no `.clone()`, no `copy.` anywhere
+in `tests/pcc/conftest.py`.** The cost is negligible — one layer's cache at 208 positions is
+≈ 208 × 8 heads × 128 dims × 2 tensors × 4 B ≈ **1.7 MB**.
+
+**And the copy would be strictly better than the substitute**, in exactly the dimension that
+matters. The synthetic prefill exercises RoPE at positions 0-63 with an empty cache; the real
+captured step exercises it at **position 208 with a 208-deep cache**. RoPE errors are
+position-dependent — `[gpt-21]` records SDPA settings that were correct at one length and
+*"NOT SAFE — position sweep"* across others. The harness itself calls RoPE *"the thing most likely
+to be wrong in a port"*, and then tests it at the positions least likely to expose the bug.
+
+**Fix:** deep-copy mutable captured args per side. One line, and it converts the whole capture
+pipeline from collected-but-unused (F26) into actually-used.
+
+*(Credit to the reviewer who spotted this: the harness's reasoning is sound about why sharing fails
+and why dropping fails, which makes the missing third option easy to overlook.)*
+
+## ★★ F28 — the entire end-to-end verdict rests on ONE prompt
+
+```
+tests/e2e/test_e2e_pipeline.py     pytest parametrize: 0
+CLI flags for prompts / cases:     none found in scripts/tt_hw_planner/cli.py
+```
+
+One text, one voice, one seed, one horizon. For a **generative speech model**, that is the whole
+correctness gate — `Verdict: PASS` is decided on a single utterance.
+
+**For contrast, the hand-port's gate on the same model** runs **45 utterances across 3 seeds**, and
+its own history says why: `§6.21` records that a case's frame count depends on what ran before it in
+the same process, so arms need identical history; `§6.62`'s `tail_probe.py` exists specifically to
+*"count failures, not means"* because damage concentrates in rare bad utterances; and the
+`w2 -> bf8_b` experiment moved `mos_min` by **0.245** while `mos_longform` moved 0.021 — a
+mean-preserving change that mauled the worst case. **A one-utterance gate cannot see any of that.**
+
+This compounds every other correctness finding in this document:
+
+- **O9** — no WER, no MOS, no exact-match on discrete codes. Now also: no sample size.
+- **F26** — per-component gates run on synthetic inputs, so the e2e test carries the correctness
+  burden alone. It carries it on n=1.
+- **F27** — the one component whose real input WAS captured has it discarded, so even that single
+  sample is not deployment-representative at the component level.
+
+**Suggested fix, in order of cost:**
+
+1. `pytest.mark.parametrize` the e2e test over a prompt list, and take the **worst** PCC as the
+   verdict rather than the only one.
+2. A `--eval-prompts <file>` flag, so a user supplies the set — the same channel F23 asks for on the
+   input side.
+3. Report the distribution (min / mean / n), not a scalar. A single number invites exactly the
+   confidence it cannot support.
+
+**Why this is arguably the most important finding here:** every other defect in this document is a
+thing the tool does wrong that a reader could catch. This one is a thing it *doesn't do*, and its
+absence is invisible — the report says `PASS` and shows a PCC, and nothing on the page hints that
+`n=1`.
+
+---
+
 ## Corrections to this document
 
 ---
@@ -2706,6 +2789,89 @@ difference at 29.5% vs 3.9% error on the same code.
 **What is unaffected:** the END-TO-END test genuinely uses the real prompt through the whole
 pipeline and compares waveform against waveform. That is the number that decides whether the audio
 is right, and it is honest.
+
+---
+
+## ★ F27 — the captured input is DISCARDED where one `deepcopy` would have kept it
+
+The harness captures a real deployment activation for `attention`, correctly works out that it
+cannot hand the same object to both sides, and then **throws it away** rather than copying it.
+
+Its own note, in full:
+
+> *`_captured/attention/args.pt` holds a real deployment step: `h=[1,1,3072]` with a 208-deep KV
+> cache. It is not usable as-is for a unit test. The cache dict is MUTATED by
+> `VoxtralAttention.forward` (`cache[cache_key] = (k, v)`), and the harness hands the same object to
+> the torch reference and then to the ttnn stub — so the stub would attend over a cache one position
+> longer than the golden did. **Dropping the cache instead makes the test vacuous**: at S=1 with no
+> cache the softmax is over a single key, so it returns 1.0 whatever q and k are, and RoPE — the
+> thing most likely to be wrong in a port — stops affecting the output at all.*
+
+It considers exactly two options — **share the object** (contaminated) or **drop the cache**
+(vacuous) — and takes neither, substituting a synthetic 64-token causal prefill.
+
+**The third option is absent.** Give each side its own copy:
+
+```python
+ref_out  = reference(h, cis, bias, deepcopy(cache), key)
+stub_out = stub(h, cis, bias, deepcopy(cache), key)
+```
+
+`grep` confirms it never occurred to the harness: **no `deepcopy`, no `.clone()`, no `copy.` anywhere
+in `tests/pcc/conftest.py`.** The cost is negligible — one layer's cache at 208 positions is
+≈ 208 × 8 heads × 128 dims × 2 tensors × 4 B ≈ **1.7 MB**.
+
+**And the copy would be strictly better than the substitute**, in exactly the dimension that
+matters. The synthetic prefill exercises RoPE at positions 0-63 with an empty cache; the real
+captured step exercises it at **position 208 with a 208-deep cache**. RoPE errors are
+position-dependent — `[gpt-21]` records SDPA settings that were correct at one length and
+*"NOT SAFE — position sweep"* across others. The harness itself calls RoPE *"the thing most likely
+to be wrong in a port"*, and then tests it at the positions least likely to expose the bug.
+
+**Fix:** deep-copy mutable captured args per side. One line, and it converts the whole capture
+pipeline from collected-but-unused (F26) into actually-used.
+
+*(Credit to the reviewer who spotted this: the harness's reasoning is sound about why sharing fails
+and why dropping fails, which makes the missing third option easy to overlook.)*
+
+## ★★ F28 — the entire end-to-end verdict rests on ONE prompt
+
+```
+tests/e2e/test_e2e_pipeline.py     pytest parametrize: 0
+CLI flags for prompts / cases:     none found in scripts/tt_hw_planner/cli.py
+```
+
+One text, one voice, one seed, one horizon. For a **generative speech model**, that is the whole
+correctness gate — `Verdict: PASS` is decided on a single utterance.
+
+**For contrast, the hand-port's gate on the same model** runs **45 utterances across 3 seeds**, and
+its own history says why: `§6.21` records that a case's frame count depends on what ran before it in
+the same process, so arms need identical history; `§6.62`'s `tail_probe.py` exists specifically to
+*"count failures, not means"* because damage concentrates in rare bad utterances; and the
+`w2 -> bf8_b` experiment moved `mos_min` by **0.245** while `mos_longform` moved 0.021 — a
+mean-preserving change that mauled the worst case. **A one-utterance gate cannot see any of that.**
+
+This compounds every other correctness finding in this document:
+
+- **O9** — no WER, no MOS, no exact-match on discrete codes. Now also: no sample size.
+- **F26** — per-component gates run on synthetic inputs, so the e2e test carries the correctness
+  burden alone. It carries it on n=1.
+- **F27** — the one component whose real input WAS captured has it discarded, so even that single
+  sample is not deployment-representative at the component level.
+
+**Suggested fix, in order of cost:**
+
+1. `pytest.mark.parametrize` the e2e test over a prompt list, and take the **worst** PCC as the
+   verdict rather than the only one.
+2. A `--eval-prompts <file>` flag, so a user supplies the set — the same channel F23 asks for on the
+   input side.
+3. Report the distribution (min / mean / n), not a scalar. A single number invites exactly the
+   confidence it cannot support.
+
+**Why this is arguably the most important finding here:** every other defect in this document is a
+thing the tool does wrong that a reader could catch. This one is a thing it *doesn't do*, and its
+absence is invisible — the report says `PASS` and shows a PCC, and nothing on the page hints that
+`n=1`.
 
 ---
 
