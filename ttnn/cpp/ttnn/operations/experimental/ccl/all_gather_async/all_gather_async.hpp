@@ -47,24 +47,6 @@ ttnn::Tensor all_gather_async(
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-// Overload with multi-device input
-std::vector<ttnn::Tensor> all_gather_async(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
-    int32_t dim,
-    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
-    std::optional<uint32_t> num_links = std::nullopt,
-    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt,
-    bool use_optimal_ccl_for_llama = false,
-    const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore = std::nullopt,
-    std::optional<uint32_t> chunks_per_sync = std::nullopt,
-    std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
-
 // Overload with mesh device
 ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,

@@ -525,41 +525,4 @@ ttnn::Tensor all_reduce_async(
         fp32_dest_acc);
 }
 
-std::vector<ttnn::Tensor> all_reduce_async(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    ttnn::Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
-    MeshDevice& mesh_device,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<const DataType> dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    ttnn::ccl::Topology topology,
-    const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
-    bool use_noc1_only,
-    bool use_optimal_ccl_for_llama) {
-    topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
-    ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
-
-    log_debug(tt::LogOp, "Using minimal all_reduce_async with multiple tensors");
-    std::vector<ttnn::Tensor> output_tensors;
-    output_tensors.reserve(input_tensors.size());
-    for (size_t i = 0; i < input_tensors.size(); ++i) {
-        output_tensors.push_back(ttnn::prim::all_reduce_async(
-            input_tensors[i],
-            buffer_tensor,
-            cluster_axis,
-            mesh_device,
-            topology,
-            multi_device_global_semaphore.global_semaphores[i],
-            dtype,
-            out_memory_config,
-            num_preferred_links,
-            worker_subdevice_id_opt,
-            use_noc1_only,
-            use_optimal_ccl_for_llama));
-    }
-    return output_tensors;
-}
-
 }  // namespace ttnn::experimental
