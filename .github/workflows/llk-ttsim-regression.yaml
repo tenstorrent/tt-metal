@@ -96,23 +96,49 @@ jobs:
 
       - name: Checkout pinned CRAQ corpus runner
         if: always()
+        continue-on-error: true
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: tenstorrent/craq-sim
           ref: aabbd10c12bd0a1a263dbec46f1c9c3c57104a32
           path: craq-sim
 
-      - name: Run informational SFPU CRAQ cycle corpus
+      - name: Build pinned CRAQ simulator
         if: always()
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          SIMULATOR="$(find "${GITHUB_WORKSPACE}/ttsim-cache" -type f -name 'libttsim*.so' -print -quit)"
-          test -n "${SIMULATOR}"
-          test -x "${GITHUB_WORKSPACE}/craq-sim/scripts/perf/llk-sim-perf.sh"
+          SFPI_PATH="${GITHUB_WORKSPACE}/tt_metal/tt-llk/tests/sfpi"
+          CRAQ_SIM_ROOT="${GITHUB_WORKSPACE}/craq-sim"
+          case "${{ matrix.architecture }}" in
+            wormhole) SHORT=wh; TT_VERSION=0; SOC=wormhole_b0_80_arch.yaml ;;
+            blackhole) SHORT=bh; TT_VERSION=1; SOC=blackhole_140_arch.yaml ;;
+            *) exit 2 ;;
+          esac
+          test -x "${SFPI_PATH}/compiler/bin/riscv-tt-elf-g++"
+          (
+            cd "${CRAQ_SIM_ROOT}"
+            env TT_VERSION="${TT_VERSION}" SFPI_PATH="${SFPI_PATH}" \
+              ./make.py "src/_out/release_${SHORT}/libttsim.so"
+          )
+          STAGE="${GITHUB_WORKSPACE}/craq-stage-${SHORT}"
+          mkdir -p "${STAGE}"
+          cp "${CRAQ_SIM_ROOT}/src/_out/release_${SHORT}/libttsim.so" "${STAGE}/libttsim.so"
+          cp "${GITHUB_WORKSPACE}/tt_metal/soc_descriptors/${SOC}" "${STAGE}/soc_descriptor.yaml"
+          sha256sum "${STAGE}/libttsim.so" "${STAGE}/soc_descriptor.yaml" | tee "${STAGE}/SHA256SUMS"
+
+      - name: Run informational SFPU CRAQ modeled-cycle corpus
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
           SHORT=wh
           if [[ "${{ matrix.architecture }}" == blackhole ]]; then SHORT=bh; fi
+          SIMULATOR="${GITHUB_WORKSPACE}/craq-stage-${SHORT}/libttsim.so"
+          test -f "${SIMULATOR}"
+          test -x "${GITHUB_WORKSPACE}/craq-sim/scripts/perf/llk-sim-perf.sh"
           CRAQ_SIM_ROOT="${GITHUB_WORKSPACE}/craq-sim" python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
             --mode craq --arch "${SHORT}" --execute --simulator "${SIMULATOR}" \
             --run-root "${GITHUB_WORKSPACE}/sfpu-craq-${SHORT}"
@@ -122,7 +148,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: sfpu-craq-${{ matrix.architecture }}
-          path: sfpu-craq-*
+          path: |
+            sfpu-craq-*
+            craq-stage-*/SHA256SUMS
           if-no-files-found: warn
 
       # Step 4: Rename the timestamped outputs to stable per-architecture
