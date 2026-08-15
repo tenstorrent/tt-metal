@@ -3496,11 +3496,29 @@ most consequential knob in this pipeline — the difference between a 0.9586 por
 next to it is precisely F26's complaint (*report what the gate measured*) applied to the headline
 result: a reader cannot tell 0.9999 from 0.9900 from "the gate was satisfied some other way".
 
+### The number is not lost — another part of the tool writes it down
+
+The optimize stage, running an hour later against the same demo, recorded this in
+`/tmp/perf_mcp_gate_verdicts_voxtral_tts_full_main.json`:
+
+```json
+{
+  "full_pipeline": {"status": "ok", "full_pipeline_ms": 1735.2656, "method": "trace", "sha": ""},
+  "pcc":           {"status": "ok", "pcc": 0.9999834299087524, "sha": ""}
+}
+```
+
+The same value, to the digit, that a direct `pytest` run produces — captured, structured, and stored
+by `perf-mcp` without difficulty. So the e2e report's `n/a` is not a measurement that could not be
+taken; it is a number the tool holds in one hand and cannot render with the other. That also makes
+fix 1 concrete rather than aspirational.
+
 ### Fixes
 
 1. **Surface the number the gate already measured.** `_run_deterministic_gates` computes the e2e PCC
-   to compare against the threshold; return it and render it, rather than re-reading a file written
-   by a different code path.
+   to compare against the threshold — and `perf-mcp` demonstrably persists exactly that value in its
+   gate-verdicts file. Return it and render it, rather than re-reading a file written by a different
+   code path.
 2. **Have the cc-engine path write `grader_report.json`** (or drop the file dependency entirely).
 3. **Never print a verdict beside `n/a`.** If the value is genuinely unavailable, say why — `PASS
    (gate satisfied; PCC not recorded by this path)` is honest; `PASS … n/a` reads as an oversight
