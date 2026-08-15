@@ -362,7 +362,7 @@ def _validate_gate(
         reference_logits,
         1,
         n_sp_devices,
-        compare_pcc(logits_pcc_threshold),
+        compare_pcc(logits_pcc_threshold, label="pcc_logits"),
         name="pcc_logits",
         broadcast_groups=n_tp_devices,
     )
@@ -372,7 +372,7 @@ def _validate_gate(
         reference_topk_scores,
         1,
         n_sp_devices,
-        compare_pcc(scores_pcc_threshold),
+        compare_pcc(scores_pcc_threshold, label="pcc_scores"),
         name="pcc_scores",
         broadcast_groups=n_tp_devices,
     )
