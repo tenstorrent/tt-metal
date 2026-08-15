@@ -52,8 +52,9 @@ from helpers.golden_generators import (
     SdpaExpUnclampedGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -140,3 +141,49 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tile
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "upper-unclamped exp does not match exp() over the swept domain"
+
+
+def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report):
+    """Measure only the exact one-tile SFPU body from the correctness node.
+
+    Each silicon sample is launched in a fresh pytest process with a unique
+    LLK archive, so profiler state and build artefacts are never shared across
+    the paired compiler configurations or repetitions.
+    """
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    src_A = torch.empty((ELEMENTS_PER_TILE,), dtype=torch.bfloat16).uniform_(
+        -20.0, 0.0
+    )
+    src_B = torch.zeros_like(src_A)
+
+    configuration = PerfConfig(
+        "sources/sfpu_sdpa_exp_unclamped_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            SFPU_SCALE_EN(scale_en=True),
+            SFPU_UNARY_SCALAR(value_bits=BF16_ONE),
+        ],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SDPA_EXP_UNCLAMPED_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"SDPA_EXP_UNCLAMPED_DEVICE_PROFILE body_cycles={cycles:.2f}")
