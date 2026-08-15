@@ -1,0 +1,51 @@
+{
+  "comparison": "async-scheduling overlap arm vs the committed non-overlap arm, same pinned prompts",
+  "prompts": 6,
+  "identical_completions": 6,
+  "max_adjacent_token_duplication": 0.0,
+  "control_tokens_leaked_into_text": false,
+  "per_prompt": [
+    {
+      "id": "p0",
+      "identical": true,
+      "adjacent_dup": 0.0,
+      "control_tokens": 0,
+      "chars": 381
+    },
+    {
+      "id": "p1",
+      "identical": true,
+      "adjacent_dup": 0.0,
+      "control_tokens": 0,
+      "chars": 559
+    },
+    {
+      "id": "p2",
+      "identical": true,
+      "adjacent_dup": 0.0,
+      "control_tokens": 0,
+      "chars": 628
+    },
+    {
+      "id": "p3",
+      "identical": true,
+      "adjacent_dup": 0.0,
+      "control_tokens": 0,
+      "chars": 600
+    },
+    {
+      "id": "p4",
+      "identical": true,
+      "adjacent_dup": 0.0,
+      "control_tokens": 0,
+      "chars": 561
+    },
+    {
+      "id": "p5",
+      "identical": true,
+      "adjacent_dup": 0.0,
+      "control_tokens": 0,
+      "chars": 703
+    }
+  ]
+}

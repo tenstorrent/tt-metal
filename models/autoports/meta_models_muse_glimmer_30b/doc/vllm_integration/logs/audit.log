@@ -1,0 +1,51 @@
+{
+  "logs": [
+    {
+      "path": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_vllm/server.log",
+      "present": true,
+      "bytes": 83952494,
+      "markers": {
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "degraded": []
+    }
+  ],
+  "processes": {
+    "surviving_vllm_processes": [],
+    "device_holders_raw": [
+      "/dev/tenstorrent/0 ",
+      "/dev/tenstorrent/1 ",
+      "/dev/tenstorrent/2 ",
+      "/dev/tenstorrent/3 ",
+      "/dev/tenstorrent/by-id"
+    ],
+    "proc_fd_scan": "",
+    "clean": true
+  },
+  "degraded_markers": [],
+  "clean": true
+}

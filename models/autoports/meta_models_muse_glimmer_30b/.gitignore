@@ -6,3 +6,13 @@ __pycache__/
 # required stage artifact and must be committed.
 !doc/**/*.log
 !doc/**/*.csv
+
+# The vLLM stage's runner writes its evidence to readiness_vllm/ rather than doc/,
+# so the root .gitignore's global *.log rule hides artifacts the stage README
+# cites as proof. Un-ignore the small ones; server.log is deliberately NOT
+# un-ignored because a single serving run produces ~81 MB of it. A filtered
+# excerpt carrying the configuration and TT-side lines is committed instead, as
+# doc/vllm_integration/logs/server_excerpt.log.
+!readiness_vllm/sampling_tests.log
+!readiness_vllm/vllm_benchmark.log
+!readiness_vllm/vllm_ci_serving_benchmark.log

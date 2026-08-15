@@ -1,0 +1,169 @@
+2026-08-15 06:52:44.502 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:52:44.538 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:52:44.538 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:52:44.539 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:52:44.539 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:52:44.551 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-15 06:52:44.551 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:52:44.629 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:52:44.629 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:52:44.629 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:52:44.629 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:52:44.630 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:52:44.633 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:52:44.757 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:52:44.757 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:52:44.757 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:52:44.758 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:52:44.758 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 06:52:44.848 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.848 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.849 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.849 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.850 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.850 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.851 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:52:44.851 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+
+=== presence_only_reset_path (incremental=False) ===
+    max|got-reference| = 0.0000
+    row  0 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row  1 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row  2 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row  3 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row  4 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row  5 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row  6 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row  7 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+    row  8 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row  9 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row 10 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row 11 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 12 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row 13 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row 14 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row 15 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+    row 16 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row 17 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row 18 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row 19 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 20 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row 21 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row 22 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row 23 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+    row 24 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row 25 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row 26 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row 27 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 28 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row 29 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row 30 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row 31 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+
+=== presence_only_decode_scatter_path (incremental=True) ===
+    max|got-reference| = 0.0000
+    row  0 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row  1 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row  2 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row  3 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row  4 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row  5 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row  6 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row  7 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+    row  8 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row  9 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row 10 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row 11 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 12 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row 13 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row 14 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row 15 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+    row 16 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row 17 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row 18 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row 19 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 20 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row 21 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row 22 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row 23 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+    row 24 presence= -1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.5] max|delta|_elsewhere=0.0
+    row 25 presence= -1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-1.0] max|delta|_elsewhere=0.0
+    row 26 presence= -0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-0.5] max|delta|_elsewhere=0.0
+    row 27 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 28 presence=  0.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5] max|delta|_elsewhere=0.0
+    row 29 presence=  1.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0] max|delta|_elsewhere=0.0
+    row 30 presence=  1.5 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5] max|delta|_elsewhere=0.0
+    row 31 presence=  2.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0] max|delta|_elsewhere=0.0
+
+=== frequency_control_decode_scatter_path (incremental=True) ===
+    max|got-reference| = 0.0000
+    row  0 presence=  0.0 frequency= -1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-6.0, -1.5] max|delta|_elsewhere=0.0
+    row  1 presence=  0.0 frequency= -1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-4.0, -1.0] max|delta|_elsewhere=0.0
+    row  2 presence=  0.0 frequency= -0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-2.0, -0.5] max|delta|_elsewhere=0.0
+    row  3 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row  4 presence=  0.0 frequency=  0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5, 2.0] max|delta|_elsewhere=0.0
+    row  5 presence=  0.0 frequency=  1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0, 4.0] max|delta|_elsewhere=0.0
+    row  6 presence=  0.0 frequency=  1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5, 6.0] max|delta|_elsewhere=0.0
+    row  7 presence=  0.0 frequency=  2.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0, 8.0] max|delta|_elsewhere=0.0
+    row  8 presence=  0.0 frequency= -1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-6.0, -1.5] max|delta|_elsewhere=0.0
+    row  9 presence=  0.0 frequency= -1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-4.0, -1.0] max|delta|_elsewhere=0.0
+    row 10 presence=  0.0 frequency= -0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-2.0, -0.5] max|delta|_elsewhere=0.0
+    row 11 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 12 presence=  0.0 frequency=  0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5, 2.0] max|delta|_elsewhere=0.0
+    row 13 presence=  0.0 frequency=  1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0, 4.0] max|delta|_elsewhere=0.0
+    row 14 presence=  0.0 frequency=  1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5, 6.0] max|delta|_elsewhere=0.0
+    row 15 presence=  0.0 frequency=  2.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0, 8.0] max|delta|_elsewhere=0.0
+    row 16 presence=  0.0 frequency= -1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-6.0, -1.5] max|delta|_elsewhere=0.0
+    row 17 presence=  0.0 frequency= -1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-4.0, -1.0] max|delta|_elsewhere=0.0
+    row 18 presence=  0.0 frequency= -0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-2.0, -0.5] max|delta|_elsewhere=0.0
+    row 19 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 20 presence=  0.0 frequency=  0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5, 2.0] max|delta|_elsewhere=0.0
+    row 21 presence=  0.0 frequency=  1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0, 4.0] max|delta|_elsewhere=0.0
+    row 22 presence=  0.0 frequency=  1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5, 6.0] max|delta|_elsewhere=0.0
+    row 23 presence=  0.0 frequency=  2.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0, 8.0] max|delta|_elsewhere=0.0
+    row 24 presence=  0.0 frequency= -1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-6.0, -1.5] max|delta|_elsewhere=0.0
+    row 25 presence=  0.0 frequency= -1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-4.0, -1.0] max|delta|_elsewhere=0.0
+    row 26 presence=  0.0 frequency= -0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[-2.0, -0.5] max|delta|_elsewhere=0.0
+    row 27 presence=  0.0 frequency=  0.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.0] max|delta|_elsewhere=0.0
+    row 28 presence=  0.0 frequency=  0.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[0.5, 2.0] max|delta|_elsewhere=0.0
+    row 29 presence=  0.0 frequency=  1.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.0, 4.0] max|delta|_elsewhere=0.0
+    row 30 presence=  0.0 frequency=  1.5 appeared_cols=3 counts=[1, 4] delta_on_appeared=[1.5, 6.0] max|delta|_elsewhere=0.0
+    row 31 presence=  0.0 frequency=  2.0 appeared_cols=3 counts=[1, 4] delta_on_appeared=[2.0, 8.0] max|delta|_elsewhere=0.0
+
+PRESENCE_PENALTY_REACHES_LOGITS = True
+wrote models/autoports/meta_models_muse_glimmer_30b/doc/vllm_integration/penalty_probe.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x78b891a78078 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "dims"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "logical_volume"
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "contains"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:52:49.678 | info     |    BuildKernels | JIT cache stats: 64/99 hits (64.6%) [64 cached, 23 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:52:49.678 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:52:49.691 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:52:49.691 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:52:50.287 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:52:50.287 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:52:50.287 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

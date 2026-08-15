@@ -1,0 +1,14 @@
+{
+  "arm": "prefill3_decode1",
+  "layers": "0,3",
+  "decode_s": 0.01,
+  "tokens": [
+    [
+      145814,
+      77316,
+      193263,
+      29851
+    ]
+  ],
+  "status": "ok"
+}

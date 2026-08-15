@@ -1,0 +1,61 @@
+# vLLM + TT-plugin install for this stage (copied from /home/ttuser/dev/muse-glimmer/logs/install_vllm.log).
++ cd /home/ttuser/dev/vllm-tt-plugin
++ export VIRTUAL_ENV=/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv
++ VIRTUAL_ENV=/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv
++ export PATH=/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin:/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ttuser/.local/bin
++ PATH=/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin:/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ttuser/.local/bin
++ export VLLM_TARGET_DEVICE=empty
++ VLLM_TARGET_DEVICE=empty
++ uv pip install --no-binary vllm --override docs/vllm-overrides.txt vllm==0.24.0
+[2mUsing Python 3.12.12 environment at: /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv[0m
+[2mResolved [1m180 packages[0m [2min 326ms[0m[0m
+   [36m[1mBuilding[0m[39m vllm[2m==0.24.0[0m
+[36m[1mDownloading[0m[39m triton [2m(188.6MiB)[0m
+[36m[1mDownloading[0m[39m openai [2m(1.6MiB)[0m
+ [36m[1mDownloaded[0m[39m openai
+ [36m[1mDownloaded[0m[39m triton
+      [32m[1mBuilt[0m[39m vllm[2m==0.24.0[0m
+[2mPrepared [1m11 packages[0m [2min 11.58s[0m[0m
+[2mUninstalled [1m7 packages[0m [2min 21ms[0m[0m
+[2mInstalled [1m105 packages[0m [2min 110ms[0m[0m
+ [32m+[39m [1manthropic[0m[2m==0.122.0[0m
+ [32m+[39m [1mapache-tvm-ffi[0m[2m==0.1.9[0m
+ [32m+[39m [1mastor[0m[2m==0.8.1[0m
+ [32m+[39m [1mblake3[0m[2m==1.0.9[0m
+ [32m+[39m [1mcbor2[0m[2m==6.1.4[0m
+ [32m+[39m [1mcloudpickle[0m[2m==3.1.2[0m
+ [32m+[39m [1mcompressed-tensors[0m[2m==0.17.0[0m
+ [32m+[39m [1mcuda-bindings[0m[2m==13.3.1[0m
+ [32m+[39m [1mcuda-core[0m[2m==1.0.1[0m
+ [32m+[39m [1mcuda-pathfinder[0m[2m==1.6.0[0m
+ [32m+[39m [1mcuda-python[0m[2m==13.3.1[0m
+ [32m+[39m [1mcuda-tile[0m[2m==1.5.0[0m
+ [32m+[39m [1mcuda-toolkit[0m[2m==13.3.1[0m
+ [32m+[39m [1mdepyf[0m[2m==0.20.0[0m
+ [32m+[39m [1mdetect-installer[0m[2m==0.1.0[0m
+ [32m+[39m [1mdiskcache[0m[2m==5.6.3[0m
+ [32m+[39m [1mdistro[0m[2m==1.9.0[0m
+ [32m+[39m [1mdocstring-parser[0m[2m==0.18.0[0m
+ [32m+[39m [1memail-validator[0m[2m==2.3.0[0m
+ [32m+[39m [1mfastapi[0m[2m==0.136.3[0m
+ [32m+[39m [1mfastapi-cli[0m[2m==0.0.32[0m
+ [32m+[39m [1mfastapi-cloud-cli[0m[2m==0.23.0[0m
+ [32m+[39m [1mfastar[0m[2m==0.11.0[0m
+ [32m+[39m [1mfastsafetensors[0m[2m==0.3.3[0m
+ [32m+[39m [1mflashinfer-cubin[0m[2m==0.6.12[0m
+ [32m+[39m [1mflashinfer-python[0m[2m==0.6.12[0m
+ [32m+[39m [1mgoogleapis-common-protos[0m[2m==1.75.0[0m
+ [32m+[39m [1mgrpcio[0m[2m==1.83.0[0m
+ [32m+[39m [1mhttpcore2[0m[2m==2.10.0[0m
+ [32m+[39m [1mhttptools[0m[2m==0.8.0[0m
+ [32m+[39m [1mhttpx2[0m[2m==2.10.0[0m
+ [32m+[39m [1mhumming-kernels[0m[2m==0.1.6[0m
+ [32m+[39m [1minteregular[0m[2m==0.3.3[0m
+ [32m+[39m [1mjiter[0m[2m==0.16.0[0m
+ [31m-[39m [1mlark[0m[2m==1.3.1[0m
+ [32m+[39m [1mlark[0m[2m==1.2.2[0m
+ [32m+[39m [1mllguidance[0m[2m==1.7.6[0m
+ [31m-[39m [1mllvmlite[0m[2m==0.48.0[0m
+ [32m+[39m [1mllvmlite[0m[2m==0.47.0[0m
+ [32m+[39m [1mlm-format-enforcer[0m[2m==0.11.3[0m
+ [32m+[39m [1mmcp[0m[2m==2.0.0[0m

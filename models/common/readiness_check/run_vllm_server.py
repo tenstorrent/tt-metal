@@ -81,6 +81,7 @@ over it with host-side sampling.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import os
@@ -155,12 +156,42 @@ _FATAL_LOG_PATTERNS = (
     "Failed core proc",
 )
 
+# Mesh presets the TT vLLM plugin understands (`vllm_tt_plugin.utils.dp_discovery
+# ._MESH_GRID_PRESETS`). `--mesh-device` is forwarded verbatim as `MESH_DEVICE`,
+# so the runner must not be narrower than the plugin: a Blackhole P300_X2 part is
+# `P300x2` (1x4), and restricting the flag to the four Wormhole presets made the
+# runner unusable on it. An explicit "(rows, cols)" grid is also accepted, which
+# is what the plugin falls back to for a topology with no preset name.
 _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
+    "P100": (1, 1),
+    "P150": (1, 1),
     "N300": (1, 2),
+    "P150x2": (1, 2),
+    "P300": (1, 2),
+    "N150x4": (1, 4),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
     "T3K": (1, 8),
+    "P150x8": (1, 8),
     "TG": (8, 4),
 }
+
+
+def _mesh_device(value: str) -> str:
+    """Accept a preset name or an explicit ``(rows, cols)`` grid."""
+    if value in _MESH_SHAPES:
+        return value
+    try:
+        parsed = ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        parsed = None
+    if isinstance(parsed, (tuple, list)) and len(parsed) == 2 and all(isinstance(v, int) for v in parsed):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"Unknown --mesh-device {value!r}. Expected one of {sorted(_MESH_SHAPES)} "
+        'or an explicit grid such as "(1, 4)".'
+    )
 
 
 def _find_plugin_tests_dir() -> Path:
@@ -199,6 +230,44 @@ def _check_port_available(port: int) -> None:
         sock.close()
 
 
+def _tt_config_flag() -> str:
+    """The CLI flag this vLLM build takes for the TT plugin's config dict.
+
+    The TT plugin always *reads* the same place — `vllm_config.additional_config["tt"]`
+    (`vllm_tt_plugin/config.py::get_tt_config`) — but which CLI flag writes it has
+    moved between vLLM versions. vLLM 0.24.0, the version
+    `vllm-tt-plugin/docs/install-vllm-tt.sh` pins, exposes it as
+    `--additional-config` and rejects `--plugin-config` outright:
+
+        api_server.py: error: unrecognized arguments: --plugin-config
+
+    which kills the launcher before any TT code runs and reads as a model failure.
+    So ask the installed `EngineArgs` which field exists rather than hard-coding a
+    flag that is right for one version and fatal on another.
+
+    `--plugin-config` wins when a build exposes **both**. This runner is shared by
+    every ported model, so the change has to be a strict repair: a build that
+    already worked did so through `--plugin-config`, and preferring the other
+    spelling there would silently move config plumbing for models this stage never
+    ran. Only a build that has dropped `plugin_config` — like the pinned 0.24.0 —
+    falls through to `--additional-config`.
+    """
+    try:
+        from vllm.engine.arg_utils import EngineArgs
+
+        fields = set(EngineArgs.__dataclass_fields__)
+    except Exception:  # noqa: BLE001 -- no importable vLLM: fall back to the newer spelling
+        return "--additional-config"
+    if "plugin_config" in fields:
+        return "--plugin-config"
+    if "additional_config" in fields:
+        return "--additional-config"
+    raise RuntimeError(
+        "This vLLM build exposes neither `additional_config` nor `plugin_config` on "
+        "EngineArgs, so there is no way to pass the TT plugin its configuration."
+    )
+
+
 def _launch_server(
     *,
     hf_model: str,
@@ -235,7 +304,7 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += [_tt_config_flag(), json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {
@@ -741,6 +810,17 @@ def _main() -> None:
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--hf-model", type=str, required=True)
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Where server.log, sampling_tests.log, qualitative and benchmark artifacts are "
+            "written. Default `<model-dir>/readiness_vllm`. Point a variant run (e.g. one "
+            "under --async-scheduling) at a separate directory so it cannot overwrite the "
+            "stage's committed evidence."
+        ),
+    )
+    parser.add_argument(
         "--stages",
         type=_parse_stages,
         default=list(DEFAULT_STAGES),
@@ -757,10 +837,12 @@ def _main() -> None:
     )
     parser.add_argument(
         "--mesh-device",
-        type=str,
+        type=_mesh_device,
         default=None,
-        choices=sorted(_MESH_SHAPES),
-        help="Required when `serve` is in --stages; ignored otherwise.",
+        help=(
+            "Required when `serve` is in --stages; ignored otherwise. One of "
+            f'{sorted(_MESH_SHAPES)} or an explicit grid such as "(1, 4)".'
+        ),
     )
     parser.add_argument(
         "--prompts",
@@ -946,7 +1028,7 @@ def _main() -> None:
     benchmark_temperature = None if args.benchmark_use_server_generation_config else args.benchmark_temperature
 
     model_dir = args.model_dir.resolve()
-    output_dir = model_dir / "readiness_vllm"
+    output_dir = args.output_dir.resolve() if args.output_dir else model_dir / "readiness_vllm"
     output_dir.mkdir(parents=True, exist_ok=True)
     server_log = output_dir / "server.log"
     sampling_log = output_dir / "sampling_tests.log"

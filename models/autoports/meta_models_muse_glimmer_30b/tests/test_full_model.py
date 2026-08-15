@@ -716,6 +716,33 @@ def test_inactive_rows_carry_the_minus_one_sentinel(generator):
     assert all(int(v) == 0 for v in host_rope[1:])
 
 
+def test_out_of_range_start_pos_is_rejected_instead_of_hanging_the_mesh(generator, expect_error):
+    """-1 is the *only* legal negative decode position.
+
+    ``paged_update_cache`` and ``paged_scaled_dot_product_attention_decode`` skip an
+    inactive row by comparing the index against ``(uint32_t)-1`` exactly, so any other
+    negative is reinterpreted as a huge unsigned index: ``update_idx / block_size``
+    then reads past the page-table circular buffer and the op issues a NOC transaction
+    to whatever physical block the garbage names.  That transaction never retires, so
+    the op never completes and the whole mesh -- fabric routers included -- hangs until
+    a ``tt-smi -r``, with no in-band error anywhere.
+
+    This is not hypothetical: it is the vLLM serving hang of
+    ``doc/vllm_integration/AUTOFIX.md``, where a host-sampled decode step (which
+    restages from the caller by contract) was handed -7.  A caller bug has to fail as
+    a caller bug.
+    """
+    model = generator.model
+    for bad in (-7, -2):
+        with expect_error(ValueError, "exactly -1 for an inactive slot"):
+            model.positions_to_device(torch.tensor([bad], dtype=torch.int32), device=False)
+    with expect_error(ValueError, "exactly -1 for an inactive slot"):
+        model.positions_to_device(torch.tensor([model.config.max_seq_len], dtype=torch.int32), device=False)
+    # The sentinel itself, position 0 and the last in-range position stay legal.
+    for good in (-1, 0, model.config.max_seq_len - 1):
+        model.positions_to_device(torch.tensor([good], dtype=torch.int32), device=False)
+
+
 # ------------------------------------------------------------------- batching
 
 

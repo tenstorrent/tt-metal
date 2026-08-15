@@ -1,0 +1,8 @@
+=== launching server 12:19:57 ===
+=== server ready 12:23:47 ===
+STEP logit_determinism rc=0
+RUN_TO_RUN bitwise_identical=True candidates=160 max_delta=0.0
+CROSS_BATCH distinct=1 candidates=160 all_identical=True max_delta=0.0
+LOGIT_DETERMINISM_OK -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/vllm_integration/logit_determinism.json
+=== shutdown 12:23:50 ===
+LOGIT_DET_DONE 12:23:57

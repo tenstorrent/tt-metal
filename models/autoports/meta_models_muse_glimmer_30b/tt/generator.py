@@ -113,7 +113,12 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import (
     open_multichip_mesh,
 )
 from models.common.readiness_check.contract import Generator
-from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling.generator import (
+    SamplingGenerator,
+    SamplingParams,
+    broadcast_sampling_params,
+    format_sampling_params,
+)
 
 #: Trace region a full-model decode trace needs: the model decode trace plus the
 #: sampler's, each over ~2400 ops for the 52-layer stack.  Generous rather than
@@ -280,6 +285,93 @@ class _SamplingArgs:
         }
 
 
+def _sampling_params_equal(left: Any, right: Any) -> bool:
+    """Do two *formatted* sampling-parameter objects describe the same per-row policy?
+
+    Field-by-field rather than ``==`` because the two sides can be different
+    dataclass types -- vLLM's ``TTSamplingParams`` and this port's
+    ``SamplingParams`` are duck-type compatible and ``format_sampling_params``
+    returns whichever it was given -- and dataclass equality is type-sensitive.
+    Lists compare element-wise, which is what "did any row's policy change" means.
+    """
+    for field in (
+        "temperature",
+        "top_k",
+        "top_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "repetition_penalty",
+        "seed",
+        "num_logprobs",
+        "enable_log_probs",
+    ):
+        if getattr(left, field, None) != getattr(right, field, None):
+            return False
+    return True
+
+
+@dataclass
+class _ServingDecodeHost:
+    """A decode step's output, already on host, not yet a torch tensor.
+
+    Held as a ttnn host tensor rather than converted eagerly because the async
+    split's whole point is that the conversion happens after the caller has waited
+    on the read event, not inside the read.
+    """
+
+    kind: str  # "tokens" | "logits"
+    host: Any
+    rows: int
+    #: The device tensor this was read from, when the *generator* owns it (the
+    #: gathered full-vocab logits of the host-sampling compatibility mode).  Freed
+    #: once the host copy has been converted.
+    owned_device: Any = None
+
+    def to_torch(self, model: MuseGlimmerModel, *, is_tokens: bool) -> torch.Tensor:
+        if is_tokens != (self.kind == "tokens"):
+            raise ValueError(
+                f"decode step produced {self.kind!r} but the caller asked to format it as "
+                f"{'tokens' if is_tokens else 'logits'}"
+            )
+        try:
+            if self.kind == "tokens":
+                flat = ttnn.to_torch(ttnn.get_device_tensors(self.host)[0]).reshape(-1)
+                return flat[: self.rows].to(torch.int64)
+            logits = model.logits_to_torch(self.host, gathered=True)
+            return logits[: self.rows].unsqueeze(1)
+        finally:
+            if self.owned_device is not None:
+                try:
+                    ttnn.deallocate(self.owned_device)
+                except Exception:  # noqa: BLE001
+                    pass
+                self.owned_device = None
+
+
+@dataclass
+class _ServingDecodeOutput:
+    """A submitted decode step whose output is still on device.
+
+    This is what ``decode_forward(read_from_device=False)`` hands back.  It is
+    deliberately not a torch tensor and not a ttnn tensor: the vLLM plugin tests
+    ``isinstance(tt_out, torch.Tensor)`` to decide whether a step still needs a
+    read, and an opaque carrier makes "still on device" unambiguous.
+    """
+
+    kind: str  # "tokens" | "logits"
+    device: Any
+    rows: int
+    owned: bool = False
+
+    def read(self, *, blocking: bool) -> _ServingDecodeHost:
+        return _ServingDecodeHost(
+            kind=self.kind,
+            host=self.device.cpu(blocking=blocking),
+            rows=self.rows,
+            owned_device=self.device if self.owned else None,
+        )
+
+
 class MuseGlimmerGenerator(Generator):
     """Readiness/vLLM-shaped generator over :class:`MuseGlimmerModel`."""
 
@@ -399,6 +491,12 @@ class MuseGlimmerGenerator(Generator):
     def reset_counters(self) -> None:
         self.model.reset_counters()
         self.counters = self.model.counters
+        #: Serving-only counters, kept out of the model's shared ``counters`` dict so the
+        #: readiness contract's counter surface is unchanged.  Both record decisions the
+        #: serving stage has to be able to prove rather than assert: how often a decode
+        #: step re-staged the sampler's parameter tensors from host, and how often it
+        #: reused what was already on device.
+        self.serving_counters = {"sampling_param_refreshes": 0, "sampling_param_reuses": 0}
 
     def _allocate_device_inputs(self) -> None:
         """The four persistent decode trace inputs, allocated once.
@@ -498,6 +596,107 @@ class MuseGlimmerGenerator(Generator):
         host = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]).reshape(-1)
         self.counters["readbacks"] += 1
         return host[:DECODE_ROWS].to(torch.int64)
+
+    # ------------------------------------------------- serving sampling state
+    #
+    # The two entry points a serving adapter needs so that *it* never owns a
+    # sampling decision.  Both go through ``models.common.sampling``'s own
+    # prefill/decode state helpers, which is the same contract
+    # ``models/tt_transformers/tt/generator.py`` drives; the adapter passes vLLM's
+    # per-row parameters straight through and this file keeps every call to the
+    # sampler in one place.
+
+    def apply_prefill_sampling_state(
+        self,
+        sampling_params: Any,
+        *,
+        request_index: int,
+        slot: int,
+        prompt_tokens: torch.Tensor | None = None,
+    ) -> None:
+        """Point the sampler at one request's parameters for a prefill sample.
+
+        The LM head is given the *tile row* holding the prompt's last position, so
+        the sampler sees 32 rows that all belong to this one request.  Broadcasting
+        that request's parameters across all 32 rows is therefore not an
+        approximation: every row is the same user, and the one the caller reads is
+        selected by ``row_within_tile``.
+        """
+        total = DECODE_ROWS
+        params = format_sampling_params(
+            broadcast_sampling_params(sampling_params, request_index, slot_len=total), total
+        )
+        self._sampling_params = params
+        self.sampling.apply_prefill_state(
+            sampling_params=params,
+            prompt_tokens=prompt_tokens,
+            empty_slots=[int(slot) % total],
+        )
+
+    def apply_decode_sampling_state(
+        self,
+        sampling_params: Any,
+        *,
+        start_pos: torch.Tensor | Sequence[int] | None = None,
+        reset_batch: bool = False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+        slot_remap: Any = None,
+    ) -> None:
+        """Apply one decode step's per-row sampling parameters and seed state.
+
+        ``start_pos`` is used twice and for different reasons: it names the *active*
+        rows (a row at the ``-1`` inactive sentinel has no request and must not
+        consume a seed), and it ties each explicit request seed's counter to the
+        absolute decode position, so a request that vLLM evicts and re-admits in a
+        different slot reproduces the same stream.
+
+        The parameter tensors are re-staged **only when a row's parameters actually
+        change**.  A serving scheduler hands the same per-row parameters back on
+        every step of a steady request, and re-applying them writes five host-to-device
+        copies (top-k, top-p, temperature, the greedy tie-break column, and the seed
+        row) into buffers the sampling trace reads -- per token, while two
+        ``blocking=False`` trace replays are in flight.  That is per-token host work
+        the steady decode contract says should not exist, and it is written into
+        exactly the tensors a live replay is reading.  Comparing first costs one
+        dataclass equality test.
+        """
+        # ``apply_decode_state`` formats internally, so it is handed the caller's *raw*
+        # parameters.  Formatting is not idempotent -- it inverts the temperature -- so
+        # pre-formatting here and passing that on would square every non-greedy
+        # temperature.  The formatted copy is what the comparison and the seed list use.
+        params = format_sampling_params(sampling_params, DECODE_ROWS)
+        unchanged = (
+            not reset_batch
+            and slot_remap is None
+            and prompt_tokens is None
+            and output_tokens is None
+            and self._sampling_params is not None
+            and _sampling_params_equal(self._sampling_params, params)
+        )
+        if unchanged:
+            self.serving_counters["sampling_param_reuses"] += 1
+        else:
+            self.sampling.apply_decode_state(
+                [sampling_params],
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+            )
+            self.serving_counters["sampling_param_refreshes"] += 1
+        self._sampling_params = params
+        positions = None
+        active_slots = None
+        if start_pos is not None:
+            positions = [int(p) for p in torch.as_tensor(start_pos).reshape(-1).tolist()[:DECODE_ROWS]]
+            active_slots = [idx for idx, pos in enumerate(positions) if pos >= 0]
+        if slot_remap is not None:
+            self.sampling.seed_manager.apply_slot_remap(torch.as_tensor(slot_remap).reshape(-1)[:DECODE_ROWS])
+        if active_slots:
+            seeds = params.seed
+            self.sampling.seed_manager.reset_seed_from_slots_if_needed(seeds, active_slots)
+            self.sampling.seed_manager.align_seed_counters_to_positions(seeds, active_slots, positions)
+        self.sampling.seed_manager.get_new_values(active_slots)
 
     # --------------------------------------------------------------- prefill
 
@@ -1094,6 +1293,9 @@ class MuseGlimmerGenerator(Generator):
         kv_cache: Any = None,
         prompt_lens: List[int] | None = None,
         return_all_logits: bool = False,
+        sample_on_device: bool = False,
+        sampling_params: Any = None,
+        user_ids: Sequence[int] | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         """Low-level prefill.  Updates ``kv_cache`` in place; returns host logits.
@@ -1107,6 +1309,14 @@ class MuseGlimmerGenerator(Generator):
         ``page_table`` may be a torch tensor, a ttnn tensor, or ``None``; the
         readiness prefill check hands in a ttnn tensor of a different width than
         the model's ``blocks_per_seq``, so it is normalised rather than trusted.
+
+        ``sample_on_device=True`` returns ``[batch]`` sampled token ids instead of
+        logits.  It is the serving prefill: the same untraced
+        :meth:`_sample_eager` call ``generate()`` makes for a prompt's first token,
+        driven with vLLM's per-request parameters, so there is no second sampling
+        strategy anywhere in this port.  ``user_ids`` names the cache slot each
+        batch row prefills into; it defaults to the row index, which is what a
+        page table built row-per-request already implies.
         """
         self.model.set_kv_cache(kv_cache)
         # Bind first, then invalidate only if the buffers actually moved: a serving
@@ -1155,17 +1365,43 @@ class MuseGlimmerGenerator(Generator):
                     "drive MuseGlimmerModel.prefill_forward directly for chunked continuation"
                 )
 
+        if sample_on_device:
+            if return_all_logits:
+                raise ValueError("return_all_logits and sample_on_device are mutually exclusive")
+            self._allocate_device_inputs()
+            sampled_ids: list[int] = []
+            for user in range(batch):
+                ids = tokens[user, : prompt_lens[user]].tolist()
+                slot = int(user_ids[user]) if user_ids is not None else user
+                self.apply_prefill_sampling_state(
+                    sampling_params if sampling_params is not None else GREEDY,
+                    request_index=user,
+                    slot=slot,
+                )
+                logits, row_in_tile = self._prefill_user(ids, user_id=slot, page_table=table)
+                # ``into_tokens=False``: the sampler samples all 32 rows of the tile the
+                # LM head was given, and the prompt's last token is row ``row_in_tile``
+                # of it -- writing that whole vector into the decode token buffer would
+                # put the wrong row in slot ``slot``.  vLLM restages the decode token
+                # from host on the first decode step after a prefill (it is the step
+                # whose ``reset_batch`` is True), so nothing is lost by not writing it.
+                sampled = self._sample_eager(logits, into_tokens=False)
+                ttnn.deallocate(logits)
+                sampled_ids.append(int(sampled[row_in_tile].item()))
+            return torch.tensor(sampled_ids, dtype=torch.int64)
+
         outputs: list[torch.Tensor] = []
         for user in range(batch):
             ids = tokens[user, : prompt_lens[user]].tolist()
+            slot = int(user_ids[user]) if user_ids is not None else user
             if return_all_logits:
-                rows = self._prefill_user(ids, user_id=user, page_table=table, return_all_logits=True)
+                rows = self._prefill_user(ids, user_id=slot, page_table=table, return_all_logits=True)
                 host_rows = [self.model.logits_to_torch(row) for row in rows]
                 for row in rows:
                     ttnn.deallocate(row)
                 outputs.append(torch.cat(host_rows, dim=0)[: prompt_lens[user]].unsqueeze(0))
             else:
-                logits, row_in_tile = self._prefill_user(ids, user_id=user, page_table=table)
+                logits, row_in_tile = self._prefill_user(ids, user_id=slot, page_table=table)
                 host = self.model.logits_to_torch(logits)
                 ttnn.deallocate(logits)
                 outputs.append(host[row_in_tile : row_in_tile + 1].unsqueeze(0))
@@ -1251,16 +1487,72 @@ class MuseGlimmerGenerator(Generator):
         self._sampling_captured = True
         logger.info("MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)")
 
-    def _decode_step_traced(self, *, host_sampling: bool) -> torch.Tensor:
+    def _decode_step_traced(self, *, host_sampling: bool, advance_seeds: bool = True) -> torch.Tensor:
         """One traced decode step; returns the sampled token per batch row."""
+        sampled = self._decode_submit_traced(host_sampling=host_sampling, advance_seeds=advance_seeds)
+        if host_sampling:
+            return sampled
+        return self._read_tokens(sampled)
+
+    def _decode_submit_traced(self, *, host_sampling: bool, advance_seeds: bool = True) -> Any:
+        """Replay the decode trace and the sampling trace; **do not** read anything back.
+
+        Both replays are ``blocking=False`` and both are enqueued on cq0, so the
+        deferred read a serving caller issues afterwards is ordered behind them and
+        ahead of the next step's writes -- which is what makes reading the persistent
+        token buffer asynchronously safe even though the next replay overwrites it.
+
+        Returns the sampler's own output (a ``(tt_out_tok, tt_log_probs)`` tuple whose
+        first entry *is* the persistent decode token input), or, for the explicit
+        host-sampling compatibility mode, the already-argmaxed host tokens.
+        """
         ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
         self.counters["trace_replays"] += 1
         logits = self._trace_logits
         if host_sampling:
             return self._host_argmax(logits)
-        self.sampling.seed_manager.get_new_values()
-        sampled = self.sampling.sample(logits, enable_trace=True, tt_out_tok=self._device_inputs["tokens"])
-        return self._read_tokens(sampled)
+        if advance_seeds:
+            self.sampling.seed_manager.get_new_values()
+        return self.sampling.sample(logits, enable_trace=True, tt_out_tok=self._device_inputs["tokens"])
+
+    # ------------------------------------------------- serving decode read split
+    #
+    # ``models/common/readiness_check/contract_vllm.py`` splits one decode step into
+    # submit / read / host-format so the serving scheduler can build step N+1 while
+    # step N's readback is still in flight.  The three methods below are that split;
+    # ``decode_forward(read_from_device=False)`` is the submit half.
+
+    def read_decode_output(self, tt_out: Any, async_read: bool = False) -> Any:
+        """Move a submitted decode step's device output to host buffers.
+
+        With ``async_read=True`` the copy is enqueued non-blocking on cq0 and the
+        returned event is what the caller waits on before
+        :meth:`process_decode_output_host`.  Nothing here allocates device work
+        beyond the copy itself.
+        """
+        if not isinstance(tt_out, _ServingDecodeOutput):
+            return tt_out
+        host = tt_out.read(blocking=not async_read)
+        self.counters["readbacks"] += 1
+        if not async_read:
+            return host
+        return host, [ttnn.record_event(self.mesh_device, 0)]
+
+    def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False) -> torch.Tensor:
+        """Host formatting only: ttnn host tensor -> the torch tensor vLLM consumes.
+
+        ``[rows]`` int64 token ids when the step sampled on device, ``[rows, 1,
+        vocab]`` float logits when it did not.  A step that has not been read yet is
+        read here, which is the synchronous path (`read_from_device=False` with no
+        ``read_decode_output`` call in between).
+        """
+        if isinstance(tt_out, _ServingDecodeOutput):
+            tt_out = self.read_decode_output(tt_out, async_read=False)
+        if isinstance(tt_out, torch.Tensor):
+            return tt_out
+        if not isinstance(tt_out, _ServingDecodeHost):
+            raise TypeError(f"process_decode_output_host() cannot format {type(tt_out).__name__}")
+        return tt_out.to_torch(self.model, is_tokens=is_tokens)
 
     def _host_argmax(self, logits: ttnn.Tensor) -> torch.Tensor:
         """Explicit host-sampling compatibility mode.
@@ -1268,14 +1560,40 @@ class MuseGlimmerGenerator(Generator):
         Gathers the full vocab and takes the argmax on the host.  This exists for
         tests that require host sampling and is never the measured path; see the
         module docstring.
+
+        It says so in the log, once per generator.  A serving run that quietly took
+        this path instead of the traced on-device sampler would still produce correct
+        tokens and a materially worse decode rate, and the stage review found that the
+        serving audit was grepping the server log for a string nothing ever emitted --
+        so its "no host sampling on a measured step" line was vacuous.  A degraded
+        path has to be able to announce itself.
         """
+        if not getattr(self, "_warned_host_argmax", False):
+            self._warned_host_argmax = True
+            logger.warning(
+                "MuseGlimmerGenerator: DEGRADED PATH host_argmax_fallback -- gathering the full "
+                "vocab and taking the argmax on the host. This is the explicit compatibility "
+                "mode; it is not the measured decode path."
+            )
         gathered = self.model.gather_and_untilize_logits(logits)
         host = self.model.logits_to_torch(gathered, gathered=True)
         ttnn.deallocate(gathered)
         return torch.argmax(host, dim=-1).to(torch.int64)
 
     def _decode_step_eager(self, *, host_sampling: bool, want_logits: bool = False) -> torch.Tensor:
-        """Untraced decode, for debugging only.  Not readiness evidence."""
+        """Untraced decode, for debugging only.  Not readiness evidence.
+
+        Announced once per generator for the same reason as :meth:`_host_argmax`: an
+        eager decode step is ~2400 host dispatches instead of one trace replay, and a
+        run that silently fell back to it would report a decode rate that says nothing
+        about the traced path.
+        """
+        if not getattr(self, "_warned_eager_decode", False):
+            self._warned_eager_decode = True
+            logger.warning(
+                "MuseGlimmerGenerator: DEGRADED PATH untraced_eager_decode -- replaying the decode "
+                "step eagerly instead of from the captured trace. Not readiness or serving evidence."
+            )
         inputs = self._device_inputs
         logits = self.model.ttnn_decode_forward(
             inputs["tokens"], inputs["current_pos"], inputs["rope_pos_ids"], inputs["page_table"]
@@ -1303,6 +1621,9 @@ class MuseGlimmerGenerator(Generator):
         sample_on_device: bool = False,
         sampling_params: SamplingParams | None = None,
         enable_trace: bool = True,
+        read_from_device: bool = True,
+        refresh_inputs: bool = True,
+        advance_seeds: bool = True,
         **kwargs: Any,
     ) -> torch.Tensor:
         """Low-level decode: one step for every active row, caller-owned state.
@@ -1317,41 +1638,96 @@ class MuseGlimmerGenerator(Generator):
         Positions come from the caller every step, and that is compatible with the
         single decode trace: the in-trace ``plus_one`` runs after every read of
         them, so the next call's restage simply overwrites the increment.
+
+        ``refresh_inputs=False`` is the serving overlap contract, and it is the one
+        parameter here that is a correctness statement rather than a tuning knob.  A
+        scheduler that overlaps decode builds step N+1's host inputs *before* step
+        N's sampled token has been applied to them, so those inputs are stale by
+        construction; the device copies are not, because the sampler wrote the token
+        into the persistent token buffer and the in-trace ``plus_one`` advanced the
+        position and the RoPE index -- each exactly once per emitted token.  Passing
+        ``False`` says "the device state is authoritative, do not overwrite it from
+        host".  The page table is still compared and refreshed, because it changes
+        for a reason that has nothing to do with the sampled token (a sequence
+        crossing a block boundary gets another block id).
+
+        ``read_from_device=False`` returns the submitted step's device-resident
+        output instead of a host tensor; see :meth:`read_decode_output`.
         """
         self.model.set_kv_cache(kv_cache)
         self._invalidate_traces_if_cache_moved()  # unconditional; see prefill_forward
         self._allocate_device_inputs()
-        if self._sampling_params is None:
-            self._apply_sampling_params(sampling_params)
-        elif sampling_params is not None:
+        if sampling_params is not None or self._sampling_params is None:
             self._apply_sampling_params(sampling_params)
 
         token_list = [int(t) for t in torch.as_tensor(tokens).reshape(-1).tolist()]
         positions = torch.as_tensor(start_pos).reshape(-1)
-        self._staged_tokens = token_list
-        self._staged_positions = positions
-        self._stage(tokens=token_list, positions=positions, page_table=self._coerce_page_table(page_table))
+        table = self._coerce_page_table(page_table)
+        if refresh_inputs:
+            self._staged_tokens = token_list
+            self._staged_positions = positions
+            self._stage(tokens=token_list, positions=positions, page_table=table)
+        else:
+            self._stage(page_table=table)
 
         if not enable_trace:
             out = self._decode_step_eager(host_sampling=False, want_logits=not sample_on_device)
             return out[: len(token_list)]
 
         if self._trace_id is None:
+            if not refresh_inputs:
+                # Capture restages from ``_staged_*`` because the warm-compile pass
+                # executes and mutates the persistent inputs.  A caller that asked not
+                # to read host state cannot also be the first step of a fresh trace --
+                # vLLM's own rule is that a layout change forces ``reset_batch`` and
+                # drains pending steps -- so this is a contract violation, not a case
+                # to paper over silently.
+                logger.warning(
+                    "MuseGlimmerGenerator: decode_forward(refresh_inputs=False) had to capture the decode "
+                    "trace; the capture restages tokens and positions from this call's host values."
+                )
+                self._staged_tokens = token_list
+                self._staged_positions = positions
             self._capture_decode_trace()
-            self._stage(tokens=token_list, positions=positions)
+            self._stage(tokens=self._staged_tokens, positions=self._staged_positions)
         logits = self._trace_logits
         if sample_on_device and not self._sampling_captured:
             self._capture_sampling_trace(logits)
-            self._stage(tokens=token_list, positions=positions)
+            self._stage(tokens=self._staged_tokens, positions=self._staged_positions)
+        rows = len(token_list)
         if sample_on_device:
-            sampled = self._decode_step_traced(host_sampling=False)
-            return sampled[: len(token_list)]
+            sampled = self._decode_submit_traced(host_sampling=False, advance_seeds=advance_seeds)
+            if not read_from_device:
+                token_tensor = sampled[0] if isinstance(sampled, tuple) else sampled
+                return _ServingDecodeOutput(kind="tokens", device=token_tensor, rows=rows)
+            return self._read_tokens(sampled)[:rows]
+        # The *serving* host-sampling route.  A serving caller reaches it by passing no
+        # sampling params, which is what the vLLM plugin does when it has decided a batch
+        # cannot be sampled on device (min_p, logit_bias, bad_words, allowed_token_ids,
+        # structured outputs, or logprobs on a mesh whose device count is not 8 or 32).
+        #
+        # It is announced, once per generator, because it is the expensive path and the
+        # one that would silently invalidate a decode-rate measurement: it gathers the
+        # full padded vocab across the mesh (202752 columns, ~12.9 MB per step) and reads
+        # it to host, against a sampled token's 32 uint32.  A stage review found the
+        # serving audit grepping for a marker that only ``_host_argmax`` emitted -- a
+        # method this path does not call -- so "no host sampling on a measured decode
+        # step" was unfalsifiable for exactly the route the adapter actually takes.
+        if not getattr(self, "_warned_serving_full_logits", False):
+            self._warned_serving_full_logits = True
+            logger.warning(
+                "MuseGlimmerGenerator: DEGRADED PATH serving_full_logits_readback -- this decode step "
+                "returns gathered full-vocab logits for host sampling instead of an on-device sampled "
+                "token. Correct, and much slower; it is not the measured decode path."
+            )
         ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
         self.counters["trace_replays"] += 1
         gathered = self.model.gather_and_untilize_logits(logits)
+        if not read_from_device:
+            return _ServingDecodeOutput(kind="logits", device=gathered, rows=rows, owned=True)
         host = self.model.logits_to_torch(gathered, gathered=True)
         ttnn.deallocate(gathered)
-        return host[: len(token_list)]
+        return host[:rows]
 
     # ----------------------------------------------------------- generation
 

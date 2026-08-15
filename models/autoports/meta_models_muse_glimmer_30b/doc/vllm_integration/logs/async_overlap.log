@@ -1,0 +1,12 @@
+=== launching server WITH --async-scheduling 11:17:02 ===
+=== server ready 11:20:42 ===
+ASYNC_ACCEPTED: no 'Disabling async scheduling' in the server log
+=== qualitative under overlap 11:20:42 ===
+STEP async_qualitative rc=0
+=== shutting down 11:21:23 ===
+=== degenerate check over the overlap artifacts 11:21:32 ===
+STEP async_degenerate rc=0
+measured: prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.') [/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/vllm_integration/async_overlap/qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 97, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0928}
+
+No degenerate output detected.
+ASYNC_OVERLAP_DONE 11:21:32

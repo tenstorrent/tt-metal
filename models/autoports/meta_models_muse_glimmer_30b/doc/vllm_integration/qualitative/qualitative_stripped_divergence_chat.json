@@ -1,0 +1,93 @@
+{
+  "message_token_id": 200023,
+  "note": "compare()'s raw first_divergence is 1-2 on every prompt purely because the API strips <|message|>; these columns remove it from both sides and are the like-for-like numbers",
+  "rows": [
+    {
+      "id": "p0",
+      "served_tokens": 127,
+      "message_token_in_served": false,
+      "message_token_in_standalone": true,
+      "raw_first_divergence_vs_standalone": 2,
+      "stripped_first_divergence_vs_standalone": null,
+      "stripped_identical_to_standalone_over_common_prefix": true,
+      "raw_first_divergence_vs_hf": 2,
+      "stripped_first_divergence_vs_hf": 12,
+      "standalone_stage_first_divergence_vs_hf": 13
+    },
+    {
+      "id": "p1",
+      "served_tokens": 127,
+      "message_token_in_served": false,
+      "message_token_in_standalone": true,
+      "raw_first_divergence_vs_standalone": 2,
+      "stripped_first_divergence_vs_standalone": null,
+      "stripped_identical_to_standalone_over_common_prefix": true,
+      "raw_first_divergence_vs_hf": 1,
+      "stripped_first_divergence_vs_hf": 1,
+      "standalone_stage_first_divergence_vs_hf": 1
+    },
+    {
+      "id": "p2",
+      "served_tokens": 127,
+      "message_token_in_served": false,
+      "message_token_in_standalone": true,
+      "raw_first_divergence_vs_standalone": 2,
+      "stripped_first_divergence_vs_standalone": null,
+      "stripped_identical_to_standalone_over_common_prefix": true,
+      "raw_first_divergence_vs_hf": 2,
+      "stripped_first_divergence_vs_hf": 33,
+      "standalone_stage_first_divergence_vs_hf": 34
+    },
+    {
+      "id": "p3",
+      "served_tokens": 127,
+      "message_token_in_served": false,
+      "message_token_in_standalone": true,
+      "raw_first_divergence_vs_standalone": 2,
+      "stripped_first_divergence_vs_standalone": null,
+      "stripped_identical_to_standalone_over_common_prefix": true,
+      "raw_first_divergence_vs_hf": 2,
+      "stripped_first_divergence_vs_hf": 27,
+      "standalone_stage_first_divergence_vs_hf": 28
+    },
+    {
+      "id": "p4",
+      "served_tokens": 127,
+      "message_token_in_served": false,
+      "message_token_in_standalone": true,
+      "raw_first_divergence_vs_standalone": 2,
+      "stripped_first_divergence_vs_standalone": null,
+      "stripped_identical_to_standalone_over_common_prefix": true,
+      "raw_first_divergence_vs_hf": 2,
+      "stripped_first_divergence_vs_hf": 43,
+      "standalone_stage_first_divergence_vs_hf": 44
+    },
+    {
+      "id": "p5",
+      "served_tokens": 127,
+      "message_token_in_served": false,
+      "message_token_in_standalone": true,
+      "raw_first_divergence_vs_standalone": 2,
+      "stripped_first_divergence_vs_standalone": null,
+      "stripped_identical_to_standalone_over_common_prefix": true,
+      "raw_first_divergence_vs_hf": 2,
+      "stripped_first_divergence_vs_hf": 31,
+      "standalone_stage_first_divergence_vs_hf": 32
+    }
+  ],
+  "verdict": {
+    "served_matches_standalone_exactly_when_stripped": true,
+    "stripped_first_divergence_vs_hf": {
+      "p0": 12,
+      "p1": 1,
+      "p2": 33,
+      "p3": 27,
+      "p4": 43,
+      "p5": 31
+    },
+    "prompts_diverging_from_hf_at_token_le_2": [
+      "p1"
+    ],
+    "serving_introduced_early_hf_divergences": []
+  }
+}

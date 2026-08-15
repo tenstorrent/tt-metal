@@ -1,0 +1,121 @@
+{
+  "logs": [
+    {
+      "path": "models/autoports/meta_models_muse_glimmer_30b/readiness_vllm/server.log",
+      "present": true,
+      "bytes": 83952494,
+      "markers": {
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "degraded": []
+    },
+    {
+      "path": "models/autoports/meta_models_muse_glimmer_30b/doc/vllm_integration/async_overlap/server.log",
+      "present": true,
+      "bytes": 267877,
+      "markers": {
+        "Prefix caching is not supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "prefix caching disabled, as declared"
+        },
+        "Chunked prefill is not yet supported": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "chunked prefill disabled by the platform"
+        },
+        "adopted an externally owned paged KV cache": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "vLLM-owned cache bound"
+        },
+        "captured decode trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "decode trace captured"
+        },
+        "captured sampling trace": {
+          "count": 1,
+          "severity": "event",
+          "meaning": "sampling trace captured"
+        }
+      },
+      "degraded": []
+    }
+  ],
+  "processes": {
+    "surviving_vllm_processes": [],
+    "device_holders_raw": [
+      "/dev/tenstorrent/0 ",
+      "/dev/tenstorrent/1 ",
+      "/dev/tenstorrent/2 ",
+      "/dev/tenstorrent/3 ",
+      "/dev/tenstorrent/by-id"
+    ],
+    "proc_fd_scan": "",
+    "clean": true
+  },
+  "marker_health": {
+    "sources_checked": [
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator_vllm.py"
+    ],
+    "method": "non-docstring string literals only, collected via ast",
+    "external_markers_not_checked": [
+      "Chunked prefill is not yet supported",
+      "Disabling async scheduling",
+      "EngineCore encountered a fatal error",
+      "EngineDeadError",
+      "Prefix caching is not supported"
+    ],
+    "dead_markers": [],
+    "all_degraded_markers_live": true
+  },
+  "marker_provenance": {
+    "newest_marker_source_mtime": 1786796264.2052414,
+    "logs": [
+      {
+        "log": "models/autoports/meta_models_muse_glimmer_30b/readiness_vllm/server.log",
+        "log_mtime": 1786790655.3135161,
+        "predates_current_markers": true
+      },
+      {
+        "log": "models/autoports/meta_models_muse_glimmer_30b/doc/vllm_integration/async_overlap/server.log",
+        "log_mtime": 1786792885.1049485,
+        "predates_current_markers": true
+      }
+    ],
+    "caveat": "for any log with predates_current_markers=true, the absence of a marker added after it was written is not evidence about that run; see conditions_evidenced_elsewhere"
+  },
+  "conditions_evidenced_elsewhere": {
+    "every measured decode step was a trace replay": "probe_full_fixed.json -> multi_request.decode_counters.trace_replays equals the step count with synchronizations 0; and vllm_benchmark.json ITL p50 23.015 ms / p99 23.641 ms over 128 steps, which leaves no room for a step that gathered the full 202048-wide vocab",
+    "on-device sampling was active for the benchmarked run": "server.log records sample_on_device_mode=all and 'captured sampling trace'; the adapter refuses to start if the plugin requests device sampling it does not support"
+  },
+  "degraded_markers": [],
+  "clean": true
+}

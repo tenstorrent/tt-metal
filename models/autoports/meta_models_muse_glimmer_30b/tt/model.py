@@ -66,6 +66,7 @@ import json
 import math
 import pathlib
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import Any, Sequence
 
 import torch
@@ -1025,6 +1026,112 @@ class MuseGlimmerModel(LightweightModule):
         for layer, pair in zip(self.layers, kv_cache):
             layer.k_cache, layer.v_cache = pair
 
+    def adopt_external_kv_cache(
+        self,
+        kv_cache: Sequence[Sequence[ttnn.Tensor]],
+        *,
+        cache_slots: int | None = None,
+        free_existing: bool = True,
+    ) -> int:
+        """Bind a serving-owned paged pool whose **block count** differs from the built one.
+
+        :meth:`set_kv_cache` is the readiness contract's rebind: it requires the external
+        buffers to have exactly the shape this model allocated, which is the right check for
+        a caller that hands back a cache of the same geometry.  A serving caller is a
+        different case, and the difference is not cosmetic.  The standalone build sizes the
+        pool as ``max_batch_size x blocks_per_seq`` -- every user simultaneously at the full
+        advertised context -- while vLLM owns one *shared* pool sized by its own token
+        budget and hands out block ids from it.  Those two numbers are unrelated, and at
+        this model's geometry the standalone rule is not even satisfiable for a serving
+        batch (32 users x 2048 blocks x 905,216 B/block is 59 GB against 31.5 GiB).
+
+        So this method checks everything that makes the cache *interpretable* by the paged
+        ops -- rank, local KV head count, block size, head dim and dtype -- and lets the
+        block count be whatever the owner allocated.  It then updates the model and layer
+        configs so ``normalize_page_table``'s bounds check and ``dram_report`` describe the
+        pool that is actually bound.  ``max_num_blocks`` is a construction-time input to the
+        cache shape only; the runtime path reads ``block_size`` from the same config and the
+        block ids from the page table, so nothing else has to move.
+
+        ``cache_slots`` raises the number of *request slots* the model will accept, which
+        is the other half of the same contract: the build-time pool is sized for one
+        sequence, so the build also has ``max_batch_size = 1``, and the layer's
+        ``user_id >= max_batch_size`` guard would then reject every serving request past
+        the first.  It is a bound on the page table's row index and on nothing else -- the
+        decode tensors are 32 rows wide regardless -- so it is safe to state it here, once
+        the pool that has to back those slots is the one being adopted.
+
+        ``free_existing`` releases the buffers this model allocated at build time.  A
+        serving process wants that -- they are dead weight the moment the external pool is
+        bound -- and it is only safe here because a rebind happens before any trace is
+        captured over them; ``deallocate()``'s live-trace warning covers the other order.
+
+        Returns the adopted block count.
+        """
+        if len(kv_cache) != len(self.layers):
+            raise ValueError(f"kv_cache has {len(kv_cache)} entries for {len(self.layers)} layers")
+        expected_heads = self.plan.local_kv_heads
+        expected_block = self.config.page_block_size
+        expected_head_dim = self.plan.head_dim
+        expected_dtype = self.precision.kv_cache_dtype
+        blocks: set[int] = set()
+        for layer, pair in zip(self.layers, kv_cache):
+            if len(pair) != 2:
+                raise ValueError(f"layer {layer.config.layer_idx} cache entry must be (k, v), got {len(pair)} tensors")
+            for name, tensor in (("k", pair[0]), ("v", pair[1])):
+                shape = tuple(tensor.shape)
+                if len(shape) != 4:
+                    raise ValueError(
+                        f"external {name} cache for layer {layer.config.layer_idx} must be rank 4, got {shape}"
+                    )
+                if shape[1:] != (expected_heads, expected_block, expected_head_dim):
+                    raise ValueError(
+                        f"external {name} cache for layer {layer.config.layer_idx} is {shape}; this model needs "
+                        f"(num_blocks, {expected_heads}, {expected_block}, {expected_head_dim}) -- one local KV head "
+                        "per device, the model's page block size and its head dim"
+                    )
+                if tensor.dtype != expected_dtype:
+                    raise ValueError(
+                        f"external {name} cache for layer {layer.config.layer_idx} is {tensor.dtype}; the selected "
+                        f"precision policy's kv_cache_dtype is {expected_dtype}"
+                    )
+                blocks.add(int(shape[0]))
+        if len(blocks) != 1:
+            raise ValueError(f"every layer's external cache must hold the same number of blocks, got {sorted(blocks)}")
+        num_blocks = blocks.pop()
+        if num_blocks < self.config.blocks_per_seq:
+            raise ValueError(
+                f"the external cache holds {num_blocks} blocks, which cannot hold one sequence at the supported "
+                f"context ({self.config.blocks_per_seq} blocks of {expected_block} tokens)"
+            )
+        slots = self.config.max_batch_size if cache_slots is None else int(cache_slots)
+        if slots < 1 or slots > DECODE_ROWS:
+            raise ValueError(f"cache_slots must be within 1..{DECODE_ROWS} decode rows, got {slots}")
+        if free_existing:
+            for layer in self.layers:
+                for tensor in (layer.k_cache, layer.v_cache):
+                    if tensor is not None:
+                        try:
+                            ttnn.deallocate(tensor)
+                        except Exception:  # noqa: BLE001 -- an already-freed buffer is not a failure here
+                            pass
+        for layer, pair in zip(self.layers, kv_cache):
+            layer.k_cache, layer.v_cache = pair[0], pair[1]
+            layer.config = dataclass_replace(
+                layer.config,
+                max_batch_size=slots,
+                paged_attention_config=dataclass_replace(
+                    layer.config.paged_attention_config, max_num_blocks=num_blocks
+                ),
+            )
+        self.config = dataclass_replace(self.config, max_num_blocks=num_blocks, max_batch_size=slots)
+        logger.info(
+            f"MuseGlimmerModel: adopted an externally owned paged KV cache of {num_blocks} blocks "
+            f"({num_blocks * expected_block} tokens across all users) for {slots} request slot(s); "
+            f"the build-time pool was {'freed' if free_existing else 'retained'}."
+        )
+        return num_blocks
+
     def reset_counters(self) -> None:
         self.counters = {
             "trace_replays": 0,
@@ -1514,10 +1621,37 @@ class MuseGlimmerModel(LightweightModule):
         ``max_batch_size``: ``current_pos`` with -1, the inactive-slot sentinel the
         attention op skips and ``plus_one(skip_negative_entries=True)`` preserves,
         and the RoPE index with 0 because it is unsigned and its row is unused.
+
+        **-1 is the only legal negative.**  The paged ops take this tensor as
+        ``update_idxs`` / ``cur_pos`` and their skip test is an exact comparison
+        against ``(uint32_t)-1``
+        (``paged_cache/device/kernels/dataflow/writer_paged_fused_update_cache_interleaved_start_id.cpp``);
+        any other negative is reinterpreted as a huge unsigned index, so
+        ``virtual_block_id = update_idx / block_size`` reads far past the page-table
+        circular buffer and the op issues a NOC transaction to whatever physical
+        block that garbage names.  The transaction never retires, ``PagedUpdateCache``
+        never completes, and the whole mesh -- including the fabric routers, which is
+        where ``check_noc_status`` first reports it -- hangs until a ``tt-smi -r``.
+        There is no in-band error, so this is checked here rather than left to the
+        device: an out-of-range position is a caller bug and must fail as one.
+        Positions at or past ``max_seq_len`` are refused for the same reason, since
+        they index past the caller's page table.
         """
         batch = DECODE_ROWS
         padded = torch.full((batch,), -1, dtype=torch.int32)
         supplied = positions.reshape(-1).to(torch.int32)
+        if supplied.numel() > batch:
+            raise ValueError(f"start_pos has {supplied.numel()} entries; the decode batch is {batch} rows")
+        bad = (supplied < -1) | (supplied >= self.config.max_seq_len)
+        if bool(bad.any()):
+            rows = bad.nonzero().reshape(-1).tolist()
+            raise ValueError(
+                "decode start_pos must be in [0, "
+                f"{self.config.max_seq_len}) or exactly -1 for an inactive slot; row(s) "
+                f"{rows} carry {supplied[bad].tolist()}. Any other negative is read by "
+                "paged_update_cache / paged_scaled_dot_product_attention_decode as a huge "
+                "unsigned index and hangs the mesh with an unretired NOC transaction."
+            )
         padded[: supplied.numel()] = supplied
         rope = torch.clamp(padded, min=0).reshape(1, batch)
         return (
@@ -1551,7 +1685,19 @@ class MuseGlimmerModel(LightweightModule):
             # One contiguous run of blocks per *cache slot*; rows past the last
             # slot alias the last one below, which is safe because they are the
             # inactive rows (current_pos == -1) that no op reads or writes.
-            rows = torch.arange(min(batch, slots) * blocks, dtype=torch.int32).reshape(min(batch, slots), blocks)
+            #
+            # How many slots get their own run is bounded by the pool, not only by
+            # the slot count.  A standalone build sizes the pool at
+            # ``max_batch_size x blocks_per_seq`` so the bound never binds and this
+            # is exactly the old behaviour.  A serving build does not: vLLM owns one
+            # shared pool and hands out ids from it, so ``max_batch_size`` slots at
+            # the full context is a number the pool is deliberately smaller than.
+            # Without the bound this produced a default table naming blocks that do
+            # not exist -- the *first* thing the vLLM adapter hit, because
+            # ``_allocate_device_inputs`` builds this table before any request has
+            # supplied one.
+            private = max(1, min(slots, self.config.max_num_blocks // blocks))
+            rows = torch.arange(min(batch, private) * blocks, dtype=torch.int32).reshape(min(batch, private), blocks)
             out = torch.zeros(batch, blocks, dtype=torch.int32)
             out[: rows.shape[0]] = rows
             if rows.shape[0] < batch:

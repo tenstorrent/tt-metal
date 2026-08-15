@@ -1,0 +1,429 @@
+2026-08-15 06:22:49.971 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:22:51.358 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:22:51.358 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:22:51.359 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:22:51.359 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:22:51.370 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-15 06:22:51.371 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:22:51.448 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:22:51.448 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:22:51.448 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:22:51.449 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:22:51.450 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:22:51.653 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:22:51.781 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:22:51.781 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:22:51.781 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:22:51.781 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:22:51.781 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 06:22:51.821 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.822 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.822 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.823 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.823 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.824 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.824 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.825 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-15 06:22:51.826 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 06:22:51.850 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-15 06:22:51.851 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-15 06:22:51.851 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-15 06:22:51.852 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-15 06:22:51.852 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 06:22:51.852 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+INFO 08-15 06:22:52 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 08-15 06:22:52 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 08-15 06:22:52 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 08-15 06:22:52 [__init__.py:237] Platform plugin tt is activated
+INFO 08-15 06:22:53 [importing.py:46] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-15 06:22:53 [importing.py:81] Triton not installed or not compatible; certain GPU-related functions will not be available.
+2026-08-15 06:22:53.557 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:initialize_vllm_model:290 - MuseGlimmer vLLM: building the generator (max_model_len=131072, max_num_seqs=32, block_size=64)
+2026-08-15 06:22:53.557 | WARNING  | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:_reduced_layer_indices:147 - MuseGlimmer vLLM: MUSE_GLIMMER_VLLM_LAYER_INDICES=0,3 builds a REDUCED 2-layer serving target for bring-up. Its outputs and timings are not this model's.
+2026-08-15 06:23:09.840 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:842 - MuseGlimmerModel: built 2/2 layers
+2026-08-15 06:23:09.951 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:2177 - MuseGlimmerModel built in 15.2s
+2026-08-15 06:23:10.093 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:get_max_tokens_all_users:354 - MuseGlimmer vLLM: KV pool sized for 262144 tokens across all users (~3.71 GB/device), max_model_len=131072, max_num_seqs=32
+2026-08-15 06:23:10.094 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:allocate_kv_cache:432 - MuseGlimmer vLLM: allocating the serving KV cache -- 2 layers x 2 x (4128, 1, 64, 128) DataType.BFLOAT8_B (3.74 GB/device, 264192 tokens across all users, declared dtype torch.bfloat16)
+2026-08-15 06:23:10.456 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:adopt_external_kv_cache:1125 - MuseGlimmerModel: adopted an externally owned paged KV cache of 4128 blocks (264192 tokens across all users) for 32 request slot(s); the build-time pool was freed.
+2026-08-15 06:23:10.456 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:warmup_model_prefill:475 - MuseGlimmer vLLM: prefill warmup over padded lengths [32, 96, 128, 160, 256, 512, 1024, 8192]
+2026-08-15 06:23:10.458 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:516 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=32, blocks=2048)
+2026-08-15 06:23:10.473 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.504 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-15 06:23:10.504 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-15 06:23:10.504 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-15 06:23:10.504 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-15 06:23:10.519 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.543 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.544 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.630 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.630 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.672 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.672 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.711 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.711 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.756 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.756 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.806 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.807 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.850 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.850 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.901 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.902 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.926 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.952 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.959 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.959 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.962 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:warmup_model_decode:533 - MuseGlimmer vLLM: decode warmup done (trace=compiled, sample_on_device=True, batch capacity 32, 2048 blocks per request)
+2026-08-15 06:23:10.963 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.965 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.973 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.977 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-15 06:23:10.981 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:1467 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-15 06:23:10.982 | DEBUG    | models.common.sampling.generator:capture_trace:350 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-15 06:23:10.982 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+2026-08-15 06:23:10.982 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.982 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.984 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.985 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.987 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:1479 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-15 06:23:10.990 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:warmup_model_decode:533 - MuseGlimmer vLLM: decode warmup done (trace=captured, sample_on_device=True, batch capacity 32, 2048 blocks per request)
+2026-08-15 06:23:10.995 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:10.995 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.034 | INFO     | __main__:main:302 - prompt_len=128 -> [56562, 125391, 164576, 98162, 3506, 140038, 38912, 90202, 27321, 24563, 166855, 9977, 49747, 179928, 34011, 150015, 109267]
+2026-08-15 06:23:11.075 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.076 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.117 | INFO     | __main__:main:302 - prompt_len=37 -> [107113, 161459, 123562, 5550, 119437, 24527, 102844, 40050, 20240, 173249, 14148, 98877, 127517, 117218, 72072, 2737, 55856]
+2026-08-15 06:23:11.160 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.160 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.207 | INFO     | __main__:main:302 - prompt_len=4097 -> [21314, 87693, 116103, 177667, 29851, 158134, 16036, 79508, 284, 119437, 114158, 105977, 133734, 119437, 127442, 56326, 13656]
+2026-08-15 06:23:11.212 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.212 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.223 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.224 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.229 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-15 06:23:11.231 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[probe] multi decode section done; host-sampling step submit
+[probe] host-sampling step done
+2026-08-15 06:23:11.292 | DEBUG    | models.common.sampling.generator:reset_trace:150 - Resetting sampling trace (penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+{
+  "layers": "0,3",
+  "max_num_seqs": 32,
+  "max_model_len": 131072,
+  "block_size": 64,
+  "build_s": 17.58,
+  "kv": {
+    "tokens_all_users": 262144,
+    "num_blocks": 4128,
+    "allocated_layers": 2,
+    "cache_shape": [
+      4128,
+      1,
+      64,
+      128
+    ],
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "model_max_num_blocks": 4128,
+    "model_cache_slots": 32,
+    "binds_the_allocated_buffers": [
+      true,
+      true
+    ]
+  },
+  "warmup_s": 0.53,
+  "decode_trace_captured": true,
+  "sampling_trace_captured": true,
+  "requests": [
+    {
+      "prompt_len": 128,
+      "aligned": {
+        "tile32": true,
+        "page64": true,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 16,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 16,
+        "device_position_advances": 0
+      },
+      "decode_serving_counters": {
+        "sampling_param_refreshes": 1,
+        "sampling_param_reuses": 15
+      },
+      "tokens": [
+        56562,
+        125391,
+        164576,
+        98162,
+        3506,
+        140038,
+        38912,
+        90202,
+        27321,
+        24563,
+        166855,
+        9977,
+        49747,
+        179928,
+        34011,
+        150015,
+        109267
+      ],
+      "distinct_tokens": 17,
+      "max_token_id": 179928,
+      "in_vocab": true
+    },
+    {
+      "prompt_len": 37,
+      "aligned": {
+        "tile32": false,
+        "page64": false,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 16,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 16,
+        "device_position_advances": 0
+      },
+      "decode_serving_counters": {
+        "sampling_param_refreshes": 1,
+        "sampling_param_reuses": 15
+      },
+      "tokens": [
+        107113,
+        161459,
+        123562,
+        5550,
+        119437,
+        24527,
+        102844,
+        40050,
+        20240,
+        173249,
+        14148,
+        98877,
+        127517,
+        117218,
+        72072,
+        2737,
+        55856
+      ],
+      "distinct_tokens": 17,
+      "max_token_id": 173249,
+      "in_vocab": true
+    },
+    {
+      "prompt_len": 4097,
+      "aligned": {
+        "tile32": false,
+        "page64": false,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 16,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 16,
+        "device_position_advances": 0
+      },
+      "decode_serving_counters": {
+        "sampling_param_refreshes": 1,
+        "sampling_param_reuses": 15
+      },
+      "tokens": [
+        21314,
+        87693,
+        116103,
+        177667,
+        29851,
+        158134,
+        16036,
+        79508,
+        284,
+        119437,
+        114158,
+        105977,
+        133734,
+        119437,
+        127442,
+        56326,
+        13656
+      ],
+      "distinct_tokens": 16,
+      "max_token_id": 177667,
+      "in_vocab": true
+    }
+  ],
+  "stale_inputs": true,
+  "read_mode": "async",
+  "drain_per_step": false,
+  "multi_request": {
+    "prompt_lens": [
+      96,
+      130,
+      61
+    ],
+    "rows": 3,
+    "tokens": [
+      [
+        87050,
+        145814,
+        77316,
+        193263,
+        29851,
+        140369,
+        3101,
+        155508,
+        25196,
+        33861,
+        67054,
+        127326,
+        138891,
+        193263,
+        63653,
+        109267,
+        11216
+      ],
+      [
+        119437,
+        79617,
+        137853,
+        12533,
+        148776,
+        62883,
+        86868,
+        43954,
+        43581,
+        98169,
+        113981,
+        746,
+        122243,
+        65127,
+        116968,
+        88546,
+        199373
+      ],
+      [
+        126915,
+        34584,
+        84241,
+        96817,
+        891,
+        119437,
+        79617,
+        60400,
+        38772,
+        69211,
+        121558,
+        19692,
+        99673,
+        14616,
+        35230,
+        85343,
+        83616
+      ]
+    ],
+    "rows_are_distinct": true,
+    "decode_counters": {
+      "trace_replays": 16,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 1,
+      "synchronizations": 0,
+      "readbacks": 16,
+      "device_position_advances": 0
+    },
+    "decode_serving_counters": {
+      "sampling_param_refreshes": 1,
+      "sampling_param_reuses": 15
+    }
+  },
+  "host_sampling": {
+    "logits_shape": [
+      32,
+      1,
+      202048
+    ],
+    "finite": true,
+    "counters": {
+      "trace_replays": 1,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "readbacks": 2,
+      "device_position_advances": 0
+    }
+  },
+  "status": "ok"
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x730665a3f258 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function "__eq__"
+ - leaked function "default_core_range"
+ - leaked function "__init__"
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function "get_dram_alignment"
+ - leaked function "__getitem__"
+ - leaked function ""
+ - leaked function "UnregisterProgramRealtimeProfilerCallback"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:23:12.508 | info     |    BuildKernels | JIT cache stats: 1245/1245 hits (100.0%) [1245 cached, 931 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:23:12.508 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:23:12.528 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:23:12.528 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:23:13.049 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:23:13.049 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:23:13.049 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

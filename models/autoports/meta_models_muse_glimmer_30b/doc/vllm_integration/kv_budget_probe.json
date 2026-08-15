@@ -1,0 +1,46 @@
+{
+  "shipped_budget_tokens": 1048576,
+  "shipped_budget_blocks": 16416,
+  "bytes_per_block_per_device": 905216,
+  "max_model_len": 131072,
+  "blocks_per_seq": 2048,
+  "ladder": [
+    28672,
+    24576,
+    20480,
+    16416
+  ],
+  "attempts": [
+    {
+      "blocks": 28672,
+      "tokens": 1835008,
+      "bytes_per_device": 25954353152,
+      "allocated": true,
+      "free_dram_after_alloc": 2997558784,
+      "traces_captured": true,
+      "free_dram_after_warmup": 2986316288,
+      "prefill_tokens": 8192,
+      "free_dram_at_prefill_peak": 2986316288,
+      "decode_tokens": [
+        6453,
+        107177,
+        38,
+        589,
+        6105,
+        2032,
+        14774,
+        328
+      ],
+      "feasible": true
+    }
+  ],
+  "build_s": 158.6,
+  "dram_capacity_bytes_per_device": 33778699264,
+  "free_dram_after_weights_and_build_pool": 27098029568,
+  "largest_feasible_blocks": 28672,
+  "largest_feasible_tokens": 1835008,
+  "status": "ok",
+  "shipped_budget_blocks_formula": "ceil((budget_tokens + block_size * max_num_seqs) / block_size)",
+  "is_proven_lower_bound_not_ceiling": true,
+  "note": "The ladder descends and stops at the first success. The top rung (28672) passed, so larger pools were never attempted: this is a proven lower bound on the ceiling, not the ceiling."
+}

@@ -1,0 +1,16 @@
+=== launching server 10:34:45 ===
+=== server ready 10:38:36 ===
+=== sampling_full 10:38:36 ===
+STEP sampling_full rc=1
+=== qualitative_runner 10:41:50 ===
+STEP qualitative_runner rc=0
+=== qualitative_chat 10:42:53 ===
+STEP qualitative_chat rc=0
+=== determinism 10:43:34 ===
+STEP determinism rc=0
+=== benchmark 10:43:47 ===
+STEP benchmark rc=0
+=== shutting down 10:44:13 ===
+=== audit 10:44:22 ===
+STEP audit rc=0
+SERVING_EVIDENCE_DONE 10:44:23

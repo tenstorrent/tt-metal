@@ -1,0 +1,1418 @@
+{
+  "geometry": {
+    "mesh": [
+      1,
+      4
+    ],
+    "vocab": 202048,
+    "padded_vocab": 202752
+  },
+  "cases": [
+    {
+      "case": "presence_only_reset_path",
+      "incremental_update_output_tokens": false,
+      "vs_reference": {
+        "name": "presence_only_reset_path",
+        "max_abs_err": 0.0,
+        "mean_abs_err": 0.0
+      },
+      "rows": [
+        {
+          "row": 0,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 1,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 2,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 3,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 4,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 5,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 6,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 7,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 8,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 9,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 10,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 11,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 12,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 13,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 14,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 15,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 16,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 17,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 18,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 19,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 20,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 21,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 22,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 23,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 24,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 25,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 26,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 27,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 28,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 29,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 30,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 31,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        }
+      ]
+    },
+    {
+      "case": "presence_only_decode_scatter_path",
+      "incremental_update_output_tokens": true,
+      "vs_reference": {
+        "name": "presence_only_decode_scatter_path",
+        "max_abs_err": 0.0,
+        "mean_abs_err": 0.0
+      },
+      "rows": [
+        {
+          "row": 0,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 1,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 2,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 3,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 4,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 5,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 6,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 7,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 8,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 9,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 10,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 11,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 12,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 13,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 14,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 15,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 16,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 17,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 18,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 19,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 20,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 21,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 22,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 23,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 24,
+          "presence": -1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 25,
+          "presence": -1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 26,
+          "presence": -0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 27,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 28,
+          "presence": 0.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 29,
+          "presence": 1.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 30,
+          "presence": 1.5,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 31,
+          "presence": 2.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        }
+      ]
+    },
+    {
+      "case": "frequency_control_decode_scatter_path",
+      "incremental_update_output_tokens": true,
+      "vs_reference": {
+        "name": "frequency_control_decode_scatter_path",
+        "max_abs_err": 0.0,
+        "mean_abs_err": 0.0
+      },
+      "rows": [
+        {
+          "row": 0,
+          "presence": 0.0,
+          "frequency": -1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -6.0,
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 1,
+          "presence": 0.0,
+          "frequency": -1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -4.0,
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 2,
+          "presence": 0.0,
+          "frequency": -0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -2.0,
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 3,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 4,
+          "presence": 0.0,
+          "frequency": 0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5,
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 5,
+          "presence": 0.0,
+          "frequency": 1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0,
+            4.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 6,
+          "presence": 0.0,
+          "frequency": 1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5,
+            6.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 7,
+          "presence": 0.0,
+          "frequency": 2.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0,
+            8.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 8,
+          "presence": 0.0,
+          "frequency": -1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -6.0,
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 9,
+          "presence": 0.0,
+          "frequency": -1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -4.0,
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 10,
+          "presence": 0.0,
+          "frequency": -0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -2.0,
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 11,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 12,
+          "presence": 0.0,
+          "frequency": 0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5,
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 13,
+          "presence": 0.0,
+          "frequency": 1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0,
+            4.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 14,
+          "presence": 0.0,
+          "frequency": 1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5,
+            6.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 15,
+          "presence": 0.0,
+          "frequency": 2.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0,
+            8.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 16,
+          "presence": 0.0,
+          "frequency": -1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -6.0,
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 17,
+          "presence": 0.0,
+          "frequency": -1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -4.0,
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 18,
+          "presence": 0.0,
+          "frequency": -0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -2.0,
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 19,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 20,
+          "presence": 0.0,
+          "frequency": 0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5,
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 21,
+          "presence": 0.0,
+          "frequency": 1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0,
+            4.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 22,
+          "presence": 0.0,
+          "frequency": 1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5,
+            6.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 23,
+          "presence": 0.0,
+          "frequency": 2.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0,
+            8.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 24,
+          "presence": 0.0,
+          "frequency": -1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -6.0,
+            -1.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 25,
+          "presence": 0.0,
+          "frequency": -1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -4.0,
+            -1.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 26,
+          "presence": 0.0,
+          "frequency": -0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            -2.0,
+            -0.5
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 27,
+          "presence": 0.0,
+          "frequency": 0.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 28,
+          "presence": 0.0,
+          "frequency": 0.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            0.5,
+            2.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 29,
+          "presence": 0.0,
+          "frequency": 1.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.0,
+            4.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 30,
+          "presence": 0.0,
+          "frequency": 1.5,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            1.5,
+            6.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        },
+        {
+          "row": 31,
+          "presence": 0.0,
+          "frequency": 2.0,
+          "n_appeared_cols": 3,
+          "delta_on_appeared": [
+            2.0,
+            8.0
+          ],
+          "counts_on_appeared": [
+            1,
+            4
+          ],
+          "max_abs_delta_on_absent": 0.0
+        }
+      ]
+    }
+  ],
+  "presence_penalty_reaches_logits": true
+}

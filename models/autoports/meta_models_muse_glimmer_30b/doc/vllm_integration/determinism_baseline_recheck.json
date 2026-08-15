@@ -1,0 +1,66 @@
+{
+  "what": "Offline re-comparison of the served completions against the datatype-sweep standalone TT completions.",
+  "why": "determinism_vllm.json -> standalone_baseline reports first_divergence: 2 because it compares token ids obtained by re-encoding the RETURNED TEXT. The OpenAI API strips special tokens, so the standalone arm's <|message|> control token is absent from the served text and every re-encoded id after it shifts. Stripping that one token from the baseline text and comparing characters is the like-for-like comparison; it needs no device and no re-run, only the two committed artifacts.",
+  "inputs": [
+    "doc/vllm_integration/qualitative/qualitative_tt_chat.json",
+    "doc/datatype_sweep/qualitative/qualitative_tt_chat.json"
+  ],
+  "special_token_stripped_from_baseline": "<|message|>",
+  "prompts": [
+    {
+      "id": "p0",
+      "serving_chars": 381,
+      "baseline_chars": 392,
+      "baseline_chars_after_stripping_special": 381,
+      "common_prefix_chars": 381,
+      "identical_over_common_prefix": true,
+      "first_char_divergence": -1
+    },
+    {
+      "id": "p1",
+      "serving_chars": 559,
+      "baseline_chars": 570,
+      "baseline_chars_after_stripping_special": 559,
+      "common_prefix_chars": 559,
+      "identical_over_common_prefix": true,
+      "first_char_divergence": -1
+    },
+    {
+      "id": "p2",
+      "serving_chars": 628,
+      "baseline_chars": 639,
+      "baseline_chars_after_stripping_special": 628,
+      "common_prefix_chars": 628,
+      "identical_over_common_prefix": true,
+      "first_char_divergence": -1
+    },
+    {
+      "id": "p3",
+      "serving_chars": 600,
+      "baseline_chars": 611,
+      "baseline_chars_after_stripping_special": 600,
+      "common_prefix_chars": 600,
+      "identical_over_common_prefix": true,
+      "first_char_divergence": -1
+    },
+    {
+      "id": "p4",
+      "serving_chars": 561,
+      "baseline_chars": 572,
+      "baseline_chars_after_stripping_special": 561,
+      "common_prefix_chars": 561,
+      "identical_over_common_prefix": true,
+      "first_char_divergence": -1
+    },
+    {
+      "id": "p5",
+      "serving_chars": 703,
+      "baseline_chars": 714,
+      "baseline_chars_after_stripping_special": 703,
+      "common_prefix_chars": 703,
+      "identical_over_common_prefix": true,
+      "first_char_divergence": -1
+    }
+  ],
+  "all_identical_over_common_prefix": true
+}

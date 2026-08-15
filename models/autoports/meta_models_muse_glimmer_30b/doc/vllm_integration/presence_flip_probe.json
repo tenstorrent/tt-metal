@@ -1,0 +1,308 @@
+{
+  "phase_a": [
+    {
+      "prompt": "a b c a b c a b c",
+      "text": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c",
+      "steps_with_repeated_winner": 45,
+      "min_margin": 3.0,
+      "first_flippable": null,
+      "smallest_margin_step": {
+        "step": 3,
+        "winner": "token_id:262",
+        "challenger": "token_id:198",
+        "margin": 3.0
+      }
+    },
+    {
+      "prompt": "The quick brown fox jumps over the lazy dog. The quick brown fox",
+      "text": " jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick",
+      "steps_with_repeated_winner": 38,
+      "min_margin": 1.875,
+      "first_flippable": {
+        "step": 15,
+        "winner": "token_id:26",
+        "challenger": "token_id:1574",
+        "margin": 1.875
+      },
+      "smallest_margin_step": {
+        "step": 15,
+        "winner": "token_id:26",
+        "challenger": "token_id:1574",
+        "margin": 1.875
+      }
+    },
+    {
+      "prompt": "Once upon a time, there was a small village by the sea. The village",
+      "text": " was known for its beautiful beaches and crystal clear waters. The villagers were happy and content with their simple lives.\n\nOne day, a group of tourists arrived in the village. They were amazed by the beauty of the place and decided to stay for",
+      "steps_with_repeated_winner": 8,
+      "min_margin": 4.25,
+      "first_flippable": null,
+      "smallest_margin_step": {
+        "step": 35,
+        "winner": "token_id:1610",
+        "challenger": "token_id:17219",
+        "margin": 4.25
+      }
+    },
+    {
+      "prompt": "In 2020 the world changed. In 2021 the world",
+      "text": " is still changing. The pandemic has had a huge impact on the way we live and work, and the way we interact with each other. The world of work has changed forever, and the way we work has changed too. The pandemic has",
+      "steps_with_repeated_winner": 20,
+      "min_margin": 0.125,
+      "first_flippable": {
+        "step": 19,
+        "winner": "token_id:341",
+        "challenger": "token_id:517",
+        "margin": 1.875
+      },
+      "smallest_margin_step": {
+        "step": 28,
+        "winner": "token_id:589",
+        "challenger": "token_id:1573",
+        "margin": 0.125
+      }
+    },
+    {
+      "prompt": "banana apple banana apple banana",
+      "text": " apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana apple banana",
+      "steps_with_repeated_winner": 46,
+      "min_margin": 2.0625,
+      "first_flippable": null,
+      "smallest_margin_step": {
+        "step": 3,
+        "winner": "token_id:80487",
+        "challenger": "token_id:368",
+        "margin": 2.0625
+      }
+    },
+    {
+      "prompt": "The capital of France is Paris. The capital of Germany is",
+      "text": " Berlin. The capital of Italy is Rome. The capital of Spain is Madrid. The capital of the United Kingdom is London. The capital of the United States is Washington, D.C. The capital of Canada is Ottawa. The capital of Australia",
+      "steps_with_repeated_winner": 26,
+      "min_margin": 0.25,
+      "first_flippable": {
+        "step": 8,
+        "winner": "token_id:26",
+        "challenger": "token_id:1574",
+        "margin": 1.0
+      },
+      "smallest_margin_step": {
+        "step": 36,
+        "winner": "token_id:26",
+        "challenger": "token_id:1574",
+        "margin": 0.25
+      }
+    },
+    {
+      "prompt": "Write a short poem about the ocean:\n",
+      "text": "The ocean is a vast and mysterious place, full of wonder and beauty. It is home to a diverse array of marine life, from tiny plankton to massive whales. The ocean is also a powerful force, capable of shaping the land and",
+      "steps_with_repeated_winner": 13,
+      "min_margin": 0.6875,
+      "first_flippable": {
+        "step": 19,
+        "winner": "token_id:262",
+        "challenger": "token_id:69229",
+        "margin": 0.6875
+      },
+      "smallest_margin_step": {
+        "step": 19,
+        "winner": "token_id:262",
+        "challenger": "token_id:69229",
+        "margin": 0.6875
+      }
+    },
+    {
+      "prompt": "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return",
+      "text": " a - b\n\ndef mul(a, b):\n    return a * b\n\ndef div(a, b):\n    if b == 0:\n        return \"Error: Division by zero\"\n    return a / b\n\ndef mod(a,",
+      "steps_with_repeated_winner": 20,
+      "min_margin": 1.0,
+      "first_flippable": {
+        "step": 30,
+        "winner": "token_id:677",
+        "challenger": "token_id:11126",
+        "margin": 1.0
+      },
+      "smallest_margin_step": {
+        "step": 30,
+        "winner": "token_id:677",
+        "challenger": "token_id:11126",
+        "margin": 1.0
+      }
+    },
+    {
+      "prompt": "Reasons to learn a musical instrument:\n1.",
+      "text": " It is fun\n2. It is a great way to express yourself\n3. It is a great way to meet new people\n4. It is a great way to learn about music\n5. It is a great way to improve",
+      "steps_with_repeated_winner": 26,
+      "min_margin": 0.75,
+      "first_flippable": {
+        "step": 6,
+        "winner": "token_id:1573",
+        "challenger": "token_id:2483",
+        "margin": 1.875
+      },
+      "smallest_margin_step": {
+        "step": 18,
+        "winner": "token_id:373",
+        "challenger": "token_id:713",
+        "margin": 0.75
+      }
+    },
+    {
+      "prompt": "She opened the door and saw",
+      "text": " a man standing there. He was tall and had a beard. She asked him who he was and he said he was a friend of her husband. She invited him in and he sat down on the couch. He started talking about how he",
+      "steps_with_repeated_winner": 16,
+      "min_margin": 0.0,
+      "first_flippable": {
+        "step": 19,
+        "winner": "token_id:341",
+        "challenger": "token_id:24",
+        "margin": 0.5
+      },
+      "smallest_margin_step": {
+        "step": 35,
+        "winner": "token_id:622",
+        "challenger": "token_id:1451",
+        "margin": 0.0
+      }
+    },
+    {
+      "prompt": "Item, quantity, price\napple, 3, 1.20\nbanana, 5, 0.60\ncherry,",
+      "text": " 2, 2.50\norange, 4, 0.80\ngrape, 1, 3.00\nCalculate the total cost for each item and the overall total cost. The total cost for each item",
+      "steps_with_repeated_winner": 23,
+      "min_margin": 0.125,
+      "first_flippable": {
+        "step": 17,
+        "winner": "token_id:198",
+        "challenger": "token_id:368",
+        "margin": 1.0
+      },
+      "smallest_margin_step": {
+        "step": 41,
+        "winner": "token_id:26",
+        "challenger": "token_id:335",
+        "margin": 0.125
+      }
+    },
+    {
+      "prompt": "Q: What is machine learning?\nA: Machine learning is",
+      "text": " a subset of artificial intelligence that involves training algorithms to learn from data and make predictions or decisions without being explicitly programmed.\nA: Machine learning is a subset of artificial intelligence that involves training algorithms to learn from data and make predictions or decisions without being",
+      "steps_with_repeated_winner": 20,
+      "min_margin": 12.75,
+      "first_flippable": null,
+      "smallest_margin_step": {
+        "step": 28,
+        "winner": "token_id:262",
+        "challenger": "token_id:315",
+        "margin": 12.75
+      }
+    },
+    {
+      "prompt": "one two three one two three one",
+      "text": " two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one two three one",
+      "steps_with_repeated_winner": 45,
+      "min_margin": 2.375,
+      "first_flippable": null,
+      "smallest_margin_step": {
+        "step": 5,
+        "winner": "token_id:1085",
+        "challenger": "token_id:368",
+        "margin": 2.375
+      }
+    },
+    {
+      "prompt": "The weather today is quite nice, and tomorrow it will be",
+      "text": " even nicer. The weather is nice today, and tomorrow it will be even nicer. The weather today is quite nice, and tomorrow it will be even nicer. The weather is nice today, and tomorrow it will be even nicer. The weather",
+      "steps_with_repeated_winner": 33,
+      "min_margin": 1.125,
+      "first_flippable": {
+        "step": 16,
+        "winner": "token_id:26",
+        "challenger": "token_id:1574",
+        "margin": 1.5
+      },
+      "smallest_margin_step": {
+        "step": 45,
+        "winner": "token_id:26",
+        "challenger": "token_id:1574",
+        "margin": 1.125
+      }
+    }
+  ],
+  "phase_b": {
+    "prompt": "She opened the door and saw",
+    "max_tokens": 20,
+    "predicted_step": 19,
+    "measured_margin": 0.5,
+    "observed_flip_threshold": 0.475,
+    "winner": "token_id:341",
+    "challenger": "token_id:24",
+    "runs": [
+      {
+        "presence_penalty": 0.0,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was and",
+        "identical_to_zero_penalty": true,
+        "first_char_divergence": null
+      },
+      {
+        "presence_penalty": 0.125,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was and",
+        "identical_to_zero_penalty": true,
+        "first_char_divergence": null
+      },
+      {
+        "presence_penalty": 0.25,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was and",
+        "identical_to_zero_penalty": true,
+        "first_char_divergence": null
+      },
+      {
+        "presence_penalty": 0.375,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was and",
+        "identical_to_zero_penalty": true,
+        "first_char_divergence": null
+      },
+      {
+        "presence_penalty": 0.475,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was,",
+        "identical_to_zero_penalty": false,
+        "first_char_divergence": 76
+      },
+      {
+        "presence_penalty": 0.525,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was,",
+        "identical_to_zero_penalty": false,
+        "first_char_divergence": 76
+      },
+      {
+        "presence_penalty": 0.625,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was,",
+        "identical_to_zero_penalty": false,
+        "first_char_divergence": 76
+      },
+      {
+        "presence_penalty": 0.75,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was,",
+        "identical_to_zero_penalty": false,
+        "first_char_divergence": 76
+      },
+      {
+        "presence_penalty": 1.0,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was,",
+        "identical_to_zero_penalty": false,
+        "first_char_divergence": 76
+      },
+      {
+        "presence_penalty": 2.0,
+        "text": " a man standing there. He was tall and had a beard. She asked him who he was,",
+        "identical_to_zero_penalty": false,
+        "first_char_divergence": 76
+      }
+    ],
+    "presence_penalty_reaches_device_logits": true,
+    "largest_penalty_with_no_change": 0.375,
+    "monotone_step": true,
+    "tolerance": 0.15,
+    "within_tolerance": true,
+    "verdict_provenance": "derived fields recomputed offline by presence_flip_probe.phase_b_verdict() from the committed runs; measurements untouched. The original file was written by an earlier revision whose rule disagreed with the printed verdict (recorded False)."
+  }
+}

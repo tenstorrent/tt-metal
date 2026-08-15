@@ -1,0 +1,482 @@
+{
+  "layers": "0,3",
+  "max_num_seqs": 32,
+  "max_model_len": 131072,
+  "block_size": 64,
+  "build_s": 17.52,
+  "kv": {
+    "tokens_all_users": 262144,
+    "num_blocks": 4128,
+    "allocated_layers": 2,
+    "cache_shape": [
+      4128,
+      1,
+      64,
+      128
+    ],
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "model_max_num_blocks": 4128,
+    "model_cache_slots": 32,
+    "binds_the_allocated_buffers": [
+      true,
+      true
+    ]
+  },
+  "warmup_s": 0.52,
+  "decode_trace_captured": true,
+  "sampling_trace_captured": true,
+  "requests": [
+    {
+      "prompt_len": 128,
+      "aligned": {
+        "tile32": true,
+        "page64": true,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 16,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 16,
+        "device_position_advances": 0
+      },
+      "tokens": [
+        56562,
+        125391,
+        164576,
+        98162,
+        3506,
+        140038,
+        38912,
+        90202,
+        27321,
+        24563,
+        166855,
+        9977,
+        49747,
+        179928,
+        34011,
+        150015,
+        109267
+      ],
+      "distinct_tokens": 17,
+      "max_token_id": 179928,
+      "in_vocab": true
+    },
+    {
+      "prompt_len": 37,
+      "aligned": {
+        "tile32": false,
+        "page64": false,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 16,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 16,
+        "device_position_advances": 0
+      },
+      "tokens": [
+        107113,
+        161459,
+        123562,
+        5550,
+        119437,
+        24527,
+        102844,
+        40050,
+        20240,
+        173249,
+        14148,
+        98877,
+        127517,
+        117218,
+        72072,
+        2737,
+        55856
+      ],
+      "distinct_tokens": 17,
+      "max_token_id": 173249,
+      "in_vocab": true
+    },
+    {
+      "prompt_len": 4097,
+      "aligned": {
+        "tile32": false,
+        "page64": false,
+        "chunk8192": false
+      },
+      "prefill_counters": {
+        "trace_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "readbacks": 1,
+        "device_position_advances": 0
+      },
+      "decode_counters": {
+        "trace_replays": 16,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "page_table_refreshes": 1,
+        "synchronizations": 0,
+        "readbacks": 16,
+        "device_position_advances": 0
+      },
+      "tokens": [
+        21314,
+        87693,
+        116103,
+        177667,
+        29851,
+        158134,
+        16036,
+        79508,
+        284,
+        119437,
+        114158,
+        105977,
+        133734,
+        119437,
+        127442,
+        56326,
+        13656
+      ],
+      "distinct_tokens": 16,
+      "max_token_id": 177667,
+      "in_vocab": true
+    }
+  ],
+  "stale_inputs": false,
+  "multi_request": {
+    "prompt_lens": [
+      96,
+      130,
+      61
+    ],
+    "rows": 3,
+    "tokens": [
+      [
+        87050,
+        145814,
+        77316,
+        193263,
+        29851,
+        140369,
+        3101,
+        155508,
+        25196,
+        33861,
+        67054,
+        127326,
+        138891,
+        193263,
+        63653,
+        109267,
+        11216
+      ],
+      [
+        119437,
+        79617,
+        137853,
+        12533,
+        148776,
+        62883,
+        86868,
+        43954,
+        43581,
+        98169,
+        113981,
+        746,
+        122243,
+        65127,
+        116968,
+        88546,
+        199373
+      ],
+      [
+        126915,
+        34584,
+        84241,
+        96817,
+        891,
+        119437,
+        79617,
+        60400,
+        38772,
+        69211,
+        121558,
+        19692,
+        99673,
+        14616,
+        35230,
+        85343,
+        83616
+      ]
+    ],
+    "rows_are_distinct": true,
+    "decode_counters": {
+      "trace_replays": 16,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 1,
+      "synchronizations": 0,
+      "readbacks": 16,
+      "device_position_advances": 0
+    }
+  },
+  "host_sampling": {
+    "logits_shape": [
+      32,
+      1,
+      202048
+    ],
+    "finite": true,
+    "counters": {
+      "trace_replays": 1,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "readbacks": 2,
+      "device_position_advances": 0
+    }
+  },
+  "capability_report": {
+    "hf_model": "meta-models/Muse-Glimmer-30B",
+    "supported_context": 131072,
+    "cache_slots": 32,
+    "decode_rows": 32,
+    "max_num_blocks": 4128,
+    "page_block_size": 64,
+    "blocks_per_seq": 2048,
+    "prefill_chunk_size": 8192,
+    "vocab_size": 202048,
+    "padded_vocab_size": 202752,
+    "num_layers": 2,
+    "layer_kinds": [
+      "sliding",
+      "full"
+    ],
+    "force_argmax": false,
+    "sampling_implementation": "models.common.sampling.SamplingGenerator",
+    "lm_head_softcap_in_l1": true,
+    "embed_decode_gather_sharded": true,
+    "decode_swiglu_mul_cores": 80,
+    "prefill_trace": false,
+    "prefill_trace_max_entries": 1,
+    "prefill_capture_failures": 0,
+    "prefill_capture_disabled_after_failure": false,
+    "prefill_trace_buckets_resident": [],
+    "lm_head_dtype": "DataType.BFLOAT4_B",
+    "lm_head_matmul": "dram_sharded",
+    "lm_head_cores": 52,
+    "lm_head_in0_block_w": 2,
+    "lm_head_fidelity": "MathFidelity.LoFi",
+    "lm_head_fp32_acc": false,
+    "lm_head_output_dtype": "DataType.BFLOAT16",
+    "sampler_max_top_k": 32,
+    "sampler_pad_logits_to_power_of_2_requested": false,
+    "sampler_pad_logits_to_power_of_2_effective": true,
+    "sampler_topk_split_to_power_of_2": true,
+    "sampler_topk_pieces": 2,
+    "sampler_invalid_vocab_tail_width": 704,
+    "sampler_invalid_vocab_mask_built": true,
+    "sampler_candidates_per_device": 64,
+    "counters": {
+      "trace_replays": 1,
+      "token_refreshes": 1,
+      "position_refreshes": 1,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "readbacks": 2,
+      "device_position_advances": 0
+    },
+    "carried_forward_decoder_contract": {
+      "activation_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "DataType.BFLOAT8_B",
+      "weight_dtype_wqkv": "DataType.BFLOAT4_B",
+      "weight_dtype_o_proj": "DataType.BFLOAT4_B",
+      "weight_dtype_mlp_gate": "DataType.BFLOAT4_B",
+      "weight_dtype_mlp_down": "DataType.BFLOAT4_B",
+      "prefill_ccl_impl": "async",
+      "decode_ccl_impl": "wrapper",
+      "prefill_ccl_mode": "all_reduce",
+      "decode_ccl_mode": "rs_ag",
+      "prefill_ccl_dtype": "DataType.BFLOAT8_B",
+      "decode_ccl_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_rs_workers": 4,
+      "decode_ccl_rs_workers": 1,
+      "ccl_ag_barrier": true,
+      "ccl_persistent_buffers_rejected_and_off": true,
+      "prefill_fractured_norm": true,
+      "prefill_fractured_norm_min_rows": 256,
+      "sharded_decode_io": true,
+      "boundary_cores": 16,
+      "decode_matmul_o_proj": [
+        16,
+        2
+      ],
+      "max_cores_per_head_batch": 32
+    },
+    "precision_policy": {
+      "policy_name": "c14-attn4-cclbfp8-kv8",
+      "decoder_overrides": {
+        "prefill_fractured_norm": true,
+        "prefill_ccl_mode": "all_reduce",
+        "decode_ccl_mode": "rs_ag",
+        "prefill_ccl_impl": "async",
+        "decode_ccl_impl": "wrapper"
+      },
+      "num_layers": 2,
+      "layer_groups": [
+        {
+          "layers": [
+            0,
+            3
+          ],
+          "precision": {
+            "policy_name": "c14-attn4-cclbfp8-kv8",
+            "activation_dtype": "DataType.BFLOAT16",
+            "kv_cache_dtype": "DataType.BFLOAT8_B",
+            "kv_cache_dtype_requested": "DataType.BFLOAT8_B",
+            "roles": {
+              "wqkv": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "attn_gate": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "o_proj": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 2
+              },
+              "mlp_gate": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "mlp_up": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 13
+              },
+              "mlp_down": {
+                "weight_dtype": "DataType.BFLOAT4_B",
+                "decode_fidelity": "MathFidelity.LoFi",
+                "prefill_fidelity": "MathFidelity.LoFi",
+                "decode_cores": 16,
+                "decode_in0_block_w": 10
+              }
+            },
+            "ccl": {
+              "prefill_payload_dtype": "DataType.BFLOAT8_B",
+              "decode_payload_dtype": "DataType.BFLOAT8_B",
+              "prefill_ccl_dtype_requested": "DataType.BFLOAT8_B",
+              "decode_ccl_dtype_requested": "DataType.BFLOAT8_B",
+              "prefill_ccl_impl": "async",
+              "decode_ccl_impl": "wrapper",
+              "prefill_ccl_mode": "all_reduce",
+              "decode_ccl_mode": "rs_ag"
+            }
+          }
+        }
+      ],
+      "embedding": {
+        "weight_dtype": "DataType.BFLOAT16"
+      },
+      "lm_head": {
+        "weight_dtype": "DataType.BFLOAT4_B",
+        "fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": false,
+        "output_dtype": "DataType.BFLOAT16",
+        "matmul": "dram_sharded",
+        "cores": 52,
+        "in0_block_w": 2,
+        "softcap_in_l1": true
+      },
+      "terminal_norms": {
+        "embed_norm_weight_dtype": "DataType.BFLOAT16",
+        "final_norm_weight_dtype": "DataType.BFLOAT16"
+      },
+      "logits": {
+        "logits_dtype": "DataType.BFLOAT16",
+        "sampling_input_dtype": "DataType.BFLOAT16",
+        "sampling_implementation": "models.common.sampling.generator.SamplingGenerator"
+      },
+      "selected_config_id": "c14-attn4-cclbfp8-kv8"
+    },
+    "per_device_layer_weight_bytes": 144302080,
+    "per_device_kv_cache_bytes": 143720448,
+    "per_device_rope_table_bytes": 134217728,
+    "per_device_terminal_weight_bytes": 863073536,
+    "per_device_total_bytes": 1285313792,
+    "per_device_dram_capacity_bytes": 33778699264,
+    "vllm": {
+      "adapter": "models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:MuseGlimmerForConditionalGeneration",
+      "model_capabilities": {
+        "supports_prefix_caching": false,
+        "supports_async_decode": true,
+        "supports_sample_on_device": true
+      },
+      "max_num_seqs": 32,
+      "served_max_model_len": 131072,
+      "kv_cache_owner": "vllm (allocate_kv_cache -> MuseGlimmerModel.adopt_external_kv_cache)",
+      "kv_cache_blocks": 4128,
+      "kv_cache_tokens_all_users": 264192,
+      "page_block_size": 64,
+      "blocks_per_seq": 2048,
+      "trace_region_size_default": 400000000,
+      "prefill_warmup_lengths": [
+        32,
+        96,
+        128,
+        160,
+        256,
+        512,
+        1024,
+        8192
+      ]
+    }
+  },
+  "status": "ok"
+}
