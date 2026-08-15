@@ -1,0 +1,33 @@
+{
+  "component": "flow_matching",
+  "submodule_path": "flow",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          3072
+        ],
+        "dtype": "torch.float32"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "cfg_alpha": {
+        "kind": "none"
+      }
+    }
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      37
+    ],
+    "dtype": "torch.int64"
+  }
+}

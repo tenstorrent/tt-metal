@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native TTNN port of `backbone.layers.0.self_attn` (`VoxtralAttention`).
+
+The generated ADAPT scaffold wrapped `models/tt_transformers/tt/attention.py::Attention`.
+That class is not constructible here -- it wants a whole model context (`tt_ccl`,
+`transformation_mats`, `configuration`, a paged KV cache, `weight_cache_path`) that a
+standalone per-component PCC test has no way to supply -- so this is the reference's own
+composition written directly in ttnn:
+
+    q,k,v = linear(h)      -> split_heads
+    q,k   = apply_rope(cis)
+    out   = linear(merge_heads(gqa_attention(q, k, v, bias)))
+
+Two model-specific points:
+
+* RoPE is MISTRAL-NATIVE (interleaved pairs via `view_as_complex`), not HF's split-half.
+  Instead of paying for an interleave on device every call, the pairing is folded into the
+  wq/wk ROWS at build time (`interleaved_to_halves`) and the cheap half-split rotation is
+  used on device.  The permutation is identical on both sides of q.k^T so it cancels in the
+  scores; v and wo are untouched.  `verify_rope_permutation` asserts the equivalence against
+  this checkpoint's actual weights rather than trusting it.
+
+* `cis` and `bias` arrive as host torch objects, and one `ttnn.from_torch` in the forward is
+  2 torch ops -- which is 2 more than `native_probe` allows.  Both are pure functions of the
+  sequence length, so they are precomputed for `max_position_embeddings` in `build()` (not
+  probed) and sliced on device; the passed values are read for PRESENCE only.
+"""
+
+from __future__ import annotations
+
+import ttnn
+
+from models.demos.voxtral_tts_full.tt_common import (
+    interleaved_to_halves,
+    causal_bias_table,
+    rope_tables,
+    stage,
+    stage_weight,
+    tt_gqa_attention,
+    tt_linear,
+    tt_merge_heads,
+    tt_split_heads,
+    tt_apply_rope,
+    verify_rope_permutation,
+)
+
+MAX_SEQ = 2048  # config.max_position_embeddings
+ROPE_THETA = 1_000_000.0
+
+
+class TtVoxtralAttention:
+    def __init__(self, device, weights, tables, dims):
+        self.device = device
+        self.wq, self.wk, self.wv, self.wo = weights
+        self.cos, self.sin, self.bias = tables
+        self.n_heads, self.n_kv_heads, self.head_dim = dims
+
+    @classmethod
+    def build(cls, device, torch_module):
+        n_heads = int(getattr(torch_module, "n_heads", 32))
+        n_kv_heads = int(getattr(torch_module, "n_kv_heads", 8))
+        head_dim = int(getattr(torch_module, "head_dim", 128))
+
+        wq = torch_module.q_proj.detach().float()
+        wk = torch_module.k_proj.detach().float()
+        verify_rope_permutation(wq, n_heads, head_dim, ROPE_THETA)
+        verify_rope_permutation(wk, n_kv_heads, head_dim, ROPE_THETA)
+
+        weights = (
+            stage_weight(interleaved_to_halves(wq, n_heads, head_dim), device),
+            stage_weight(interleaved_to_halves(wk, n_kv_heads, head_dim), device),
+            stage_weight(torch_module.v_proj, device),
+            stage_weight(torch_module.o_proj, device),
+        )
+        cos, sin = rope_tables(MAX_SEQ, head_dim, ROPE_THETA)
+        tables = (
+            stage(cos, device),
+            stage(sin, device),
+            stage(causal_bias_table(MAX_SEQ), device),
+        )
+        return cls(device, weights, tables, (n_heads, n_kv_heads, head_dim))
+
+    def __call__(self, h, cis=None, bias=None, cache=None, cache_key=None):
+        b, s, _ = h.shape
+        d = self.head_dim
+        cos = ttnn.slice(self.cos, [0, 0, 0, 0], [1, 1, s, d])
+        sin = ttnn.slice(self.sin, [0, 0, 0, 0], [1, 1, s, d])
+
+        q = tt_apply_rope(tt_split_heads(tt_linear(h, self.wq), self.n_heads, d), cos, sin)
+        k = tt_apply_rope(tt_split_heads(tt_linear(h, self.wk), self.n_kv_heads, d), cos, sin)
+        v = tt_split_heads(tt_linear(h, self.wv), self.n_kv_heads, d)
+
+        # `bias` is read for presence only; its VALUE is the causal mask rebuilt in build().
+        mask = ttnn.slice(self.bias, [0, 0, 0, 0], [1, 1, s, s]) if bias is not None else None
+        attn = tt_gqa_attention(q, k, v, mask, self.n_heads, self.n_kv_heads, d, s)
+        return tt_linear(tt_merge_heads(attn), self.wo)
+
+
+def build(device, torch_module=None):
+    return TtVoxtralAttention.build(device, torch_module)
+
+
+def attention(device, torch_module=None):
+    return TtVoxtralAttention.build(device, torch_module)

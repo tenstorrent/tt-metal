@@ -1,0 +1,59 @@
+{
+  "last_failure_class": {
+    "attention": "OTHER"
+  },
+  "last_failure_text": {
+    "attention": "  - FAILED  models.demos.voxtral_tts_full.tests.pcc.test_attention::test_attention[device_params0]\n      NameError: name '_captured_submodule_path' is not defined\n### models.demos.voxtral_tts_full.tests.pcc.test_attention::test_attention[device_params0]\nNameError: name '_captured_submodule_path' is not defined\ndevice_params = {'l1_small_size': 24576}\ndevice = MeshDevice(1x1 grid, 1 devices)\n\n    @pytest.mark.parametrize(\"device_params\", [{\"l1_small_size\": 24576}], indirect=True)\n    def test_attention(device_params, device):\n        stage_budget_s = int(os.environ.get(\"TT_PLANNER_TEST_STAGE_S\", \"120\"))\n    \n        try:\n            _seed = int(os.environ.get(\"TT_PLANNER_TEST_SEED\", \"0\"))\n        except ValueError:\n            _seed = 0\n        torch.manual_seed(_seed)\n    \n        _module_level = os.environ.get(\"TT_PLANNER_GOLDEN_CACHE\", \"1\") not in (\"\", \"0\", \"false\", \"False\")\n        _golden_cache_file = None\n        _golden_hit = None\n        if _module_level:\n            try:\n                from models.common.golden_cache import golden_cache_path, load_golden_cache\n    \n                _golden_cache_file = golden_cache_path(__file__, COMPONENT_NAME, _seed)\n                _golden_hit = load_golden_cache(_golden_cache_file)\n            except Exception:\n                _golden_hit = None\n        if _golden_hit is not None:\n            torch_module, sample_kwargs, primary, torch_out = _golden_hit\n            print(\"[bringup] stage=golden_cache_hit (skipped full-model load)\", flush=True)\n        else:\n            print(\"[bringup] stage=build_torch_reference\", flush=True)\n            _set_stage_timeout(stage_budget_s)\n            try:\n>               torch_module, sample_kwargs, primary = _build_torch_reference()\n\nmodels/demos/voxtral_tts_full/tests/pcc/test_attention.py:650: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\n    def _build_torch_reference():\n        # AutoModelForCausalLM-first fallback: HF causal-LM models\n        # (Llama / Qwen / Mistral / DeepSeek / Phi / Gemma / ...) follow\n        # the `XxxForCausalLM(model: XxxModel)` structure. `AutoModel.from_pretrained`\n        # returns the INNER `XxxModel` (no LM head); captured submodule paths\n        # typically reference the OUTER `XxxForCausalLM` (e.g. `model.layers.0`).\n        # The path mismatch causes `_resolve` to land on a bare `nn.Module`\n        # whose `_forward_unimplemented` raises TypeError on every kwarg.\n        # Mirror the multi-class fallback pattern already established in\n        # `agentic/probe.py:159`, `output_validation.py:830-965`, and\n        # `activation_diff.py:1163-1171` so the PCC test harness resolves\n        # the same class the capture step used.\n        model = None\n        _last_err = None\n        for _cls_name in (\"AutoModelForCausalLM\", \"AutoModel\"):\n            try:\n                _cls = getattr(transformers, _cls_name)\n            except AttributeError:\n                continue\n            try:\n                model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype=\"bfloat16\", low_cpu_mem_usage=True)\n                break\n            except Exception as _e:\n                _last_err = _e"
+  },
+  "attempts": {
+    "attention": 2,
+    "codec_decoder": 1,
+    "decoder_layer": 1,
+    "flow_matching": 1,
+    "m_l_p": 1,
+    "r_m_s_norm": 1,
+    "tts_backbone": 1
+  },
+  "best_pcc": {
+    "attention": 0.9999991871343353,
+    "codec_decoder": 0.9999262856038799,
+    "decoder_layer": 0.9999999987236295,
+    "flow_matching": 1.0,
+    "m_l_p": 0.9999998422876026,
+    "r_m_s_norm": 1.000000000509784,
+    "tts_backbone": 0.9999943003990592
+  },
+  "consecutive_same_class": {
+    "attention": 0,
+    "codec_decoder": 0,
+    "decoder_layer": 0,
+    "flow_matching": 0,
+    "m_l_p": 0,
+    "r_m_s_norm": 0,
+    "tts_backbone": 0
+  },
+  "pcc_history": {
+    "attention": [
+      0.9999991871343353,
+      0.9999991871343353
+    ],
+    "codec_decoder": [
+      0.9999262856038799
+    ],
+    "decoder_layer": [
+      0.9999999987236295
+    ],
+    "flow_matching": [
+      1.0
+    ],
+    "m_l_p": [
+      0.9999998422876026
+    ],
+    "r_m_s_norm": [
+      1.000000000509784
+    ],
+    "tts_backbone": [
+      0.9999943003990592
+    ]
+  }
+}

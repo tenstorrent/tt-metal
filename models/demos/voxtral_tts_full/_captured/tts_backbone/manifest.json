@@ -1,0 +1,31 @@
+{
+  "component": "tts_backbone",
+  "submodule_path": "backbone",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          200,
+          3072
+        ],
+        "dtype": "torch.float32"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      200,
+      3072
+    ],
+    "dtype": "torch.float32"
+  }
+}
