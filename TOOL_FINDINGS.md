@@ -134,6 +134,8 @@ defect.
 | **F35** | backend selection is non-deterministic — identical runs picked different templates, the LLM ranker overriding its own top score, choosing between two entries whose paths are both missing | **YES — reproducibility** | small |
 | **F36** | "PCC tests will use real inputs" is false — the graduation gate builds inputs with `torch.randn` and never loads the 43 MB captures or the captured `output.pt`; raising the threshold measures the wrong thing more precisely | **YES — the sharpest one** | small |
 | **F37** | the generated test calls `_captured_submodule_path()`, defined in 0 of 7 emitted files → guaranteed first-round `NameError` for every model; and its input defaults drop the causal mask (non-causal golden) and stage index tensors as bf16 (8191→8192) | **YES — with F36** | small |
+| **F38** | `optimize --devices` defaults to `"0,1"`, so a 1-chip box is planned as 2-chip TP=2 — overriding an explicit `--mesh 1,1` and ignoring the `parallelism_manifest.json` the tool wrote itself | **YES** | one line |
+| **F39** | the e2e report prints `Verdict: PASS` beside `e2e PCC n/a` — verdict and measurement come from different sources and only one survived the cc-engine refactor (real value was 0.99998) | **YES** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -3352,6 +3354,123 @@ So this run's 0.99 gate is intact — it is the inputs and the golden that neede
    float → `float32`/`TILE`.
 5. **Let a stub marshal its own side inputs**, or exclude input staging from the `torch_ops == 0`
    probe — otherwise the probe's definition of "native" forces stubs to ignore their arguments.
+
+---
+
+## ★★★ F38 — `optimize --devices` defaults to `"0,1"`, so a single-chip box gets a 2-chip plan — and an explicit `--mesh 1,1` does not stop it
+
+**Status: live, hit launching the optimize stage** · severity: the perf stage optimizes and gates
+under a topology the model was never ported to · reported: not yet
+
+`cli.py:11101`:
+
+```python
+popt.add_argument("--devices", default="0,1", help="single | all | explicit ids like '0,1'")
+```
+
+A literal two-device default. This box has **one** chip:
+
+- `HARDWARE['P150'].chips == 1`
+- one device node exists: `/dev/tenstorrent/3`
+- bring-up, minutes earlier, wrote `models/demos/voxtral_tts_full/parallelism_manifest.json`:
+  ```json
+  {"chips": 1, "tp": 1, "dp": 1, "mesh": [1, 1]}
+  ```
+- the whole port was brought up and e2e-verified at TP=1
+
+Launched with the topology stated explicitly — `--box P150 --mesh 1,1` — `optimize` printed:
+
+```
+  engine   : cc · devices 0,1 · mesh 1,1 · metric device_ms
+  topology : 2-chip -> mesh 1x2 (TP=2 DP=1) [1D default]
+```
+
+It echoes `mesh 1,1` on one line and resolves `2-chip -> mesh 1x2 (TP=2 DP=1)` on the next. The
+device-list default wins over the explicitly requested mesh, silently. Adding `--devices 0` fixes
+it:
+
+```
+  engine   : cc · devices 0 · mesh 1,1 · metric device_ms
+  topology : single chip -> mesh 1x1
+```
+
+**Why it matters.** Every measurement the optimize stage takes — and the e2e PCC gate it runs to
+protect correctness — would have run against a 1x2 mesh with TP=2 on hardware that has one chip.
+Either it fails somewhere late and expensively, or it "succeeds" and reports device_ms for a
+topology the port does not have. The tool wrote the correct topology into its own
+`parallelism_manifest.json` during bring-up and does not read it back.
+
+This is F20's shape again — the tool already knows, and the knowledge is not wired to the decision.
+
+### Fixes
+
+1. **Default `--devices` to what is present**, not to `"0,1"`. `single` is already an accepted value
+   of the flag; it is the safe default.
+2. **Read `parallelism_manifest.json`.** The tool records the port's own chips/TP/DP during
+   bring-up; the perf stage should inherit it rather than re-derive a different answer.
+3. **Never let a device-list default override an explicit `--mesh`.** If they disagree, stop and say
+   so — the current behaviour prints both, one line apart, and proceeds with the one the user did
+   not ask for.
+
+---
+
+## ★★ F39 — the e2e report prints `Verdict: PASS` beside `e2e PCC n/a`
+
+**Status: live, observed on the 0.99 re-run** · severity: the headline artifact omits the one number
+the verdict is about · reported: not yet
+
+`emit-e2e` finished PASS. Both the console summary and `RUN_REPORT.md` render:
+
+```
+    task         e2e PCC   demo (real I/O)            trace perf test
+    tts          n/a       demo/demo_tts.py           test_tts_perf.py
+```
+
+**The verdict is sound.** `can_stop` comes from `e2e_mcp.py`'s combined gate, which the module
+docstring describes as *"Tool-run, NOT agent-reported: the tool runs tests/e2e and measures PCC
+itself, so the agent cannot self-declare done, fake the number, or xfail/skip past it"* — good
+design, and it held. A direct `pytest` run confirms the port is excellent:
+
+```
+e2e PCC = 0.9999834299087524
+frames tt=(8,37) ref=(8,37)  exact_match=True  code_flips=0
+per-step hidden PCC: 1.000000 x9
+7 passed in 50.96s
+```
+
+**The report just cannot see it.** The cell is computed at `commands/emit_e2e.py:434`:
+
+```python
+pcc_s = f"{pcc:.4f}" if isinstance(pcc, float) else "n/a"
+```
+
+and `pcc` is sourced (`emit_e2e.py:377-386`) from `demo_dir/grader_report.json` → `calls[].final_pcc`.
+**That file does not exist** — the cc-engine fix-loop path never writes it; it belongs to the older
+grader-agent path. The verdict beside it is a literal, passed in at `emit_e2e.py:1487`:
+
+```python
+if final.get("can_stop"):
+    emit_e2e_report(model_id, demo_dir, verdict="PASS")
+```
+
+So verdict and measurement come from two different places, and only one of them survived the
+refactor to the cc engine.
+
+**Why it matters more than a cosmetic gap.** F29 established that the PCC threshold is the single
+most consequential knob in this pipeline — the difference between a 0.9586 port and a 0.9986 one.
+`RUN_REPORT.md` is the artifact a reviewer reads to judge a port. Printing `PASS` with no number
+next to it is precisely F26's complaint (*report what the gate measured*) applied to the headline
+result: a reader cannot tell 0.9999 from 0.9900 from "the gate was satisfied some other way".
+
+### Fixes
+
+1. **Surface the number the gate already measured.** `_run_deterministic_gates` computes the e2e PCC
+   to compare against the threshold; return it and render it, rather than re-reading a file written
+   by a different code path.
+2. **Have the cc-engine path write `grader_report.json`** (or drop the file dependency entirely).
+3. **Never print a verdict beside `n/a`.** If the value is genuinely unavailable, say why — `PASS
+   (gate satisfied; PCC not recorded by this path)` is honest; `PASS … n/a` reads as an oversight
+   the reader must not notice.
 
 ---
 
