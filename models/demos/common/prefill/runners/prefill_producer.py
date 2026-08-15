@@ -55,18 +55,11 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  prompt's real length (so PREFILL_PRODUCER_CHUNKS/MID_END are ignored per
                                  slot). Unset (default) => one shared PREFILL_TRACE_DIR + the synthetic
                                  schedule for all slots.
-  PREFILL_DFLASH_GOLDEN_KV_DIR   dir holding the DFlash drafter's golden context K/V
-                                 (k_cache.safetensors + v_cache.safetensors, [layers, kv_heads, S,
-                                 head_dim]). Set it to ALSO PCC the drafter's context cache per
-                                 (layer, kv-head), read back through the drafter configs of the same KV
-                                 chunk table. Unset (default) => the drafter half is skipped even when
-                                 the table carries it, because the golden is prompt-specific and this
-                                 module cannot tell whether the pushed trace is the one that produced it
-                                 — setting this is the operator asserting that pairing.
-                                 e.g. /mnt/models/deepseek-prefill-cache/golden/dflash_context_kv_55k_v3
-  PREFILL_DFLASH_PCC             per-(layer, head) bar for the drafter check (default 0.999, the
-                                 tests/dflash_prefill threshold — a bf8 cache costs ~1e-4 vs an fp32
-                                 golden, so this is not slack for a layout bug to hide in).
+  PREFILL_DFLASH_GOLDEN_KV_DIR   dir with the DFlash drafter's golden context K/V (k_cache/v_cache
+                                 .safetensors); set it to ALSO PCC the drafter caches the table carries.
+  PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.999). Both feed
+                                 dflash_kv_table_pcc_check in deepseek_v3_d_p/tt/dflash_prefill/
+                                 kv_validation.py; unset golden => the drafter half is skipped.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
 Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
@@ -97,19 +90,15 @@ import struct
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
 import torch
 from loguru import logger
-from safetensors import safe_open
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
-from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
-from tests.ttnn.utils_for_testing import comp_pcc
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -490,9 +479,8 @@ class ProducerConfig:
     interleave: str = "random"  # slot order: "random" | "round_robin" (fair alternation)
     slot_lengths: dict = None  # per-slot real token count (from per-slot prompts); overrides the random
     # chunk draw + mid_chunk_end when set (each slot pushes exactly its prompt). None => synthetic depth.
-    multi_turn_prob: float = 0.0  # probability a recycled slot CONTINUES its conversation (a new turn
-    # resuming at the 32-aligned prefix already cached) instead of starting a fresh one at position 0.
-    # 0.0 => every recycle is a fresh request, i.e. exactly the pre-multi-turn behaviour.
+    multi_turn_prob: float = 0.0  # P(a recycled slot resumes its conversation at the 32-aligned cached
+    # prefix instead of restarting at 0). 0.0 => every recycle is a fresh request (pre-multi-turn behaviour).
 
 
 def _config_from_env() -> ProducerConfig:
@@ -526,13 +514,9 @@ def _config_from_env() -> ProducerConfig:
 
 
 class _Slot:
-    """One cache-user slot holding one in-flight request. `next_chunk` advances per push; `actual_isl`
-    is the conversation's real (non-pad) token count, so the last chunk reports a clamped actual_end.
-
-    `prefix_len` is the 32-aligned absolute cache offset this TURN resumes writing at: 0 for a fresh
-    conversation, and the aligned-down length of the previous turn when the slot continues one. Every
-    length here is ABSOLUTE (measured from cache position 0), never relative to the turn -- actual_end
-    is a cache position, so making it turn-relative would silently mis-address every consumer."""
+    """One cache-user slot holding one in-flight request. `next_chunk` advances per push; `actual_isl` is
+    the conversation's real (non-pad) token count. `prefix_len` is the 32-aligned absolute cache offset
+    this turn resumes at (0 for a fresh conversation); every length here is absolute, not turn-relative."""
 
     def __init__(self, slot_id: int):
         self.slot_id = slot_id
@@ -549,17 +533,12 @@ class _Slot:
 
 
 class _Resident(NamedTuple):
-    """What is physically resident in one slot's KV cache at push time.
+    """What is physically resident in one slot's KV cache: `real_len`, the absolute non-pad extent
+    [0, real_len) the runner actually wrote (the last `actual_end` pushed). Recorded, not re-derived from
+    chunk counts -- a multi-turn slot resumes at a non-zero prefix, so chunks_pushed * CHUNK_SIZE would
+    describe only its latest turn. Shared producer/migration_driver contract."""
 
-    `real_len` is recorded rather than re-derived: it is exactly the last `actual_end` pushed, so it can
-    never disagree with what the runner actually wrote. (Consumers used to recompute
-    ``min(chunks_pushed * CHUNK_SIZE, actual_isl)`` in three places, which silently drops `prefix_len`.)"""
-
-    chunks_pushed: int  # chunks pushed for the resident TURN, not the whole conversation
-    actual_isl: int  # the conversation's absolute non-pad token count
-    real_len: int  # absolute non-pad end: the slot holds real KV over [0, real_len)
-    prefix_len: int = 0  # absolute 32-aligned offset this turn resumed at (0 = fresh conversation)
-    turn_idx: int = 0
+    real_len: int
 
 
 def _new_request(
@@ -567,25 +546,19 @@ def _new_request(
 ) -> None:
     """(Re)assign a request to `slot`, starting at chunk 0 of a turn that writes from `prefix_len`.
 
-    Per-slot-prompt mode (cfg.slot_lengths set): the slot pushes exactly its assigned prompt — depth is
-    ceil(real_len / CHUNK_SIZE) and actual_isl is the prompt's real token count, so validation covers
-    [0, real_len). The random chunk draw + mid_chunk_end are bypassed (interleave/gaps/bursts still apply).
-    Otherwise (shared-trace mode): a random chunk count, optionally ending mid-chunk.
-
-    A resumed turn (`prefix_len > 0`) may only add what still fits under the per-user cache, so the depth
-    draw is clamped to the remaining capacity. At prefix_len == 0 that clamp is the bound
-    `_config_from_env` already applied to chunks_max, so the rng draw sequence is unchanged."""
+    Per-slot-prompt mode (cfg.slot_lengths set): the slot pushes exactly its assigned prompt (depth
+    ceil(real_len / CHUNK_SIZE)); the random chunk draw + mid_chunk_end are bypassed. Otherwise a random
+    chunk count, optionally ending mid-chunk. A resumed turn (prefix_len > 0) clamps its depth draw to the
+    capacity still left under the per-user cache; at prefix_len == 0 that clamp is already chunks_max, so
+    the rng sequence is unchanged."""
     slot.req_id = req_id
     slot.next_chunk = 0
     slot.prefix_len = prefix_len
     slot.turn_idx = turn_idx
     if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
         real_len = cfg.slot_lengths[slot.slot_id]
-        # `real_len` is this slot's prompt length, i.e. a length RELATIVE to the turn, while actual_isl is
-        # absolute -- so a resumed turn ends at prefix_len + real_len, not real_len. (Getting this wrong
-        # makes the second chunk of a resumed turn report actual_end < actual_start.) If the prompt no
-        # longer fits the per-user cache, restart the conversation, matching the shared-trace fallback
-        # applied at the recycle site -- which can only bound ONE chunk, not a whole fixed prompt.
+        # real_len is relative to the turn; actual_isl is absolute, so a resumed turn ends at
+        # prefix_len + real_len. If that no longer fits the per-user cache, restart the conversation.
         if prefix_len + real_len > MAX_SEQ_LEN:
             prefix_len = slot.prefix_len = 0
             slot.turn_idx = 0
@@ -615,15 +588,11 @@ class RunStats:
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
     """Execute the push schedule described by `cfg`.
 
-    Device-free: `push_fn(slot_id, chunk_idx, actual_start, actual_end) -> elapsed_ms` performs and
-    times the actual push, and now_fn/sleep_fn/rng are injectable so tests run instantly and
-    deterministically. Records, per slot, the resident request as a `_Resident` at push time — i.e. what
-    is physically in that slot's KV cache, which the caller PCC-checks. Returns RunStats.
-
-    A recycled slot overwrites from chunk 0 UNLESS `cfg.multi_turn_prob` selects a continued
-    conversation, in which case the next turn resumes at the previous turn's aligned-down length and
-    only the rows from there on are rewritten. Either way `_Resident.real_len` is the slot's absolute
-    non-pad extent, so consumers never need to know which case applied.
+    Device-free: `push_fn(slot_id, chunk_idx, actual_start, actual_end) -> elapsed_ms` does and times the
+    push; now_fn/sleep_fn/rng are injectable so tests run instantly and deterministically. Records each
+    slot's resident request as a `_Resident` at push time, and returns RunStats. A recycled slot restarts
+    at chunk 0 unless `cfg.multi_turn_prob` continues the conversation from its aligned-down length; either
+    way `_Resident.real_len` is the slot's absolute non-pad extent.
     """
     rng = rng if rng is not None else random.Random(cfg.seed)
     slots = [_Slot(i) for i in range(cfg.num_users)]
@@ -649,24 +618,14 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end))
         total_pushes += 1
         slot.next_chunk += 1
-        resident[slot.slot_id] = _Resident(  # what's now resident in this slot
-            chunks_pushed=chunk_idx + 1,
-            actual_isl=slot.actual_isl,
-            real_len=actual_end,
-            prefix_len=slot.prefix_len,
-            turn_idx=slot.turn_idx,
-        )
+        resident[slot.slot_id] = _Resident(real_len=actual_end)  # what's now resident in this slot
         if slot.done:
             completed += 1
             if next_req_id < cfg.max_requests:  # recycle the slot
-                # Multi-turn: keep the conversation and resume at the aligned prefix already cached.
-                # A sub-tile resume offset is rejected outright (update_padded_kv_cache asserts
-                # kv_actual_global % 32 == 0), so round to the same _KV_CHUNK_TOKENS granularity the
-                # migration reads use. Aligning DOWN means the <=31 sub-tile tail tokens are replayed by
-                # this turn's first chunk (PCC-idempotent -- the rope table is keyed on absolute
-                # position); aligning up would leave a permanent unwritten hole mid-sequence. Guarded by
-                # `multi_turn_prob > 0` so the default path draws no extra rng value and the schedule
-                # stays bit-identical.
+                # Multi-turn: resume at the aligned prefix already cached. Align DOWN to 32
+                # (update_padded_kv_cache asserts kv_actual_global % 32 == 0); the <=31 tail tokens are
+                # replayed by this turn's first chunk (PCC-idempotent). Guarded so the default path draws
+                # no extra rng value and the schedule stays bit-identical.
                 prefix = (slot.actual_isl // _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
                 if (
                     cfg.multi_turn_prob > 0
@@ -725,9 +684,9 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     The reader is NOT adapter-pluggable — a new model whose cache is neither of those layouts needs
     a branch here (and its own decode), not just an adapter.
 
-    The MODEL's own caches only. Under DFlash the drafter's context caches ride in the same table as
-    further `dflash_*` configs, but they are a sibling gate with their own golden and their own bar — see
-    _read_slot_dflash_kv_and_check_pcc, called alongside this from _verify_resident_slots."""
+    The MODEL's own caches only. Under DFlash the drafter's context caches ride in the same table under
+    further `dflash_*` configs, checked as a sibling gate from _verify_resident_slots (see
+    dflash_kv_table_pcc_check in the deepseek dflash_prefill module)."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
@@ -1044,151 +1003,32 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     return min_pcc
 
 
-def _dflash_config_ids(table):
-    """``(k_ids, v_ids)`` indexed by GLOBAL kv-head, or None when the table carries no drafter configs. By
-    NAME, never ``base + head_idx``: the protobuf round-trip reassigns config ids in sorted-name order.
-    Raises when the set is not one K and one V per kv-head — a partial publish, not a non-DFlash run."""
-    present = {name for name in _config_names(table) if name.startswith("dflash_")}
-    if not present:
-        return None
-    num_kv_heads = len(present) // 2
-    expected = {dflash_config_name(kind, h) for kind in ("k", "v") for h in range(num_kv_heads)}
-    if present != expected:
-        raise RuntimeError(
-            f"drafter table configs are not one K and one V config per kv-head: got {sorted(present)}, "
-            f"expected {sorted(expected)} for {num_kv_heads} kv-heads"
-        )
-    return (
-        [table.config_id_of(dflash_config_name("k", h)) for h in range(num_kv_heads)],
-        [table.config_id_of(dflash_config_name("v", h)) for h in range(num_kv_heads)],
-    )
-
-
-def _read_slot_dflash_kv_and_check_pcc(
-    table, device_map: dict, slot_id: int, real_len: int, threshold: float
-) -> float | None:
-    """PCC the drafter's context K/V for `slot_id` over [0, real_len) through the published KV chunk table vs
-    ``$PREFILL_DFLASH_GOLDEN_KV_DIR``: min PCC, or None (NOT 1.0 — a real PCC) when there is nothing to check.
-    Same check as tests/dflash_prefill/test_dflash_trace_table.py, but from the UMD side migration actually runs on."""
-    ids = _dflash_config_ids(table)
-    if ids is None:
-        # No drafter configs in the table: DFlash was not run (or was not published). Say nothing at all —
-        # this is the common case for every other model, and it must not surface as a drafter measurement.
-        return None
-    cfg_ids = {"k": ids[0], "v": ids[1]}
-    num_kv_heads = len(ids[0])
-
-    golden_dir = os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR", "").strip()
-    if not golden_dir:
-        logger.info(
-            f"[producer] table carries the drafter's context caches ({num_kv_heads} kv-heads x K/V) but "
-            f"PREFILL_DFLASH_GOLDEN_KV_DIR is unset, so the drafter half is NOT checked. The golden is "
-            f"prompt-specific and this module cannot tell whether the pushed trace produced it."
-        )
-        return None
-
-    cfg = table.config(cfg_ids["k"][0])
-    n_layers = cfg.num_layers  # the DRAFTER's layer count (6), not the verifier's NUM_LAYERS
-    # head_dim comes from the golden and is then cross-checked against the physical chunk size the table
-    # reports, so a golden whose head_dim disagrees with the device cache fails on the shape instead of
-    # producing a uniformly bad PCC that reads like a device bug.
-    head_dim_from_bytes = {(d // 32) * _BFP8_TILE_BYTES: d for d in (64, 128, 256)}.get(cfg.chunk_size_bytes)
-
-    if os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip() and slot_id == 0:
-        logger.warning(
-            "[producer] PREFILL_PRODUCER_SLOT_TRACES is set (per-slot prompts) but the drafter golden is a "
-            "single directory: only slots that pushed THAT prompt can match it."
-        )
-
-    worst, worst_at = 1.0, None
-    failures = []
-    paths = {kind: Path(golden_dir) / f"{kind}_cache.safetensors" for kind in ("k", "v")}
-    with safe_open(str(paths["k"]), framework="pt") as fk, safe_open(str(paths["v"]), framework="pt") as fv:
-        # get_slice, not get_tensor: these are fp32 [6, 8, 56320, 128] = 1.38 GiB each, and only one
-        # (layer, head) row block is needed at a time (~29 MiB) to PCC against one read-back.
-        sl = {"k": fk.get_slice("k_cache"), "v": fv.get_slice("v_cache")}
-        shapes = {kind: list(sl[kind].get_shape()) for kind in ("k", "v")}
-        if shapes["k"] != shapes["v"]:
-            raise RuntimeError(f"drafter golden K/V shapes differ: {shapes['k']} vs {shapes['v']}")
-        g_layers, g_heads, g_seq, head_dim = shapes["k"]
-        if (g_layers, g_heads) != (n_layers, num_kv_heads):
-            raise RuntimeError(
-                f"drafter golden {shapes['k']} is (layer, head, seq, head_dim) = ({g_layers}, {g_heads}, ...) "
-                f"but the table describes {n_layers} layers x {num_kv_heads} kv-heads"
-            )
-        if head_dim_from_bytes != head_dim:
-            raise RuntimeError(
-                f"drafter golden head_dim {head_dim} does not match the table's chunk_size_bytes "
-                f"{cfg.chunk_size_bytes} (a bfp8 [32, {head_dim}] chunk is {(head_dim // 32) * _BFP8_TILE_BYTES} B)"
-            )
-
-        # The golden is one fixed prompt. A shorter push is still comparable over its own prefix — a context
-        # K/V row at position p depends only on tokens <= p — so compare the common prefix and say so.
-        cmp_len = min(real_len, g_seq)
-        if cmp_len != real_len:
-            logger.warning(
-                f"[producer] slot {slot_id} holds {real_len} tokens but the drafter golden has only {g_seq}; "
-                f"checking the common prefix [0,{cmp_len})."
-            )
-        # Reads go by whole 32-token blocks, so the ROUNDED length is what the table must cover.
-        read_len = ((cmp_len + _KV_CHUNK_TOKENS - 1) // _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
-        if read_len > cfg.max_sequence_length:
-            raise RuntimeError(
-                f"drafter config max_sequence_length {cfg.max_sequence_length} < {read_len} tokens to read "
-                f"({cmp_len} rounded up to whole {_KV_CHUNK_TOKENS}-token blocks)"
-            )
-
-        # V before K, and keep it that way: V never touches RoPE, so V-passes-while-K-fails localizes a fault
-        # to the rope table rather than to the taps, the cache addressing, or the projections.
-        for kind in ("v", "k"):
-            for layer in range(n_layers):
-                heads = []
-                for head, config_id in enumerate(cfg_ids[kind]):
-                    dev = _read_kv_slice(
-                        table, device_map, config_id, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk
-                    )[:cmp_len]
-                    _, pcc = comp_pcc(sl[kind][layer, head, :cmp_len, :].to(torch.float32), dev)
-                    pcc = float(pcc)
-                    heads.append(pcc)
-                    if pcc < worst:
-                        worst, worst_at = pcc, (kind, layer, head)
-                    if pcc < threshold:  # same sense as the gate in _verify_resident_slots
-                        failures.append((kind, layer, head, pcc))
-                lo = min(heads)
-                logger.info(
-                    f"[producer] slot {slot_id} dflash {kind.upper()} layer {layer}: per-head min={lo:.6f} "
-                    f"(head {heads.index(lo)}) max={max(heads):.6f}"
-                )
-
-    logger.info(
-        f"[producer] slot {slot_id} dflash drafter KV PCC over [0,{cmp_len}) across {n_layers} layers x "
-        f"{num_kv_heads} kv-heads -> {worst:.6f} at {worst_at} (golden {golden_dir})"
-    )
-    if failures:
-        logger.error(
-            f"[producer] slot {slot_id}: drafter KV PCC below {threshold} for {len(failures)} of "
-            f"{2 * n_layers * num_kv_heads} (tensor, layer, head) slices, worst {worst:.6f} at {worst_at}; "
-            f"first failures {failures[:8]}"
-        )
-    return worst
-
-
 def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict) -> bool:
     """PCC-check every slot that holds resident trace-derived KV, each against ITS OWN golden trace
     (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold.
 
-    Two independent gates per slot: the model's own caches vs the trace, and — when the table carries the
-    DFlash drafter's configs and $PREFILL_DFLASH_GOLDEN_KV_DIR names its golden — the drafter's context K/V
-    vs that golden, at its own tighter bar. Whatever is measured must pass, and a drafter breach cannot hide
-    the kvpe verdict (or the marker line below) any more than a loose kvpe bar can excuse the drafter. The
-    drafter half is entirely silent when it was not measured — no field on the marker, no success line — so a
-    non-DFlash run's output is unchanged by this gate's existence."""
+    Two independent gates per slot, both of which must pass: the model's own caches vs the trace, and --
+    when the table carries the DFlash drafter's configs -- the drafter's context K/V at its own bar (see
+    dflash_kv_table_pcc_check). The drafter half is silent when not measured (no marker field, no success
+    line), so a non-DFlash run's output is unchanged."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         return False
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.999"))
+    # Under DFlash the table also carries the drafter's context caches (extra dflash_* configs); PCC them
+    # via the deepseek gate. The import + read closure are built only when those configs are present, so a
+    # non-DFlash run neither imports the deepseek module nor measures anything.
+    check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
+    if check_dflash:
+        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.kv_validation import dflash_kv_table_pcc_check
+
+        def read_dflash_slice(config_id, layer, slot_id, read_len, head_dim):
+            return _read_kv_slice(
+                kv_table, device_map, config_id, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk
+            )
+
     min_pcc_overall = 1.0
     min_dflash_overall = None  # stays None unless a drafter slice is actually measured
     checked = 0
@@ -1203,12 +1043,15 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         checked += 1
         if pcc < threshold:
             failures.append((slot_id, real_len, pcc))
-        # None on every non-DFlash run (no drafter configs in the table) and when no golden is configured.
-        dflash_pcc = _read_slot_dflash_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, dflash_threshold)
-        if dflash_pcc is not None:
-            min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)
-            if dflash_pcc < dflash_threshold:
-                dflash_failures.append((slot_id, real_len, dflash_pcc))
+        if check_dflash:
+            # None when no golden is configured (the drafter golden is prompt-specific, so opt-in).
+            dflash_pcc = dflash_kv_table_pcc_check(
+                kv_table, slot_id, real_len, read_config_slice=read_dflash_slice, threshold=dflash_threshold
+            )
+            if dflash_pcc is not None:
+                min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)
+                if dflash_pcc < dflash_threshold:
+                    dflash_failures.append((slot_id, real_len, dflash_pcc))
 
     # The drafter field appears ONLY when it was measured: on every non-DFlash run the marker line is exactly
     # what it was before this gate existed. Keep `min_pcc=` last-but-one so a `min_pcc=([\d.]+)` reader is
@@ -1276,8 +1119,7 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         # A resumed turn slices the pool from its prefix onward, so multi-turn needs a pool covering the
-        # whole per-user cache, not just one request's depth (push_chunk's payload-size assert would
-        # otherwise fire on the first short slice).
+        # whole per-user cache, not just one request's depth (else push_chunk's payload-size assert fires).
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
         return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
 
@@ -1343,22 +1185,20 @@ def _mr_config():
 
 
 def _mr_bcast_resident(rank: int, resident: dict) -> dict:
-    """Broadcast the master's resident-slot map (slot_id -> (chunks_pushed, actual_isl)) to every rank
-    via allgather_int — element [0] of each allgather is rank 0's contribution, giving a broadcast built
-    from the only value-carrying collective ttnn exposes (no native broadcast/scatter). Doubles as the
-    GO barrier: a validator blocks in the first
-    allgather until the master arrives (which happens only after it has drained every LayerAck).
-    Non-master ranks pass {} and receive the map. All ranks must issue the same number of allgathers in
-    the same order, so the slot count is broadcast first and then each slot's three ints."""
+    """Broadcast the master's resident-slot map (slot_id -> _Resident) to every rank via allgather_int:
+    element [0] of each allgather is rank 0's contribution, giving a broadcast from the only value-carrying
+    collective ttnn exposes (no native broadcast/scatter). Doubles as the GO barrier: a validator blocks in
+    the first allgather until the master arrives (only after it has drained every LayerAck). Non-master ranks
+    pass {} and receive the map. All ranks must issue the same number of allgathers in the same order, so the
+    slot count is broadcast first, then each slot's (slot_id, real_len)."""
     items = sorted(resident.items()) if rank == 0 else []
     n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
     out: dict = {}
     for k in range(n):
-        slot_id, chunks, isl = (items[k][0], items[k][1][0], items[k][1][1]) if rank == 0 else (0, 0, 0)
+        slot_id, real_len = (items[k][0], items[k][1].real_len) if rank == 0 else (0, 0)
         slot_id = ttnn.distributed_context_allgather_int(slot_id)[0]
-        chunks = ttnn.distributed_context_allgather_int(chunks)[0]
-        isl = ttnn.distributed_context_allgather_int(isl)[0]
-        out[slot_id] = (chunks, isl)
+        real_len = ttnn.distributed_context_allgather_int(real_len)[0]
+        out[slot_id] = _Resident(real_len=real_len)
     return out
 
 
