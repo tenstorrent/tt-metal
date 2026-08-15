@@ -759,20 +759,21 @@ class TtMoe(LightweightModule):
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
         # would leave the cache holding a deallocated tensor (next forward's cache hit fails is_allocated()).
-        # Under LatentMoE x and routed_x are distinct buffers and both need freeing; otherwise they
-        # alias and only the deallocate below runs.
+        # Dispatch has consumed routed_x by here. Under LatentMoE it is the latent buffer, a distinct
+        # allocation needing its own free; without a latent space it IS x, so it is only an alias to
+        # drop so that the deallocate below sees a single reference to the buffer.
         latent_input = None
-        if self.use_latent_moe:
-            # Dispatch has consumed it by here; park it in DRAM when the PCC path needs it.
-            latent_input = (
-                ttnn.to_memory_config(routed_x, ttnn.DRAM_MEMORY_CONFIG)
-                if return_intermediates
-                else ttnn.deallocate(routed_x, force=True)
-            )
-        # Dropped before the free below so that deallocate sees a single reference to the buffer.
         if not self.use_latent_moe:
             routed_x = None
-        elif not return_intermediates:
+        elif return_intermediates:
+            # to_memory_config short-circuits when the config already matches, handing back a tensor
+            # that SHARES routed_x's buffer instead of copying it -- and routed_x is interleaved-DRAM
+            # on every path run today. Freeing it then would leave the PCC path reading freed memory,
+            # so release routed_x only when a real copy was made.
+            latent_input = ttnn.to_memory_config(routed_x, ttnn.DRAM_MEMORY_CONFIG)
+            if routed_x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                routed_x = ttnn.deallocate(routed_x, force=True)
+        else:
             routed_x = ttnn.deallocate(routed_x, force=True)
         x = ttnn.deallocate(x, force=True)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)

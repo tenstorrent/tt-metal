@@ -94,14 +94,13 @@ class TtPrefillBlock(LightweightModule):
             if not TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn"):
                 return False
         else:
-            routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) if model_cfg else None
-            emb_size = getattr(model_cfg, "EMB_SIZE", None) if model_cfg else None
             if not TtMoe.check_cache_complete(
                 cache_path,
                 layer_idx,
                 experts_per_chip,
-                use_latent_moe=routed_emb_dim is not None and routed_emb_dim != emb_size,
-                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True) if model_cfg else True,
+                use_latent_moe=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
+                not in (None, getattr(model_cfg, "EMB_SIZE", None)),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
             ):
                 return False
 

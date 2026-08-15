@@ -337,10 +337,6 @@
   test_group: module
   skus:
     bh_sc1:
-      # Measured end to end at 15m55s fully cold on an idle 8x4. Largest contributors: 9m55s to
-      # build the 896-expert weight cache, 2m45s to generate the weights, 1m31s in TtMoe's
-      # constructor and 67s in the forward; the ~2m balance is process startup, imports and device
-      # open. 26 leaves ~60% headroom. Was 36 when this row also carried the 25k perf case.
       timeout: 26
   owner_id: U08RL15T4N8
   team: models
@@ -357,10 +353,6 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # The profiler pass itself is 4m15s warm (two runs, 255s and 251s). On a cold runner add the
-      # 896-expert weight-cache build, ~9 min on an idle 8x4, plus first-run JIT: ~14 min expected,
-      # 22 for headroom. This SKU does not share a cache with the PCC row above, so it pays that
-      # build itself.
       timeout: 22
   owner_id: U08RL15T4N8
   team: models
