@@ -108,7 +108,7 @@ matmul); separate dense projections were directly slower.
 - Default PCC: sliding 0.998493 prefill / 0.997778 decode; full 0.997408 /
   0.998347 (threshold 0.995).
 - Default sequence 1024, batch 1, five extra warmups and 30 replays: sliding
-  77.817 ms prefill / 1.068942 ms decode; full 86.199 / 1.110293 ms.
+  77.496 ms prefill / 1.070437 ms decode; full 86.166 / 1.113634 ms.
 - Batch-32 trace, logical sequence 33 prefill/repeated decode, and advertised
   current position 262143 pass for both layer kinds.
 - Fallback audit passes. Separate worker watcher run with

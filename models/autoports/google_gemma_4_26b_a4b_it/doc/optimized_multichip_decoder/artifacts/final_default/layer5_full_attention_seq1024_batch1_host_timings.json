@@ -7,16 +7,16 @@
   ],
   "decode_batch": 1,
   "decode_current_pos": 1024,
-  "decode_trace_host_ms": 1.1102933436632156,
+  "decode_trace_host_ms": 1.1136344633996487,
   "decode_trace_iterations": 30,
   "decode_trace_warmups": 6,
   "layer_idx": 5,
   "layer_type": "full_attention",
   "model_id": "google/gemma-4-26B-A4B-it",
-  "prefill_host_ms": 86.19908336549997,
+  "prefill_host_ms": 86.16592083126307,
   "provenance": {
     "artifact_dir": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/final_default",
-    "checkout_git_sha": "c4821fe5156f293908de96d8f683f83b1919cda8",
+    "checkout_git_sha": "d854bfea7ab385005a59f46ef14139bb097a3630",
     "exact_command": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_RANGE_DOWNLOAD=1 python -m tracy -r -p pytest -- models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::test_functional_decoder_perf_profile -k 'full_attention and batch1'",
     "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
     "gemma4_environment": {
@@ -37,7 +37,7 @@
       "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
     },
     "measured_decoder_path": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py",
-    "measured_decoder_sha256": "55a0f646dbc95b64966fb2719aaa6790a21e2371515cb2aefc50b3adf33398d7",
+    "measured_decoder_sha256": "f75dbd9909b959e737694f9e2e56e1971d0f9c2a5e0db826ab37cd27ba9a8c1a",
     "multichip_test_sha256": "f1579fa50beb609c884ee04495ee3281a2d2d1f9bc7cd6728b48d2fcbaa07a69",
     "test_sha256": "e3661921c7f65d158bb3fc2f12ac0544934c13ac07bc56cf585f1df8af71b585",
     "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",

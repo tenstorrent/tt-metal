@@ -8,8 +8,8 @@ prefill, setup, and repeated replay rows.
 
 | Layer | Scoped rows | Merged device-op sum (us) | Reported op-gap sum (us) | Warmed host decode (us) | Approx. local weight payload/token | Ideal 512 GB/s weight floor |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| sliding | 88 | 1041.138 | 319.950 | 1068.942 | 25.1 MB | 49 us |
-| full | 93 | 1089.118 | 352.227 | 1110.293 | 37.4 MB | 73 us |
+| sliding | 88 | 1043.127 | 350.650 | 1070.437 | 25.1 MB | 49 us |
+| full | 93 | 1088.442 | 335.140 | 1113.634 | 37.4 MB | 73 us |
 
 Device rows are merged from four concurrently executing devices, so the
 device-op and op-gap columns are diagnostics, not quantities to add into a

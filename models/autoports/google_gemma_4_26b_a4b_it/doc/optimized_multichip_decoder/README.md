@@ -42,11 +42,11 @@ thresholds are 0.995.
 
 | Layer kind | Baseline prefill/decode PCC | Final prefill/decode PCC | Prefill before/after (ms) | Traced decode before/after (ms) |
 | --- | ---: | ---: | ---: | ---: |
-| sliding, layer 0 | 0.998613 / 0.999653 | 0.998493 / 0.997778 | 77.524 / 77.817 | 1.146865 / 1.068942 |
-| full, layer 5 | 0.997088 / 0.999786 | 0.997408 / 0.998347 | 85.728 / 86.199 | 1.252950 / 1.110293 |
+| sliding, layer 0 | 0.998613 / 0.999653 | 0.998493 / 0.997778 | 77.524 / 77.496 | 1.146865 / 1.070437 |
+| full, layer 5 | 0.997088 / 0.999786 | 0.997408 / 0.998347 | 85.728 / 86.166 | 1.252950 / 1.113634 |
 
-Decode improves 6.79% for sliding and 11.38% for full attention. Prefill is
-0.38% slower for sliding and 0.55% slower for full; the selected
+Decode improves 6.66% for sliding and 11.12% for full attention. Prefill is
+unchanged for sliding and 0.51% slower for full; the selected
 changes target the traced decode path and do not alter prefill kernels.
 
 Final default also passes logical sequence 33 prefill plus repeated traced
