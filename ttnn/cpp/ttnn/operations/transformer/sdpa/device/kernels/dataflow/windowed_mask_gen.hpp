@@ -15,6 +15,7 @@
 #include "api/dataflow/noc.h"
 #include <tt-metalium/constants.hpp>
 #include "dataflow_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
 // Zero a [row,col) sub-rectangle of a Float16_b tile that is otherwise -inf (the partial-window boundary
 // tile). A Float16_b tile is 4 row-major 16x16 faces of 2-byte elements, so this is a direct per-element
@@ -58,7 +59,8 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t valid_Sqt,
     uint32_t valid_Skt,
     uint32_t k_num_chunks,
-    uint32_t cu_window_seqlens_eles) {
+    uint32_t cu_window_seqlens_eles,
+    uint32_t q_tok_offset) {
     // cu_window_seqlens is INT32/UINT32 (validated host-side); both store non-negative cumulative
     // lengths in 32-bit words, so a plain uint32 read is correct for either.
     CircularBuffer cb_cu(cb_cu_window_in);
@@ -76,8 +78,12 @@ inline void generate_windowed_mask_for_q_chunk(
 
     const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
     const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
-    const uint32_t q_low_tok = q_row_start_tile * tt::constants::TILE_HEIGHT;
-    const uint32_t q_high_tok = q_row_end_tile * tt::constants::TILE_HEIGHT;
+    // Q rows are addressed LOCALLY -- the Q tensor may be a sequence-parallel shard, so `q_chunk` and
+    // `valid_Sqt` count this device's rows only. Windows in cu_window_seqlens are GLOBAL, so the search
+    // and every window comparison run at the global position. K/V are never sharded (Sk is the full
+    // sequence), so k indices are already global and are left alone.
+    const uint32_t q_low_tok = q_tok_offset + q_row_start_tile * tt::constants::TILE_HEIGHT;
+    const uint32_t q_high_tok = q_tok_offset + q_row_end_tile * tt::constants::TILE_HEIGHT;
 
     uint32_t start_window_idx = 0;
     bool found_mask_windows = false;
@@ -91,10 +97,24 @@ inline void generate_windowed_mask_for_q_chunk(
         }
     }
 
+    // Narrowed K-chunk range for this Q chunk: the same shared function the reader uses to bound its
+    // K/V streaming and to feed compute — the three kernels' per-Q-chunk counts must agree exactly.
+    // Skipping the out-of-range chunks cannot change the cursor walk below: their tiles all take the
+    // -inf `continue` branches, which never advance `local_window_idx`.
+    const auto k_range = windowed_k_chunk_range(
+        q_chunk,
+        Sq_chunk_t,
+        valid_Sqt,
+        q_tok_offset,
+        cu_ptr,
+        cu_window_seqlens_eles,
+        Sk_chunk_t,
+        k_num_chunks,
+        tt::constants::TILE_HEIGHT);
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     CircularBuffer cb_mask(cb_mask_in);
     uint32_t local_window_idx = start_window_idx;
-    for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+    for (uint32_t k_chunk = k_range.k_lo; k_chunk < k_range.k_hi; ++k_chunk) {
         const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
 
         cb_mask.reserve_back(mask_chunk_tiles);
@@ -103,7 +123,7 @@ inline void generate_windowed_mask_for_q_chunk(
         int zero_tile_idx = -1;
         int inf_tile_idx = -1;
         for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
-            uint32_t q_start_idx = (q_row_start_tile + row) * tt::constants::TILE_HEIGHT;
+            uint32_t q_start_idx = q_tok_offset + (q_row_start_tile + row) * tt::constants::TILE_HEIGHT;
             uint32_t q_end_idx = q_start_idx + tt::constants::TILE_HEIGHT;
 
             auto result = get_window_indices(local_window_idx);
@@ -183,10 +203,19 @@ inline void windowed_generate_if_enabled(
     uint32_t valid_Sqt,
     uint32_t valid_Skt,
     uint32_t k_num_chunks,
-    uint32_t cu_window_seqlens_eles) {
+    uint32_t cu_window_seqlens_eles,
+    uint32_t q_tok_offset) {
     if constexpr (W) {
         constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
         generate_windowed_mask_for_q_chunk<mask_tile_bytes, cb_mask_in, cb_cu_window_in>(
-            noc, q_chunk, Sq_chunk_t, Sk_chunk_t, valid_Sqt, valid_Skt, k_num_chunks, cu_window_seqlens_eles);
+            noc,
+            q_chunk,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            valid_Sqt,
+            valid_Skt,
+            k_num_chunks,
+            cu_window_seqlens_eles,
+            q_tok_offset);
     }
 }
