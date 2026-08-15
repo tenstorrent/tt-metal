@@ -8,6 +8,7 @@
 #include <type_traits>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "profiler.h"
 
@@ -91,6 +92,88 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+namespace
+{
+
+// Compiler-flow counterpart to the eight-instruction LOAD/SWAP replay body in
+// ckernel_sfpu_reduce_custom.h.  Address generation and architectural LREG
+// ownership deliberately remain explicit: this fixture is intended to compare
+// scheduling/code generation, not to silently change the Reduce-SDPA ABI.
+template <sfpi::LRegs Accumulator, std::uint32_t LoadLreg, std::uint32_t Offset>
+sfpi_inline void generated_load_max()
+{
+    TTI_SFPLOAD(LoadLreg, InstrModLoadStore::FP16B, ADDR_MOD_3, Offset);
+    __builtin_rvtt_sfprawlreg_access(0, 1u << LoadLreg);
+
+    sfpi::vFloat accumulator = sfpi::l_reg[Accumulator];
+    sfpi::vFloat input = sfpi::l_reg[static_cast<sfpi::LRegs>(LoadLreg)];
+    sfpi::l_reg[Accumulator] = sfpi::max(accumulator, input);
+}
+
+sfpi_inline void generated_reduce_group()
+{
+    generated_load_max<sfpi::LRegs::LReg4, p_sfpu::LREG2, 0>();
+    generated_load_max<sfpi::LRegs::LReg5, p_sfpu::LREG3, 2>();
+    generated_load_max<sfpi::LRegs::LReg6, p_sfpu::LREG2, 16>();
+    generated_load_max<sfpi::LRegs::LReg7, p_sfpu::LREG3, 18>();
+}
+
+sfpi_inline void generated_reduce_pass(const std::uint32_t block_height)
+{
+    for (std::uint32_t i = 0; i < block_height; ++i)
+    {
+        generated_reduce_group();
+        TTI_INCRWC(0, 4, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 4, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 4, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 10, 0, 0);
+        TTI_INCRWC(0, 10, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 4, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 4, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 4, 0, 0);
+        generated_reduce_group();
+        TTI_INCRWC(0, 10, 0, 0);
+        TTI_INCRWC(0, 10, 0, 0);
+
+        // Move to the next tile in the same row without changing the Dst
+        // counter; this is the same dummy load used by the replay path.
+        TTI_SFPLOAD(8, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+    }
+}
+
+sfpi_inline void calculate_reduce_max_col_subblock_4x2_generated(const std::uint32_t block_height)
+{
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);
+
+    ckernel::sfpu::sfpu_reduce_max_col_subblock_4x2_load_initial_values();
+    // L0/L1 carry prologue state across the raw transform, while L4--L7 are
+    // raw accumulator definitions consumed by generated SFPI.  L2/L3 are
+    // announced precisely at each raw load above.
+    __builtin_rvtt_sfprawlreg_access(0, 0xf3);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    generated_reduce_pass(block_height);
+
+    ckernel::sfpu::_move_to_next_subblock_4x2_();
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, 1);
+    ckernel::sfpu::sfpu_reduce_max_col_subblock_4x2_load_initial_values();
+    __builtin_rvtt_sfprawlreg_access(0, 0xf3);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPLOAD(8, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+    generated_reduce_pass(block_height);
+
+    ckernel::sfpu::_move_to_next_subblock_4x2_();
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG4, 1);
+    __builtin_rvtt_sfprawlreg_access(0xff, 0);
+}
+
+} // namespace
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -106,13 +189,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
+        static_assert(REDUCE_IMPL <= 1, "Unknown Reduce-SDPA implementation selector");
         _llk_packer_wait_for_math_done_();
 
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
-        ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
+        if constexpr (REDUCE_IMPL == 0)
+        {
+            ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
+        }
+        else
+        {
+            ckernel::sfpu::_init_sfpu_config_reg();
+            ckernel::sfpu::sfpu_reduce_max_col_subblock_4x2_configure_addrmod();
+        }
         _llk_math_eltwise_sfpu_start_(0);
         ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();
-        ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
+        {
+            START_PERF_MEASURE("REDUCE_SDPA_BODY")
+            if constexpr (REDUCE_IMPL == 0)
+            {
+                ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
+            }
+            else
+            {
+                calculate_reduce_max_col_subblock_4x2_generated(BLOCK_RT_DIM);
+            }
+        }
         ckernel::sfpu::_reduce_max_col_subblock_4x2_epilogue_();
         _llk_math_eltwise_sfpu_done_();
 
