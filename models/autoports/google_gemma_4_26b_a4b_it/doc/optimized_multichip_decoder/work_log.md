@@ -2,6 +2,7 @@
 
 Local stage commits (not pushed): `c78b0d5959a`, `c4821fe5156`,
 `d854bfea7ab`, and final evidence refresh `27d88aa9ddc`.
+Final risk-matched stress/candidate evidence: `02bd8575979`.
 
 ## 2026-08-15 inventory and operation-topology audit
 
