@@ -457,3 +457,24 @@ abandoned once the corruption bisection made it redundant -- its tree is deleted
 than committed as evidence of nothing); in both cases the launcher and
 `VLLM::EngineCore` were killed, `/dev/tenstorrent/*` was confirmed free, and the next job
 opened the mesh normally.
+
+## 10. Commit
+
+Stage-owned changes are committed locally and **not pushed**, per the bringup contract.
+
+| repo | branch | commit |
+|---|---|---|
+| `tt-metal` | `agentic-research/hous/muse-glimmer-30b` | `8ca2878926da1cd60d6467b92b5235356779b61c` |
+
+512 files: `doc/optimized_vllm/` (16 MB of evidence; raw `server.log` files re-ignored, each
+arm committing `server_excerpt.log` instead), `tt/{model,generator,generator_vllm}.py`,
+`tests/test_full_model.py`, `.gitignore`, `doc/vllm_integration/bench/{audit_serving,adapter_probe}.py`
+and `models/common/readiness_check/check_degenerate_output.py`. No unrelated dirty state was
+swept in; the worktree is clean at this SHA.
+
+Two pre-commit hooks acted on the staged tree and are worth noting because they touched
+evidence: `trailing-whitespace` stripped trailing spaces from committed `*.log` artifacts
+(cosmetic; no numbers or tokens changed), and `prefer-expect-error` required the repo's
+`expect_error` fixture in place of `pytest.raises` in the three new acceptance tests. The
+rewritten tests were re-run on hardware before committing -- 3 passed,
+`logs/pytest_expect_error.log`.
