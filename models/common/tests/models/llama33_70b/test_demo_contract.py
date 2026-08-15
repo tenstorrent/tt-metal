@@ -218,6 +218,7 @@ def test_eval_perf_report_reuses_three_repeat_geometry_and_first_repeat_telemetr
     assert "first_repeat_profiler=profiler" in source
     assert "'on_device_topk' if perf_report else 'host'" in source
     assert "_assert_eval32_perf_target(first_result, expected" in source
+    assert "config_params={'optimization_profile': case_name.split('/', 1)[0]}" in source
     assert "if expected is not None" in source
     assert "run_type='demo_perf'" in source
 

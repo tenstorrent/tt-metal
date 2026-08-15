@@ -579,12 +579,14 @@ def test_complete_local_perf_floor_still_fails_both_missed_targets(expect_error)
 def test_main_demo_resolves_eval_floor_by_optimization_profile_and_local_perf_only_gates_complete_floor():
     main_source = ast.unparse(_function("test_qwen3_32b"))
     perf_source = ast.unparse(_function("_run_perf_benchmark"))
+    eval_source = ast.unparse(_function("_run_eval_repeat_batch32"))
 
     assert "_resolve_eval32_perf_targets(hf_model, device_name, optimizations)" in main_source
     assert "expected = _resolve_local_perf_floor" in perf_source
     assert perf_source.index("Performance [{case_name}]") < perf_source.index("_resolve_local_perf_floor")
     assert "if expected:" in perf_source
     assert "_assert_local_perf_target(result, expected" in perf_source
+    assert "config_params={'optimization_profile': case_name.split('/', 1)[0]}" in eval_source
 
 
 def test_traced_compatibility_wrapper_is_accepted_by_transition_perf_helper(monkeypatch):

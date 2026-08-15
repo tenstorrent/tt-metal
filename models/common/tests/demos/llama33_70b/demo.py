@@ -1213,6 +1213,7 @@ def _run_eval_repeat_batch32(
             device_name=get_device_name(mesh_device),
             num_layers=model.config.n_layers,
             batch_size=first_result.batch_size,
+            config_params={"optimization_profile": case_name.split("/", 1)[0]},
             input_sequence_length=prefill_seq_len,
             output_sequence_length=_EVAL_NUM_DECODE_TOKENS,
         )

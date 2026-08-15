@@ -42,6 +42,29 @@
         # https://github.com/tenstorrent/tt-metal/issues/51374
         pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
         ;;
+      bh_p150|bh_quietbox_2)
+        # Additive real-SKU shadow qualification. Keep every TTTv1 BH command
+        # below until the complete TTTv2 matrix passes on tested_code_sha.
+        if [ "{sku}" = "bh_p150" ]; then
+          export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+          export HF_HUB_OFFLINE=1
+          export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct
+          export MESH_DEVICE=P150
+          export SAMPLING_MODE=on_device_topk
+          export PIPELINE_READBACK=1
+          test -d "$TT_CACHE_PATH/$MESH_DEVICE"
+          mkdir -p generated/test_reports
+          pytest --timeout 600 --junitxml=generated/test_reports/llama3_8b_bh_p150_tttv2_shadow.xml "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-P150]"
+        fi
+
+        unset HF_HUB_OFFLINE MESH_DEVICE SAMPLING_MODE PIPELINE_READBACK
+        export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+        export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+        pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+        pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
+        pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
+        pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+        ;;
       *)
         export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
         pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
@@ -118,9 +141,6 @@
     wh_llmbox_perf:
       timeout: 20
       tier: 2
-    # bh_quietbox_2 is 4-chip: the DP-8 case is auto-skipped when the chip count
-    # is below the DP factor, so it effectively runs the DP-4 case only.
-    # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
     bh_quietbox_2:
       timeout: 20
       tier: 2
@@ -206,6 +226,16 @@
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+
+    # Additive TTTv2 shadow qualification; the TTTv1 commands remain above.
+    export HF_HUB_OFFLINE=1
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.3-70B-Instruct
+    export MESH_DEVICE=P150x4
+    export SAMPLING_MODE=on_device_topk
+    export PIPELINE_READBACK=1
+    test -d "$TT_CACHE_PATH/$MESH_DEVICE"
+    mkdir -p generated/test_reports
+    pytest --timeout 1800 --junitxml=generated/test_reports/llama33_70b_bh_p150x4_tttv2_shadow.xml "models/common/tests/demos/llama33_70b/demo.py::test_llama33_70b[performance-eval-32-perf-report-P150x4]"
   model: llama3.3-70b
   model_family: Llama
   skus:
@@ -248,13 +278,10 @@
 # ── Qwen ───────────────────────────────────────────────────────────
 
 - name: Qwen3-32B e2e tests
-  # TTTv2 substitution (wh_llmbox_perf / T3K only — the TTTv2 qwen3_32b demo is T3K-only: 64 attn / 8 KV
-  # heads need 8-way TP and the 32B weights don't fit < 8 devices). ci-token-matching -> token-accuracy,
-  # ci-eval-32 -> eval-32; both under the performance optimization, matching the TTTv1 leg's cases.
-  # One pytest process per case (matching the Qwen2.5-Coder-32B leg below): grouping demo configs in a
-  # single process on the 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
+    # Keep each T3K case in its own pytest process: grouping cases has
+    # previously wedged a Wormhole ETH core.
     pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy and performance"
     pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32 and performance"
   model: qwen3-32b
@@ -267,17 +294,25 @@
   team: models
 
 - name: Qwen3-32B e2e tests (Blackhole)
-  # The TTTv2 qwen3_32b demo is T3K-only, so the Blackhole (bh_quietbox_2) SKU keeps its TTTv1
-  # simple_text_demo leg until a Blackhole TTTv2 bring-up exists — no coverage dropped.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+
+    # Additive TTTv2 shadow qualification; the TTTv1 commands remain above.
+    export HF_HUB_OFFLINE=1
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B
+    export MESH_DEVICE=P150x4
+    export SAMPLING_MODE=on_device_topk
+    export PIPELINE_READBACK=1
+    test -d "$TT_CACHE_PATH/$MESH_DEVICE"
+    mkdir -p generated/test_reports
+    pytest --timeout 1800 --junitxml=generated/test_reports/qwen3_32b_bh_p150x4_accuracy_tttv2_shadow.xml "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-eval-32-perf-report-P150x4]"
   model: qwen3-32b
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
