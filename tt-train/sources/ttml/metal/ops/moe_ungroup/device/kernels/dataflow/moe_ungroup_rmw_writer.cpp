@@ -121,7 +121,7 @@ void kernel_main() {
     // (the first to touch a row reads zero and effectively writes), and tokens
     // with no local experts stay zero.
     fill_zeros_async(noc, cb_scratch, h * 2U);
-    noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     auto zero_slice = ttml::metal::moe_ungroup::slice_for_core(total_rows, num_total_cores, my_core_idx);
     for (uint32_t row = zero_slice.start; row < zero_slice.start + zero_slice.count; ++row) {
         uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(row);
@@ -193,7 +193,7 @@ void kernel_main() {
                 {
                     uint32_t w_tile_addr = get_write_ptr(cb_w);
                     fill_zeros_async(noc, cb_w, TILE_BYTES);
-                    noc_async_read_barrier();
+                    noc.write_zeros_l1_barrier();
                     volatile tt_l1_ptr uint16_t* w_tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_tile_addr);
                     for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                         uint32_t face = (r < FACE_HEIGHT) ? 0U : 2U;
@@ -224,6 +224,10 @@ void kernel_main() {
                     noc_async_read(dst_noc, row_buf, chunk_bytes);
                 }
                 noc_async_read_barrier();
+                // The SENTINEL-row fills above went through async_write_zeros,
+                // which needs its own barrier: the read barrier alone leaves
+                // cmd buffer 0 in zero mode on Quasar, corrupting later writes.
+                noc.write_zeros_l1_barrier();
                 // Zero the partial-last-tile tail AFTER the reads complete:
                 // doing it before the barrier would race with NOC writes that
                 // can land slightly after their request size due to packet
@@ -236,7 +240,7 @@ void kernel_main() {
                         }
                         fill_zeros_async(noc, cb_existing_rm, pad_bytes, r * hidden_chunk_bytes + chunk_bytes);
                     }
-                    noc_async_read_barrier();
+                    noc.write_zeros_l1_barrier();
                 }
                 cb_push_back(cb_existing_rm, tt::constants::TILE_HEIGHT);
             };

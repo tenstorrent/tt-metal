@@ -151,7 +151,11 @@ void kernel_main() {
 
     // ---- Address generators ----
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
-    const auto dispatched_addrgen = TensorAccessor(dispatched_args, dispatched_addr, h * 2U);
+    // Default page stride (AlignedPageSize): row pages sit at
+    // round_up(h*2, DRAM_ALIGN) intervals within a bank, so passing the raw
+    // h*2 here would misaddress every row after the first whenever h*2 isn't
+    // DRAM-aligned.
+    const auto dispatched_addrgen = TensorAccessor(dispatched_args, dispatched_addr);
     const auto md_addrgen = TensorAccessor(metadata_args, metadata_addr);
     const auto cnt_addrgen = TensorAccessor(counts_args, counts_addr);
     const auto off_addrgen = TensorAccessor(offsets_args, offsets_addr);
@@ -359,6 +363,10 @@ void kernel_main() {
         // Write counts and offsets to DRAM (use stage as staging)
         for (uint32_t e = 0; e < e_local; ++e) stage[e] = counts[e];
         noc_async_write((uint32_t)stage, cnt_addrgen.get_noc_addr(0), cnt_page_bytes);
+        // noc_async_write is zero-copy: the NIU reads stage at packet transmit,
+        // not call time. Flush the counts write before restaging offsets over
+        // the same bytes.
+        noc_async_write_barrier();
         for (uint32_t e = 0; e <= e_local; ++e) stage[e] = offsets[e];
         noc_async_write((uint32_t)stage, off_addrgen.get_noc_addr(0), off_page_bytes);
         noc_async_write_barrier();

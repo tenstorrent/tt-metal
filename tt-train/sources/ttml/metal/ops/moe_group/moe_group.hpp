@@ -20,6 +20,7 @@ namespace ttml::metal {
 // Return type: (grouped, grouped_scores, k_slot, counts, offsets, plan)
 //   grouped        : [1, 1, T_cap, H]   TILE      bf16   DRAM — active rows
 //                                                                packed per expert
+//                                                                (0 in pad rows)
 //   grouped_scores : [1, 1, 1, T_cap]   ROW_MAJOR bf16   DRAM — scores[t, k_slot]
 //                                                                per active row
 //                                                                (0 in pad slots)
