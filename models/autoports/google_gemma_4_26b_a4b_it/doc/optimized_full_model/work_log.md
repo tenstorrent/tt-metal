@@ -203,3 +203,8 @@ Artifact: `candidates/dram_sharded_lm_head.json`; failing logs:
   observational rather than attributed to an optimization: no performance
   candidate remains in the model/generator diff. The current reproduced
   host-visible and no-readback values are the final results.
+
+## Local commits
+
+- Stage implementation and evidence: `d351ed07056` (`Optimize Gemma4 full-model
+  TP4 path`). This commit is local and was not pushed.
