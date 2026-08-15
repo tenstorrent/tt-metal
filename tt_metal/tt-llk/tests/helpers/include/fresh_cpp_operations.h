@@ -18,7 +18,9 @@ inline void calculate_exp_fresh_cpp() {
 }
 
 template <int ITERATIONS>
-inline void calculate_sigmoid_appx_fresh_cpp() {
+// Keep the semantic loop isolated so compiler A/Bs cannot inherit opaque setup,
+// profiler, or counter ownership from the caller.
+__attribute__((noinline)) void calculate_sigmoid_appx_fresh_cpp() {
     for (int row = 0; row < ITERATIONS; ++row) {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vFloat input_squared = input * input;
