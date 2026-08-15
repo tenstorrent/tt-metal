@@ -319,7 +319,10 @@ def pad_from_neighbours(ccl, volume: ttnn.Tensor, *, dims, halo, padding_mode: s
     for axis, (dim, width) in enumerate(zip(dims, halo)):
         if width == 0:
             continue
-        volume = ccl.neighbor_pad(
+        # Persistent output buffers rather than fresh allocations: a captured trace replays into
+        # fixed addresses, and the ping-pong pair is what the conv decoder's traced path uses for
+        # the same reason. Untraced it also stops each block allocating a new padded volume.
+        volume = ccl.neighbor_pad_persistent_buffer(
             volume,
             dims=[dim],
             pad_left=[width],
@@ -641,6 +644,11 @@ class DiffVAEDecoder(Module):
         self.ghost_latent_frames = (config["stage_kernels"][0][0] // 2) * 2
         # Composed temporal upscale of the four upsamples, which is also the ghost's pixel cost.
         self.time_scale = math.prod(stride[0] for stride, _ in config["upsamples"])
+        # Composed spatial upscale, for sizing the stage-5 grid without running the stages.
+        self.space_scale = (
+            math.prod(stride[1] for stride, _ in config["upsamples"]),
+            math.prod(stride[2] for stride, _ in config["upsamples"]),
+        )
 
         self.stages = DeterministicStages(
             in_channels=config["in_channels"],
@@ -704,14 +712,31 @@ class DiffVAEDecoder(Module):
         applies unchanged to a shard.
         """
         batch, channels, t, h, w = latent.shape
+        x, padded_dims = self.upload_latent(latent)
+        return self.forward_context_device(x, padded_dims=padded_dims, latent_frames=t, shard=shard)
+
+    def upload_latent(self, latent: torch.Tensor) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """Ghost-pad, flatten channels-last and upload. Host work, so outside any trace."""
+        batch, channels, t, h, w = latent.shape
         assert batch == 1, f"batched decode is not implemented; got batch={batch}"
         assert channels == self.in_channels, f"latent has {channels} channels, expected {self.in_channels}"
 
         padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, self.ghost_latent_frames, -1, -1)], dim=2)
         tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
         x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
+        return x, (padded.shape[2], h, w)
 
-        x, dims = self.stages(x, dims=(padded.shape[2], h, w), shard=shard)
+    def forward_context_device(
+        self,
+        x: ttnn.Tensor,
+        *,
+        padded_dims: tuple[int, int, int],
+        latent_frames: int,
+        shard: MeshShardConfig | None = None,
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """Deterministic stages and the ghost crop, on device only."""
+        t = latent_frames
+        x, dims = self.stages(x, dims=padded_dims, shard=shard)
         keep = self.context_frames(t)
         if keep < dims[0]:
             channels_out = self.config["stage_channels"][-1]
@@ -742,20 +767,51 @@ class DiffVAEDecoder(Module):
         """
         from .diffvae_ltx_stage5 import Grid
 
-        context, dims = self.forward_context(latent, shard=shard)
-        grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
-        sites = grid.sites if shard is None else self.stage5.shard_grid(grid, shard).sites
-        context = ttnn.reshape(context, (1, 1, sites, self.config["stage_channels"][-1]))
+        latent_tt, padded_dims = self.upload_latent(latent)
+        grid = Grid(
+            batch=1,
+            t=self.context_frames(latent.shape[2]),
+            h=padded_dims[1] * self.space_scale[0],
+            w=padded_dims[2] * self.space_scale[1],
+        )
 
         if noise is None:
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
             noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
+        noise_tt = self.stage5.upload_x_t(noise, shard=shard)
 
         # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0].
         timestep = ttnn.from_torch(
             torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
-        return self.stage5.forward(context, noise, timestep, grid, shard=shard)
+        out = self.decode_device(
+            latent_tt, noise_tt, timestep, grid, padded_dims=padded_dims, latent_frames=latent.shape[2], shard=shard
+        )
+        return self.stage5.unpack_pixels(out, grid, shard=shard)
+
+    def decode_device(
+        self,
+        latent: ttnn.Tensor,
+        noise: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        grid,
+        *,
+        padded_dims: tuple[int, int, int],
+        latent_frames: int,
+        shard: MeshShardConfig | None = None,
+    ) -> ttnn.Tensor:
+        """Uploaded latent and noise in, padded patch channels out, without touching host.
+
+        Split out of :meth:`decode` on the same rule the conv decoder follows: everything a trace
+        can capture on one side, the host pad/patchify/gather on the other.
+        """
+        context, dims = self.forward_context_device(
+            latent, padded_dims=padded_dims, latent_frames=latent_frames, shard=shard
+        )
+        assert (grid.t, grid.h, grid.w) == dims, f"grid {grid} disagrees with the context extent {dims}"
+        sites = grid.sites if shard is None else self.stage5.shard_grid(grid, shard).sites
+        context = ttnn.reshape(context, (1, 1, sites, self.config["stage_channels"][-1]))
+        return self.stage5.forward_device(context, noise, timestep, grid, shard=shard)
 
     def forward(
         self,

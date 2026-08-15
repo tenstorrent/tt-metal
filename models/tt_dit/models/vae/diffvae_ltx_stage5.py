@@ -639,10 +639,19 @@ class DiffVAEStage5(Module):
         return tables
 
     def embed_x_t(self, x_t: torch.Tensor, *, shard: "MeshShardConfig | None" = None) -> ttnn.Tensor:
-        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it to ``(1, B, S, dim)``.
+        """Patchify, upload and project noise to ``(1, B, S, dim)``.
+
+        Kept as one call for untraced use; a traced decode wants the upload and the projection
+        on opposite sides of the trace boundary and calls the two halves itself.
+        """
+        return self.conv_in_x_t(self.upload_x_t(x_t, shard=shard))
+
+    def upload_x_t(self, x_t: torch.Tensor, *, shard: "MeshShardConfig | None" = None) -> ttnn.Tensor:
+        """Patchify pixel-space ``(B, C, T, H, W)`` noise and upload it, unprojected.
 
         The noise is an input drawn on host, so a split run uploads it already split rather
-        than uploading the whole volume and discarding most of it on every device.
+        than uploading the whole volume and discarding most of it on every device. Host work,
+        so a traced decode does this before capture.
         """
         cfg = self.config
         patched = patchify(x_t, cfg.patch_size)
@@ -669,7 +678,7 @@ class DiffVAEStage5(Module):
             uploaded = ttnn.to_layout(
                 ttnn.reshape(uploaded, (1, batch, local.sites, self.padded_patch_channels)), ttnn.TILE_LAYOUT
             )
-        return self.conv_in_x_t(uploaded)
+        return uploaded
 
     def forward_diff_step(
         self,
@@ -765,10 +774,29 @@ class DiffVAEStage5(Module):
         share of it. The shards are gathered before ``unpatchify``, which is a host permutation
         over the full pixel grid.
         """
-        cfg = self.config
-        context_and_x = ttnn.concat([context, self.embed_x_t(x_t, shard=shard)], dim=-1)
-        out = self.forward_diff_step(context_and_x, timestep, grid, shard=shard)
+        out = self.forward_device(context, self.upload_x_t(x_t, shard=shard), timestep, grid, shard=shard)
+        return self.unpack_pixels(out, grid, shard=shard)
 
+    def forward_device(
+        self,
+        context: ttnn.Tensor,
+        x_t: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        grid: Grid,
+        *,
+        shard: "MeshShardConfig | None" = None,
+    ) -> ttnn.Tensor:
+        """Device-only stage 5: uploaded noise in, padded patch channels out.
+
+        Nothing here touches host, so it is the half a trace can capture. ``x_t`` arrives already
+        patchified and uploaded because that permutation has no ttnn expression.
+        """
+        context_and_x = ttnn.concat([context, self.conv_in_x_t(x_t)], dim=-1)
+        return self.forward_diff_step(context_and_x, timestep, grid, shard=shard)
+
+    def unpack_pixels(self, out: ttnn.Tensor, grid: Grid, *, shard: "MeshShardConfig | None" = None) -> torch.Tensor:
+        """Gather the shards and undo the patch packing. Host work, so outside any trace."""
+        cfg = self.config
         if shard is None:
             packed = ttnn.to_torch(out)
         else:
