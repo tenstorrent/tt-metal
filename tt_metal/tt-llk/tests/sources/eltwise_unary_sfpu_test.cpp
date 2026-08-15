@@ -9,8 +9,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context              = 0;
@@ -133,6 +135,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // calculation of sfpu operation on dest
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
+            {
+                START_PERF_MEASURE("RECIPROCAL_BODY")
             if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
             {
                 SFPU_UNARY_CALL(
@@ -163,6 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     FAST_MODE,
                     false /* STABLE_SORT */,
                     CLAMP_NEGATIVE>(block_tile, formats.math);
+            }
             }
         }
 

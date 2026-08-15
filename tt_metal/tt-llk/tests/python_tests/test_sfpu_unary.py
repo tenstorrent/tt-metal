@@ -19,6 +19,7 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
@@ -40,6 +41,7 @@ from helpers.sfpu_domains import (
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
+from helpers.perf.core import PerfConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
@@ -1036,6 +1038,70 @@ def test_reciprocal_semantic_edges(reciprocal_impl: int):
         ),
         reciprocal_impl=reciprocal_impl,
     )
+
+
+@pytest.mark.parametrize(
+    "reciprocal_impl,label", [(0, "production"), (1, "semantic")]
+)
+def test_reciprocal_device_profile(
+    perf_report, reciprocal_impl: int, label: str
+):
+    """Profile one accurate BF16 reciprocal body, excluding datacopy."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    input_dimensions = [32, 32]
+    spec_A = exclude_undefined(
+        MathOperation.Reciprocal,
+        for_op_pipeline(
+            MathOperation.Reciprocal,
+            formats.input_format,
+            formats.output_format,
+        ).spec_A,
+    )
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
+    )
+
+    configuration = PerfConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.Reciprocal),
+            ReciprocalImpl(reciprocal_impl),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(1),
+            NUM_TILES_IN_BLOCK(1),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "RECIPROCAL_BODY"]
+    assert len(rows) >= 1, rows.to_string(index=False)
+    cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"RECIPROCAL_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
