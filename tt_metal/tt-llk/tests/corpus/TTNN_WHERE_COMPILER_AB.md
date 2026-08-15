@@ -39,13 +39,16 @@ The generated straight-line eight-row body is automatically converted to a
 4. bit-preserving store and Dst-counter increment.
 
 The linked `run_kernel` records that 14-entry sequence once and replays it seven
-times. This is the first ranked corpus target where generic replay formation
-itself creates a simulator-negative binary. Until the exact illegal member or
-capture rule is isolated, the generated path is not safe to launch on hardware.
-The serial device runner `run_ttnn_where_silicon_ab.sh` is ready but deliberately
-not executed.
+times. Replay formation is not the failure cause: recompiling selector 1 with
+`-mno-tt-tensix-optimize-replay` still exits CRAQ before a trace. The sequence
+common to both failing binaries is the deprecated vBool-to-vInt lowering used
+to materialize a bit mask (`SFPPUSHC`, predicated 0/1 loads, `SFPPOPC`) followed
+by the bitwise select. That sequence, or a simulator defect it exposes, is the
+current boundary. Until it is isolated, the generated path is not safe to
+launch on hardware. The serial device runner `run_ttnn_where_silicon_ab.sh` is
+ready but deliberately not executed.
 
-An earlier, more direct `v_if` spelling also exposed a separate compiler
-hardening issue: `rvtt_expand` failed SSA verification for a predicated `vUInt`
-selection. The checked-in mask spelling avoids that ICE; it does not explain the
-CRAQ exit.
+A canonical direct `v_if` spelling exposes a separate compiler hardening issue:
+`rvtt_expand` fails SSA verification for both predicated `vUInt` and `vFloat`
+selection. The checked-in mask spelling avoids that ICE; it does not explain
+the CRAQ exit.
