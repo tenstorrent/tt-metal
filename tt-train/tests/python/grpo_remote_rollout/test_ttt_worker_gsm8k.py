@@ -60,7 +60,6 @@ def test_16_greedy_completions_are_identical():
         completions = completer.generate(
             [prompt_ids] * NUM_COMPLETIONS,
             max_new_tokens=MAX_NEW_TOKENS,
-            temperature=0.0,
         )
 
         assert len(completions) == NUM_COMPLETIONS, f"expected {NUM_COMPLETIONS} completions, got {len(completions)}"
