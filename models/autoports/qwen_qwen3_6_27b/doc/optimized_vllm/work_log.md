@@ -101,5 +101,11 @@ presentation limitation.
 
 ## Review and commits
 
-Independent stage review and local commit SHAs are recorded after final review.
-Nothing is pushed.
+Independent rereview verdict: `clean-pass` (`STAGE_REVIEW.md`).
+
+- tt-metal optimized-vLLM stage commit:
+  `030411cf0fabb94ab8ea6c89fdd81e43cf8540af`
+- sibling vLLM TT plugin async RNG fix:
+  `c5f35e55071e8b5b3af7796e23ecc371a5859f24`
+
+Both commits are local only; nothing was pushed.
