@@ -46,6 +46,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "params.h"
 #include "sfpu_operations.h"
+#include "fresh_cpp_operations.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 using namespace ckernel::sfpu;
 
@@ -73,9 +78,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; tile += 2)
         {
-            test_utils::
-                call_binary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
-                    tile, tile + 1, tile);
+            if constexpr (
+                FRESH_CPP_IMPL == 1 &&
+                (SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX || SFPU_BINARY_OPERATION == ckernel::BinaryOp::MIN))
+            {
+                constexpr bool is_max = SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX;
+                SFPU_BINARY_CALL(
+                    DstSync::SyncHalf,
+                    is_fp32_dest_acc_en,
+                    calculate_binary_max_min_fresh_cpp,
+                    (is_max, 8),
+                    tile,
+                    tile + 1,
+                    tile,
+                    VectorMode::RC);
+            }
+            else
+            {
+                test_utils::call_binary_sfpu_operation<
+                    DstSync::SyncHalf,
+                    is_fp32_dest_acc_en,
+                    APPROX_MODE,
+                    SFPU_BINARY_OPERATION,
+                    32 /* iterations */,
+                    formats.math>(tile, tile + 1, tile);
+            }
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

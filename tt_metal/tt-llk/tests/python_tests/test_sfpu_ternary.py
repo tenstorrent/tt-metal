@@ -29,6 +29,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
     DISABLE_SRC_ZERO_FLAG,
+    FRESH_CPP_IMPL,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
     SFPU_TERNARY_OP,
@@ -87,6 +88,7 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    fresh_cpp_impl=0,
 ):
     # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
     # sitting near its tolerance pass or fail by luck. Same as the binary driver.
@@ -136,6 +138,7 @@ def _run_sfpu_ternary(
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
+            FRESH_CPP_IMPL(fresh_cpp_impl),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
@@ -199,6 +202,21 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_addcmul(formats, dest_acc, fresh_cpp_impl):
+    """A/B identical stimuli/golden; pass criterion is the suite's format-aware tolerance gate."""
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuAddcmul,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
 
 
 @parametrize(

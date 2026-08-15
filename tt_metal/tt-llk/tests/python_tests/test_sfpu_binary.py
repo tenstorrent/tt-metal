@@ -50,6 +50,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
+    FRESH_CPP_IMPL,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -417,6 +418,7 @@ def sfpu_binary(
     spec_B=None,
     twos_complement=False,
     input_dimensions=None,
+    fresh_cpp_impl=0,
 ):
 
     # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
@@ -538,6 +540,7 @@ def sfpu_binary(
             MATH_OP(mathop=mathop),
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
+            FRESH_CPP_IMPL(fresh_cpp_impl),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -704,6 +707,23 @@ def test_sfpu_binary_float_extended(formats, dest_acc, mathop):
         dest_acc,
         mathop,
         broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuBinaryMax, MathOperation.SfpuBinaryMin],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binary_max_min(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B identical stimuli/golden; pass criterion is the suite's format-aware tolerance gate."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        fresh_cpp_impl=fresh_cpp_impl,
     )
 
 

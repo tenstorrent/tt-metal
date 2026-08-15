@@ -84,6 +84,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "sfpu_operations.h"
+#include "fresh_cpp_operations.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -178,15 +183,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Ternary op reads three Dest tiles (a, b, c) and writes the result back
                         // to block_tile. The operand tiles reuse adjacent Dest slots — the SFPU
                         // cost is data-independent, so this measures the representative math cost.
-                        test_utils::call_ternary_sfpu_operation<
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            SFPU_TERNARY_OPERATION,
-                            APPROX_MODE,
-                            is_fp32_dest_acc_en,
-                            MATH_FORMAT_ENUM,
-                            8>(
-                            block_tile, (block_tile + 1) % MAX_TILES_DEST, (block_tile + 2) % MAX_TILES_DEST, block_tile, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::addcmul)
+                        {
+                            SFPU_TERNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_addcmul_fresh_cpp,
+                                (is_fp32_dest_acc_en, MATH_FORMAT_ENUM, 8),
+                                block_tile,
+                                (block_tile + 1) % MAX_TILES_DEST,
+                                (block_tile + 2) % MAX_TILES_DEST,
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_TERNARY_SCALAR);
+                        }
+                        else
+                        {
+                            test_utils::call_ternary_sfpu_operation<
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                SFPU_TERNARY_OPERATION,
+                                APPROX_MODE,
+                                is_fp32_dest_acc_en,
+                                MATH_FORMAT_ENUM,
+                                8>(
+                                block_tile, (block_tile + 1) % MAX_TILES_DEST, (block_tile + 2) % MAX_TILES_DEST, block_tile, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                        }
                     }
                 }
             }
@@ -208,15 +230,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
 
-                        test_utils::call_ternary_sfpu_operation<
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            SFPU_TERNARY_OPERATION,
-                            APPROX_MODE,
-                            is_fp32_dest_acc_en,
-                            MATH_FORMAT_ENUM,
-                            8>(
-                            block_tile, (block_tile + 1) % MAX_TILES_DEST, (block_tile + 2) % MAX_TILES_DEST, block_tile, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::addcmul)
+                        {
+                            SFPU_TERNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_addcmul_fresh_cpp,
+                                (is_fp32_dest_acc_en, MATH_FORMAT_ENUM, 8),
+                                block_tile,
+                                (block_tile + 1) % MAX_TILES_DEST,
+                                (block_tile + 2) % MAX_TILES_DEST,
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_TERNARY_SCALAR);
+                        }
+                        else
+                        {
+                            test_utils::call_ternary_sfpu_operation<
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                SFPU_TERNARY_OPERATION,
+                                APPROX_MODE,
+                                is_fp32_dest_acc_en,
+                                MATH_FORMAT_ENUM,
+                                8>(
+                                block_tile, (block_tile + 1) % MAX_TILES_DEST, (block_tile + 2) % MAX_TILES_DEST, block_tile, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                        }
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

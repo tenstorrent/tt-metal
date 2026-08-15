@@ -103,6 +103,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "sfpu_operations.h"
+#include "fresh_cpp_operations.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
+
+inline void run_selected_binary_sfpu(
+    std::uint32_t dst_in0, std::uint32_t dst_in1, std::uint32_t dst_out) {
+    if constexpr (
+        FRESH_CPP_IMPL == 1 &&
+        (SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX || SFPU_BINARY_OPERATION == ckernel::BinaryOp::MIN)) {
+        constexpr bool is_max = SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX;
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_binary_max_min_fresh_cpp,
+            (is_max, 8),
+            dst_in0,
+            dst_in1,
+            dst_out,
+            VectorMode::RC);
+    } else {
+        test_utils::call_binary_sfpu_operation<
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            APPROX_MODE,
+            SFPU_BINARY_OPERATION,
+            ITERATIONS,
+            formats.math>(dst_in0, dst_in1, dst_out);
+    }
+}
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -211,9 +242,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        test_utils::
-                            call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
-                                block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
+                        run_selected_binary_sfpu(block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
                     }
                 }
             }
@@ -238,9 +267,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU binary operation
-                        test_utils::
-                            call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
-                                block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
+                        run_selected_binary_sfpu(block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

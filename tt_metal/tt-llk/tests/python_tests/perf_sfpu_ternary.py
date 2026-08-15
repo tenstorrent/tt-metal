@@ -34,6 +34,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FRESH_CPP_IMPL,
     ITERATIONS,
     LOOP_FACTOR,
     NUM_FACES,
@@ -47,7 +48,7 @@ from helpers.test_variant_parameters import (
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
 
 
-def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
+def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions, fresh_cpp_impl=0):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -66,6 +67,7 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+            FRESH_CPP_IMPL(fresh_cpp_impl),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(iterations),
             TILE_COUNT(tile_count),
@@ -230,4 +232,22 @@ def test_perf_sfpu_snake_beta(
         loop_factor,
         iterations,
         input_dimensions,
+    ).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_fresh_cpp_addcmul(perf_report, formats, dest_acc, fresh_cpp_impl):
+    _run(
+        formats,
+        MathOperation.SfpuAddcmul,
+        dest_acc,
+        loop_factor=16,
+        iterations=32,
+        input_dimensions=[128, 64],
+        fresh_cpp_impl=fresh_cpp_impl,
     ).run(perf_report)

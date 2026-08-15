@@ -250,6 +250,16 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class FRESH_CPP_IMPL(TemplateParameter):
+    """Select production (0) or test-only semantic SFPI C++ (1)."""
+
+    value: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define FRESH_CPP_IMPL {self.value}"
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 

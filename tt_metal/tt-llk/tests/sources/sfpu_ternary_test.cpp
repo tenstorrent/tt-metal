@@ -85,6 +85,11 @@ using namespace ckernel;
 
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
+#include "fresh_cpp_operations.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 namespace ckernel::sfpu
 {
@@ -217,7 +222,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             {
                 START_PERF_MEASURE("TTNN_WHERE_BODY")
-                if constexpr (TTNN_WHERE_IMPL == 0)
+                if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::addcmul)
+                {
+                    SFPU_TERNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_addcmul_fresh_cpp,
+                        (is_fp32_dest_acc_en, MATH_FORMAT, 8),
+                        0 /*DST_IN0*/,
+                        1 /*DST_IN1*/,
+                        2 /*DST_IN2*/,
+                        0 /*DST_OUT*/,
+                        VectorMode::RC,
+                        SFPU_TERNARY_SCALAR);
+                }
+                else if constexpr (TTNN_WHERE_IMPL == 0)
                 {
                     test_utils::call_ternary_sfpu_operation<dest_sync, is_fp32_dest_acc_en, SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 8>(
                         0 /*DST_IN0*/, 1 /*DST_IN1*/, 2 /*DST_IN2*/, 0 /*DST_OUT*/, SFPU_TERNARY_SCALAR, VectorMode::RC);
