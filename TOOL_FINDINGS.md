@@ -132,6 +132,7 @@ defect.
 | **F33** | `worktree-list` can never print ORPHAN (`id(s) in orphans`), so dead worktrees accumulate looking active; `PermissionError` is also misread as dead | **YES** | one line |
 | **F34** | the overlay store silently restores a deleted model over a clean HEAD, so a from-scratch run is unreachable and two runs from one commit differ invisibly; `overlay-drop` also fails to empty its scope | **YES — reproducibility** | small |
 | **F35** | backend selection is non-deterministic — identical runs picked different templates, the LLM ranker overriding its own top score, choosing between two entries whose paths are both missing | **YES — reproducibility** | small |
+| **F36** | "PCC tests will use real inputs" is false — the graduation gate builds inputs with `torch.randn` and never loads the 43 MB captures or the captured `output.pt`; raising the threshold measures the wrong thing more precisely | **YES — the sharpest one** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -3139,6 +3140,92 @@ ranker happened to name that day.
    record the resolved backend in the run report as an input, not a narration line.
 3. **Exclude candidates whose `demo_path` is missing** before ranking. Both candidates here were
    unusable; the ranker was choosing between two dead links (F30).
+
+---
+
+## ★★★ F36 — "PCC tests will use real inputs" is false: the gate runs on `torch.randn`, and the real capture is never loaded
+
+**Status: live in this checkout, observed during the 0.99 re-run** · severity: every component
+graduates against synthetic data while its real activations sit unused on disk · reported: not yet
+
+This is F26 confirmed by direct inspection, and worse than F26 recorded it, because the tool now
+*states* the opposite in its own log.
+
+### The claim
+
+Preflight, run 2, 2026-08-15:
+
+```
+  [capture] attention: captured args=5 kwargs=0 output=tensor
+  …
+  [preflight] captured 7/7 components; per-component PCC tests will use real inputs
+```
+
+It captured well. `_captured/attention/` and `_captured/decoder_layer/` are **43 MB each** — real
+deployment activations with a deep KV cache — and every component directory holds `args.pt`,
+`kwargs.pt`, **`output.pt`** (the real reference output) and `manifest.json`.
+
+### What the gate actually runs
+
+`bringup_mcp.py:337` runs the per-component gate as
+`_run_focused_pytest(test_files=[tests/pcc/test_<comp>.py])`. That generated test:
+
+- contains **no `torch.load`, no `args.pt`, no `.pt` reference of any kind** — verified across the
+  whole `tests/pcc/` directory, 0 hits in 7 files;
+- builds every input from the forward signature by **argument name**, via `_make_arg_for`:
+
+```python
+if arg_name in ("hidden_states", "inputs_embeds", "embeddings"):
+    shape, _ = _detect_hidden_shape(torch_module, model=model)
+    return torch.randn(*shape).to(md)
+…
+if primary is None:
+    primary = ("(synthetic)", torch.randn(1, 64, 64))
+```
+
+- uses the capture for exactly one thing — deciding **which submodule** to test:
+
+```python
+_captured_path = _captured_submodule_path(COMPONENT_NAME)
+if _captured_path:
+    torch_module = _resolve(model, _captured_path)
+```
+
+All six `_captured` references in each test are that path lookup. The tensors are never opened.
+
+### So what graduation at 0.99 means here
+
+A component is graduated when this test reports PCC ≥ 0.99 — against `torch.randn` at whatever
+shape the name heuristic infers, compared to the HF module fed *the same* synthetic tensor. For
+`attention` that replaces a real 208-deep KV cache with `torch.randn(1, 64, …)`; the captured
+`output.pt` that would have made it a true golden comparison is never read.
+
+Raising the threshold does not help. **0.99 on synthetic input is not a stronger claim than 0.95 on
+synthetic input — it is a more precise measurement of the wrong thing.** This is the limit of what
+F29's threshold fix can buy, and the reason F28's point stands: the whole real-correctness signal
+rests on the e2e stage.
+
+### It is not that the captures are unusable
+
+The demo path does consume them — `demo_wiring.py:80-81` requires `args.pt`/`kwargs.pt` to exist,
+and `bringup_loop.py` emits a `_load_captured()` helper into generated demo code whose docstring
+says it "matches the PCC test convention so the demo passes whenever the PCC test passes". The
+convention it claims to match is the one the PCC test does not implement. The plumbing to do this
+right is already written and already paid for; the gate simply does not call it.
+
+### Fixes
+
+1. **Load `args.pt`/`kwargs.pt` in the generated PCC test when the capture exists**, and fall back
+   to `_make_arg_for` only when it does not — the fallback is the current behaviour, so this is
+   additive.
+2. **Compare against the captured `output.pt`**, not only against a re-run of the HF module on
+   synthetic input. That turns the gate into a golden test at no extra cost.
+3. **Make the log line honest.** If the test ran on synthetic inputs, say `captured 7/7; gate ran on
+   SYNTHETIC inputs (captures used for submodule resolution only)`. Reporting what the gate
+   measured rather than what was collected is F26, and this is the same sentence needing the same
+   repair.
+4. **State it in the report too.** `RUN_REPORT.md` records components as "graduated, native ttnn,
+   PCC verified" with no indication of what they were verified against.
 
 ---
 
