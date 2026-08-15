@@ -2339,6 +2339,48 @@ either one leaves the symptom unchanged.
 three components as things `tt_transformers` already implements rather than writing them from
 scratch. Honest structure did not just fix the gate; it made the port cheaper.
 
+### Run 4 — `captured 7/7`, and the third fix was also ours
+
+Runs 1-3 reached 3/7, then 5/7. The last two misses were **Blocks 2 and 3**, and the cause was again
+the wrapper, not the tool:
+
+```
+driver `model(input_ids=..., attention_mask=...) [10 tokens]`:
+   AssertionError: prompt has 0 audio placeholders but the preset has 169 rows
+driver `submodule[backbone](**['inputs_embeds'])`: ok          <- backbone ONLY
+```
+
+Unable to construct a valid whole-model prompt, the framework fell back to driving the **backbone
+submodule alone** — which reaches every backbone component and never executes the flow matcher or
+the codec, so those two were gated on synthetic inputs while the run reported success.
+
+**The model could not be run with no arguments.** Its `forward` required a prompt whose
+audio-placeholder count is voice-specific (169 rows for the default voice), and no such prompt was
+shipped with it. A generic driver cannot invent one. Fixed by carrying `default_prompt_ids` in
+`config.json` — deliberately in the config rather than a sidecar file, because trust_remote_code
+copies only `.py` into its module cache (S4 #4), so anything resolved from `__file__` is absent.
+
+```
+[capture] tts_backbone / decoder_layer / r_m_s_norm / attention / m_l_p /
+          codec_decoder / flow_matching:  captured
+[preflight] captured 7/7 components; per-component PCC tests will use real inputs
+```
+
+**Trajectory: 3/7 → 5/7 → 7/7, across three independent causes** — two ours (hollow modules, no
+default prompt), one the tool's (F25's copied decomposition plan). Every per-component gate is now
+measured against tensors the deployment actually produces.
+
+**A caveat that keeps F23 intact.** The driver that finally succeeded is
+`model(pixel_values=...): ok` — the *image-tensor* driver, on a text-to-speech model. It works only
+because `forward` ignores unknown kwargs and falls through to the bundled default. **The tool still
+does not know how to drive this model; it merely can no longer fail.** The recommendation is
+unchanged: a `--calibration-inputs` channel, so representative inputs are supplied rather than
+guessed.
+
+**Packaging lesson for anyone wrapping a model for this tool:** it must be runnable with **no
+arguments**. Every automatic driver, capture and smoke test depends on that, and a model whose
+`forward` demands a specially-constructed input is undrivable no matter how correct it is.
+
 ---
 
 ## Corrections to this document
@@ -2532,6 +2574,48 @@ either one leaves the symptom unchanged.
 `0 REUSE, 0 ADAPT, 4 NEW (total 4)` to **`3 REUSE, 0 ADAPT, 4 NEW (total 7)`** — the tool recognised
 three components as things `tt_transformers` already implements rather than writing them from
 scratch. Honest structure did not just fix the gate; it made the port cheaper.
+
+### Run 4 — `captured 7/7`, and the third fix was also ours
+
+Runs 1-3 reached 3/7, then 5/7. The last two misses were **Blocks 2 and 3**, and the cause was again
+the wrapper, not the tool:
+
+```
+driver `model(input_ids=..., attention_mask=...) [10 tokens]`:
+   AssertionError: prompt has 0 audio placeholders but the preset has 169 rows
+driver `submodule[backbone](**['inputs_embeds'])`: ok          <- backbone ONLY
+```
+
+Unable to construct a valid whole-model prompt, the framework fell back to driving the **backbone
+submodule alone** — which reaches every backbone component and never executes the flow matcher or
+the codec, so those two were gated on synthetic inputs while the run reported success.
+
+**The model could not be run with no arguments.** Its `forward` required a prompt whose
+audio-placeholder count is voice-specific (169 rows for the default voice), and no such prompt was
+shipped with it. A generic driver cannot invent one. Fixed by carrying `default_prompt_ids` in
+`config.json` — deliberately in the config rather than a sidecar file, because trust_remote_code
+copies only `.py` into its module cache (S4 #4), so anything resolved from `__file__` is absent.
+
+```
+[capture] tts_backbone / decoder_layer / r_m_s_norm / attention / m_l_p /
+          codec_decoder / flow_matching:  captured
+[preflight] captured 7/7 components; per-component PCC tests will use real inputs
+```
+
+**Trajectory: 3/7 → 5/7 → 7/7, across three independent causes** — two ours (hollow modules, no
+default prompt), one the tool's (F25's copied decomposition plan). Every per-component gate is now
+measured against tensors the deployment actually produces.
+
+**A caveat that keeps F23 intact.** The driver that finally succeeded is
+`model(pixel_values=...): ok` — the *image-tensor* driver, on a text-to-speech model. It works only
+because `forward` ignores unknown kwargs and falls through to the bundled default. **The tool still
+does not know how to drive this model; it merely can no longer fail.** The recommendation is
+unchanged: a `--calibration-inputs` channel, so representative inputs are supplied rather than
+guessed.
+
+**Packaging lesson for anyone wrapping a model for this tool:** it must be runnable with **no
+arguments**. Every automatic driver, capture and smoke test depends on that, and a model whose
+`forward` demands a specially-constructed input is undrivable no matter how correct it is.
 
 ---
 
