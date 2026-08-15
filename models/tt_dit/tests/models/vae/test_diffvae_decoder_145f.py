@@ -41,9 +41,12 @@ _FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical
 
 
 def _dram_in_use(mesh_device) -> str:
-    """Best-effort DRAM figure; the point of the test is that the decode fits, not the exact byte."""
+    """Per-bank DRAM after the decode, as a figure rather than a survival claim."""
     try:
-        return str(ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM))[:200]
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        used = view.total_bytes_allocated_per_bank * view.num_banks
+        total = view.total_bytes_per_bank * view.num_banks
+        return f"{used / 1e9:.2f} GB of {total / 1e9:.2f} GB per device across {view.num_banks} banks"
     except Exception as err:  # noqa: BLE001 - reporting only
         return f"unavailable ({type(err).__name__}: {err})"
 
