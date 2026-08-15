@@ -29,9 +29,7 @@
 static bool check_32_chips() {
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
     auto all_chips = cluster_desc->get_all_chips();
-    // Galaxy descriptors can include non-worker chips (e.g. gateways), so
-    // require at least 32 rather than exactly 32.
-    return all_chips.size() >= 32;
+    return all_chips.size() == 32;
 }
 
 class GalaxyRingSDPATest : public ::testing::Test {
