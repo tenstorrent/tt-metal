@@ -108,33 +108,42 @@ sfpi_inline void calculate_where_generated(
         if constexpr (FORMAT == DataFormat::Float16_b)
         {
             sfpi::vFloat condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::F16b>();
-            sfpi::vInt enabled = condition != 0.0f;
-            sfpi::vUInt mask = sfpi::as<sfpi::vUInt>(-enabled);
-            sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::LO16>();
-            sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::LO16>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::LO16>() =
-                (true_bits & mask) | (false_bits & ~mask);
+            sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
+            sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
+            sfpi::vUInt result = false_bits;
+            v_if (condition != 0.0f)
+            {
+                result = true_bits;
+            }
+            v_endif;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>() = result;
         }
         else if constexpr (FORMAT == DataFormat::Float32)
         {
             sfpi::vFloat condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::F32>();
-            sfpi::vInt enabled = condition != 0.0f;
-            sfpi::vUInt mask = sfpi::as<sfpi::vUInt>(-enabled);
             sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
             sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>() =
-                (true_bits & mask) | (false_bits & ~mask);
+            sfpi::vUInt result = false_bits;
+            v_if (condition != 0.0f)
+            {
+                result = true_bits;
+            }
+            v_endif;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>() = result;
         }
         else
         {
             static_assert(FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32);
             sfpi::vInt condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-            sfpi::vInt enabled = condition != 0;
-            sfpi::vUInt mask = sfpi::as<sfpi::vUInt>(-enabled);
             sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
             sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>() =
-                (true_bits & mask) | (false_bits & ~mask);
+            sfpi::vUInt result = false_bits;
+            v_if (condition != 0)
+            {
+                result = true_bits;
+            }
+            v_endif;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>() = result;
         }
 
         sfpi::dst_reg++;
