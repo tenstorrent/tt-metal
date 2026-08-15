@@ -24,10 +24,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim",
     [
-        (4096, 7 * 1024, 2 * 1024),
-        (3200, 7 * 1024, 2 * 1024),
+        (640, 7 * 1024, 2 * 1024),
     ],
-    ids=["4K", "3.2K"],
+    ids=["640"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",

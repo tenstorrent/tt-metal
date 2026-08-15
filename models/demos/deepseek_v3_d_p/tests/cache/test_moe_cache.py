@@ -51,8 +51,8 @@ def cleanup_cache():
 )
 @pytest.mark.parametrize(
     "gate_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],
-    ids=["device_gate", "host_gate"],
+    [GateComputeMode.DEVICE_FP32],
+    ids=["device_fp32"],
 )
 def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     """Test: weights → cold cache → warm cache produce identical outputs."""
@@ -277,9 +277,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     logger.info(f"  cold_load:   {profiler.get('cold_load')*1000:.1f} ms")
     logger.info(f"  warm_load:   {profiler.get('warm_load')*1000:.1f} ms")
 
-    # MoE integration test should achieve high PCC like component tests
-    # Using GateComputeMode.DEVICE ensures gate runs on device (not host fallback)
-    # This avoids issues with uninitialized torch tensors in cache mode
+    # DEVICE_FP32 keeps the gate on device, so cache mode never touches the
+    # host-reference torch tensors that are uninitialized here.
     pcc_threshold = 0.99
     assert pcc_cold >= pcc_threshold, f"Cold cache mismatch: PCC={pcc_cold} < {pcc_threshold}"
     assert pcc_warm >= pcc_threshold, f"Warm cache mismatch: PCC={pcc_warm} < {pcc_threshold}"
