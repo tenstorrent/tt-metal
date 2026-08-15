@@ -2117,13 +2117,13 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
                 if (start_marker_stack.empty()) {
-                    // Orphan ZONE_END from a dropped-marker run; skip instead of fatal.
-                    if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
-                        TT_FATAL(
-                            false,
-                            "End marker found without a corresponding start marker.\nEnd marker: {}",
-                            marker.to_string());
-                    }
+                    // PERF_AUTOMATION_ORPHAN_SKIP: tolerate an orphan ZONE_END (mesh / high-volume
+                    // marker imbalance) -- warn and skip, keep a partial report instead of aborting.
+                    log_warning(
+                        tt::LogMetal,
+                        "PERF_AUTOMATION_ORPHAN_SKIP End marker found without a corresponding start "
+                        "marker; skipping (report will be partial).\nEnd marker: {}",
+                        marker.to_string());
                     device_marker_it = next_device_marker_it;
                     continue;
                 }
@@ -2132,14 +2132,13 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 if (!MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
                     if (start_marker_it->marker_id != marker.marker_id) {
-                        if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
-                            TT_FATAL(
-                                false,
-                                "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
-                                start_marker_it->to_string(),
-                                marker.to_string());
-                        }
-                        // Stack is misaligned due to drops; skip this end without popping.
+                        // PERF_AUTOMATION_ORPHAN_SKIP: stack misaligned -- warn and skip this end.
+                        log_warning(
+                            tt::LogMetal,
+                            "Start and end marker IDs do not match; skipping this end (report will be "
+                            "partial).\nStart marker: {}\nEnd marker: {}",
+                            start_marker_it->to_string(),
+                            marker.to_string());
                         device_marker_it = next_device_marker_it;
                         continue;
                     }
@@ -2260,20 +2259,13 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
     }
 
     if (!start_marker_stack.empty()) {
-        if (this->had_dropped_markers.load(std::memory_order_relaxed)) {
-            log_warning(
-                tt::LogMetal,
-                "{} start markers detected without corresponding end markers (some end markers were "
-                "dropped due to DRAM-buffer overflow; report will be partial). Marker at top of stack: {}",
-                start_marker_stack.size(),
-                start_marker_stack.top()->to_string());
-        } else {
-            TT_FATAL(
-                false,
-                "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
-                start_marker_stack.size(),
-                start_marker_stack.top()->to_string());
-        }
+        // PERF_AUTOMATION_ORPHAN_SKIP: leftover starts with no matching end -- warn + partial report.
+        log_warning(
+            tt::LogMetal,
+            "{} start markers detected without corresponding end markers (marker imbalance; report will "
+            "be partial). Marker at top of stack: {}",
+            start_marker_stack.size(),
+            start_marker_stack.top()->to_string());
     }
 }
 

@@ -2,6 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
+def _bootstrap_ttnn_import_paths() -> None:
+    """Republish the editable install's sys.path entries for an in-place checkout.
+
+    setup.py's `ttnn-custom.pth` publishes three entries: the repo root, `<repo>/ttnn`
+    (so `import ttnn` finds the real package at `<repo>/ttnn/ttnn`) and `<repo>/tools`
+    (so `import tracy` resolves, which `ttnn._ttnn` needs at extension-init time). A
+    checkout built in place has no such .pth, and the shared `/opt/venv` cannot carry one
+    without hijacking `import ttnn` for every other checkout on the box.
+
+    Without `<repo>/ttnn` on the path the failure is silent and misleading: `<repo>/ttnn`
+    is a source directory with no `__init__.py`, so `import ttnn` binds it as an EMPTY
+    namespace package (`ttnn.__file__ is None`) and the first real attribute access raises
+    `ModuleNotFoundError: No module named 'ttnn.device'` from this file -- which callers
+    report as "the workload did not run" rather than "the path is wrong".
+
+    Doing it here fixes every pytest entry point at once, whatever PYTHONPATH the caller
+    set. It is a no-op when the install is present: the entries are already importable, and
+    an already-correct `ttnn` keeps its binding.
+    """
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent
+    if not (repo / "ttnn" / "ttnn" / "__init__.py").is_file():
+        return  # not an in-place checkout; leave the installed layout alone
+    for entry in (repo / "tools", repo / "ttnn", repo):
+        text = str(entry)
+        if text in sys.path:
+            sys.path.remove(text)
+        sys.path.insert(0, text)
+    # A namespace-package `ttnn` bound before the repair would shadow the real one for the
+    # rest of the process; drop it so the next import re-resolves. Missing `argmax` is the
+    # tell -- the real package has it, the empty namespace portion does not.
+    stale = sys.modules.get("ttnn")
+    if stale is not None and not hasattr(stale, "argmax"):
+        del sys.modules["ttnn"]
+
+
+_bootstrap_ttnn_import_paths()
+
 import contextlib
 import json
 import os

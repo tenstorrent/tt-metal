@@ -1,0 +1,38 @@
+{
+ "models/demos/voxtral_tts_backbone/tests/e2e/test_main_perf.py|test_main_perf": {
+  "k": 2,
+  "fp": "0"
+ },
+ "depth|models/demos/voxtral_tts_backbone/tests/e2e/test_main_perf.py": {
+  "env": {
+   "TT_PERF_LAYERS": "2"
+  },
+  "fp": "0"
+ },
+ "models/demos/voxtral_tts_backbone/tests/e2e/test_main_perf.py::test_main_perf|test_main_perf": {
+  "k": 2,
+  "fp": "1786666374"
+ },
+ "depth|models/demos/voxtral_tts_backbone/tests/e2e/test_main_perf.py::test_main_perf": {
+  "env": {},
+  "fp": "1786666374"
+ },
+ "models/demos/voxtral_tts_full/tests/e2e/test_main_perf.py|test_main_perf": {
+  "k": 4,
+  "fp": "0"
+ },
+ "depth|models/demos/voxtral_tts_full/tests/e2e/test_main_perf.py": {
+  "env": {
+   "TT_PERF_LAYERS": "4"
+  },
+  "fp": "0"
+ },
+ "models/demos/voxtral_tts_full/tests/e2e/test_main_perf.py::test_main_perf|test_main_perf": {
+  "k": 4,
+  "fp": "1786783608"
+ },
+ "depth|models/demos/voxtral_tts_full/tests/e2e/test_main_perf.py::test_main_perf": {
+  "env": {},
+  "fp": "1786783608"
+ }
+}

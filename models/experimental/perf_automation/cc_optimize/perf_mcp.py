@@ -38,6 +38,31 @@ from agent import integrity as _integrity  # noqa: E402
 from agent.layer_depth import set_depth as _set_depth  # noqa: E402
 
 _DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
+
+
+def _subprocess_pythonpath(repo: str) -> str:
+    """The three sys.path entries tt-metal's editable install publishes, plus whatever
+    the server already had.
+
+    Setting this to the repo root ALONE is not enough, and fails in a way that looks like
+    a broken model rather than a broken path: `<repo>/ttnn` is a source DIRECTORY as well
+    as the package name, so with only the repo root on the path `import ttnn` binds to
+    that directory as an empty namespace package. The first attribute access then raises
+    `ModuleNotFoundError: No module named 'ttnn.device'` from the ROOT conftest.py --
+    before any test body runs, so the gate reports "workload did not run full-pipeline"
+    and never produces a reading.
+
+    setup.py's `ttnn-custom.pth` publishes repo root + `<repo>/ttnn` (so `import ttnn`
+    finds the real package) + `<repo>/tools` (so `import tracy` resolves, which
+    `ttnn._ttnn` needs at extension-init time). A checkout built in place has no such
+    .pth, so the subprocess must republish them. Appending the inherited value keeps any
+    caller-supplied entries instead of discarding them.
+    """
+    entries = [repo, str(Path(repo) / "ttnn"), str(Path(repo) / "tools")]
+    inherited = os.environ.get("PYTHONPATH", "")
+    if inherited:
+        entries.append(inherited)
+    return os.pathsep.join(entries)
 from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
@@ -2476,7 +2501,7 @@ def _run_full_pipeline_ms():
     repo = str(Path(_PKG).parent.parent.parent)
     env = dict(os.environ)
     env["TT_METAL_HOME"] = repo
-    env["PYTHONPATH"] = repo
+    env["PYTHONPATH"] = _subprocess_pythonpath(repo)
     # WHOLE model: the depth cap is REMOVED, not set to 0. "0" arrives as a truthy string and was
     # read by model builders as "build zero layers", so this gate measured nothing and could only
     # report "no markers". See agent/layer_depth.py.
@@ -3632,7 +3657,7 @@ def _full_depth_op_probe():
     repo = str(Path(_PKG).parent.parent.parent)
     env = dict(os.environ)
     env["TT_METAL_HOME"] = repo
-    env["PYTHONPATH"] = repo
+    env["PYTHONPATH"] = _subprocess_pythonpath(repo)
     _set_depth(env, None)  # ALL layers: cap REMOVED, never sent as 0 (see agent/layer_depth.py)
     env["TT_PERF_OSL_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)

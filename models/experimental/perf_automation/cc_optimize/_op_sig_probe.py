@@ -20,8 +20,18 @@ from collections import Counter
 from pathlib import Path
 
 _PKG = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PKG.parent.parent.parent))
+_REPO = _PKG.parent.parent.parent
+sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_PKG))
+# The repo root ALONE is not enough to import ttnn. `<repo>/ttnn` is a source directory
+# with no __init__.py, so with only the root on the path `import ttnn` binds it as an empty
+# namespace package and the first attribute access dies. The editable install publishes
+# `<repo>/ttnn` (the real package) and `<repo>/tools` (for `tracy`, which ttnn._ttnn needs
+# at extension-init time) alongside the root; an in-place checkout has no such .pth, so
+# republish them here. This probe runs as a bare script, so the repo conftest cannot do it.
+for _extra in (_REPO / "ttnn", _REPO / "tools"):
+    if str(_extra) not in sys.path:
+        sys.path.insert(0, str(_extra))
 
 _SIGS = set()
 _SEQ = []
