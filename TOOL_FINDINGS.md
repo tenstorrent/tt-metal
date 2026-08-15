@@ -131,6 +131,7 @@ defect.
 | **F32** | `termination_check()` blocks 30 min with no progress channel; the retry never returns | **YES** | medium |
 | **F33** | `worktree-list` can never print ORPHAN (`id(s) in orphans`), so dead worktrees accumulate looking active; `PermissionError` is also misread as dead | **YES** | one line |
 | **F34** | the overlay store silently restores a deleted model over a clean HEAD, so a from-scratch run is unreachable and two runs from one commit differ invisibly; `overlay-drop` also fails to empty its scope | **YES — reproducibility** | small |
+| **F35** | backend selection is non-deterministic — identical runs picked different templates, the LLM ranker overriding its own top score, choosing between two entries whose paths are both missing | **YES — reproducibility** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -3077,6 +3078,67 @@ about its one consequential success.
 4. **Never carry graduation markers in an overlay.** Ported source is legitimate to reuse; a
    "this component already passed its PCC gate" marker earned in a different run under a different
    threshold is not — see F26 (report what the gate measured) and F29 (the threshold sets quality).
+
+---
+
+## ★★ F35 — backend selection is not reproducible: identical runs pick different templates
+
+**Status: live in this checkout** · severity: the template that shapes the generated port is chosen
+non-deterministically · reported: not yet
+
+Two `auto-up` runs, same model, same commit (`42e9bee5f7`), ~4 minutes apart. The deterministic
+ranking was **identical** both times:
+
+```
+  Sibling candidates (top 2, exact first):
+    1. hf_eager universal (TTS)          [score=40; category 'TTS' default (generic runner)]
+    2. XTTS-v2 (multilingual TTS)        [score=30; category 'TTS' default]
+```
+
+The selection was not:
+
+```
+run 1:  Backend match: LLM-RESOLVED  (hf_eager universal (TTS))     <- rank 1
+run 2:  Backend match: LLM-RESOLVED  (XTTS-v2 (multilingual TTS))   <- rank 2, score 30
+```
+
+Same inputs, same scores, different answer — and in run 2 the LLM ranker overrode its own
+deterministic top pick in favour of a candidate scored 10 points lower, with no stated reason
+beyond the boilerplate *"the registry-constrained LLM ranker chose this as the closest
+architectural sibling"*.
+
+**Why it matters.** The backend is the template, and the template shapes the scaffold: which demo is
+copied, which attention/RoPE conventions are assumed, which reuse map applies. F19 already showed
+template dispatch can silently run a *different model*; F35 says which template you get is not
+stable across identical invocations. A bring-up that cannot be reproduced cannot be bisected, and a
+regression cannot be attributed to a code change rather than to the ranker's mood.
+
+**Both winners point at directories that do not exist** — `models/demos/hf_eager/demo.py` and
+`models/demos/xtts_v2` are both on F30's list of 26 stale registry paths. The ranker is choosing
+between two broken entries and the run continues either way.
+
+**What saved this run.** F18's corrected routing gate declined the generic route in *both* runs,
+identically and for the right reason:
+
+```
+NOT routing to the generic LLM demo: family was INFERRED from config structure, not a known
+model_type; config declares 3 stacks (backbone, flow, codec) and the block checklist covers the
+decoder stack only. Scaffolding this model's own stubs instead.
+```
+
+So for *this* model the divergence is contained — the port is scaffolded from the model's own
+structure rather than from either template. That containment is luck of architecture, not design:
+a single-stack model with a known `model_type` would have been routed to whichever template the
+ranker happened to name that day.
+
+### Fixes
+
+1. **Make the deterministic score authoritative unless the LLM gives a stated, logged reason to
+   depart from it** — and log the reason next to the score it overrode.
+2. **Seed / cache the ranker per (model, commit)** so a re-run reproduces the earlier choice, and
+   record the resolved backend in the run report as an input, not a narration line.
+3. **Exclude candidates whose `demo_path` is missing** before ranking. Both candidates here were
+   unusable; the ranker was choosing between two dead links (F30).
 
 ---
 
