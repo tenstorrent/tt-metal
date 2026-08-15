@@ -808,13 +808,17 @@ inline void configure_unpack_AB(
     std::uint32_t exp_width         = (static_cast<std::uint32_t>(unpA_dst_format_masked) >> 2) & 0x1; // 0=5-bit, 1=8-bit
 
     // Strides for incrementing ch1 address to srcA and srcB
-    cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
+    cfg_store(
+        cfg,
+        UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32,
         (0 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
-        (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+            (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)); // Z and W(not used) stride for dest address (ch1)
 
-    cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
+    cfg_store(
+        cfg,
+        UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32,
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
-        (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+            (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)); // Z and W(not used) stride for dest address (ch1)
 
     // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits that
     // mutate Y-stride (e.g. tilizeA_B) can deterministically restore this baseline on uninit

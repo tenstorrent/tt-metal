@@ -654,7 +654,7 @@ TT_ALWAYS_INLINE void configure_pack(
     pack_counters.f.pack_reads_per_xy_plane = 1;
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
-        cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
+        cfg_store(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i, pack_counters.val); // disable auto last generation
     }
 
     pck_edge_offset_u pck_edge_offset;
@@ -662,7 +662,7 @@ TT_ALWAYS_INLINE void configure_pack(
     pck_edge_offset.f.mask = 0xffff;
 
     cfg_store(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, pck_edge_offset.val);
-    cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+    cfg_store(cfg, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32, 0x0); // All packers use row set mapping 0, edge offset 0 mask
 
     // TILE_HEADER is the per-tile datum count (tile_size), an author-owned GPR
     // (not format-derived config), so it stays as the direct regfile store
