@@ -441,6 +441,135 @@ TEST_F(AdamWWeightDecaySkip1DTest, SkipsDecayOn1DParamsOnly) {
 }
 
 // ====================================================================
+// State-dict restore tests
+// A checkpoint's betas may differ from the constructor config; both the
+// moment updates and the bias correction (beta powers) must follow the
+// restored betas.
+// ====================================================================
+
+class AdamWStateDictTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+// Builds an optimizer whose constructor betas differ from the effective ones, applies the
+// effective betas either through the state dict or through the setters, then verifies one
+// step against a CPU reference driven purely by the effective betas.
+static void run_effective_betas_step_and_compare(bool use_beta_setters) {
+    using namespace ttml;
+
+    const float lr = 1e-2f;
+    const float epsilon = 1e-8f;
+    const size_t initial_steps = 10;
+    const float constructor_beta1 = 0.9f;
+    const float constructor_beta2 = 0.999f;
+    const float effective_beta1 = 0.5f;
+    const float effective_beta2 = 0.9f;
+    const std::array<std::size_t, 4> shape = {1, 1, 128, 256};
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const uint32_t seed_param = gen();
+    const uint32_t seed_grad = gen();
+    const uint32_t seed_first_moment = gen();
+    const uint32_t seed_second_moment = gen();
+
+    xt::xarray<float> w0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> g0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> m0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 = test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed_second_moment);
+
+    // CPU reference driven purely by the effective betas: the behavior a resumed run must match.
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(lr, effective_beta1, effective_beta2, epsilon, /*weight_decay=*/0.0f, /*amsgrad=*/false);
+    cpu_opt.set_state(m0, v0, initial_steps);
+    cpu_opt.step(w_cpu, g0);
+
+    auto theta = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta->set_grad(to_tt_bf16(g0));
+    serialization::NamedParameters params{{"theta", theta}};
+
+    optimizers::AdamWConfig cfg;
+    cfg.lr = lr;
+    cfg.beta1 = constructor_beta1;
+    cfg.beta2 = constructor_beta2;
+    cfg.epsilon = epsilon;
+    cfg.weight_decay = 0.0f;
+    optimizers::AdamW opt(params, cfg);
+
+    // When exercising the setters, the state dict carries the constructor betas so that only
+    // the setters introduce the effective ones.
+    const float state_beta1 = use_beta_setters ? constructor_beta1 : effective_beta1;
+    const float state_beta2 = use_beta_setters ? constructor_beta2 : effective_beta2;
+    {
+        serialization::StateDict state;
+        state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(m0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
+        state["steps"] = initial_steps;
+        state["lr"] = lr;
+        state["beta1"] = state_beta1;
+        state["beta2"] = state_beta2;
+        state["epsilon"] = epsilon;
+        state["weight_decay"] = 0.0f;
+        state["amsgrad"] = false;
+        state["stochastic_rounding"] = false;
+        opt.set_state_dict(state);
+    }
+
+    if (use_beta_setters) {
+        opt.set_beta1(effective_beta1);
+        opt.set_beta2(effective_beta2);
+    }
+
+    EXPECT_EQ(opt.get_steps(), initial_steps);
+    EXPECT_FLOAT_EQ(opt.get_beta1(), effective_beta1);
+    EXPECT_FLOAT_EQ(opt.get_beta2(), effective_beta2);
+
+    opt.step();
+
+    auto result = core::to_xtensor(theta->get_value());
+    auto metrics = compute_error_metrics(w_cpu, result, "effective_betas");
+
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
+    EXPECT_LE(metrics.mean_error, mean_error_tolerance) << "bias correction must follow the effective betas";
+    EXPECT_LE(metrics.max_error, max_error_tolerance) << "bias correction must follow the effective betas";
+
+    // Guard against a vacuous pass: a step whose moments follow the effective betas but whose
+    // bias correction still carries the constructor betas' powers must be clearly distinguishable
+    // from the reference.
+    xt::xarray<float> m1 = effective_beta1 * m0 + (1.0f - effective_beta1) * g0;
+    xt::xarray<float> v1 = effective_beta2 * v0 + (1.0f - effective_beta2) * (g0 * g0);
+    const float stale_bias_correction1 =
+        1.0f - std::pow(constructor_beta1, static_cast<float>(initial_steps)) * effective_beta1;
+    const float stale_bias_correction2 =
+        1.0f - std::pow(constructor_beta2, static_cast<float>(initial_steps)) * effective_beta2;
+    xt::xarray<float> w_stale =
+        w0 - lr * (m1 / stale_bias_correction1) / (xt::sqrt(v1 / stale_bias_correction2) + epsilon);
+    auto stale_metrics = compute_error_metrics(w_cpu, w_stale, "stale_bias_correction");
+    EXPECT_GT(stale_metrics.mean_error, mean_error_tolerance)
+        << "constructor and effective betas too close to distinguish; test is not meaningful";
+}
+
+TEST_F(AdamWStateDictTest, RestoredBetasDriveBiasCorrection) {
+    run_effective_betas_step_and_compare(/*use_beta_setters=*/false);
+}
+
+TEST_F(AdamWStateDictTest, BetaSettersRecomputeBiasCorrection) {
+    run_effective_betas_step_and_compare(/*use_beta_setters=*/true);
+}
+
+// ====================================================================
 // AMSGrad Tests
 // Test AdamW with AMSGrad variant enabled
 // ====================================================================

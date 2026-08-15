@@ -279,6 +279,21 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_Streaming) {
     }
 }
 
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_ManyRowsPaddedWidth) {
+    constexpr std::array<SoftmaxBackwardCase, 2> cases = {{
+        // N*C*(W_padded - W) exceeds W here: a row count derived from the logical shape
+        // instead of the padded shape overcounts tile-rows and writes past the output buffer.
+        {"many_rows_padded_w", 64, 1, 32, 197, 3, 5e-3F, 1e-3F, -10.0F, 10.0F},
+        // H not tile-aligned: the padded-H tile-rows are processed too; per-lane compute
+        // must keep all logical rows exact.
+        {"unaligned_h_padded_w", 1, 2, 59, 197, 3, 5e-3F, 1e-3F, -10.0F, 10.0F},
+    }};
+    for (const auto& test_case : cases) {
+        SCOPED_TRACE(test_case.name);
+        run_softmax_backward_case(test_case, GetParam(), s_device);
+    }
+}
+
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_WidthBoundaryStreamingSwitch) {
     constexpr std::array<SoftmaxBackwardCase, 5> cases = {{
         {"boundary_63_tiles", 1, 2, 32, 63 * 32, -1, 1e-3F, 1e-3F, -10.0F, 10.0F},
