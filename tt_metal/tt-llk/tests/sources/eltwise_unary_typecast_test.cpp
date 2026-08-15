@@ -86,7 +86,11 @@ constexpr int iterations = 8;
 // schedule.  The typed Dst layout is the architectural boundary; allocation,
 // conversion scheduling, and any future macro formation belong to GCC.
 template <int ITERATIONS>
+#ifdef TYPECAST_TYPED_RWC_BOUNDARY
+__attribute__((always_inline)) inline void calculate_typecast_uint16_to_fp16b_semantic()
+#else
 __attribute__((noinline)) void calculate_typecast_uint16_to_fp16b_semantic()
+#endif
 {
     // Establish a local typed all-lanes boundary. The compiler-owned macro
     // descriptor is materialized in this out-of-line semantic function and
@@ -151,6 +155,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 START_PERF_MEASURE("TYPECAST_BODY")
             if constexpr (TYPECAST_IMPL == 1)
             {
+#ifdef TYPECAST_TYPED_RWC_BOUNDARY
+                // Compiler-visible discriminator for descriptor ownership
+                // across the four architectural RC faces.  Keep the default
+                // selector on the established LLK wrapper until the compiler
+                // also owns its address-modifier state.
+                _llk_math_eltwise_sfpu_start_(block_tile);
+#pragma GCC unroll 0
+                for (int face = 0; face < 4; ++face)
+                {
+                    calculate_typecast_uint16_to_fp16b_semantic<iterations>();
+                    lltt::setrwc<0, 4, 8, 0, 0, 4>();
+                    lltt::setrwc<0, 4, 8, 0, 0, 4>();
+                }
+                _llk_math_eltwise_sfpu_done_();
+#else
                 // The semantic body describes one 8-row face.  Keep tile
                 // addressing and face traversal at the existing typed LLK
                 // boundary rather than baking physical offsets into the body.
@@ -158,6 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     calculate_typecast_uint16_to_fp16b_semantic<iterations>,
                     block_tile,
                     VectorMode::RC);
+#endif
             }
             else
             {
