@@ -500,6 +500,12 @@ class ModelArgs:
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+            # ``dummy_weights=True`` fast-boot config for the PrimeIntellect
+            # Qwen3-0.6B reverse-text SFT (used by tt-train's async GRPO example).
+            # Only ``config.json`` is needed under this path -- it feeds
+            # ``AutoConfig.from_pretrained`` for architecture bootstrap; the real
+            # weights arrive over the HostWeightBridge on the first weight sync.
+            "Qwen3-0.6B-Reverse-Text-SFT": "models/tt_transformers/model_params/Qwen3-0.6B-Reverse-Text-SFT",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
