@@ -133,6 +133,7 @@ defect.
 | **F34** | the overlay store silently restores a deleted model over a clean HEAD, so a from-scratch run is unreachable and two runs from one commit differ invisibly; `overlay-drop` also fails to empty its scope | **YES — reproducibility** | small |
 | **F35** | backend selection is non-deterministic — identical runs picked different templates, the LLM ranker overriding its own top score, choosing between two entries whose paths are both missing | **YES — reproducibility** | small |
 | **F36** | "PCC tests will use real inputs" is false — the graduation gate builds inputs with `torch.randn` and never loads the 43 MB captures or the captured `output.pt`; raising the threshold measures the wrong thing more precisely | **YES — the sharpest one** | small |
+| **F37** | the generated test calls `_captured_submodule_path()`, defined in 0 of 7 emitted files → guaranteed first-round `NameError` for every model; and its input defaults drop the causal mask (non-causal golden) and stage index tensors as bf16 (8191→8192) | **YES — with F36** | small |
 
 **If only one thing is taken: F6.** It is the difference between "this tool does not work" and
 "this tool ported a 3.4B model correctly in ten minutes".
@@ -3226,6 +3227,117 @@ right is already written and already paid for; the gate simply does not call it.
    repair.
 4. **State it in the report too.** `RUN_REPORT.md` records components as "graduated, native ttnn,
    PCC verified" with no indication of what they were verified against.
+
+---
+
+## ★★★ F37 — the generated PCC test cannot express this model, and four of its defaults are silently wrong
+
+**Status: live, hit in round 1 of the 0.99 re-run** · severity: one defect is a `NameError` on every
+model; two others corrupt the *golden* rather than the port · reported: not yet
+
+Round 1 of bring-up spent 13 minutes and 43 tool calls on `attention`. It graduated — but the
+repair went almost entirely into `tests/pcc/conftest.py`, not into the stub. The agent's own header
+is the cleanest statement of the problem:
+
+> *"Everything here fixes a defect in `tt_hw_planner`'s test TEMPLATE, so it belongs in one shared
+> conftest rather than in seven generated files (which get re-emitted) and never in a stub (the stub
+> is not what is broken)."*
+
+Four defects, in the tool's template. **(1) and (4) verified here independently; (2) and (3) are the
+repair agent's analysis, recorded as such.**
+
+### 1. `_captured_submodule_path()` is called by every generated test and defined by none — VERIFIED
+
+The first gate run of the first component died on:
+
+```
+NameError: name '_captured_submodule_path' is not defined
+   at stage=build_torch_reference
+```
+
+Checked across the emitted suite: **used in 7 of 7 tests, defined in 0 of 7.** This is not
+model-specific — the template emits the call unconditionally, so the first component of every
+bring-up, for every model, fails its first gate on the tool's own generation bug and burns repair
+rounds on it. The fix here was to define it in `conftest.py` and publish it into `builtins`, which
+works only because an unresolved global in a test module falls back there.
+
+### 2. `_make_arg_for` cannot build inputs for a functional-style reference — reported by the agent
+
+The template infers inputs from argument **names** (F36). This reference takes its own arguments,
+not HF's canonical ones, and the name heuristic fails four different ways:
+
+- **`cis`** — a complex RoPE table `[S, head_dim/2]`, required by `attention` and `decoder_layer`.
+  The fallback would hand it `randn(1, 64, 3072)`.
+- **`bias`** — the additive causal mask. It defaults to `None` and is not in the "well known" set,
+  so the template's own rule drops it:
+  ```python
+  if not is_required and not is_well_known:
+      continue
+  ```
+  **Dropping it silently makes the golden non-causal.** The port is then measured against a
+  reference that is not the model — a test that can fail a correct port, or pass an incorrect one,
+  with equal confidence.
+- **`x_0`** — `flow_matching` draws `torch.randn` for it when `None`, so golden and port integrate
+  **different noise**; and it wants `llm_hidden` `[B, 3072]` (2-D) where the template supplies a 3-D
+  activation.
+- **`codes`** — `codec_decoder` wants an integer tensor `[T, 37]`; the fallback hands it a float
+  activation.
+
+### 3. The native probe forbids marshalling the side inputs — reported by the agent
+
+`models/common/native_probe.py` graduates a stub only on `torch_ops == 0`, and `ttnn.from_torch`
+itself counts (it surfaces as `__dlpack__`). So a stub **may not** convert `cis` / `bias` / `x_0`
+per call. The workaround is to rebuild them inside `build()` (not probed) and ignore the passed
+values — meaning the graduated stub deliberately ignores three of its own inputs to satisfy the
+probe.
+
+### 4. The harness stages every primary input as bfloat16 — VERIFIED
+
+`bringup_loop.py:619`:
+
+```python
+def _ttnn_from_torch_mesh_safe(tensor, device, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    t = tensor.to(torch.bfloat16) if dtype == ttnn.bfloat16 else tensor
+```
+
+called at `bringup_loop.py:791` with no dtype override. bfloat16 carries 8 mantissa bits, so it is
+exact only to 256:
+
+- **For an index tensor this is destructive.** A codebook id of 8191 becomes 8192 — the harness
+  corrupts the input before the port ever sees it, and the port is blamed for the mismatch.
+- **For an activation it injects ~4e-3 of input error**, which lands in the same PCC number the
+  0.99 gate is judging.
+
+The repair replaces it with: integer → `uint32`/`ROW_MAJOR` (which is also what `ttnn.embedding`
+wants), float → `float32`/`TILE`.
+
+### Why this one matters most
+
+F36 says the gate measures synthetic data. F37 says that for a model whose reference is not
+HF-canonical, the synthetic data the template invents is not merely unrepresentative but
+**invalid** — and in the `bias` and bf16 cases the error is on the *reference* side, where no
+amount of work on the port can fix it and no threshold can detect it.
+
+**The threshold itself was left honest.** The repair agent noted explicitly:
+
+> *"NOTE the assertion itself is untouched: `PCC_TARGET = 0.99` and the single `assert ok` in each
+> generated test are exactly as emitted."*
+
+So this run's 0.99 gate is intact — it is the inputs and the golden that needed repair, not the bar.
+
+### Fixes
+
+1. **Emit `_captured_submodule_path` into the template** (or import it) — a one-line generation fix
+   that removes a guaranteed first-round failure for every model.
+2. **Load the capture** (F36 fix 1) — it makes defect 2 largely moot, since real `cis`, `bias`,
+   `codes` and `x_0` are already on disk in `args.pt`/`kwargs.pt`.
+3. **Never drop a defaulted argument that changes semantics.** A mask defaulting to `None` is not
+   an optional input; if the template cannot build it, it must fail loudly rather than produce a
+   non-causal golden.
+4. **Choose the staging dtype from the tensor**, not a constant: integer → `uint32`/`ROW_MAJOR`,
+   float → `float32`/`TILE`.
+5. **Let a stub marshal its own side inputs**, or exclude input staging from the `torch_ops == 0`
+   probe — otherwise the probe's definition of "native" forces stubs to ignore their arguments.
 
 ---
 
