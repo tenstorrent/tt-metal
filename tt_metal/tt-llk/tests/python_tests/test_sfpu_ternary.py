@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+from dataclasses import dataclass
 
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
     WhereGolden,
@@ -15,9 +16,11 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import PerfConfig
 from helpers.sfpu_domains import _OP_DOMAIN_REGISTRY, exclude_undefined_pair, for_op
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -30,11 +33,20 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
+    TemplateParameter,
 )
 from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
+
+
+@dataclass
+class TTNNWhereImplTemplate(TemplateParameter):
+    value: int
+
+    def convert_to_cpp(self) -> str:
+        return f"#undef TTNN_WHERE_IMPL\n#define TTNN_WHERE_IMPL {self.value}"
 
 
 # Helper check function
@@ -201,12 +213,14 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
+    ttnn_where_impl=[0, 1],  # production handwritten macro/replay, generated SFPI
 )
 def test_ttnn_where(
     formats,
     dest_acc,
     mathop,
     test_case,
+    ttnn_where_impl,
 ):
 
     if (
@@ -259,6 +273,7 @@ def test_ttnn_where(
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
+            TTNNWhereImplTemplate(ttnn_where_impl),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
@@ -304,6 +319,60 @@ def test_ttnn_where(
     )
 
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
+
+
+@pytest.mark.parametrize(
+    "ttnn_where_impl,label", [(0, "handwritten_macro_replay"), (1, "generated_sfpi")]
+)
+def test_ttnn_where_device_profile(perf_report, ttnn_where_impl, label):
+    """Measure identical Float16_b where bodies with device timestamps."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    input_dimensions = [64, 64]
+    tile_count = 4
+
+    # Deterministic alternating condition and distinguishable operands make
+    # this useful as a correctness workload as well as a stable profile shape.
+    condition = (torch.arange(64 * 64) % 2).view(64, 64).to(torch.bfloat16)
+    true_value = torch.full(input_dimensions, 2.0, dtype=torch.bfloat16)
+    false_value = torch.full(input_dimensions, 11.0, dtype=torch.bfloat16)
+
+    configuration = PerfConfig(
+        "sources/sfpu_ternary_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            SFPU_TERNARY_OP(MathOperation.TTNNWhere),
+            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+            APPROX_MODE(ApproximationMode.No),
+            DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
+            TTNNWhereImplTemplate(ttnn_where_impl),
+        ],
+        runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
+        variant_stimuli=StimuliConfig(
+            condition.flatten(),
+            formats.input_format,
+            true_value.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+            buffer_C=false_value.flatten(),
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_count,
+        ),
+        unpack_to_dest=False,
+        dest_acc=DestAccumulation.No,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "TTNN_WHERE_BODY"]
+    assert len(rows) >= 1, rows.to_string(index=False)
+    cycles = float(rows["mean(MATH_ISOLATE)"].sum())
+    assert cycles > 0
+    print(f"TTNN_WHERE_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
 
 
 # MCW test with dynamic format sweeping like main test

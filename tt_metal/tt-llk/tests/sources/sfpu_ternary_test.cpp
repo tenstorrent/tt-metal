@@ -8,7 +8,13 @@
 
 #include "ckernel.h"
 #include "ckernel_debug.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "profiler.h"
+
+#ifndef TTNN_WHERE_IMPL
+#define TTNN_WHERE_IMPL 0
+#endif
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -80,6 +86,83 @@ using namespace ckernel;
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
 
+namespace ckernel::sfpu
+{
+
+// Test-only compiler-flow spelling of the production where operation.  Keep
+// the loads and store bit-preserving: where chooses an operand, it does not
+// numerically convert it.  The condition is interpreted in its declared type
+// so floating-point -0 remains false.
+template <DataFormat FORMAT, int ITERATIONS>
+sfpi_inline void calculate_where_generated(
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_in2,
+    const std::uint32_t dst_index_out)
+{
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        if constexpr (FORMAT == DataFormat::Float16_b)
+        {
+            sfpi::vFloat condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::F16b>();
+            sfpi::vInt enabled = condition != 0.0f;
+            sfpi::vUInt mask = sfpi::as<sfpi::vUInt>(-enabled);
+            sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::LO16>();
+            sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::LO16>();
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::LO16>() =
+                (true_bits & mask) | (false_bits & ~mask);
+        }
+        else if constexpr (FORMAT == DataFormat::Float32)
+        {
+            sfpi::vFloat condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::F32>();
+            sfpi::vInt enabled = condition != 0.0f;
+            sfpi::vUInt mask = sfpi::as<sfpi::vUInt>(-enabled);
+            sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
+            sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>() =
+                (true_bits & mask) | (false_bits & ~mask);
+        }
+        else
+        {
+            static_assert(FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32);
+            sfpi::vInt condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+            sfpi::vInt enabled = condition != 0;
+            sfpi::vUInt mask = sfpi::as<sfpi::vUInt>(-enabled);
+            sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
+            sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>() =
+                (true_bits & mask) | (false_bits & ~mask);
+        }
+
+        sfpi::dst_reg++;
+    }
+}
+
+template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, DataFormat FORMAT, int ITERATIONS>
+inline void call_where_generated(
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_in2,
+    const std::uint32_t dst_index_out,
+    VectorMode vector_mode)
+{
+    SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_where_generated,
+        (FORMAT, ITERATIONS),
+        dst_index_in0,
+        dst_index_in1,
+        dst_index_in2,
+        dst_index_out,
+        vector_mode);
+}
+
+} // namespace ckernel::sfpu
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint8_t MATH_FMT = resolve_ternary_format(UNPACK_A_IN);
@@ -114,9 +197,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             // Ternary SFPU: out(tile 0) = f(a=0, b=1, c=2). VectorMode::RC drives 4 faces
             // (8 rows each) so the per-call ITERATIONS is 8, matching the production APIs.
-            test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
-            test_utils::call_ternary_sfpu_operation<dest_sync, is_fp32_dest_acc_en, SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 8>(
-                0 /*DST_IN0*/, 1 /*DST_IN1*/, 2 /*DST_IN2*/, 0 /*DST_OUT*/, SFPU_TERNARY_SCALAR, VectorMode::RC);
+            static_assert(TTNN_WHERE_IMPL <= 1, "Unknown TTNNWhere implementation selector");
+            if constexpr (TTNN_WHERE_IMPL == 0)
+            {
+                test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
+            }
+            else
+            {
+                SFPU_TERNARY_INIT(where);
+            }
+            {
+                START_PERF_MEASURE("TTNN_WHERE_BODY")
+                if constexpr (TTNN_WHERE_IMPL == 0)
+                {
+                    test_utils::call_ternary_sfpu_operation<dest_sync, is_fp32_dest_acc_en, SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 8>(
+                        0 /*DST_IN0*/, 1 /*DST_IN1*/, 2 /*DST_IN2*/, 0 /*DST_OUT*/, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                }
+                else
+                {
+                    ckernel::sfpu::call_where_generated<dest_sync, is_fp32_dest_acc_en, MATH_FORMAT, 8>(
+                        0 /*DST_IN0*/, 1 /*DST_IN1*/, 2 /*DST_IN2*/, 0 /*DST_OUT*/, VectorMode::RC);
+                }
+            }
 
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
