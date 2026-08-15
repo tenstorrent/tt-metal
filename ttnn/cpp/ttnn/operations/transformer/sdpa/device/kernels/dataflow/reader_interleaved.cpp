@@ -190,20 +190,24 @@ void kernel_main() {
     uint32_t cu_window_seqlens_eles = 0;
     uint32_t windowed_q_tok_offset = 0;
     uint32_t windowed_q_tok_offset_addr = 0;
-    // 3D-neighborhood: T != 0 selects the full-K path (per-element mask built by the writer); the
-    // reader keeps the range full and skips the cu_window load/narrowing.
+    // 3D-neighborhood: T != 0 selects the per-element-mask path (built by the writer) and skips the
+    // cu_window load. The reader narrows the K stream to the T band (nb_H/nb_W/nb_kt), matching the
+    // writer's mask loop; kh/kw don't affect the T band so they stay unused.
     uint32_t nb_T = 0;
+    uint32_t nb_H = 0;
+    uint32_t nb_W = 0;
+    uint32_t nb_kt = 0;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
-        nb_T = get_arg_val<uint32_t>(argidx++);  // 14: T
-        (void)get_arg_val<uint32_t>(argidx++);   // 15: H (reader only needs T to branch)
-        (void)get_arg_val<uint32_t>(argidx++);   // 16: W
-        (void)get_arg_val<uint32_t>(argidx++);   // 17: kt
-        (void)get_arg_val<uint32_t>(argidx++);   // 18: kh
-        (void)get_arg_val<uint32_t>(argidx++);   // 19: kw
+        nb_T = get_arg_val<uint32_t>(argidx++);   // 14: T
+        nb_H = get_arg_val<uint32_t>(argidx++);   // 15: H
+        nb_W = get_arg_val<uint32_t>(argidx++);   // 16: W
+        nb_kt = get_arg_val<uint32_t>(argidx++);  // 17: kt
+        (void)get_arg_val<uint32_t>(argidx++);    // 18: kh (not needed for the T band)
+        (void)get_arg_val<uint32_t>(argidx++);    // 19: kw
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -409,7 +413,7 @@ void kernel_main() {
             uint32_t windowed_k_lo = 0;
             uint32_t windowed_k_hi = k_num_chunks;
             if constexpr (use_windowed_narrowing) {
-                if (nb_T == 0) {  // block-diagonal narrows via cu_window; 3D-neighborhood keeps full K
+                if (nb_T == 0) {  // block-diagonal narrows via cu_window
                     const auto range = windowed_k_chunk_range(
                         q_chunk,
                         Sq_chunk_t,
@@ -417,6 +421,21 @@ void kernel_main() {
                         windowed_q_tok_offset,
                         windowed_cu_ptr,
                         cu_window_seqlens_eles,
+                        Sk_chunk_t,
+                        k_num_chunks,
+                        tt::constants::TILE_HEIGHT);
+                    windowed_k_lo = range.k_lo;
+                    windowed_k_hi = range.k_hi;
+                } else {  // 3D-neighborhood narrows to the T band (must match the writer's mask loop)
+                    const auto range = neighborhood_t_k_chunk_range(
+                        q_chunk,
+                        Sq_chunk_t,
+                        valid_Sqt,
+                        windowed_q_tok_offset,
+                        nb_T,
+                        nb_H,
+                        nb_W,
+                        nb_kt,
                         Sk_chunk_t,
                         k_num_chunks,
                         tt::constants::TILE_HEIGHT);

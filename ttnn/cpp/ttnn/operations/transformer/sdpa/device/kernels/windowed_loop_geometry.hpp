@@ -88,3 +88,73 @@ inline WindowedKChunkRange windowed_k_chunk_range(
     }
     return {k_lo, k_hi};
 }
+
+/**
+ * 3D-neighborhood (NATTEN) K-chunk range, narrowed along the OUTER (T) axis only.
+ *
+ * The volume is flattened T-outer (k = t*H*W + h*W + w), so the T axis is the only one whose
+ * neighborhood window maps to a CONTIGUOUS band of K tokens; the H/W windows are scattered inside
+ * each frame and stay fully streamed (the per-element mask -inf's them). For a Q chunk, every query
+ * it holds sits at some frame qt in [qt_min, qt_max], and the inward-shifted T-window start/end are
+ * both non-decreasing in qt, so the union of their T-windows is [t0(qt_min), t1(qt_max)). Any K
+ * token in a frame outside that band is outside EVERY query's window, so its whole mask row is -inf
+ * and skipping its chunk is exact — the same "outside is -inf" narrowing proof as the block-diagonal
+ * path, and identical math must run in the reader (K stream + ctrl CB) and the writer (mask loop).
+ *
+ * Returns [k_lo, k_hi) clamped to [0, k_num_chunks], never empty (padded-tail chunks get [0, 1)),
+ * matching windowed_k_chunk_range's contract. kh/kw are irrelevant to the T band and not taken.
+ */
+inline WindowedKChunkRange neighborhood_t_k_chunk_range(
+    uint32_t q_chunk,
+    uint32_t Sq_chunk_t,
+    uint32_t valid_Sqt,
+    uint32_t q_tok_offset,
+    uint32_t T,
+    uint32_t H,
+    uint32_t W,
+    uint32_t kt,
+    uint32_t Sk_chunk_t,
+    uint32_t k_num_chunks,
+    uint32_t tile_height) {
+    const uint32_t HW = H * W;
+    const uint32_t sites = T * HW;
+    const uint32_t q_row_start_tile = q_chunk * Sq_chunk_t < valid_Sqt ? q_chunk * Sq_chunk_t : valid_Sqt;
+    const uint32_t q_lo = q_tok_offset + q_row_start_tile * tile_height;
+    // Padded-tail chunk (no real query row): keep the >= 1 all--inf chunk contract.
+    if (q_lo >= sites) {
+        return {0, 1};
+    }
+    uint32_t q_hi_excl = q_lo + Sq_chunk_t * tile_height;
+    if (q_hi_excl > sites) {
+        q_hi_excl = sites;
+    }
+    const uint32_t qt_min = q_lo / HW;
+    const uint32_t qt_max = (q_hi_excl - 1) / HW;
+
+    // Inward-shifted window along T (mirrors nbr_axis_bounds in windowed_mask_gen.hpp): start is
+    // non-decreasing in the query coord, so t0 comes from qt_min and t1 from qt_max.
+    const uint32_t ker = kt > T ? T : kt;
+    const uint32_t half = ker / 2;
+    const uint32_t last = T - ker;
+    uint32_t t0 = qt_min < half ? 0u : qt_min - half;
+    if (t0 > last) {
+        t0 = last;
+    }
+    uint32_t start_max = qt_max < half ? 0u : qt_max - half;
+    if (start_max > last) {
+        start_max = last;
+    }
+    const uint32_t t1 = start_max + ker;
+
+    const uint32_t chunk_toks = tile_height * Sk_chunk_t;
+    uint32_t k_lo = (t0 * HW) / chunk_toks;
+    uint32_t k_hi = (t1 * HW + chunk_toks - 1) / chunk_toks;
+    if (k_hi > k_num_chunks) {
+        k_hi = k_num_chunks;
+    }
+    if (k_lo >= k_hi) {
+        k_lo = k_hi > 0 ? k_hi - 1 : 0;
+        k_hi = k_lo + 1;
+    }
+    return {k_lo, k_hi};
+}

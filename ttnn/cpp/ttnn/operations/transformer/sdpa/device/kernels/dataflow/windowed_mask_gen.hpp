@@ -135,12 +135,26 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t nb_kt,
     uint32_t nb_kh,
     uint32_t nb_kw) {
-    // 3D-neighborhood mode (nb_T != 0): full K-range, per-element mask, independent of cu_window_seqlens.
+    // 3D-neighborhood mode (nb_T != 0): per-element mask, K-range narrowed to the T band this Q
+    // chunk can see (H/W stay scattered inside each frame, -inf'd per element). The reader computes
+    // the identical range for its K stream + ctrl CB, so the per-Q-chunk mask counts agree.
     if (nb_T != 0) {
         const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
         const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
+        const auto nbr_range = neighborhood_t_k_chunk_range(
+            q_chunk,
+            Sq_chunk_t,
+            valid_Sqt,
+            q_tok_offset,
+            nb_T,
+            nb_H,
+            nb_W,
+            nb_kt,
+            Sk_chunk_t,
+            k_num_chunks,
+            tt::constants::TILE_HEIGHT);
         CircularBuffer cb_mask(cb_mask_in);
-        for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+        for (uint32_t k_chunk = nbr_range.k_lo; k_chunk < nbr_range.k_hi; ++k_chunk) {
             const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
             cb_mask.reserve_back(mask_chunk_tiles);
             for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
