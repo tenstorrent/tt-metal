@@ -121,27 +121,29 @@ sfpi_inline void generated_reduce_pass(const std::uint32_t block_height)
     for (std::uint32_t i = 0; i < block_height; ++i)
     {
         generated_reduce_group();
-        TTI_INCRWC(0, 4, 0, 0);
+        __builtin_rvtt_ttincrwc(0, 4, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 4, 0, 0);
+        __builtin_rvtt_ttincrwc(0, 4, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 4, 0, 0);
+        __builtin_rvtt_ttincrwc(0, 4, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 10, 0, 0);
-        TTI_INCRWC(0, 10, 0, 0);
+        // The typed builtin spells the 4-bit 0xa field as signed -6.
+        __builtin_rvtt_ttincrwc(0, -6, 0, 0);
+        __builtin_rvtt_ttincrwc(0, -6, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 4, 0, 0);
+        __builtin_rvtt_ttincrwc(0, 4, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 4, 0, 0);
+        __builtin_rvtt_ttincrwc(0, 4, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 4, 0, 0);
+        __builtin_rvtt_ttincrwc(0, 4, 0, 0);
         generated_reduce_group();
-        TTI_INCRWC(0, 10, 0, 0);
-        TTI_INCRWC(0, 10, 0, 0);
+        __builtin_rvtt_ttincrwc(0, -6, 0, 0);
+        __builtin_rvtt_ttincrwc(0, -6, 0, 0);
 
         // Move to the next tile in the same row without changing the Dst
         // counter; this is the same dummy load used by the replay path.
-        TTI_SFPLOAD(8, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+        __builtin_rvtt_sfploaddiscard(
+            0, static_cast<std::uint32_t>(InstrModLoadStore::FP16B), ADDR_MOD_2);
     }
 }
 
