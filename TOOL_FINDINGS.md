@@ -2173,6 +2173,51 @@ the tool had never seen, with `0 REUSE / 0 ADAPT` — nothing was copied; all of
 three decomposed sub-components did not, and graduated against synthetic inputs — the §6.54 trap
 (29.5% code flips on synthetic against 3.9% on real), which the tool's own documentation warns about.
 
+### ⚠ F23 CORRECTED — three of the four capture misses were OURS, not the tool's
+
+**Filed first as a tool finding; most of it is not.** The `captured 3/7` result had two causes and
+only one belongs to the tool.
+
+**Ours (S5).** The first version of the HF wrapper exposed the backbone's layer stack as
+
+```python
+self.layers = nn.ModuleList([nn.Module() for _ in range(26)])   # 26 EMPTY placeholders
+```
+
+with a comment saying, in as many words, that this existed *"so a structural walk finds a 26-deep
+stack"*. The weights lived in a flat `ParameterDict` and `forward` called the reference function
+over it. So the model **advertised structure it did not have**. The tool believed the
+advertisement, decomposed `decoder_layer` into `layers.0.input_layernorm` / `.self_attn` / `.mlp`,
+tried to hook those paths, and correctly reported:
+
+```
+[capture] layers_0_input_layernorm: submodule not resolved; skipping.
+[capture] layers_0_mlp:             submodule not resolved; skipping.
+[capture] layers_0_self_attn:       submodule not resolved; skipping.
+```
+
+Three of the four misses. **The tool's message was precise and correct; the model was lying to it.**
+
+**Fixed.** The backbone is now real per-layer `nn.Module`s whose `forward`s call the reference's own
+primitives (`rms_norm`, `split_heads`, `apply_rope`, `gqa_attention`, `merge_heads`, `swiglu`)
+composed in `_layer`'s exact order — still bit-exact (prefill, prefill+cache and steps all
+`maxdiff 0.0`), now with 138 named modules instead of 27, and verified by *firing hooks on a real
+prompt* rather than by assuming:
+
+```
+hooks fired: {input_layernorm: 7, self_attn: 7, mlp: 7, flow: 3, codec: 1}
+```
+
+— the multiplicities of the actual frame loop, which is the check that would have caught the
+placeholder immediately.
+
+**The lesson, and it is general enough to be worth stating in the proposal:** a porting tool reads
+the model's declared structure as ground truth. A wrapper that fakes structure to satisfy a
+discovery pass will be believed, and the damage surfaces somewhere unrelated — here, as
+"synthetic inputs" three stages later. **Verify a wrapper by hooking it, not by listing it.**
+
+**What remains genuinely the tool's**, unchanged, is below.
+
 ### F23 — the capture drivers guess, and the config already says they should not
 
 The clearest evidence yet for the representative-inputs recommendation, all from one run:
