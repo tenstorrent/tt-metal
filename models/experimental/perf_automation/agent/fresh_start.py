@@ -77,6 +77,51 @@ _MODEL_GLOBS = (
     "tests/e2e/*_perf.py.trace_caps.json",
 )
 
+# THE GENERATED PERF TESTS THEMSELVES, and only when git does not own them.
+#
+# Clearing the sidecar but leaving the test was a half-measure: on 2026-08-15 a --fresh run cleared
+# 20 items and still refused to start, because preflight checked the perf test left behind by the
+# PREVIOUS run and found it declared a different workload knob than the tool expected. The run had
+# asked to forget everything and inherited the one file that decides what gets measured.
+#
+# Tracked-only-if-untracked is the whole subtlety. These same filenames were COMMITTED model source
+# on the older lineage, where deleting them would violate this module's one promise -- nothing
+# tracked by git is touched -- and would fight the run's own reset step, which restores tracked
+# files. On a branch that generates them, they are run output like any other and regenerating costs
+# only the time it took to write them the first time.
+_MODEL_GENERATED_GLOBS = ("tests/e2e/*_perf.py",)
+
+
+def _untracked_generated(model_dir: Path) -> list:
+    """Generated perf tests git does not track. Tracked ones are left to the run's reset step.
+
+    `git ls-files --error-unmatch` is the question asked, per file, because it is the only one that
+    distinguishes "the tool wrote this" from "this ships with the model" -- the filenames are
+    identical either way. Anything git cannot be consulted about (no repo, no git binary) is treated
+    as TRACKED and kept: refusing to delete is the recoverable mistake here.
+    """
+    import subprocess
+
+    out: list = []
+    for pat in _MODEL_GENERATED_GLOBS:
+        for f in sorted(model_dir.glob(pat)):
+            try:
+                r = subprocess.run(
+                    ["git", "ls-files", "--error-unmatch", "--", f.name],
+                    cwd=str(f.parent),
+                    capture_output=True,
+                    timeout=30,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            # EXIT 1 MEANS UNTRACKED. Anything else -- 128 for "not a git repository", a missing git
+            # binary, a broken worktree -- means the question could not be ANSWERED, which is not the
+            # same as "the tool generated this". Treating every non-zero code as untracked would
+            # delete model source in any checkout git cannot read.
+            if r.returncode == 1:
+                out.append(f)
+    return out
+
 
 def plan(state_dir, tool_root=None, model_dir=None) -> list:
     """Every path `--fresh` would remove, in the order it would remove them. Nothing is deleted."""
@@ -95,6 +140,7 @@ def plan(state_dir, tool_root=None, model_dir=None) -> list:
     if model_dir:
         for pat in _MODEL_GLOBS:
             out += sorted(Path(model_dir).glob(pat))
+        out += _untracked_generated(Path(model_dir))
     return out
 
 
