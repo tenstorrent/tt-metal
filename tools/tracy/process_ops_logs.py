@@ -499,9 +499,21 @@ def import_tracy_op_logs(
                     if "BEGIN" in opDataStr:
                         traceIDs[deviceID] = traceID
                     elif "END" in opDataStr:
-                        assert traceIDs[deviceID] == traceID, (
+                        active_trace_id = traceIDs.get(deviceID)
+                        if active_trace_id is None:
+                            # A mid-run device-profiler flush can make the host
+                            # export begin inside an already-active trace.  In
+                            # that case its END marker is valid but there is no
+                            # BEGIN in this partial capture to correlate.  Do
+                            # not discard subsequent named host operations.
+                            logger.warning(
+                                f"Ignoring trace END without a captured BEGIN "
+                                f"(device {deviceID}, trace {traceID})"
+                            )
+                            continue
+                        assert active_trace_id == traceID, (
                             f"Wrong trace ID, device {deviceID} should finish on trace ID "
-                            f"{traceIDs[deviceID]} but it is finishing on trace ID {traceID}"
+                            f"{active_trace_id} but it is finishing on trace ID {traceID}"
                         )
                         traceIDs[deviceID] = None
                     elif "REPLAY" in opDataStr:

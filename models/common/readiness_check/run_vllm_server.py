@@ -171,6 +171,7 @@ _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N300": (1, 2),
     "T3K": (1, 8),
     "TG": (8, 4),
+    "P300x2": (1, 4),
 }
 
 
@@ -246,7 +247,7 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {

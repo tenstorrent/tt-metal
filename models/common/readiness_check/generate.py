@@ -34,6 +34,7 @@ import argparse
 import bz2
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -264,6 +265,10 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
             add_generation_prompt=True,
             tokenize=True,
         )
+        # Transformers 5 tokenizers may return a BatchEncoding even without
+        # ``return_tensors``; older versions returned the input-id list.
+        if isinstance(prompt_tokens, Mapping):
+            prompt_tokens = prompt_tokens["input_ids"]
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 

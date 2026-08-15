@@ -12,6 +12,22 @@ import pytest
 from tracy import process_ops_logs
 
 
+def test_import_tracy_logs_tolerates_partial_trace_end(tmp_path):
+    """Mid-run flushes can export END after the matching BEGIN was flushed."""
+    (tmp_path / process_ops_logs.TRACY_OPS_DATA_FILE_NAME).write_text(
+        "MessageName;total_ns\n`TT_METAL_TRACE_END: 3, 7`;123\n"
+    )
+    (tmp_path / process_ops_logs.TRACY_OPS_TIMES_FILE_NAME).write_text(
+        "name,special_parent_text,zone_text\n"
+    )
+
+    ops, signposts, trace_replays = process_ops_logs.import_tracy_op_logs(tmp_path)
+
+    assert ops == {}
+    assert signposts == {}
+    assert trace_replays == {}
+
+
 # class for mocking creation of npe data
 class _FakeNpeResult:
     def __init__(self, noc_util, mcast_noc_util, dram_bw_util, cong_impact):
