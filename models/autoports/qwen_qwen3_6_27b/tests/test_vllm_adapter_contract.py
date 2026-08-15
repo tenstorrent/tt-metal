@@ -4,6 +4,7 @@ from pathlib import Path
 
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE
 from models.autoports.qwen_qwen3_6_27b.tt.generator_vllm import Qwen36ForCausalLM
+from models.autoports.qwen_qwen3_6_27b.tt.model import _streaming_prefill_chunk_size
 from models.common.sampling import SamplingParams
 
 
@@ -26,6 +27,41 @@ def test_vllm_capabilities_and_context_pool():
     assert LINEAR_PREFILL_CHUNK_SIZE == 32
     assert concat_bytes_per_bank_at_64 // 2 == 50_331_648
     assert concat_bytes_per_bank_at_64 // 2 < measured_largest_free_block
+
+
+def test_streaming_prefill_chunks_follow_effective_kv_page_boundaries():
+    assert _streaming_prefill_chunk_size(32768, 64) == 32768
+    assert _streaming_prefill_chunk_size(32768, 800) == 32000
+    assert _streaming_prefill_chunk_size(32768, 1024) == 32768
+
+    boundaries = {
+        64: (32767, 32768, 32769),
+        800: (
+            31999,
+            32000,
+            32001,
+            32767,
+            32768,
+            32769,
+            32780,
+            33599,
+            33600,
+            33601,
+            63999,
+            64000,
+            64001,
+        ),
+        1024: (32767, 32768, 32769),
+    }
+    for page_size, sequences in boundaries.items():
+        chunk = _streaming_prefill_chunk_size(32768, page_size)
+        assert 0 < chunk <= 32768
+        assert chunk % page_size == 0
+        assert chunk % LINEAR_PREFILL_CHUNK_SIZE == 0
+        for sequence in sequences:
+            starts = range(0, sequence, chunk)
+            assert all(start % page_size == 0 for start in starts)
+            assert all(start % LINEAR_PREFILL_CHUNK_SIZE == 0 for start in starts)
 
 
 def test_decode_delegates_to_canonical_token_out_path():

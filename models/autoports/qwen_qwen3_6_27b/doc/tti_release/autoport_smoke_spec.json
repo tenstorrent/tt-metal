@@ -1,0 +1,83 @@
+{
+  "model_id": "id_autoport_Qwen3.6-27B_p300x2_smoke",
+  "impl": {
+    "impl_id": "qwen36_autoport",
+    "impl_name": "qwen36-blackhole",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/qwen_qwen3_6_27b"
+  },
+  "hf_model_repo": "Qwen/Qwen3.6-27B",
+  "model_name": "Qwen3.6-27B",
+  "inference_engine": "vLLM",
+  "device_type": "P300X2",
+  "device_model_spec": {
+    "device": "P300X2",
+    "max_concurrency": 1,
+    "max_context": 262144,
+    "max_tokens_all_users_override": null,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 8,
+        "osl": 8,
+        "max_concurrency": 1,
+        "num_prompts": 1,
+        "task_type": "text",
+        "targets": {}
+      }
+    ],
+    "vllm_args": {
+      "model": "Qwen/Qwen3.6-27B",
+      "block_size": "64",
+      "max_model_len": "262144",
+      "max_num_seqs": "1",
+      "max_num_batched_tokens": "262144"
+    },
+    "override_tt_config": {
+      "fabric_config": "FABRIC_1D_RING",
+      "trace_region_size": 200000000
+    },
+    "env_vars": {},
+    "tensor_cache_timeout": 3600.0,
+    "system_requirements": null,
+    "known_issues": [],
+    "eval_max_retries": null,
+    "image_benchmark_num_batches": 3
+  },
+  "system_requirements": null,
+  "env_vars": {},
+  "tt_metal_commit": "f7119ed18595b9262528a55e87265173818ade0b",
+  "vllm_commit": "c5f35e55071e8b5b3af7796e23ecc371a5859f24",
+  "hf_weights_repo": "Qwen/Qwen3.6-27B",
+  "param_count": 27,
+  "min_disk_gb": 74,
+  "min_ram_gb": 67.5,
+  "model_type": "LLM",
+  "repacked": 0,
+  "version": "autoport-stage11",
+  "docker_image": null,
+  "status": "EXPERIMENTAL",
+  "code_link": "models/autoports/qwen_qwen3_6_27b",
+  "override_tt_config": {
+    "fabric_config": "FABRIC_1D_RING",
+    "trace_region_size": 200000000
+  },
+  "supported_modalities": ["text"],
+  "subdevice_type": null,
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {
+    "reasoning_parser_name": "qwen3",
+    "autoport_context_contract": "models/autoports/qwen_qwen3_6_27b/doc/context_contract.json"
+  },
+  "cli_args": {
+    "workflow": "benchmarks",
+    "docker_server": false,
+    "local_server": false,
+    "service_port": 8000,
+    "server_url": "http://127.0.0.1",
+    "disable_trace_capture": true,
+    "runtime_model_spec_json": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/tti_release/autoport_smoke_spec.json"
+  }
+}

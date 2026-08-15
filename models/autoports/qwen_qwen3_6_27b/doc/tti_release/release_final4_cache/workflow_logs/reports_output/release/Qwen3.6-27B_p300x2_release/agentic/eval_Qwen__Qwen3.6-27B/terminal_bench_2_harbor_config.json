@@ -1,0 +1,50 @@
+{
+  "job_name": "terminal_bench_2",
+  "jobs_dir": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/tti_release/release_final4_cache/workflow_logs/reports_output/release/Qwen3.6-27B_p300x2_release/agentic/eval_Qwen__Qwen3.6-27B",
+  "n_attempts": 1,
+  "n_concurrent_trials": 5,
+  "quiet": true,
+  "environment": {
+    "type": "docker",
+    "override_cpus": 16,
+    "override_memory_mb": 49152
+  },
+  "agents": [
+    {
+      "model_name": "openai/Qwen/Qwen3.6-27B",
+      "override_timeout_sec": 10800,
+      "kwargs": {
+        "parser_name": "json",
+        "temperature": 1.0,
+        "model_info": {
+          "max_input_tokens": 262144,
+          "max_output_tokens": 81920
+        },
+        "llm_kwargs": {
+          "top_p": 0.95,
+          "max_tokens": 81920,
+          "timeout": 3600,
+          "extra_body": {
+            "top_k": 20
+          }
+        },
+        "api_base": "http://127.0.0.1:8000/v1"
+      },
+      "name": "terminus-2"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "terminal-bench/terminal-bench-2",
+      "n_tasks": 89,
+      "task_names": [
+        "terminal-bench/break-filter-js-from-html",
+        "terminal-bench/cobol-modernization",
+        "terminal-bench/compile-compcert",
+        "terminal-bench/feal-differential-cryptanalysis",
+        "terminal-bench/qemu-startup"
+      ]
+    }
+  ],
+  "agent_timeout_multiplier": 1.0
+}

@@ -26,6 +26,17 @@ from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import _dram_weight_
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import load_precision_config
 
 
+def _streaming_prefill_chunk_size(max_chunk: int, page_size: int) -> int:
+    """Largest stack chunk no greater than ``max_chunk`` aligned to cache/scan."""
+    quantum = math.lcm(int(page_size), LINEAR_PREFILL_CHUNK_SIZE)
+    chunk = (int(max_chunk) // quantum) * quantum
+    if chunk < quantum:
+        raise ValueError(
+            f"streaming prefill alignment quantum {quantum} exceeds maximum chunk {max_chunk}"
+        )
+    return chunk
+
+
 def _replicate(value, mesh, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     return ttnn.from_torch(
         value.contiguous(),
@@ -229,6 +240,11 @@ class Qwen36Model:
                 raise ValueError("each layer cache entry must contain exactly two tensors")
             names = ("key", "value") if layer.layer_kind == "full_attention" else ("conv", "recurrent")
             for name, tensor in zip(names, pair):
+                if layer.layer_kind == "full_attention" and int(tensor.shape[2]) != self.page_size:
+                    raise ValueError(
+                        f"bound attention cache page size {tensor.shape[2]} "
+                        f"does not match model page size {self.page_size}"
+                    )
                 layer.caches[name] = tensor
         self.kv_cache = kv_cache
 
@@ -484,9 +500,12 @@ class Qwen36Model:
         if logit_positions is None:
             raise ValueError("long streaming prefill returns terminal prompt logits only")
         sequence = token_ids.shape[-1]
+        stack_chunk_size = _streaming_prefill_chunk_size(
+            self.PREFILL_STACK_CHUNK_SIZE, self.page_size
+        )
         terminal_rows = [None] * self.batch
-        for start in range(0, sequence, self.PREFILL_STACK_CHUNK_SIZE):
-            end = min(start + self.PREFILL_STACK_CHUNK_SIZE, sequence)
+        for start in range(0, sequence, stack_chunk_size):
+            end = min(start + stack_chunk_size, sequence)
             token_chunk = ttnn.slice(token_ids, (0, start), (self.batch, end))
             position_chunk = ttnn.slice(current_positions, (0, start), (self.batch, end))
             hidden = self.embed_tokens(token_chunk)
