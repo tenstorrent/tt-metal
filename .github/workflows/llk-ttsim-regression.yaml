@@ -94,6 +94,14 @@ jobs:
             --workers ${{ inputs.workers }} \
             --timeout ${{ inputs.per_test_timeout_seconds }}
 
+      - name: Checkout pinned CRAQ corpus runner
+        if: always()
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: tenstorrent/craq-sim
+          ref: 5b73c068d79a11b36e9e4946246c75aab07b468b
+          path: craq-sim
+
       - name: Run informational SFPU CRAQ cycle corpus
         if: always()
         continue-on-error: true
@@ -102,10 +110,10 @@ jobs:
           set -euo pipefail
           SIMULATOR="$(find "${GITHUB_WORKSPACE}/ttsim-cache" -type f -name 'libttsim*.so' -print -quit)"
           test -n "${SIMULATOR}"
-          test -x /opt/craq-sim/scripts/perf/llk-sim-perf.sh
+          test -x "${GITHUB_WORKSPACE}/craq-sim/scripts/perf/llk-sim-perf.sh"
           SHORT=wh
           if [[ "${{ matrix.architecture }}" == blackhole ]]; then SHORT=bh; fi
-          CRAQ_SIM_ROOT=/opt/craq-sim python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
+          CRAQ_SIM_ROOT="${GITHUB_WORKSPACE}/craq-sim" python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
             --mode craq --arch "${SHORT}" --execute --simulator "${SIMULATOR}" \
             --run-root "${GITHUB_WORKSPACE}/sfpu-craq-${SHORT}"
 
