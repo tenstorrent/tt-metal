@@ -36,6 +36,22 @@
 
 namespace ttml::ops::distributed {
 
+namespace {
+
+// Pads a (B, H, S, 1) FP32 logsumexp tensor into the (B, H, S, 32) intermediates layout
+// the SDPA kernels expect: lse in column 0, the remaining 31 columns are ignored padding.
+ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
+    const ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
+        {0, 0},  // batch
+        {0, 0},  // heads
+        {0, 0},  // seq_len
+        {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
+    };
+    return ttnn::pad(lse, padding, 0.0F, false, std::nullopt);
+}
+
+}  // namespace
+
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
@@ -99,13 +115,7 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::DataType::FLOAT32,
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
-    ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec = {
-        {0, 0},  // batch
-        {0, 0},  // heads
-        {0, 0},  // seq_len
-        {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
-    };
-    ttnn::Tensor no_contrib_intermediate = ttnn::pad(col0_neg_inf, padding_spec, 0.0F, false, std::nullopt);
+    ttnn::Tensor no_contrib_intermediate = pad_lse_to_intermediates_layout(col0_neg_inf);
 
     for (uint32_t step = 0; step < ring_size; ++step) {
         // For causal masking, initialize intermediate_tensor to "no contribution" values
@@ -191,16 +201,12 @@ autograd::TensorPtr ring_attention_sdpa(
         // u = rowsum(dO * O_global) is the global softmax-backward correction. Per-chunk
         // contributions then sum to the exact dQ/dK/dV. Feeding per-chunk O/lse here would
         // bias dQ/dK (per-chunk u instead of global) — only dV would come out right.
-        //
-        // The global lse goes in column 0 of the (B, H, S, 32) FP32 intermediates layout
-        // the kernels expect; the remaining 31 columns are ignored padding.
-        const ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> lse_padding = {
-            {0, 0},  // batch
-            {0, 0},  // heads
-            {0, 0},  // seq_len
-            {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
-        };
-        ttnn::Tensor global_intermediates = ttnn::pad(final_lse, lse_padding, 0.0F, false, std::nullopt);
+        ttnn::Tensor global_intermediates = pad_lse_to_intermediates_layout(final_lse);
+
+        // Zero sources for resetting the step buffers before every ring step.
+        const ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);
+        const ttnn::Tensor zero_K = ttnn::zeros_like(grad_K_step);
+        const ttnn::Tensor zero_V = ttnn::zeros_like(grad_V_step);
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
@@ -208,14 +214,9 @@ autograd::TensorPtr ring_attention_sdpa(
 
             // Devices skipped by the causal schedule at this step do not run the kernels,
             // so their step buffers must be zeroed to contribute nothing to the accumulators.
-            {
-                ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);
-                ttnn::Tensor zero_K = ttnn::zeros_like(grad_K_step);
-                ttnn::Tensor zero_V = ttnn::zeros_like(grad_V_step);
-                ttnn::copy(zero_Q, grad_Q_step);
-                ttnn::copy(zero_K, grad_K_step);
-                ttnn::copy(zero_V, grad_V_step);
-            }
+            ttnn::copy(zero_Q, grad_Q_step);
+            ttnn::copy(zero_K, grad_K_step);
+            ttnn::copy(zero_V, grad_V_step);
 
             // Use Backward direction (same as forward) since src = (device + step) % ring_size
             auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_sdpa_bw(
@@ -234,9 +235,11 @@ autograd::TensorPtr ring_attention_sdpa(
                 grad_K_step,
                 grad_V_step);
 
-            grad_Q_accum = ttnn::add(grad_Q_accum, grad_Q_step);
-            grad_K_accum = ttnn::add(grad_K_accum, grad_K_step);
-            grad_V_accum = ttnn::add(grad_V_accum, grad_V_step);
+            // The results alias the preallocated step buffers; skipped devices keep the
+            // zeros written above.
+            grad_Q_accum = ttnn::add(grad_Q_accum, grad_Q_result);
+            grad_K_accum = ttnn::add(grad_K_accum, grad_K_result);
+            grad_V_accum = ttnn::add(grad_V_accum, grad_V_result);
 
             // Ring shift K/V and grad accumulators in FORWARD direction
             // K/V: replays the forward pass in reverse (gets K/V for previous step)
