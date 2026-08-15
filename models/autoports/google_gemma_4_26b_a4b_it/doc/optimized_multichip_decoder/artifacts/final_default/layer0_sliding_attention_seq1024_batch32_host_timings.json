@@ -7,16 +7,25 @@
   ],
   "decode_batch": 32,
   "decode_current_pos": 1024,
-  "decode_trace_host_ms": 12.08147139598926,
+  "decode_trace_host_ms": 12.081373234589895,
   "decode_trace_iterations": 30,
   "decode_trace_warmups": 6,
   "layer_idx": 0,
   "layer_type": "sliding_attention",
   "model_id": "google/gemma-4-26B-A4B-it",
   "provenance": {
-    "checkout_git_sha": "e45e09947780cdb1d44881b2fbc2b2a8efbf5a85",
-    "exact_command": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_RANGE_DOWNLOAD=1 python -m tracy -r -p pytest -- models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::test_functional_decoder_perf_profile -k 'sliding_attention and batch32'",
+    "artifact_dir": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/final_default",
+    "checkout_git_sha": "be61a936c6aab1f25a1d1cf64443ea315df28118",
+    "exact_command": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS=5 GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS=30 pytest -q test_multichip_decoder.py::test_multichip_perf_profile -k batch32",
     "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+    "gemma4_environment": {
+      "GEMMA4_EVIDENCE_COMMAND": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS=5 GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS=30 pytest -q test_multichip_decoder.py::test_multichip_perf_profile -k batch32",
+      "GEMMA4_FUNCTIONAL_DECODER_PERF": "1",
+      "GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS": "30",
+      "GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS": "5",
+      "GEMMA4_MULTICHIP_ARTIFACT_DIR": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/final_default",
+      "GEMMA4_RANGE_DOWNLOAD": "1"
+    },
     "hardware": {
       "arch": "Arch.BLACKHOLE",
       "device_ids": [
@@ -27,7 +36,10 @@
       ],
       "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
     },
-    "test_sha256": "4420c53ab821a6ba9a8d4c97051cb6bd64a0b2de57fa7c689ef98e7cd825e7da",
+    "measured_decoder_path": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py",
+    "measured_decoder_sha256": "f75dbd9909b959e737694f9e2e56e1971d0f9c2a5e0db826ab37cd27ba9a8c1a",
+    "multichip_test_sha256": "f1579fa50beb609c884ee04495ee3281a2d2d1f9bc7cd6728b48d2fcbaa07a69",
+    "test_sha256": "e3661921c7f65d158bb3fc2f12ac0544934c13ac07bc56cf585f1df8af71b585",
     "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
     "ttnn_extension_sha256": "ed2bf1a78109396ab2411c7f7bd0a0fa341c3eb3c8b4f82a40985fadb3dc26a2"
   },

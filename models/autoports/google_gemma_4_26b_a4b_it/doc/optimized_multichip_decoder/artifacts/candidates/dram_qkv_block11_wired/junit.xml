@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="21.053" timestamp="2026-08-15T17:45:28.738170+00:00" hostname="b30c965c728b"><testcase classname="models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_decoder" name="test_multichip_real_weights_prefill_decode[blackhole-sliding_attention-mesh_device0-device_params0]" time="10.453"><properties><property name="start_timestamp" value="2026-08-15T17:45:29" /><property name="end_timestamp" value="2026-08-15T17:45:40" /></properties><failure message="AssertionError: np.float64(0.9926418874304439)&#10;assert np.False_">mesh_device = MeshDevice(1x4 grid, 4 devices)
+device_params = {'fabric_config': FabricConfig.FABRIC_1D_RING}
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x739f76d55040&gt;
+layer_idx = 0, shared_physical = False, decode_pcc = 0.995
+
+    @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+    @pytest.mark.parametrize(
+        "layer_idx,shared_physical,decode_pcc",
+        [
+            pytest.param(0, False, 0.995, id="sliding_attention"),
+            pytest.param(5, False, 0.995, id="full_attention"),
+        ],
+    )
+    def test_multichip_real_weights_prefill_decode(
+        mesh_device, device_params, monkeypatch, layer_idx, shared_physical, decode_pcc
+    ):
+        """Reuse the established HF oracle with TP-local cache geometry."""
+
+        def local_cache_shape(layer_type, *, shared_physical, token_capacity=None):
+            if layer_type == "full_attention":
+                block_size, heads, head_dim, default_blocks = 128, 1, 512, 2
+            else:
+                block_size, heads, head_dim, default_blocks = 64, 2, 256, 4
+            blocks = default_blocks if token_capacity is None else (token_capacity + block_size - 1) // block_size
+            return blocks, heads, block_size, head_dim
+
+        def replicated_output(_mesh, tensor):
+            return ttnn.to_torch(ttnn.get_device_tensors(tensor.cpu())[0])
+
+        monkeypatch.setenv("GEMMA4_RANGE_DOWNLOAD", "1")
+        monkeypatch.setattr(functional_tests, "FunctionalDecoder", MultichipDecoder)
+        monkeypatch.setattr(functional_tests, "_cache_shape", local_cache_shape)
+        monkeypatch.setattr(functional_tests, "_to_torch", replicated_output)
+        monkeypatch.setattr(
+            functional_tests,
+            "ARTIFACT_DIR",
+            Path(
+                os.getenv(
+                    "GEMMA4_MULTICHIP_ARTIFACT_DIR",
+                    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/artifacts",
+                )
+            ),
+        )
+&gt;       functional_tests.test_functional_decoder_real_weights_prefill_decode(
+            mesh_device, device_params, layer_idx, shared_physical, decode_pcc
+        )
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py:653:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+device_params = {'fabric_config': FabricConfig.FABRIC_1D_RING}, layer_idx = 0
+shared_physical = False, decode_pcc = 0.995
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 64 * 1024 * 1024}], indirect=True)
+    @pytest.mark.parametrize(
+        "layer_idx,shared_physical,decode_pcc",
+        [
+            pytest.param(0, True, 0.995, id="sliding_attention_shared_cache"),
+            pytest.param(5, False, 0.995, id="full_attention_natural_cache"),
+            pytest.param(5, True, 0.995, id="full_attention_shared_cache_view"),
+        ],
+    )
+    def test_functional_decoder_real_weights_prefill_decode(
+        mesh_device, device_params, layer_idx, shared_physical, decode_pcc
+    ):
+        cfg = _load_text_config()
+        layer_type = cfg.layer_types[layer_idx]
+        state = _load_layer_state(layer_idx)
+        seq_len = 32
+        torch.manual_seed(layer_idx)
+
+        hidden = torch.randn(1, seq_len, HIDDEN_SIZE, dtype=torch.bfloat16)
+        decode_hidden = torch.randn(1, 1, HIDDEN_SIZE, dtype=torch.bfloat16)
+        rotary = Gemma4TextRotaryEmbedding(cfg)
+        position_ids = torch.arange(seq_len).unsqueeze(0)
+        decode_position_ids = torch.tensor([[seq_len]])
+        cos, sin = rotary(hidden, position_ids, layer_type=layer_type)
+        decode_cos, decode_sin = rotary(decode_hidden, decode_position_ids, layer_type=layer_type)
+
+        prefix = f"model.language_model.layers.{layer_idx}"
+        ref = Gemma4TextDecoderLayer(cfg, layer_idx=layer_idx).eval().to(dtype=torch.bfloat16)
+        ref.load_state_dict({k[len(prefix) + 1 :]: v for k, v in state.items()}, strict=True)
+        cache = DynamicCache(config=cfg)
+        sliding_window = cfg.sliding_window if layer_type == "sliding_attention" else None
+        with torch.no_grad():
+            ref_prefill = ref(
+                hidden,
+                shared_kv_states={},
+                position_embeddings=(cos, sin),
+                attention_mask=_causal_mask(seq_len, sliding_window=sliding_window),
+                position_ids=position_ids,
+                past_key_values=cache,
+            )
+            ref_decode = ref(
+                decode_hidden,
+                shared_kv_states={},
+                position_embeddings=(decode_cos, decode_sin),
+                attention_mask=_decode_mask(seq_len + 1, sliding_window=sliding_window),
+                position_ids=decode_position_ids,
+                past_key_values=cache,
+            )
+
+        decoder = FunctionalDecoder.from_state_dict(state, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device)
+        page_table = _as_tt(
+            mesh_device,
+            _page_table(layer_type, shared_physical=shared_physical),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        cache_shape = _cache_shape(layer_type, shared_physical=shared_physical)
+        cache_dtype = {
+            "bf16": ttnn.bfloat16,
+            "bfp8": ttnn.bfloat8_b,
+        }[os.getenv("GEMMA4_FUNCTIONAL_DECODER_CACHE_DTYPE", "bf16")]
+        kv_cache = (
+            _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16), dtype=cache_dtype),
+            _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16), dtype=cache_dtype),
+        )
+
+        tt_prefill = decoder.prefill_forward(
+            _as_tt(mesh_device, hidden.unsqueeze(1)),
+            position_cos=_as_tt(mesh_device, cos.unsqueeze(1)),
+            position_sin=_as_tt(mesh_device, sin.unsqueeze(1)),
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
+        tt_decode = decoder.decode_forward(
+            _as_tt(mesh_device, decode_hidden.unsqueeze(1)),
+            position_cos=_as_tt(mesh_device, decode_cos.unsqueeze(1)),
+            position_sin=_as_tt(mesh_device, decode_sin.unsqueeze(1)),
+            current_pos=_as_tt(
+                mesh_device, torch.tensor([seq_len], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+            ),
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        tt_prefill_torch = _to_torch(mesh_device, tt_prefill).reshape(1, seq_len, HIDDEN_SIZE).to(torch.bfloat16)
+        tt_decode_torch = _to_torch(mesh_device, tt_decode).reshape(1, 1, HIDDEN_SIZE).to(torch.bfloat16)
+        prefill_ok, prefill_pcc = comp_pcc(ref_prefill, tt_prefill_torch, 0.995)
+        decode_ok, actual_decode_pcc = comp_pcc(ref_decode, tt_decode_torch, decode_pcc)
+        ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        (ARTIFACT_DIR / f"pcc_layer{layer_idx}_{layer_type}_shared{int(shared_physical)}.json").write_text(
+            json.dumps(
+                {
+                    "model_id": MODEL_ID,
+                    "layer_idx": layer_idx,
+                    "layer_type": layer_type,
+                    "shared_physical_cache": shared_physical,
+                    "sequence_length": seq_len,
+                    "decode_current_pos": seq_len,
+                    "prefill_pcc": float(prefill_pcc),
+                    "prefill_threshold": 0.995,
+                    "decode_pcc": float(actual_decode_pcc),
+                    "decode_threshold": decode_pcc,
+                    "provenance": _evidence_provenance(
+                        mesh_device,
+                        "GEMMA4_RANGE_DOWNLOAD=1 pytest -q "
+                        "models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::"
+                        "test_functional_decoder_real_weights_prefill_decode",
+                    ),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        assert prefill_ok, prefill_pcc
+&gt;       assert decode_ok, actual_decode_pcc
+E       AssertionError: np.float64(0.9926418874304439)
+E       assert np.False_
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py:410: AssertionError</failure></testcase><testcase classname="models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_decoder" name="test_multichip_real_weights_prefill_decode[blackhole-full_attention-mesh_device0-device_params0]" time="9.599"><properties><property name="start_timestamp" value="2026-08-15T17:45:40" /><property name="end_timestamp" value="2026-08-15T17:45:49" /></properties></testcase></testsuite></testsuites>

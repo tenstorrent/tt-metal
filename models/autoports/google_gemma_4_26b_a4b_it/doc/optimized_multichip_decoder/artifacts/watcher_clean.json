@@ -3,6 +3,8 @@
   "result": "2 passed, 0 failed, 0 errors in 27.005 s",
   "coverage": "watcher assert, pause, ring-buffer, stack, worker NoC/CB sanitizers on all four devices; separate from profiler",
   "ethernet_limitation": "Full watcher instrumentation on ACTIVE_ETH cannot initialize FABRIC_1D_RING in this checkout: firmware program 27920 bytes exceeds the 25600-byte kernel-config buffer. Disabling only Ethernet watcher instrumentation is required; fabric remains enabled and model collectives execute.",
-  "watcher_log": "artifacts/watcher.log; sha256=541eec42c6f7959759338c37eab432552b8e774ac61f8721cd44dbbb1d5f7c30; no ERROR/FATAL/ASSERT/NOC marker after the passing run",
-  "timestamp_utc": "2026-08-15T16:37:38Z"
+  "watcher_log": "artifacts/watcher.log; sha256=db8e04290a05aeb4bb7872d23733b580da417975e07abbca3112ed440bcaea7d; no ERROR/FATAL/ASSERT/NOC marker after the passing run",
+  "measured_decoder_sha256": "f75dbd9909b959e737694f9e2e56e1971d0f9c2a5e0db826ab37cd27ba9a8c1a",
+  "test_sha256": "f1579fa50beb609c884ee04495ee3281a2d2d1f9bc7cd6728b48d2fcbaa07a69",
+  "timestamp_utc": "2026-08-15T17:46:45Z"
 }

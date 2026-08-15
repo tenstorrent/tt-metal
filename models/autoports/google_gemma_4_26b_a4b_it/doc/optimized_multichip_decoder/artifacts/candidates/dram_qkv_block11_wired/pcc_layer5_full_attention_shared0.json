@@ -1,29 +1,21 @@
 {
-  "cache_shape": [
-    288,
-    1,
-    128,
-    512
-  ],
-  "decode_batch": 32,
-  "decode_current_pos": 1024,
-  "decode_trace_host_ms": 12.144952453672886,
-  "decode_trace_iterations": 30,
-  "decode_trace_warmups": 6,
+  "decode_current_pos": 32,
+  "decode_pcc": 0.9983467004212263,
+  "decode_threshold": 0.995,
   "layer_idx": 5,
   "layer_type": "full_attention",
   "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_pcc": 0.9974075132917918,
+  "prefill_threshold": 0.995,
   "provenance": {
-    "artifact_dir": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/final_default",
+    "artifact_dir": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/candidates/dram_qkv_block11_wired",
     "checkout_git_sha": "be61a936c6aab1f25a1d1cf64443ea315df28118",
-    "exact_command": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS=5 GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS=30 pytest -q test_multichip_decoder.py::test_multichip_perf_profile -k batch32",
+    "exact_command": "GEMMA4_MULTICHIP_DRAM_SHARDED_ROLES=qkv,o_proj,packed_mlp_gate_up,mlp_down pytest -q test_multichip_decoder.py::test_multichip_real_weights_prefill_decode",
     "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
     "gemma4_environment": {
-      "GEMMA4_EVIDENCE_COMMAND": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS=5 GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS=30 pytest -q test_multichip_decoder.py::test_multichip_perf_profile -k batch32",
-      "GEMMA4_FUNCTIONAL_DECODER_PERF": "1",
-      "GEMMA4_FUNCTIONAL_DECODER_TRACE_ITERATIONS": "30",
-      "GEMMA4_FUNCTIONAL_DECODER_TRACE_WARMUPS": "5",
-      "GEMMA4_MULTICHIP_ARTIFACT_DIR": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/final_default",
+      "GEMMA4_EVIDENCE_COMMAND": "GEMMA4_MULTICHIP_DRAM_SHARDED_ROLES=qkv,o_proj,packed_mlp_gate_up,mlp_down pytest -q test_multichip_decoder.py::test_multichip_real_weights_prefill_decode",
+      "GEMMA4_MULTICHIP_ARTIFACT_DIR": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/artifacts/candidates/dram_qkv_block11_wired",
+      "GEMMA4_MULTICHIP_DRAM_SHARDED_ROLES": "qkv,o_proj,packed_mlp_gate_up,mlp_down",
       "GEMMA4_RANGE_DOWNLOAD": "1"
     },
     "hardware": {
@@ -43,6 +35,6 @@
     "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
     "ttnn_extension_sha256": "ed2bf1a78109396ab2411c7f7bd0a0fa341c3eb3c8b4f82a40985fadb3dc26a2"
   },
-  "sequence_length": 1024,
+  "sequence_length": 32,
   "shared_physical_cache": false
 }
