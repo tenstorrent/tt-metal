@@ -576,56 +576,57 @@ def neighborhood_attention_3d_op_sp(
     k: ttnn.Tensor,
     v: ttnn.Tensor,
     *,
-    dims: tuple[int, int, int],
     kernel_size: tuple[int, int, int],
     sp_axis: int,
     ccl_manager,
     scale: float | None = None,
 ) -> ttnn.Tensor:
-    """3D neighborhood attention with the query volume sharded over T (sequence parallelism).
+    """SP-over-T drop-in for :func:`neighborhood_attention_3d_op`: same replicated in/out contract
+    (``q``/``k``/``v`` full ``(B, T, H, W, NH, HD)`` on every chip, returns full
+    ``(B, T, H, W, NH*HD)``), but the attention compute is split ``sp`` ways over the temporal axis.
 
-    ``q`` is this chip's contiguous T-slice, local shape ``(B, T_local, H, W, NH, HD)`` with
-    ``T_local = T / mesh.shape[sp_axis]``; ``k``/``v`` are the FULL grid ``(B, T, H, W, NH, HD)``
-    replicated on every chip (the T neighbourhood window reaches a few frames past a shard edge, so
-    replicating K/V is what avoids a halo exchange). ``dims`` is the full ``(T, H, W)``.
+    Q is partitioned over T across ``sp_axis`` (``ttnn.mesh_partition`` -- a per-device slice, the
+    inverse of all_gather), so each chip attends only its ``T/sp`` frames; K/V stay full/replicated
+    (the T window reaches a few frames past a shard edge, so replicating K/V avoids a halo). Each
+    chip is told its global frame origin through a per-device offset tensor, and the sharded outputs
+    are all-gathered back along T, so every chip ends with the full volume -- bit-identical (mod
+    bf16) to the replicated executor, at 1/sp of the attention work per chip. Pointwise work in the
+    block stays replicated; only the attention is parallelized.
 
-    Each chip runs the op on its Q shard against full K/V, told its global frame origin through a
-    per-device offset tensor (``windowed_q_token_offset_tensor``); the op's mask + T/H/W k-range
-    narrowing already place the shard correctly against the global K. The shards' outputs are then
-    all-gathered along the T dimension, so the return is the full ``(B, T, H, W, NH*HD)`` volume,
-    replicated -- the same result the replicated executor gives, computed 1/sp of the work per chip.
-
-    Requires whole-frame shards (T divisible by the mesh axis) and a tile-aligned shard origin
-    (``T_local * H * W`` a multiple of TILE_HEIGHT); the large stages satisfy both.
+    Requires whole-frame shards (T divisible by ``mesh.shape[sp_axis]``) and a tile-aligned shard
+    origin (``(T/sp) * H * W`` a multiple of TILE_HEIGHT); the large stages satisfy both.
     """
     mesh = q.device()
     sp = int(list(mesh.shape)[sp_axis])
-    t_full, h_full, w_full = dims
-    batch, t_local, h, w, heads, head_dim = tuple(q.shape)
+    batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
-    assert (h, w) == (h_full, w_full), f"q spatial dims {(h, w)} != dims {(h_full, w_full)}"
-    assert t_local * sp == t_full, f"T={t_full} must split evenly over sp={sp} (got T_local={t_local})"
-    hw = h_full * w_full
-    seq_full = t_full * hw
-    seq_local = t_local * hw
+    hw = h * w
+    seq_full = t * hw
+    width = heads * head_dim
+    if sp == 1:  # nothing to split -- fall back to the plain replicated op path
+        return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
+    assert t % sp == 0, f"T={t} must split evenly over sp={sp}"
+    seq_local = seq_full // sp
     tile_height = 32
-    assert seq_local % tile_height == 0, f"shard origin T_local*H*W={seq_local} must be a multiple of {tile_height}"
+    assert seq_local % tile_height == 0, f"shard origin (T/sp)*H*W={seq_local} must be a multiple of {tile_height}"
     if scale is None:
         scale = head_dim**-0.5
-    kernels = tuple(min(kk, d) for kk, d in zip(kernel_size, dims))
+    kernels = tuple(min(kk, d) for kk, d in zip(kernel_size, (t, h, w)))
 
-    def to_seq(x: ttnn.Tensor, s_: int) -> ttnn.Tensor:
+    def to_seq(x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (batch, s_, heads, head_dim))
+        x = ttnn.reshape(x, (batch, seq_full, heads, head_dim))
         x = ttnn.permute(x, (0, 2, 1, 3))
         return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-    tq = to_seq(q, seq_local)
-    tk = to_seq(k, seq_full)
-    tv = to_seq(v, seq_full)
+    tk = to_seq(k)
+    tv = to_seq(v)
+    # (B, NH, S, HD) full -> this chip's frame-shard (B, NH, S/sp, HD). mesh_partition slices S/sp per
+    # device along sp_axis at S/sp boundaries = whole frames (T divisible by sp), so no fabric traffic.
+    tq = ttnn.mesh_partition(to_seq(q), dim=2, cluster_axis=sp_axis)
 
-    # One offset per chip along sp_axis: chip at sp position p owns frames [p*T_local, ...), origin
-    # p*seq_local. Distribute the (sp,) table along sp_axis so each chip reads its own origin at page 0.
+    # One offset per chip along sp_axis: chip at position p holds seq [p*seq_local, ...) -- the same
+    # slice mesh_partition assigns. Distribute the (sp,) table so page 0 per chip is its own origin.
     offsets = torch.arange(sp, dtype=torch.int32) * seq_local
     off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
 
@@ -634,7 +635,7 @@ def neighborhood_attention_3d_op_sp(
         tk,
         tv,
         is_causal=False,
-        neighborhood_3d=(t_full, h_full, w_full, *kernels),
+        neighborhood_3d=(t, h, w, *kernels),
         scale=scale,
         windowed_q_token_offset=0,
         windowed_q_token_offset_tensor=off_tt,
@@ -642,13 +643,13 @@ def neighborhood_attention_3d_op_sp(
     for tensor in (tq, tk, tv):
         ttnn.deallocate(tensor)
 
-    # (B, NH, seq_local, HD) -> (B, T_local, H, W, width) local, then all-gather T across sp_axis so
-    # every chip holds the full volume (chip order along sp_axis is frame order, so no reshuffle).
-    width = heads * head_dim
+    # (B, NH, S/sp, HD) -> (B, S/sp, width) local, all-gather along seq across sp_axis (chip order is
+    # frame order, so no reshuffle) -> full (B, T, H, W, width) on every chip.
     attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
     attended = ttnn.permute(attended, (0, 2, 1, 3))
-    local = ttnn.reshape(attended, (batch, t_local, h_full, w_full, width))
-    return ccl_manager.all_gather(local, dim=1, mesh_axis=sp_axis, use_hyperparams=False)
+    local = ttnn.reshape(attended, (batch, seq_local, width))
+    full = ccl_manager.all_gather(local, dim=1, mesh_axis=sp_axis, use_hyperparams=False)
+    return ttnn.reshape(full, (batch, t, h, w, width))
 
 
 def neighborhood_attention_3d(
@@ -662,6 +663,7 @@ def neighborhood_attention_3d(
     chunk_budget: int = DEFAULT_CHUNK_BUDGET,
     ccl_manager=None,
     backend: str = "gather",
+    sp_axis: int | None = None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention on device.
 
@@ -684,13 +686,20 @@ def neighborhood_attention_3d(
 
     ``backend`` selects the executor. ``"gather"`` (default) is the grouped gather + dense masked
     attention above. ``"op"`` routes to :func:`neighborhood_attention_3d_op`, which synthesizes the
-    neighborhood mask inside the SDPA op and needs no gather, mask upload, or CCL; the gather-only
-    arguments (``device_plan``, ``chunk_budget``, ``ccl_manager``) do not apply to it.
+    neighborhood mask inside the SDPA op and needs no gather, mask upload, or CCL. ``"op_sp"`` routes
+    to :func:`neighborhood_attention_3d_op_sp`, the same op path with the attention split over T
+    across ``sp_axis`` (needs ``ccl_manager`` and ``sp_axis``). The gather-only arguments
+    (``device_plan``, ``chunk_budget``) do not apply to the op backends.
     """
     if backend == "op":
         return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
+    if backend == "op_sp":
+        assert ccl_manager is not None and sp_axis is not None, "op_sp needs ccl_manager and sp_axis"
+        return neighborhood_attention_3d_op_sp(
+            q, k, v, kernel_size=kernel_size, sp_axis=sp_axis, ccl_manager=ccl_manager, scale=scale
+        )
     if backend != "gather":
-        raise ValueError(f"unknown NA3D backend {backend!r}; expected 'gather' or 'op'")
+        raise ValueError(f"unknown NA3D backend {backend!r}; expected 'gather', 'op', or 'op_sp'")
 
     batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
