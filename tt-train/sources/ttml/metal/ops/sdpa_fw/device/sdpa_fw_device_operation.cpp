@@ -61,6 +61,24 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 
+    // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
+    // iterate the padded sequence, so tile padding on S or head_dim would silently
+    // mis-scale attention instead of erroring out.
+    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name) {
+        const auto& logical = tensor.logical_shape();
+        const auto& padded = tensor.padded_shape();
+        TT_FATAL(
+            logical[-1] == padded[-1] && logical[-2] == padded[-2],
+            "Tensor '{}' must be tile-aligned in sequence and head_dim (padded shape == logical shape). "
+            "Got logical={}, padded={}",
+            name,
+            logical,
+            padded);
+    };
+    check_tile_aligned(query, "Query");
+    check_tile_aligned(key, "Key");
+    check_tile_aligned(value, "Value");
+
     auto query_shape = query.logical_shape();
     auto key_shape = key.logical_shape();
     auto value_shape = value.logical_shape();

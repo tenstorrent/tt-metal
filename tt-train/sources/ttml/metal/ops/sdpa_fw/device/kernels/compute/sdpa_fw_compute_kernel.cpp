@@ -192,10 +192,14 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_push_back(cb_attention_weights, Sk_chunk_t);
         }
 #else
-        // USE_ATTN_MASK (provided mask) — uses a per-`n` matmul_tiles + apply_mask_on_reg path.
+        // USE_ATTN_MASK (provided mask) and no-mask — a per-`n` matmul_tiles path.
         // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
         // on a single DST tile + scratch, which fits comfortably here. K is laid out col-major
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
+        //
+        // Without USE_ATTN_MASK (AttentionMaskType::None) the host never creates cb_attn_mask
+        // and the reader never fills it, so every mask touch must be compiled out; scaling
+        // still happens later inside the scaled exp of the softmax.
         constexpr uint32_t matmul_accum_reg = 0U;
         for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
             matmul_init(cb_query, cb_key, /* transpose */ 1);
@@ -209,7 +213,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                     tile_idx * Sk_chunk_t + n,
                     /* dst */ matmul_accum_reg);
             }
+#ifdef USE_ATTN_MASK
             apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits, /* mask_tile_idx */ n);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_attention_weights, onetile);
@@ -218,9 +224,11 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_push_back(cb_attention_weights, onetile);
         }
 
+#ifdef USE_ATTN_MASK
         // Every mask tile is unique per (row, k tile). Pop the whole chunk's worth so the
         // reader can stage the next chunk.
         cb_pop_front(cb_attn_mask, Sk_chunk_t);
+#endif
 #endif
         // CAUSAL_MASK/BALANCED_PARALLELISM: the two mask tiles stay permanently fronted; no pop.
 
