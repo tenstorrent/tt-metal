@@ -66,6 +66,14 @@ inline void nbr_axis_bounds(uint32_t q, uint32_t len, uint32_t ker, uint32_t& lo
 // k_base+c lies in the (kt,kh,kw) box of the Q token q_base+r over a (T,H,W) grid flattened T-outer
 // (t = idx/(H*W), h = (idx%(H*W))/W, w = idx%W), else -inf. Rows/cols past the last real token (index
 // >= T*H*W) stay -inf. Per-element because the flattened 3D window is not a contiguous tile rectangle.
+//
+// Spatial-SP over W: when W_full != 0 the (T, H, W) here is the LOCAL padded shard and W_full is the
+// full width. A column's GLOBAL w is w_origin + (local w); the W window is computed and clamped in
+// [0, W_full), and any column whose global w falls outside [0, W_full) -- the fake halo replicated at
+// a true edge -- is left -inf. This makes an edge shard inward-shift at the true edge exactly as the
+// whole volume would (and interior shards are unaffected, their global window == their local one).
+// w_origin is signed (a left-edge shard's fake halo maps to negative global w). W_full == 0 => no
+// W-sharding: global w == local w, the original single-grid behaviour.
 template <uint32_t tile_bytes, uint32_t cb_mask_in>
 inline void fill_neighborhood_3d_tile(
     uint32_t tile_id,
@@ -76,12 +84,16 @@ inline void fill_neighborhood_3d_tile(
     uint32_t W,
     uint32_t kt,
     uint32_t kh,
-    uint32_t kw) {
+    uint32_t kw,
+    uint32_t W_full,
+    int32_t w_origin) {
     fill_neginf_tile<tile_bytes>(cb_mask_in, tile_id);
     constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
     constexpr uint32_t FW = tt::constants::FACE_WIDTH;
     const uint32_t HW = H * W;
     const uint32_t sites = T * HW;
+    const bool w_sharded = W_full != 0;
+    const uint32_t w_span = w_sharded ? W_full : W;  // width the W window is clamped in
     CircularBuffer cb(cb_mask_in);
     volatile tt_l1_ptr uint16_t* p =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
@@ -92,10 +104,15 @@ inline void fill_neighborhood_3d_tile(
         }
         const uint32_t qt = q / HW;
         const uint32_t qrem = q % HW;
+        // Global W coordinate of this query column (local == global when not W-sharded).
+        const int32_t qw_g = w_origin + static_cast<int32_t>(qrem % W);
+        if (qw_g < 0 || qw_g >= static_cast<int32_t>(w_span)) {
+            continue;  // fake-halo query row; its output is cropped, so leave it -inf
+        }
         uint32_t t0, t1, h0, h1, w0, w1;
         nbr_axis_bounds(qt, T, kt, t0, t1);
         nbr_axis_bounds(qrem / W, H, kh, h0, h1);
-        nbr_axis_bounds(qrem % W, W, kw, w0, w1);
+        nbr_axis_bounds(static_cast<uint32_t>(qw_g), w_span, kw, w0, w1);
         const uint32_t face_row = (r >= FH) ? 2u : 0u;
         const uint32_t fr = r & (FH - 1);
         for (uint32_t c = 0; c < tt::constants::TILE_WIDTH; ++c) {
@@ -105,7 +122,12 @@ inline void fill_neighborhood_3d_tile(
             }
             const uint32_t ktt = k / HW;
             const uint32_t krem = k % HW;
-            if (ktt >= t0 && ktt < t1 && (krem / W) >= h0 && (krem / W) < h1 && (krem % W) >= w0 && (krem % W) < w1) {
+            const int32_t kw_g = w_origin + static_cast<int32_t>(krem % W);
+            if (kw_g < 0 || kw_g >= static_cast<int32_t>(w_span)) {
+                continue;  // fake-halo key column: never in any window
+            }
+            if (ktt >= t0 && ktt < t1 && (krem / W) >= h0 && (krem / W) < h1 && static_cast<uint32_t>(kw_g) >= w0 &&
+                static_cast<uint32_t>(kw_g) < w1) {
                 const uint32_t face = face_row + ((c >= FW) ? 1u : 0u);
                 p[face * (FH * FW) + fr * FW + (c & (FW - 1))] = 0x0000;
             }
@@ -134,7 +156,9 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t nb_W,
     uint32_t nb_kt,
     uint32_t nb_kh,
-    uint32_t nb_kw) {
+    uint32_t nb_kw,
+    uint32_t nb_W_full,
+    int32_t nb_w_origin) {
     // 3D-neighborhood mode (nb_T != 0): per-element mask over the ACTIVE K chunks only. The T band
     // bounds the outer loop; within it the H band makes the in-window K a set of runs (frames are
     // HW apart), so we pack -- masks are emitted only for chunks the box touches, by their real k
@@ -183,7 +207,17 @@ inline void generate_windowed_mask_for_q_chunk(
                 for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                     const uint32_t k_base = (k_row_start_tile + col) * tt::constants::TILE_HEIGHT;
                     fill_neighborhood_3d_tile<mask_tile_bytes, cb_mask_in>(
-                        row * Sk_chunk_t + col, q_base, k_base, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw);
+                        row * Sk_chunk_t + col,
+                        q_base,
+                        k_base,
+                        nb_T,
+                        nb_H,
+                        nb_W,
+                        nb_kt,
+                        nb_kh,
+                        nb_kw,
+                        nb_W_full,
+                        nb_w_origin);
                 }
             }
             noc.async_read_barrier();
@@ -340,7 +374,9 @@ inline void windowed_generate_if_enabled(
     uint32_t nb_W,
     uint32_t nb_kt,
     uint32_t nb_kh,
-    uint32_t nb_kw) {
+    uint32_t nb_kw,
+    uint32_t nb_W_full,
+    int32_t nb_w_origin) {
     if constexpr (W) {
         constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
         generate_windowed_mask_for_q_chunk<mask_tile_bytes, cb_mask_in, cb_cu_window_in>(
@@ -358,6 +394,8 @@ inline void windowed_generate_if_enabled(
             nb_W,
             nb_kt,
             nb_kh,
-            nb_kw);
+            nb_kw,
+            nb_W_full,
+            nb_w_origin);
     }
 }

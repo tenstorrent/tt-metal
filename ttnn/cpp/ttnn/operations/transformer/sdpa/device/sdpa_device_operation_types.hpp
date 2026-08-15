@@ -35,6 +35,11 @@ struct SDPAParams {
     // When set, the writer synthesizes the per-element 3D mask on-device (no cu_window_seqlens needed);
     // mutually exclusive with the 1D windowed / sliding-window modes. Layout: {T, H, W, kt, kh, kw}.
     std::optional<std::array<uint32_t, 6>> neighborhood_3d;
+    // Spatial sequence-parallel over W for neighborhood_3d: the (T,H,W) above is this chip's LOCAL
+    // padded shard; this carries {W_full, w_origin} so the mask computes each column's GLOBAL w =
+    // w_origin + local_w and clamps the window in [0, W_full). w_origin is a signed int32 stored in a
+    // uint32 (a left-edge shard's fake halo maps to negative global w). Absent => not W-sharded.
+    std::optional<std::array<uint32_t, 2>> neighborhood_w_shard;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

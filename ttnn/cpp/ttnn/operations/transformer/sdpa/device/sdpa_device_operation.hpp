@@ -61,6 +61,7 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset = 0,
     const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
     const std::optional<std::array<uint32_t, 6>>& neighborhood_3d = std::nullopt,
+    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard = std::nullopt,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
 
 }  // namespace ttnn::prim

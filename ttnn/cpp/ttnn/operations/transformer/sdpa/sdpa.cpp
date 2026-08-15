@@ -47,7 +47,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
-    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d) {
+    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
+    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -98,7 +99,8 @@ ttnn::Tensor scaled_dot_product_attention(
         cu_window_seqlens,
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
-        neighborhood_3d);
+        neighborhood_3d,
+        neighborhood_w_shard);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -140,6 +142,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
         std::nullopt,  // neighborhood_3d
+        std::nullopt,  // neighborhood_w_shard
         paged_cache_geometry);
 }
 
@@ -182,6 +185,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
         std::nullopt,  // neighborhood_3d
+        std::nullopt,  // neighborhood_w_shard
         paged_cache_geometry);
 }
 

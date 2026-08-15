@@ -107,3 +107,44 @@ def test_neighborhood_3d_q_offset_shard(device, t_lo, t_hi, offset_as_tensor):
     ).reshape(hi - lo, head_dim)
 
     assert_quality(full[lo:hi], got, pcc=0.99)
+
+
+# W-bands whose padded shard (interior + halo) reproduces the full-result W-columns. Covers an
+# interior band and both true edges, where the inward-shift must win over the fake replicate halo.
+@pytest.mark.parametrize("w_lo, w_hi", [(2, 6), (0, 4), (4, 8)], ids=["interior", "left_edge", "right_edge"])
+def test_neighborhood_3d_w_shard(device, w_lo, w_hi):
+    """Spatial-SP over W: neighborhood_w_shard=(W_full, w_origin) makes a padded W-band shard attend
+    at global W. This is what lets the host split the volume over W with a neighbor-pad halo."""
+    torch.manual_seed(0)
+    t_, h_, w_full, kt, kh, kw, head_dim = 4, 4, 8, 3, 3, 3, 64
+    halo = kw // 2
+    qv, kv, vv = (torch.randn(1, t_, h_, w_full, 1, head_dim) for _ in range(3))
+
+    def to_tt(x):
+        s = x.shape[1] * x.shape[2] * x.shape[3]
+        return ttnn.from_torch(
+            x.reshape(1, 1, s, head_dim), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+    full = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            to_tt(qv), to_tt(kv), to_tt(vv), is_causal=False, neighborhood_3d=(t_, h_, w_full, kt, kh, kw)
+        )
+    ).reshape(t_, h_, w_full, head_dim)
+
+    pad_lo, pad_hi = w_lo - halo, w_hi + halo
+    cols = [min(max(w, 0), w_full - 1) for w in range(pad_lo, pad_hi)]  # replicate fake halo at true edges
+    w_pad = len(cols)
+    qs, ks, vs = (x[:, :, :, cols, :, :] for x in (qv, kv, vv))
+    out = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            to_tt(qs),
+            to_tt(ks),
+            to_tt(vs),
+            is_causal=False,
+            neighborhood_3d=(t_, h_, w_pad, kt, kh, kw),
+            neighborhood_w_shard=(w_full, pad_lo & 0xFFFFFFFF),
+        )
+    ).reshape(t_, h_, w_pad, head_dim)
+    interior = out[:, :, halo : halo + (w_hi - w_lo), :]
+    assert_quality(full[:, :, w_lo:w_hi, :], interior, pcc=0.99)

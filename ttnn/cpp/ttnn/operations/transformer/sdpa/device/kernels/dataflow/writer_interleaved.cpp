@@ -82,6 +82,10 @@ void kernel_main() {
     const uint32_t nb_kt = get_arg_val<uint32_t>(17);
     const uint32_t nb_kh = get_arg_val<uint32_t>(18);
     const uint32_t nb_kw = get_arg_val<uint32_t>(19);
+    // Spatial-SP over W: full width + this shard's global W origin (signed). nb_W_full == 0 => not
+    // W-sharded (mask uses local == global W).
+    const uint32_t nb_W_full = get_arg_val<uint32_t>(20);
+    const int32_t nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -223,7 +227,9 @@ void kernel_main() {
                 nb_W,
                 nb_kt,
                 nb_kh,
-                nb_kw);
+                nb_kw,
+                nb_W_full,
+                nb_w_origin);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

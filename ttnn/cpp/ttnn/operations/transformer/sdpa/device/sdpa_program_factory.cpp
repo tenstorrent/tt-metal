@@ -810,6 +810,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // reader (k-range) and writer (mask gen); the kernels select the 3D path when the leading dim (T) != 0.
     const std::array<uint32_t, 6> neighborhood =
         operation_attributes.neighborhood_3d.value_or(std::array<uint32_t, 6>{});
+    // {W_full, w_origin} for spatial-SP over W (both 0 => not W-sharded). w_origin is a signed int32
+    // stored as a uint32 bit-pattern; the writer reinterprets it. Only the writer's mask uses these.
+    const std::array<uint32_t, 2> w_shard =
+        operation_attributes.neighborhood_w_shard.value_or(std::array<uint32_t, 2>{});
     if (is_windowed) {
         // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
         // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
@@ -1534,7 +1538,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              neighborhood[2],                                  // 16: W
              neighborhood[3],                                  // 17: kt
              neighborhood[4],                                  // 18: kh
-             neighborhood[5]});                                // 19: kw
+             neighborhood[5],                                  // 19: kw
+             w_shard[0],                                       // 20: W_full (0 => not W-sharded)
+             w_shard[1]});                                     // 21: w_origin (signed int32 bit-pattern)
 
         compute_desc.emplace_runtime_args(
             core,

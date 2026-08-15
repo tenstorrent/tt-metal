@@ -39,7 +39,11 @@ ttnn::Tensor scaled_dot_product_attention(
     /// box, inward-shifted at borders, over a (T,H,W) grid flattened T-outer. The on-device mask is
     /// synthesized from these six ints -- no cu_window_seqlens. Mutually exclusive with the 1D
     /// windowed / sliding-window / causal modes; requires T*H*W == the K sequence length.
-    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d = std::nullopt);
+    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d = std::nullopt,
+    /// Spatial sequence-parallel over W: {W_full, w_origin}. The neighborhood_3d (T,H,W) is then this
+    /// chip's LOCAL padded shard, and the mask computes each column's global w = w_origin + local_w,
+    /// clamped in [0, W_full). w_origin is signed (int32 bit-pattern in a uint32).
+    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

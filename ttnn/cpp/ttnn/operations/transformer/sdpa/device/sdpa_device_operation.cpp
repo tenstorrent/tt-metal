@@ -489,6 +489,14 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     "windowed_q_token_offset_tensor must hold at least 1 element, got {}.",
                     off.logical_shape().volume());
             }
+            // Spatial-SP over W: {W_full, w_origin}. The (T,H,W) above is the local padded shard, so
+            // W_full must cover it and the kernel spans the full width. w_origin is a signed int32 in a
+            // uint32 (not range-checked: a left-edge shard's fake halo is intentionally negative).
+            if (attrs.neighborhood_w_shard.has_value()) {
+                const uint32_t w_full = attrs.neighborhood_w_shard.value()[0];
+                TT_FATAL(w_full >= nbr[2], "neighborhood_w_shard W_full={} must be >= local W={}.", w_full, nbr[2]);
+                TT_FATAL(nbr[5] <= w_full, "neighborhood_3d kw={} must be <= W_full={}.", nbr[5], w_full);
+            }
             return;
         }
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
@@ -700,6 +708,7 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
+    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -717,6 +726,7 @@ Tensor sdpa(
             .is_windowed = cu_window_seqlens.has_value() || neighborhood_3d.has_value(),
             .windowed_q_token_offset = windowed_q_token_offset,
             .neighborhood_3d = neighborhood_3d,
+            .neighborhood_w_shard = neighborhood_w_shard,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },
