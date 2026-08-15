@@ -1006,9 +1006,15 @@
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
 //
-// Redirected: 112 of 120.  These have no matching intrinsic or a
+// Redirected: 119 of 128.  These have no matching intrinsic or a
 // different operand shape, and keep their original definitions:
-//   INCRWC, MOP_CFG, PACR_SETREG, REPLAY, SFPLUTFP32, SFPSETMAN, SFP_STOCH_RND, UNPACR_NOP
+//   MOP_CFG, PACR_SETREG, RAREB, REPLAY, SFPLUTFP32, SFPSETMAN, SFP_STOCH_RND, TRNSPSRCA, UNPACR_NOP
+//
+// RAREB and TRNSPSRCA have intrinsics but no rvtt-cfg-reads.def entry, so
+// routing them through one would trade an asm barrier for a "not in read-set
+// table" barrier and fold nothing.  RAREB is named for the unpacker's rarefy-B
+// feature, which is config-driven, so an empty read set is a guess this file
+// is not the place to make.
 // --------------------------------------------------------------------------
 
 #undef TT_ADDDMAREG
@@ -1115,6 +1121,12 @@
 #define TT_INCADCZW(a0, a1, a2, a3, a4) __builtin_rvtt_incadczw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
 #undef TTI_INCADCZW
 #define TTI_INCADCZW(a0, a1, a2, a3, a4) TT_INCADCZW(a0, a1, a2, a3, a4)
+// The intrinsic is spelled ttincrwc, not incrwc, which is why the sweep that
+// produced this list did not pair them up.
+#undef TT_INCRWC
+#define TT_INCRWC(a0, a1, a2, a3) __builtin_rvtt_ttincrwc((int)(a0), (int)(a1), (int)(a2), (int)(a3))
+#undef TTI_INCRWC
+#define TTI_INCRWC(a0, a1, a2, a3) TT_INCRWC(a0, a1, a2, a3)
 #undef TT_LOADIND
 #define TT_LOADIND(a0, a1, a2, a3, a4) __builtin_rvtt_loadind((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
 #undef TTI_LOADIND
@@ -1461,5 +1473,53 @@
 #define TT_ZEROSRC(a0, a1, a2, a3) __builtin_rvtt_wh_zerosrc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_ZEROSRC
 #define TTI_ZEROSRC(a0, a1, a2, a3) TT_ZEROSRC(a0, a1, a2, a3)
+
+// These have intrinsics too.  The sweep that produced the list above paired
+// macros with builtins by name and operand count, which is why the operand-less
+// ones and UNPACR (whose macro names its 13 fields) were left behind.
+//
+// It is worth the noise: left as .ttinsn each one is opaque to
+// pass_rvtt_config, which then discards the whole config state at every
+// occurrence.
+#undef TTI_CLREXPHIST
+#define TTI_CLREXPHIST __builtin_rvtt_clrexphist()
+#undef TTI_RSTDMA
+#define TTI_RSTDMA __builtin_rvtt_rstdma()
+#undef TTI_SFPNOP
+#define TTI_SFPNOP __builtin_rvtt_sfpnop()
+#undef TTI_TBUFCMD
+#define TTI_TBUFCMD __builtin_rvtt_tbufcmd()
+#undef TTI_TRNSPSRCB
+#define TTI_TRNSPSRCB __builtin_rvtt_trnspsrcb()
+
+#undef TTI_UNPACR
+#define TTI_UNPACR(                         \
+    Unpack_block_selection,                 \
+    AddrMode,                               \
+    CfgContextCntInc,                       \
+    CfgContextId,                           \
+    AddrCntContextId,                       \
+    OvrdThreadId,                           \
+    SetDatValid,                            \
+    rareb_en,                               \
+    ZeroWrite2,                             \
+    AutoIncContextID,                       \
+    RowSearch,                              \
+    SearchCacheFlush,                       \
+    Last)                                   \
+    __builtin_rvtt_wh_unpacr(               \
+        (unsigned)(Unpack_block_selection), \
+        (unsigned)(AddrMode),               \
+        (unsigned)(CfgContextCntInc),       \
+        (unsigned)(CfgContextId),           \
+        (unsigned)(AddrCntContextId),       \
+        (unsigned)(OvrdThreadId),           \
+        (unsigned)(SetDatValid),            \
+        (unsigned)(rareb_en),               \
+        (unsigned)(ZeroWrite2),             \
+        (unsigned)(AutoIncContextID),       \
+        (unsigned)(RowSearch),              \
+        (unsigned)(SearchCacheFlush),       \
+        (unsigned)(Last))
 
 #endif // __riscv_xtttensixwh
