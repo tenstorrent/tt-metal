@@ -169,6 +169,9 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto col_sender_sem2 = CreateSemaphore(program, all_cores, INVALID);
     auto col_receiver_sem2 = CreateSemaphore(program, all_cores, INVALID);
     auto reduce_sem = CreateSemaphore(program, all_cores, 0);
+    // Consumption credit for the reduce channel: the receiver increments the sender's
+    // copy after reserving its c_5 slot; the sender waits for it before each NOC write.
+    auto reduce_ack_sem = CreateSemaphore(program, all_cores, 0);
 
     const auto noc_1 = detail::preferred_noc_for_dram_write(device->arch());
     const auto noc_0 = detail::preferred_noc_for_dram_read(device->arch());
@@ -243,7 +246,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             reduce_sem,
             num_m_blocks,
             M_block,
-            num_n_blocks};
+            num_n_blocks,
+            reduce_ack_sem};
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         row_sender_reduce_kid = CreateKernel(
             program,
@@ -314,7 +318,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             reduce_sem,
             num_m_blocks,
             M_block,
-            num_n_blocks};
+            num_n_blocks,
+            reduce_ack_sem};
     };
 
     auto make_recv_write_ct = [&](uint32_t sender_sem_id, uint32_t receiver_sem_id) {
@@ -333,7 +338,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             reduce_sem,
             num_m_blocks,
             M_block,
-            num_n_blocks};
+            num_n_blocks,
+            reduce_ack_sem};
         TensorAccessorArgs(*output.buffer()).append_to(ct);
         return ct;
     };
@@ -423,7 +429,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                  reduce_sem,
                  num_m_blocks,
                  M_block,
-                 num_n_blocks},
+                 num_n_blocks,
+                 reduce_ack_sem},
             .defines = {{"REDUCE_SEND", "1"}}});
 
     // Col upper receivers (y<x, y>0): plain receiver
@@ -465,7 +472,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                  Mpc,
                  num_m_blocks,
                  M_block,
-                 num_n_blocks},
+                 num_n_blocks,
+                 reduce_ack_sem},
             .defines = {{"REDUCE_RECV", "1"}}});
 
     // Helper DRAM reader: reads odd K-columns, writes combined output (c_6) to DRAM
@@ -512,12 +520,17 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         make_core_range_set(sender_transpose_cores),
         compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
 
-    // Diagonal: REDUCE_SENDER
+    // Diagonal: REDUCE_SENDER_TRANSPOSE — the even-K partial of a diagonal block is
+    // symmetric, so the transposed send matches the helper's row-major consume order
+    // under the senders' column-major iteration.
     std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
     sender_diag_cores.reserve(grid_dim);
     for (uint32_t d = 0; d < grid_dim; d++) sender_diag_cores.push_back({d, d});
     CreateKernel(
-        program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
+        program,
+        compute_matmul_path,
+        make_core_range_set(sender_diag_cores),
+        compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR
     std::vector<tt::tt_metal::CoreCoord> accum_cores;
@@ -678,6 +691,10 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                     rt.push_back(N_start_tile);  // mirror_M_start = N_start (swapped)
                     rt.push_back(M_start_tile);  // mirror_N_start = M_start (swapped)
                 }
+                // Reduce partner (lower core) — target of the consumption credit
+                auto partner_p = device->worker_core_from_logical_core({y, x});
+                rt.push_back((uint32_t)partner_p.x);
+                rt.push_back((uint32_t)partner_p.y);
                 SetRuntimeArgs(program, row_upper_recv_kid, core, rt);
             }
         }
@@ -710,8 +727,14 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             tt::tt_metal::CoreCoord helper_core{grid_dim, y};
             auto row_sender_p = device->worker_core_from_logical_core({0, y});
 
-            // RISCV_0: row receiver + REDUCE_RECV (receives diagonal's partial)
-            SetRuntimeArgs(program, helper_recv_kid, helper_core, {(uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y});
+            // RISCV_0: row receiver + REDUCE_RECV (receives diagonal's partial).
+            // Reduce partner is the diagonal core (y, y) — target of the consumption credit.
+            auto diag_p = device->worker_core_from_logical_core({y, y});
+            SetRuntimeArgs(
+                program,
+                helper_recv_kid,
+                helper_core,
+                {(uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, (uint32_t)diag_p.x, (uint32_t)diag_p.y});
 
             // RISCV_1: DRAM reader + output writer for diagonal block G[y,y]
             SetRuntimeArgs(
