@@ -1127,3 +1127,49 @@ in any section, in or out of backticks, in either word order — while the true
 statements those same claims are usually corrected *into* remain sayable. That is
 a ratchet, not a proof, and the distinction is the reason each round's fix is
 recorded here with the perturbation that would catch its regression.
+
+## 13. Stage review round 10 — clean-pass, and the commits
+
+Round 10 was scoped back to the stage's own completion requirements, since rounds
+6-9 had found only documentation-accuracy defects and rounds 7-9 had found theirs
+inside the self-check instrument rather than in anything delivered. It re-derived
+every requirement from the artifacts rather than from these documents — the
+adapter read in full, the precision policy read off the built serving model, the
+per-file sampling counts recounted from the ANSI-stripped log, all six served
+completions read, the 84 MB server log grepped independently — and returned
+**clean-pass with no required work**.
+
+Its three non-blocking items were fixed anyway, two being the tracked class:
+
+* §12 claimed all eight rounds 7-9 evasions were `rc=1`; one was not.
+  `_sentences()` protected filename dots but not `e.g.`, so "All 21 logprobs
+  tests, e.g. the chat ones, pass" was split in half and escaped. Abbreviations
+  are protected now; that phrasing and the `i.e.` variant are `rc=1`, and "Of the
+  21 logprobs tests, e.g. the chat ones, 20 pass and one is skipped" correctly
+  still is not.
+* §12 gave two different reasons, in adjacent sentences, for why there is no
+  `probe_full.json`. `AUTODEBUG.md` had it right: that arm **hung** before its
+  write. The other absent artifact is different — there is no `probe_guard.json`
+  because that arm **exits 1 at the position guard**, by design. Both now say so.
+* The server log's `~14.83 GB/device` is the *budget request* for a
+  1,048,576-token pool, while the allocated pool rounds up to a whole
+  `blocks_per_seq` multiple — 16416 blocks, 1,050,624 tokens, 14.86 GB. The README
+  reports the allocated figure and now says why the log shows two.
+
+### Commits
+
+Local only; nothing pushed from either repo.
+
+* `tt-metal` — `a48bb45543d33903e5623713cb10791d9664ef87`, "Muse-Glimmer-30B vLLM
+  integration: serve through the shared vLLM path". 110 files: `tt/generator_vllm.py`,
+  `tt/generator.py`, `tt/model.py`, `tests/test_full_model.py`, `.gitignore`,
+  `models/common/readiness_check/run_vllm_server.py`, and all of
+  `doc/vllm_integration/` and `readiness_vllm/`.
+* `vllm-tt-plugin` — `10308fb5f66b664f3a3f4a7828934f92857b1547`, "Register
+  Muse-Glimmer-30B and allow an explicit fabric router payload":
+  `src/vllm_tt_plugin/platform.py`, `src/vllm_tt_plugin/worker.py`.
+
+The repo's pre-commit hooks normalised trailing whitespace and end-of-file
+newlines in several evidence logs and JSON artifacts as they were committed. No
+measurement changed — the diff is whitespace only — and both checkers re-derive
+`rc=0` from the normalised files.
