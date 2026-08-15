@@ -10,8 +10,11 @@ from typing import Dict
 
 from helpers.chip_architecture import ChipArchitecture
 
+from .arch_common import sfpu_common
+from .base_sfpu import Sfpu
 from .fuser_config import FuserConfig
 from .operand import OperandRegistry
+from .sfpu_node import SfpuNode
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -68,9 +71,12 @@ class MathKernelGenerator:
 
     def generate(self) -> str:
         # Collect all unique headers from all operations
+        isolate_sfpu = sfpu_common.sfpu_on_isolated_trisc(self.config.global_config)
         all_headers = set()
         for op in self.config.pipeline:
             for unit in op.math.get_math_units():
+                if isolate_sfpu and isinstance(unit, Sfpu):
+                    continue
                 all_headers.update(unit.get_headers())
 
         # Generate include statements
@@ -103,15 +109,40 @@ class SfpuKernelGenerator:
         self.config = config
 
     def generate(self) -> str:
-        if self.config.global_config.architecture != ChipArchitecture.QUASAR:
+        global_config = self.config.global_config
+        if global_config.architecture != ChipArchitecture.QUASAR:
             return ""
+
+        emit_sfpu = sfpu_common.sfpu_on_isolated_trisc(global_config) and any(
+            op.math.has_math_sfpu() for op in self.config.pipeline
+        )
+
+        includes = ""
+        sfpu_calls = ""
+        if emit_sfpu:
+            all_headers = set()
+            for op in self.config.pipeline:
+                for node in op.math.math_nodes:
+                    if isinstance(node, SfpuNode):
+                        all_headers.update(node.get_headers())
+
+            includes = (
+                "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
+                + "\n"
+            )
+            sfpu_calls = "".join(
+                [op.do_sfpu(global_config) for op in self.config.pipeline]
+            )
 
         return (
             f"\n"
             f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
             f"\n"
+            f"{includes}"
+            f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
+            f"{sfpu_calls}"
             f"}}\n"
             f"\n"
             f"#endif\n"

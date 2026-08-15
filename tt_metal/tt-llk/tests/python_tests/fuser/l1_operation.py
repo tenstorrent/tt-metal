@@ -46,6 +46,9 @@ class L1Operation:
     def do_math(self, config) -> str:
         return self.math.math_body(self, config)
 
+    def do_sfpu(self, config) -> str:
+        return self.math.sfpu_body(self, config)
+
     def pack(self, config) -> str:
         return self.math.pack_body(self, config)
 

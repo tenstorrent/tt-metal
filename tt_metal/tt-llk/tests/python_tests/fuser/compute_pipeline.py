@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from helpers.llk_params import GoldenType
 
-from .arch_common import fpu_common, pack_common, unpack_common
+from .arch_common import fpu_common, pack_common, sfpu_common, unpack_common
 from .base_fpu import Fpu
 from .base_sfpu import Sfpu
 from .base_unpacker import Unpacker
@@ -36,6 +36,25 @@ class ComputePipeline:
 
     def _get_pack_nodes(self) -> List[PackNode]:
         return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
+
+    def has_math_sfpu(self) -> bool:
+        return any(isinstance(node, SfpuNode) for node in self.math_nodes)
+
+    def _math_sfpu_runs(self) -> List[List[SfpuNode]]:
+        runs: List[List[SfpuNode]] = []
+        current: List[SfpuNode] = []
+
+        for node in self.math_nodes:
+            if isinstance(node, SfpuNode):
+                current.append(node)
+            elif current:
+                runs.append(current)
+                current = []
+
+        if current:
+            runs.append(current)
+
+        return runs
 
     def get_unpackers(self) -> List["Unpacker"]:
         unpackers: List["Unpacker"] = []
@@ -269,9 +288,14 @@ class ComputePipeline:
             init_fn = lambda block: fpu_ops[0].fpu_init(operation, config, block)
             uninit_fn = lambda block: fpu_ops[0].fpu_uninit(operation, config, block)
 
+        isolate_sfpu = sfpu_common.sfpu_on_isolated_trisc(config)
+
         def batch_body(block: BlockData):
             body = fpu_common.math_wait_for_dest(config, operation)
-            for cu in self.math_nodes:
+            index = 0
+            while index < len(self.math_nodes):
+                cu = self.math_nodes[index]
+                index += 1
                 if isinstance(cu, FpuNode):
                     if not hoist_reconfig and not config.skip_math_init:
                         body += config.sentinel.configure_math(config, operation, cu)
@@ -281,9 +305,16 @@ class ComputePipeline:
                     if not hoist:
                         body += cu.fpu_uninit(operation, config, block)
                 elif isinstance(cu, SfpuNode):
-                    body += cu.sfpu_init(operation, config, block)
-                    body += cu.sfpu_run(operation, config, block)
-                    body += cu.sfpu_uninit(operation, config, block)
+                    if isolate_sfpu:
+                        while index < len(self.math_nodes) and isinstance(
+                            self.math_nodes[index], SfpuNode
+                        ):
+                            index += 1
+                        body += sfpu_common.math_handoff_to_sfpu(config, operation)
+                    else:
+                        body += cu.sfpu_init(operation, config, block)
+                        body += cu.sfpu_run(operation, config, block)
+                        body += cu.sfpu_uninit(operation, config, block)
             body += fpu_common.math_dest_section_done(config, operation)
             return body
 
@@ -297,6 +328,32 @@ class ComputePipeline:
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
         code += self._zone(config, "INIT", uninit_code)
+
+        return code
+
+    def sfpu_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
+        code = f"// Operation {operation.stage_id}: SFPU\n"
+        code += self._zone(
+            config, "INIT", sfpu_common.sfpu_sync_init(config, operation)
+        )
+
+        sfpu_runs = self._math_sfpu_runs()
+
+        def batch_body(block: BlockData):
+            body = ""
+            for run in sfpu_runs:
+                body += sfpu_common.sfpu_wait_for_math(config, operation)
+                for node in run:
+                    body += node.sfpu_init(operation, config, block)
+                    body += node.sfpu_run(operation, config, block)
+                    body += node.sfpu_uninit(operation, config, block)
+                body += sfpu_common.sfpu_signal_math(config, operation)
+            body += sfpu_common.sfpu_dest_section_done(config, operation)
+            return body
+
+        code += self._zone_loop(
+            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+        )
 
         return code
 
