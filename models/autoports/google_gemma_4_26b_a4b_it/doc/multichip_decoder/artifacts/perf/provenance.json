@@ -1,0 +1,14 @@
+{
+  "checkout_before_stage": "8bc06c55da5",
+  "hardware": "4x Blackhole P300C, 1x4 mesh, FABRIC_1D_RING",
+  "profiler": "python -m tracy -r -p -v --check-exit-code --dump-device-data-mid-run --op-support-count=5000",
+  "test": "pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_non_aligned_prefill_and_decode_trace -k <layer-kind>",
+  "report": "tt-perf-report --ignore-signposts --active-experts 8 --no-color --csv <analyzed.csv> --summary-file <summary.csv> <raw_ops.csv>",
+  "full_attention_capture_utc": "2026-08-15T14:53:18Z",
+  "sliding_attention_capture_utc": "2026-08-15T15:16:05Z",
+  "decode_batch32_capture_utc": "2026-08-15T15:30:37Z",
+  "decode_batch32_profiler": "GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_FUNCTIONAL_DECODER_SEQ_LEN=32 python -m tracy -r -p -v --check-exit-code --dump-device-data-mid-run --op-support-count=5000 -o /tmp/gemma4-multichip-tracy-final -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_perf_profile",
+  "decode_report_range": "PERF_DECODE_layer{0,5}_{sliding_attention,full_attention}_seq32_batch32 through matching _END",
+  "runtime_fallback_policy": "TTNN_CONFIG_OVERRIDES={throw_exception_on_fallback:true}",
+  "notes": "The analyzed CSVs derive from four-device raw Tracy captures of the complete prefill/eager/capture/replay workload. Ring all-reduce appears as AllGatherDeviceOperation plus FastReduceNCDeviceOperation in the op stream. Raw captures remain reproducible from the exact command but are omitted from source control because each is about 20 MB."
+}

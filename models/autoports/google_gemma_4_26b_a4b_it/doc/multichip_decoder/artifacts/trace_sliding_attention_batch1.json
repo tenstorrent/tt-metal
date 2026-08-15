@@ -1,0 +1,24 @@
+{
+  "current_position_replicated": true,
+  "decode_batch": 1,
+  "full_kv_pair_duplication_verified": false,
+  "iterations": 30,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "local_cache_shape": [
+    4,
+    2,
+    64,
+    256
+  ],
+  "logical_prefill_length": 33,
+  "multichip_trace_replay_ms": 1.122183445841074,
+  "page_table_replicated": true,
+  "repeat_bit_exact": true,
+  "replicas_bit_exact": true,
+  "single_chip_optimized_baseline_ms": 1.272,
+  "single_chip_source": "doc/optimized_decoder/README.md",
+  "speedup": 1.1335045127551662,
+  "tp_efficiency": 0.28337612818879154,
+  "warmups": 5
+}

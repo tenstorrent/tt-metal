@@ -84,5 +84,68 @@
       "shared_physical_cache_view_also_tested": true
     }
   },
+  "multichip_decoder": {
+    "validated_at_utc": "2026-08-15",
+    "hardware": {
+      "architecture": "Blackhole",
+      "board": "P300C",
+      "mesh": [1, 4],
+      "chips_used": 4,
+      "fabric": "FABRIC_1D_RING",
+      "collective": "ring all-reduce on replicated hidden states"
+    },
+    "tensor_parallel_size": 4,
+    "context_capability_reduction": null,
+    "per_device_layout": {
+      "q_heads": 4,
+      "sliding_kv_heads": 2,
+      "full_kv_heads": 1,
+      "dense_intermediate_logical_padded_local": [2112, 2176, 544],
+      "expert_intermediate_logical_padded_local": [704, 768, 192],
+      "residual": [1, 1, "batch_or_sequence", 2816],
+      "weight_policy": "column-sharded QKV/gate/up, row-sharded O/down; norms and router replicated",
+      "expert_policy": "all experts resident but TP-sharded; gate-selected top-8 sparse execution only"
+    },
+    "kv_cache_bytes_per_token_per_layer_per_device": {
+      "sliding_attention": 2048,
+      "full_attention": 2048,
+      "formula": "2 (K,V) * local_heads * head_dim * 2 BF16 bytes"
+    },
+    "memory_envelope": {
+      "physical_dram_gib_per_device": 32.0,
+      "estimated_weights_per_device_gb": 6.8,
+      "single_user_full_context_kv_gib_per_device": 2.5,
+      "single_user_sliding_window_kv_gib_per_device": 0.048828125,
+      "single_user_total_kv_gib_per_device": 2.548828125,
+      "decode_trace_reserve_mib": 64,
+      "conservative_activation_workspace_reserve_gib": 6.0,
+      "program_allocator_reserve_gib": 4.0,
+      "conservative_total_gib_per_device": 19.411328125,
+      "remaining_margin_gib_per_device": 12.588671875,
+      "note": "The full-stack allocator bounds each sliding layer to 1024 tokens (25 layers x 2 MiB/device = 0.048828125 GiB); the advertised-context layer probe deliberately allocates a full 262144-token stress cache and is not the stacked allocator. Five BF16 full layers consume 2.5 GiB/device at context 262144. The conservative total is 6.8 GiB weights + 2.548828125 GiB KV + 0.0625 GiB trace + 6 GiB live activation/workspace + 4 GiB program/allocator reserve = 19.411328125 GiB/device, leaving 12.588671875 GiB on each 32 GiB P300C. The 262144 context and batch-32 serving gates are independent maxima; a simultaneous batch of 32 users each at maximum full context exceeds P300C DRAM, so no public context reduction is introduced."
+    },
+    "validated": {
+      "prefill_non_aligned": 33,
+      "decode_current_position": 33,
+      "decode_batch": 32,
+      "trace_replay": true,
+      "sliding_modulo_capacity": 1024,
+      "sliding_modulo_tail_integrity_tested_at": 1025,
+      "layer_kinds": ["sliding_attention", "full_attention"]
+    },
+    "artifacts": {
+      "mesh_plan": "multichip_decoder/mesh_plan.md",
+      "optimized_references": [
+        "multichip_decoder/artifacts/optimized_reference_layer0.pt",
+        "multichip_decoder/artifacts/optimized_reference_layer5.pt"
+      ],
+      "trace": [
+        "multichip_decoder/artifacts/trace_sliding_attention_batch1.json",
+        "multichip_decoder/artifacts/trace_full_attention_batch1.json",
+        "multichip_decoder/artifacts/multichip_batch32_layer0.json",
+        "multichip_decoder/artifacts/multichip_batch32_layer5.json"
+      ]
+    }
+  },
   "notes": "No context reduction: real-weight whole-layer prefill passed at aligned 262144 and non-aligned 262143 for both layer kinds. Traced batch-1 decode passed at current position 262143 using rolled page tables, nonzero cache baselines, and device-verified distinct history sentinels at logical positions 0, 131071, and 262142. Traced correctness, mutable-buffer replay, and current-source latency passed at serving batch 32."
 }

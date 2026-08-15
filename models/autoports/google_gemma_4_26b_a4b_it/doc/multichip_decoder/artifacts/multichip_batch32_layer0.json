@@ -1,0 +1,17 @@
+{
+  "batch": 32,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "local_cache_shape": [
+    128,
+    2,
+    64,
+    256
+  ],
+  "optimized_pcc_threshold": 0.995,
+  "repeat_bit_exact": true,
+  "single_chip_trace_replay_ms": 14.841650209079186,
+  "speedup": 1.1694405284366256,
+  "tp_efficiency": 0.2923601321091564,
+  "trace_replay_ms": 12.691239826381207
+}

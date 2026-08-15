@@ -1,0 +1,12 @@
+{
+  "batch": 32,
+  "cache_shape": [
+    64,
+    2,
+    128,
+    512
+  ],
+  "layer_idx": 5,
+  "repeat_bit_exact": true,
+  "trace_replay_ms": 14.90797239045302
+}

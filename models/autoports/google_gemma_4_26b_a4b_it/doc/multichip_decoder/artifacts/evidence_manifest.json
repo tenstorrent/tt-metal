@@ -1,0 +1,24 @@
+{
+  "captured_at_utc": "2026-08-15",
+  "hardware": "4x Blackhole P300C, target mesh 1x4, FABRIC_1D_RING",
+  "environment": {
+    "GEMMA4_RANGE_DOWNLOAD": "1",
+    "TTNN_CONFIG_OVERRIDES": "{\"throw_exception_on_fallback\": true}"
+  },
+  "source_sha256": "ef4b74503659d2422643cd030595002282291a44400f9f1f6aa6d183661d1c21",
+  "test_sha256": "c765be73748ee795eb9d320cd4c4e21573453d442fe890f28cb1e6c63787fc00",
+  "optimized_reference_capture_command": "GEMMA4_CAPTURE_SINGLE_CHIP_REFERENCE=1 pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_capture_optimized_single_chip_reference models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_capture_optimized_batch32_reference",
+  "multichip_reference_comparison_command": "pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_matches_optimized_single_chip models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_batch32_trace_and_optimized_pcc",
+  "capacity_command": "GEMMA4_PREFILL_CAPACITY_LENGTH=262143 pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_prefill_capacity",
+  "advertised_context_command": "GEMMA4_FUNCTIONAL_DECODER_CONTEXT=1 pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode",
+  "watcher_command": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' GEMMA4_RANGE_DOWNLOAD=1 pytest -v --junitxml=models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/artifacts/watcher/results.xml models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_decoder.py -k 'multichip_real_weights_prefill_decode or multichip_matches_optimized_single_chip or multichip_batch32_trace_and_optimized_pcc or multichip_non_aligned_prefill_and_decode_trace or multichip_bounded_modulo_tail_integrity'",
+  "watcher_result": "9 passed, 14 deselected in 97.84s against the exact source_sha256/test_sha256 above",
+  "profiler_source_relation": "The signposted Tracy capture preceded only python -m black formatting and commit-hook import cleanup (isort plus removal of two unused imports). The reviewed source/test hashes are the hook-clean files; exact-source bytecode/static checks and watcher acceptance passed afterward. No executable token or program configuration changed after profiler capture.",
+  "optimized_reference_sha256": {
+    "optimized_reference_layer0.pt": "107f4713683080ca80a9b5394b98e6ffeda9052db074ec43a271d24e7a7681b1",
+    "optimized_reference_layer5.pt": "f4727782200ddf1991ee0e1292786c0f7a1779fc4277597c7369a96749855f05",
+    "optimized_batch32_layer0.pt": "17c13b0f018938e97b16481ed13ad06827e5bc3af73c477694192143568d0de8",
+    "optimized_batch32_layer5.pt": "6223685e57438c77fb37a86984657af15951a6091f8218889169639d7388dc6f"
+  },
+  "note": "This manifest augments inherited functional-harness JSON provenance with the actual multichip wrapper commands and hashes of the reviewed uncommitted source. The final commit SHA is logged in work_log.md after clean review."
+}
