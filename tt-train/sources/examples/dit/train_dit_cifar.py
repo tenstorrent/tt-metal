@@ -28,6 +28,7 @@ import ttml
 from ttml.common.config import load_config
 
 from diffusion import DiffusionSchedule, make_training_batch, one_hot, timestep_features, patchify, unpatchify
+from edm import make_edm_batch
 from dit_ttml import DiT
 
 CIFAR_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
@@ -234,13 +235,16 @@ def main():
     )
     cfg_drop_prob = dc.get("cfg_drop_prob", 0.1)
     hflip = bool(tc.get("hflip_augment", False))
+    recipe = dc.get("recipe", "ddpm")  # "ddpm" | "edm" (Karras et al. 2022, F-space MSE)
 
     opt = ttml.optimizers.create_optimizer(tc["optimizer"], model.parameters())
     ctx = ttml.autograd.AutoContext.get_instance()
     rng = np.random.default_rng(seed)
 
     base_lr = tc["optimizer"]["lr"]
-    use_cosine = tc.get("lr_schedule", "constant") == "cosine"
+    lr_schedule = tc.get("lr_schedule", "constant")
+    use_cosine = lr_schedule == "cosine"
+    use_warmup_const = lr_schedule == "warmup_constant"
     warmup = tc.get("warmup_steps", 500)
     ema = None
     if tc.get("ema_decay", 0):
@@ -290,10 +294,16 @@ def main():
             batch_rng = rng
             idx = rng.integers(0, images.shape[0], size=batch_size)
 
-        tokens, t_feats, onehot, target = make_training_batch(
-            images[idx], labels[idx], schedule, patch, model.dim, batch_rng,
-            cfg_drop_prob=cfg_drop_prob, null_class=num_classes, hflip=hflip,
-        )
+        if recipe == "edm":
+            tokens, t_feats, onehot, target = make_edm_batch(
+                images[idx], labels[idx], patch, model.dim, batch_rng,
+                cfg_drop_prob=cfg_drop_prob, null_class=num_classes, hflip=hflip,
+            )
+        else:
+            tokens, t_feats, onehot, target = make_training_batch(
+                images[idx], labels[idx], schedule, patch, model.dim, batch_rng,
+                cfg_drop_prob=cfg_drop_prob, null_class=num_classes, hflip=hflip,
+            )
 
         import ttnn
 
@@ -304,6 +314,8 @@ def main():
 
         if use_cosine:
             opt.set_lr(cosine_lr(step, max_steps, base_lr, warmup))
+        elif use_warmup_const:
+            opt.set_lr(base_lr * min(1.0, step / max(1, warmup)))
 
         opt.zero_grad()
         pred = model(dev(tokens), dev(t_feats), dev(onehot))
