@@ -52,6 +52,12 @@ def _private_temp_state(tmp_path_factory, monkeypatch):
     box = tmp_path_factory.mktemp("tmpstate")
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(box))
     monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(box))
+    # The BOARD dir too. It holds facts about the machine rather than the run -- the learned clamp
+    # threshold -- so in production it sits one level above the per-model state dir, shared by every
+    # model on the host. Unpinned here, that `.parent` walks straight out of this box and into the
+    # shared pytest root, where tests inherit each other's clamp observations: a fully mocked test
+    # then finds a threshold, reads the real die temperature, and waits 900 s for a hot board to cool.
+    monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))
     # Belt and braces: anything still reaching gettempdir() directly (the containment check in
     # _reap_measurement_dir deliberately does) lands in the box too.
     monkeypatch.setattr(_tempfile, "tempdir", str(box))

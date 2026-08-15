@@ -32,6 +32,9 @@ def _mcp(monkeypatch, state):
     from cc_optimize import perf_mcp
 
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(state))
+    # The autouse sandbox pins the board dir to its own box; these tests are ABOUT the board dir, so
+    # they take it back and point it at the layout under test.
+    monkeypatch.delenv("PERF_MCP_BOARD_STATE_DIR", raising=False)
     monkeypatch.delenv("PERF_MCP_MAX_START_TEMP_C", raising=False)
     return perf_mcp
 
@@ -100,8 +103,39 @@ def test_a_writable_parent_is_required_before_climbing(monkeypatch):
     write, and not a board directory either."""
     from cc_optimize import perf_mcp
 
+    monkeypatch.delenv("PERF_MCP_BOARD_STATE_DIR", raising=False)
     monkeypatch.delenv("PERF_MCP_STATE_DIR", raising=False)
     assert perf_mcp._board_state_dir() == perf_mcp.state_dir()
+
+
+def test_an_explicit_board_dir_wins_over_climbing(tmp_path, monkeypatch):
+    """CLIMBING OUT OF A SANDBOX DEFEATS IT. The suite gives each test a private state dir; a blind
+    .parent lands in the shared pytest root, and tests inherit each other's clamp observations."""
+    from cc_optimize import perf_mcp
+
+    box = tmp_path / "box"
+    box.mkdir()
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(box))
+    monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))
+    assert perf_mcp._board_state_dir() == box, "the sandbox pin was ignored and it climbed anyway"
+
+
+def test_the_suite_sandbox_pins_the_board_dir():
+    """Belt and braces: the fixture must set it, or every test escapes its box again."""
+    src = (_PA / "tests" / "conftest.py").read_text()
+    assert 'monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))' in src
+
+
+def test_a_mocked_test_finds_no_threshold_and_never_waits(tmp_path, monkeypatch):
+    """The hang, reproduced at its root: an isolated box has no observations, so there is no learned
+    threshold, so _wait_for_thermal_headroom returns at once instead of polling a real thermometer."""
+    from cc_optimize import perf_mcp
+
+    box = tmp_path / "box"
+    box.mkdir()
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(box))
+    monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))
+    assert perf_mcp._clamp_threshold_c() is None, "an empty box still produced a threshold"
 
 
 def test_fresh_no_longer_deletes_it():

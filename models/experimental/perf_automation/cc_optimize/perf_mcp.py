@@ -2824,9 +2824,20 @@ def _board_state_dir():
     from scratch every time -- gemma3 had 140 observations of this board while voxtral had 4 and no
     clean reading at all, so the same hardware answered "what is too hot" two different ways.
 
+    PERF_MCP_BOARD_STATE_DIR names it outright; otherwise it is the parent of the per-model state
+    dir. The explicit form exists because CLIMBING OUT OF A SANDBOX DEFEATS IT: the test suite gives
+    each test a private state dir and expects nothing to escape, and a blind `.parent` landed in the
+    shared pytest root where every other test's box lives. Tests then inherited clamp observations
+    from each other, a fully mocked test found a learned threshold, read the real die temperature of
+    a hot board, and sat in a 900 s thermal wait -- which is how the tool's own preflight suite went
+    from 190 s to hanging.
+
     Only climbs when the state dir was pointed at explicitly. On the tempdir default the parent is /,
     which is not somewhere to write.
     """
+    explicit = os.environ.get("PERF_MCP_BOARD_STATE_DIR")
+    if explicit:
+        return Path(explicit)
     return state_dir().parent if os.environ.get("PERF_MCP_STATE_DIR") else state_dir()
 
 
