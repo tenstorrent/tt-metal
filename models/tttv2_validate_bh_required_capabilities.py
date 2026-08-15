@@ -782,6 +782,46 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
                 if phrase not in policy_text:
                     errors.append(f"llama3_8b batched-prefill policy must follow verdict phrase {phrase!r}")
 
+        performance_policy = cross_by_id.get("fail_closed_performance")
+        if performance_policy is None:
+            errors.append("llama3_8b must preserve the observational performance-floor policy")
+        else:
+            performance_text = (
+                f"{performance_policy['capability']} {performance_policy['acceptance_condition']}"
+            )
+            for phrase in (
+                "must not block BH model execution or observational measurement",
+                "cannot establish performance acceptance",
+                "Every complete declared floor remains enforced",
+                "every failed meets_target result fails",
+                "performance acceptance requires an independently justified, frozen floor",
+                "records performance acceptance only when a complete independently frozen floor exists",
+                "every declared target passes",
+            ):
+                if phrase not in performance_text:
+                    errors.append(
+                        "llama3_8b performance-floor policy must preserve observational execution and "
+                        f"fail-closed acceptance phrase {phrase!r}"
+                    )
+
+    if contract_id == _LLAMA33_70B_CONTRACT_ID:
+        performance_policy = {item["id"]: item for item in cross_cutting}.get("fail_closed_performance")
+        if performance_policy is None:
+            errors.append("llama33_70b must preserve its observational-without-floor performance policy")
+        else:
+            performance_text = f"{performance_policy['capability']} {performance_policy['acceptance_condition']}"
+            for phrase in (
+                "observational",
+                "must not claim acceptance",
+                "complete independently frozen floor",
+                "target miss fails",
+            ):
+                if phrase not in performance_text:
+                    errors.append(
+                        "llama33_70b performance policy must preserve observational execution and "
+                        f"fail-closed complete-floor semantics including {phrase!r}"
+                    )
+
     if contract_id == _QWEN_CONTRACT_ID:
         actual_manifest = {
             item["id"]: (
@@ -873,6 +913,7 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
         cross_by_id = {item["id"]: item for item in cross_cutting}
         experiment = cross_by_id.get("cross_cardinality_invariance")
         policy = cross_by_id.get("disable_batched_prefill_policy")
+        performance_policy = cross_by_id.get("fail_closed_performance")
         if experiment is None or policy is None:
             errors.append("qwen3_32b must preserve experiment-disposition and batched-prefill-policy requirements")
         else:
@@ -884,6 +925,21 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
             for phrase in ("INVARIANT", "BATCHED_PREFILL_REJECTED", "remains sequential"):
                 if phrase not in policy_text:
                     errors.append(f"qwen3_32b batched-prefill policy must follow recorded verdict phrase {phrase!r}")
+        if performance_policy is None:
+            errors.append("qwen3_32b must preserve its observational-without-floor performance policy")
+        else:
+            performance_text = f"{performance_policy['capability']} {performance_policy['acceptance_condition']}"
+            for phrase in (
+                "observational",
+                "must not claim acceptance",
+                "complete independently frozen floor",
+                "target miss fails",
+            ):
+                if phrase not in performance_text:
+                    errors.append(
+                        "qwen3_32b performance policy must preserve observational execution and "
+                        f"fail-closed complete-floor semantics including {phrase!r}"
+                    )
     if expected_identity is not None:
         errors.extend(_demo_source_errors(contract))
     return errors

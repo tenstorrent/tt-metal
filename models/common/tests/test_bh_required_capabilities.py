@@ -165,6 +165,26 @@ class TestBhRequiredCapabilities(unittest.TestCase):
         )
         self._assert_invalid(contract, "including 'Malformed or incomplete outputs'")
 
+    def test_llama_missing_performance_floor_allows_observation_but_not_acceptance(self) -> None:
+        contract = self._load_contract(0)
+        policy = next(
+            row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance"
+        )
+        policy_text = f"{policy['capability']} {policy['acceptance_condition']}"
+        self.assertIn("must not block BH model execution or observational measurement", policy_text)
+        self.assertIn("cannot establish performance acceptance", policy_text)
+        self.assertIn("Every complete declared floor remains enforced", policy_text)
+        self.assertIn("every failed meets_target result fails", policy_text)
+        self.assertIn("every declared target passes", policy_text)
+        validate_contract_data(contract, self.schema)
+
+        policy["capability"] = (
+            "A missing metric floor blocks model execution. Every complete declared floor remains enforced, "
+            "every failed meets_target result fails, and performance acceptance requires an independently "
+            "justified, frozen floor."
+        )
+        self._assert_invalid(contract, "must preserve observational execution and fail-closed acceptance")
+
     def test_llama_manifests_reject_missing_extra_and_renamed_rows(self) -> None:
         for index, package in ((0, "llama3_8b"), (2, "llama33_70b")):
             base = self._load_contract(index)
@@ -213,6 +233,18 @@ class TestBhRequiredCapabilities(unittest.TestCase):
                     row = contract["demo_requirements"][0]
                     row[field] = replacement(row)
                     self._assert_invalid(contract, rf"{package} demo manifest does not match immutable")
+
+    def test_llama70_performance_policy_preserves_observation_without_acceptance(self) -> None:
+        contract = self._load_contract(2)
+        policy = next(
+            row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance"
+        )
+        policy["acceptance_condition"] = "Missing targets block execution before measurements are collected."
+        self._assert_invalid(
+            contract,
+            "llama33_70b performance policy must preserve observational execution and "
+            "fail-closed complete-floor semantics",
+        )
 
     def test_llama_source_ast_rejects_missing_functions_and_parameter_ids(self) -> None:
         for index, package in ((0, "llama3_8b"), (2, "llama33_70b")):
@@ -296,6 +328,15 @@ class TestBhRequiredCapabilities(unittest.TestCase):
                     "A passing node is enough without a recorded experiment verdict.",
                 ),
                 "acceptance must define exact-token executed verdict semantics",
+            ),
+            (
+                lambda contract: next(
+                    row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance"
+                ).__setitem__(
+                    "acceptance_condition",
+                    "Missing targets block model execution before measurements are collected.",
+                ),
+                "must preserve observational execution and fail-closed complete-floor semantics",
             ),
         )
         for mutate, message in mutations:

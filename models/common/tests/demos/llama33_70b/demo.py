@@ -8,8 +8,9 @@ Uses the model-owned ``Llama33_70BExecutor`` directly (no vLLM adapter).
 
 **Mesh note:** Llama-3.3-70B-Instruct supports Wormhole T3K (8 devices) and
 BlackHole P150x4 (4 devices on physical P150_X4 or P300_X2). P150x4 token accuracy is gated by the existing
-central ``p300x2``/``bh_quietbox_2`` floor; performance qualification fails
-closed until a workload-matched independent floor exists.
+central ``p300x2``/``bh_quietbox_2`` floor. Performance cases without a
+workload-matched independent floor still run and report observational metrics;
+those measurements are not acceptance claims.
 
 **Workload:** performance tests prefill each prompt at its natural length (TTTv1
 ``preprocess_inputs_prefill`` semantics; these sample prompts are ~90-125 tokens -> 128
@@ -106,8 +107,8 @@ EXPECTED_METRICS = {
 
 # batch-1 throughput, sampling-mode- AND profile-aware. host = TTTv2-host; on_device_topk =
 # max(TTTv1, TTTv2-on-device). Populated from same-box measurement this session.
-# Cells not yet measured stay {}. T3K characterization remains unchanged; P150x4
-# perf cases explicitly fail closed rather than silently passing without a floor.
+# Cells not yet measured stay {}. T3K characterization remains unchanged; cases
+# without a complete floor run observationally and do not make acceptance claims.
 EXPECTED_METRICS_BATCH1: dict = {
     "host": {
         "performance": {"T3K": {"tok_s_u": 10.5, "ttft_ms": 195}},  # TTTv2-host 2026-07-24 (10.52)
@@ -141,8 +142,8 @@ EXPECTED_METRICS_BATCH32: dict = {
 # CI-faithful batch-32 targets (the ``batch-32-ci`` leg), measured at the batch-32-ci workload
 # (seq clamp below + 1024-token decode budget; TTTv1 ci-32 workload). Separate from the lighter
 # batch-32 leg: the longer decode budget grows the KV read window so steady-state per-token decode
-# is a bit slower. Cells not measured fall back to EXPECTED_METRICS_BATCH32 (stay gated, never
-# silently un-gated).
+# is a bit slower. Cells not measured fall back to EXPECTED_METRICS_BATCH32; if neither profile has
+# a complete floor, the case remains observational.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {"T3K": {"tok_s_u": 9.6, "ttft_ms": 90}},  # TTTv2-host 2026-07-24 (9.68)
@@ -184,13 +185,14 @@ _EVAL32_FIXED_PROVENANCE = {
 }
 
 
-def _resolve_eval32_perf_targets(hf_model: str, device_name: str, optimization_profile: str) -> dict:
+def _resolve_eval32_perf_targets(hf_model: str, device_name: str, optimization_profile: str) -> dict | None:
     provenance = _EVAL32_TARGET_PROVENANCE.get(optimization_profile, {}).get(device_name)
     if provenance is None:
-        raise ValueError(
+        logger.warning(
             f"No independently reviewed {optimization_profile} eval-32 perf floor for "
-            f"{hf_model} on {device_name}; qualification gates fail closed before model construction."
+            f"{hf_model} on {device_name}; running observationally without an acceptance claim."
         )
+        return None
     mismatches = {
         key: (provenance.get(key), required)
         for key, required in _EVAL32_FIXED_PROVENANCE.items()
@@ -214,17 +216,20 @@ def _resolve_eval32_perf_targets(hf_model: str, device_name: str, optimization_p
         seq_len=seq_len,
     )
     if not expected:
-        raise ValueError(
+        logger.warning(
             f"No centralized eval-32 perf target for {hf_model} on {device_name} "
             f"(profile={optimization_profile}, batch_size=32, seq_len={seq_len}); "
-            "qualification gates fail closed."
+            "running observationally without an acceptance claim."
         )
+        return None
     required = ("decode_t/s/u", "prefill_time_to_first_token")
     missing = [metric for metric in required if metric not in expected]
     if missing:
-        raise ValueError(
-            f"Incomplete centralized eval-32 perf target for {hf_model} on {device_name}: missing {missing}"
+        logger.warning(
+            f"Incomplete centralized eval-32 perf target for {hf_model} on {device_name}: missing {missing}; "
+            "running observationally without an acceptance claim."
         )
+        return None
     return expected
 
 
@@ -241,15 +246,17 @@ def _assert_eval32_perf_target(result, expected: dict, *, case_name: str) -> Non
     assert not failures, f"{case_name}: " + "; ".join(failures)
 
 
-def _require_p150x4_local_perf_target(device_name: str, expected: dict, *, case_name: str) -> None:
-    if device_name != "P150x4":
-        return
+def _resolve_local_perf_target(expected: dict, *, case_name: str) -> dict:
+    """Use only complete local floors; otherwise preserve the run as observation."""
+
     missing = [metric for metric in ("tok_s_u", "ttft_ms") if metric not in expected]
     if missing:
-        raise ValueError(
-            f"{case_name}: missing frozen P150x4 perf target(s) {missing}; "
-            "characterization output must not silently become its own acceptance floor."
+        logger.warning(
+            f"{case_name}: missing frozen perf target(s) {missing}; running observationally "
+            "without an acceptance claim."
         )
+        return {}
+    return expected
 
 
 def _require_eval_perf_report_configuration(environ) -> None:
@@ -272,14 +279,14 @@ def _preflight_perf_target(
     hf_model: str,
     expected: dict,
 ) -> dict | None:
-    """Reject noncanonical or missing qualification floors before loading 70B."""
+    """Validate canonical modes and resolve either a complete floor or observation."""
 
     case_name = f"{optimization_profile}/{test_config}"
     if test_config == "eval-32-perf-report":
         _require_eval_perf_report_configuration(os.environ)
         return _resolve_eval32_perf_targets(hf_model, device_name, optimization_profile)
-    if device_name == "P150x4" and test_config in {"batch-1", "batch-32", "batch-32-ci"}:
-        _require_p150x4_local_perf_target(device_name, expected, case_name=case_name)
+    if test_config in {"batch-1", "batch-32", "batch-32-ci"}:
+        return _resolve_local_perf_target(expected, case_name=case_name)
     return None
 
 # batch-32-ci per-SKU max_seq_len (TTTv1 ci-32 parity is seq2048). DRAM trap: raising max_seq_len
@@ -720,13 +727,17 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
                 .get(optimizations, {})
                 .get(device_name, {})
             )
-        eval_expected = _preflight_perf_target(
+        resolved_perf_expected = _preflight_perf_target(
             test_config=test_config,
             optimization_profile=optimizations,
             device_name=device_name,
             hf_model=hf_model,
             expected=perf_expected,
         )
+        if test_config in {"batch-1", "batch-32", "batch-32-ci"}:
+            perf_expected = resolved_perf_expected
+        else:
+            eval_expected = resolved_perf_expected
         model = create_model(mesh_device, optimizations, cache_dir, max_batch_size=max_bs, max_seq_len=max_seq_len)
 
         if test_config == "token-accuracy":
@@ -903,7 +914,6 @@ def _run_perf_benchmark(
     decode position never overruns the page table (the ``batch-32-ci`` leg requests 1024).
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-    _require_p150x4_local_perf_target(get_device_name(mesh_device), expected, case_name=case_name)
     tokenizer = model.demo_tokenizer
 
     # Batched-prefill A/B knob (parity caveat #12): set DISABLE_BATCHED_PREFILL=1 to force the
@@ -1074,8 +1084,6 @@ def _run_eval_repeat_batch32(
     repeat is timed for telemetry and target enforcement.
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-    if perf_report and expected is None:
-        raise ValueError(f"{case_name}: missing independently reviewed eval-32 performance floor")
     if perf_report:
         _require_eval_perf_report_configuration(os.environ)
         if not getattr(model, "supports_on_device_sampling", False):
@@ -1209,6 +1217,6 @@ def _run_eval_repeat_batch32(
             output_sequence_length=_EVAL_NUM_DECODE_TOKENS,
         )
 
-    assert expected is not None
-    _assert_eval32_perf_target(first_result, expected, case_name=case_name)
+    if expected is not None:
+        _assert_eval32_perf_target(first_result, expected, case_name=case_name)
     return first_result

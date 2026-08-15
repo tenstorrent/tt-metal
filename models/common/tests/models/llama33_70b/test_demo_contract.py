@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ _DEMO_TREE = ast.parse(_DEMO_SOURCE, filename=_DEMO_PATH)
 _SMOKE_PATH = "models/common/tests/models/llama33_70b/test_p150x4_smoke.py"
 _SMOKE_SOURCE = Path(_SMOKE_PATH).read_text(encoding="utf-8")
 _SMOKE_TREE = ast.parse(_SMOKE_SOURCE, filename=_SMOKE_PATH)
+_REQUIRED_CAPABILITIES_PATH = "models/tttv2_llama33_70b_bh_required_capabilities.json"
 
 
 def _function(name):
@@ -91,6 +93,22 @@ def test_p150x4_eval_perf_has_no_independent_floor_to_copy_or_invent():
         and node.target.id == "_EVAL32_TARGET_PROVENANCE"
     )
     assert ast.literal_eval(provenance.value) == {}
+
+
+def test_required_capability_policy_allows_observation_but_never_acceptance_without_floor():
+    contract = json.loads(Path(_REQUIRED_CAPABILITIES_PATH).read_text(encoding="utf-8"))
+    policy = next(row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance")
+    policy_text = f"{policy['capability']} {policy['acceptance_condition']}"
+    for phrase in (
+        "observational",
+        "must not claim acceptance",
+        "complete independently frozen floor",
+        "target miss fails",
+        "TTFT",
+        "decode tokens/s/user",
+        "aggregate tokens/s",
+    ):
+        assert phrase in policy_text
 
 
 def test_demo_uses_model_owned_runtime_provider_and_shared_helpers():
@@ -200,6 +218,7 @@ def test_eval_perf_report_reuses_three_repeat_geometry_and_first_repeat_telemetr
     assert "first_repeat_profiler=profiler" in source
     assert "'on_device_topk' if perf_report else 'host'" in source
     assert "_assert_eval32_perf_target(first_result, expected" in source
+    assert "if expected is not None" in source
     assert "run_type='demo_perf'" in source
 
 
@@ -208,24 +227,30 @@ def test_eval_perf_report_is_dispatched_for_both_profiles_and_resolves_target():
     assert "test_config in ('eval-32', 'eval-32-perf-report')" in source
     assert "_preflight_perf_target" in source
     assert "perf_report=perf_report" in source
+    assert "perf_expected = resolved_perf_expected" in source
+    assert "eval_expected = resolved_perf_expected" in source
     preflight = _calls("test_llama33_70b", "_preflight_perf_target")[0]
     create = _calls("test_llama33_70b", "create_model")[0]
     assert preflight.lineno < create.lineno
 
 
-def test_eval_perf_targets_fail_closed_when_missing_incomplete_or_failed(expect_error):
+def test_eval_perf_targets_observe_when_missing_but_enforce_complete_floor(expect_error):
     resolve_function = _function("_resolve_eval32_perf_targets")
+    logger = SimpleNamespace(warning=lambda message: None)
 
     missing_namespace = {
         "resolve_perf_targets": lambda *args, **kwargs: None,
         "_EVAL32_TARGET_PROVENANCE": {},
         "_EVAL32_FIXED_PROVENANCE": {},
+        "logger": logger,
     }
     exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), missing_namespace)
-    with expect_error(ValueError, "No independently reviewed performance eval-32 perf floor"):
+    assert (
         missing_namespace["_resolve_eval32_perf_targets"](
             "meta-llama/Llama-3.3-70B-Instruct", "P150x4", "performance"
         )
+        is None
+    )
 
     incomplete_namespace = {
         "resolve_perf_targets": lambda *args, **kwargs: {"decode_t/s/u": 10.0},
@@ -251,12 +276,15 @@ def test_eval_perf_targets_fail_closed_when_missing_incomplete_or_failed(expect_
                 }
             }
         },
+        "logger": logger,
     }
     exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), incomplete_namespace)
-    with expect_error(ValueError, "missing.*prefill_time_to_first_token"):
+    assert (
         incomplete_namespace["_resolve_eval32_perf_targets"](
             "meta-llama/Llama-3.3-70B-Instruct", "P150x4", "performance"
         )
+        is None
+    )
 
     bad_provenance_namespace = {
         "resolve_perf_targets": lambda *args, **kwargs: {
@@ -278,6 +306,7 @@ def test_eval_perf_targets_fail_closed_when_missing_incomplete_or_failed(expect_
                 }
             }
         },
+        "logger": logger,
     }
     exec(
         compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"),
@@ -296,6 +325,7 @@ def test_eval_perf_targets_fail_closed_when_missing_incomplete_or_failed(expect_
         ),
         "_EVAL32_FIXED_PROVENANCE": incomplete_namespace["_EVAL32_FIXED_PROVENANCE"],
         "_EVAL32_TARGET_PROVENANCE": incomplete_namespace["_EVAL32_TARGET_PROVENANCE"],
+        "logger": logger,
     }
     exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), good_namespace)
     assert good_namespace["_resolve_eval32_perf_targets"](
@@ -320,29 +350,25 @@ def test_eval_perf_targets_fail_closed_when_missing_incomplete_or_failed(expect_
         assert_namespace["_assert_eval32_perf_target"](result, expected, case_name="BH/eval")
 
 
-def test_all_other_declared_p150x4_perf_nodes_fail_closed_on_missing_targets(expect_error):
-    namespace = {}
-    function = _function("_require_p150x4_local_perf_target")
+def test_local_perf_nodes_observe_without_floor_and_enforce_complete_floor():
+    warnings = []
+    namespace = {"logger": SimpleNamespace(warning=warnings.append)}
+    function = _function("_resolve_local_perf_target")
     exec(compile(ast.Module(body=[function], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
-    namespace["_require_p150x4_local_perf_target"]("T3K", {}, case_name="WH")
-    with expect_error(ValueError, "missing frozen P150x4 perf target"):
-        namespace["_require_p150x4_local_perf_target"]("P150x4", {}, case_name="BH/batch-32-ci")
+    assert namespace["_resolve_local_perf_target"]({}, case_name="BH/batch-32-ci") == {}
+    assert "observationally without an acceptance claim" in warnings[-1]
+    complete = {"tok_s_u": 10.0, "ttft_ms": 100.0}
+    assert namespace["_resolve_local_perf_target"](complete, case_name="WH/batch-32") is complete
 
     perf_source = ast.unparse(_function("_run_perf_benchmark"))
-    assert "_require_p150x4_local_perf_target(get_device_name(mesh_device), expected" in perf_source
-    guard = _calls("_run_perf_benchmark", "_require_p150x4_local_perf_target")[0]
-    tokenizer = next(
-        node
-        for node in ast.walk(_function("_run_perf_benchmark"))
-        if isinstance(node, ast.Assign) and ast.unparse(node.value) == "model.demo_tokenizer"
-    )
-    assert guard.lineno < tokenizer.lineno
+    assert "if expected" in perf_source
+    assert "assert not failures" in perf_source
 
 
 def test_eval_perf_preflight_applies_to_every_sku_and_canonical_sampling_is_early(expect_error):
     preflight_source = ast.unparse(_function("_preflight_perf_target"))
     assert "if test_config == 'eval-32-perf-report'" in preflight_source
-    assert "device_name == 'P150x4' and test_config in" in preflight_source
+    assert "return _resolve_local_perf_target(expected, case_name=case_name)" in preflight_source
 
     helper = _function("_run_eval_repeat_batch32")
     config_guard = _calls("_run_eval_repeat_batch32", "_require_eval_perf_report_configuration")[0]
@@ -382,9 +408,10 @@ def test_eval_perf_preflight_applies_to_every_sku_and_canonical_sampling_is_earl
             ("eval_target", model, device, profile)
         )
         or {"floor": True},
-        "_require_p150x4_local_perf_target": lambda device, expected, case_name: calls.append(
-            ("local_target", device, expected, case_name)
-        ),
+        "_resolve_local_perf_target": lambda expected, case_name: calls.append(
+            ("local_target", expected, case_name)
+        )
+        or expected,
     }
     exec(
         compile(ast.Module(body=[_function("_preflight_perf_target")], type_ignores=[]), _DEMO_PATH, "exec"),
@@ -398,16 +425,15 @@ def test_eval_perf_preflight_applies_to_every_sku_and_canonical_sampling_is_earl
         expected={},
     ) == {"floor": True}
     assert calls[:2] == [("configuration", {}), ("eval_target", "llama", "T3K", "performance")]
-    preflight_namespace["_preflight_perf_target"](
+    assert preflight_namespace["_preflight_perf_target"](
         test_config="batch-32-ci",
         optimization_profile="accuracy",
         device_name="P150x4",
         hf_model="llama",
         expected={"tok_s_u": 1.0, "ttft_ms": 2.0},
-    )
+    ) == {"tok_s_u": 1.0, "ttft_ms": 2.0}
     assert calls[-1] == (
         "local_target",
-        "P150x4",
         {"tok_s_u": 1.0, "ttft_ms": 2.0},
         "accuracy/batch-32-ci",
     )

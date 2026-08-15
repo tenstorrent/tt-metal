@@ -1002,13 +1002,13 @@
     },
     {
       "id": "fail_closed_performance",
-      "capability": "Every declared BH performance node must fail on missing metrics or failed meets_target and use an independently justified, frozen floor.",
+      "capability": "A missing or incomplete metric floor must not block BH model execution or observational measurement, but the resulting measurements cannot establish performance acceptance. Every complete declared floor remains enforced, every failed meets_target result fails, and performance acceptance requires an independently justified, frozen floor.",
       "applies_to": [
         "p150_tp1_dp1",
         "p150x4_tp4_dp1"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+      "acceptance_condition": "Immutable qualification evidence may record observational measurements when a floor is missing or incomplete, but records performance acceptance only when a complete independently frozen floor exists and every declared target passes."
     },
     {
       "id": "cold_warm_cache",

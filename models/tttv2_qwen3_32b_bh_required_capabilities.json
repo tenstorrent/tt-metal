@@ -370,12 +370,12 @@
     },
     {
       "id": "fail_closed_performance",
-      "capability": "Missing EXPECTED_METRICS and every failed meets_target result must fail; acceptance floors require matched real bh_quietbox_2 TTTv1 evidence and independent freezing.",
+      "capability": "Missing or incomplete profile-matched metrics permit the full model workload to execute and report observational measurements but cannot claim acceptance; every complete independently frozen floor remains enforced and every target miss fails.",
       "applies_to": [
         "p150x4_tp4_dp1"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+      "acceptance_condition": "PASS requires fresh measurements meeting every complete independently frozen floor. When a profile-matched floor is absent or incomplete, the node must execute and report TTFT, decode tokens/s/user, aggregate tokens/s, and applicable accuracy or determinism results as observational evidence; it must not claim acceptance or derive a floor from that run."
     },
     {
       "id": "cold_warm_cache",

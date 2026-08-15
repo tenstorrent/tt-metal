@@ -505,20 +505,39 @@ def test_eval_perf_report_reuses_three_repeat_geometry_and_first_repeat_profiler
     source = ast.unparse(_function("_run_eval_repeat_batch32"))
     assert "repeat_batches=_EVAL_REPEAT_BATCHES" in source
     assert "first_repeat_profiler=profiler" in source
+    assert "if expected is None" in source
     assert "_assert_eval32_perf_target(first_result, expected" in source
     assert "'on_device_topk' if perf_report else 'host'" in source
     assert "eval-32-perf-report" in ast.unparse(_function("test_qwen3_32b"))
 
 
-def test_eval_perf_targets_fail_closed_when_missing_or_failed(expect_error):
+def test_eval_perf_targets_run_observationally_when_profile_floor_is_missing_but_failed_floor_fails(expect_error):
+    warnings = []
     resolve_namespace = {
-        "resolve_perf_targets": lambda *args, **kwargs: None,
+        "resolve_perf_targets": lambda *args, **kwargs: {
+            "decode_t/s/u": 21.6,
+            "prefill_time_to_first_token": 87,
+        },
         "_EVAL32_TARGET_SEQ_LEN": 686,
+        "logger": SimpleNamespace(warning=warnings.append),
     }
     resolve_function = _function("_resolve_eval32_perf_targets")
     exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), resolve_namespace)
+    assert (
+        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "accuracy") is None
+    )
+    assert resolve_namespace["_resolve_eval32_perf_targets"](
+        "Qwen/Qwen3-32B", "P150x4", "performance"
+    ) == {"decode_t/s/u": 21.6, "prefill_time_to_first_token": 87}
+    assert "observationally" in warnings[0]
+
+    resolve_namespace["resolve_perf_targets"] = lambda *args, **kwargs: None
+    assert (
+        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "performance")
+        is None
+    )
     with expect_error(ValueError, "qualification gates fail closed"):
-        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4")
+        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "T3K", "performance")
 
     assert_namespace = {
         "resolve_metric_tolerance": resolve_metric_tolerance,
@@ -532,13 +551,40 @@ def test_eval_perf_targets_fail_closed_when_missing_or_failed(expect_error):
         assert_namespace["_assert_eval32_perf_target"](result, expected, case_name="BH/eval")
 
 
-def test_other_declared_p150x4_perf_nodes_fail_closed_on_missing_targets(expect_error):
-    namespace = {}
-    function = _function("_require_p150x4_local_perf_target")
+def test_other_declared_p150x4_perf_nodes_run_observationally_without_floor_and_preserve_complete_floor():
+    warnings = []
+    namespace = {"logger": SimpleNamespace(warning=warnings.append)}
+    function = _function("_resolve_local_perf_floor")
     exec(compile(ast.Module(body=[function], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
-    namespace["_require_p150x4_local_perf_target"]("T3K", {}, case_name="WH")
-    with expect_error(ValueError, "missing frozen P150x4 perf target"):
-        namespace["_require_p150x4_local_perf_target"]("P150x4", {}, case_name="BH/batch-32-ci")
+    assert namespace["_resolve_local_perf_floor"]("T3K", {}, case_name="WH") == {}
+    assert namespace["_resolve_local_perf_floor"]("P150x4", {}, case_name="BH/batch-32-ci") is None
+    complete = {"tok_s_u": 20.0, "ttft_ms": 120.0}
+    assert namespace["_resolve_local_perf_floor"](
+        "P150x4", complete, case_name="BH/batch-32-ci"
+    ) == complete
+    assert "observationally" in warnings[0]
+
+
+def test_complete_local_perf_floor_still_fails_both_missed_targets(expect_error):
+    namespace = {"PERF_TOLERANCE": 0.05}
+    function = _function("_assert_local_perf_target")
+    exec(compile(ast.Module(body=[function], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
+    result = SimpleNamespace(tok_s_u=10.0, ttft_ms=200.0)
+    expected = {"tok_s_u": 20.0, "ttft_ms": 100.0}
+
+    with expect_error(AssertionError, "tok/s/u.*ttft_ms"):
+        namespace["_assert_local_perf_target"](result, expected, case_name="BH/batch-32-ci")
+
+
+def test_main_demo_resolves_eval_floor_by_optimization_profile_and_local_perf_only_gates_complete_floor():
+    main_source = ast.unparse(_function("test_qwen3_32b"))
+    perf_source = ast.unparse(_function("_run_perf_benchmark"))
+
+    assert "_resolve_eval32_perf_targets(hf_model, device_name, optimizations)" in main_source
+    assert "expected = _resolve_local_perf_floor" in perf_source
+    assert perf_source.index("Performance [{case_name}]") < perf_source.index("_resolve_local_perf_floor")
+    assert "if expected:" in perf_source
+    assert "_assert_local_perf_target(result, expected" in perf_source
 
 
 def test_traced_compatibility_wrapper_is_accepted_by_transition_perf_helper(monkeypatch):

@@ -415,9 +415,10 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
         _skip_unsupported_case(case, mesh_device)
 
         if case.performance_case is not None:
-            # Qualification floors are configuration, not a post-construction
-            # concern.  In particular, do not load weights or compile a BH
-            # model only to discover that its declared perf node is ungated.
+            # Resolve an optional in-test gate before model construction.  A
+            # missing or incomplete floor must not prevent the model from
+            # running and reporting measurements; complete declared targets
+            # are still enforced after the run.
             case_performance_expected = _expected_for_case(
                 expected,
                 case.performance_case,
@@ -762,7 +763,7 @@ def _warmup_demo_executor(executor, *, kv_cache, page_table, prefill_can_sample_
 
 
 def _expected_for_case(expected, test_config, *, device_name=None):
-    """Return a complete secondary in-test performance gate for one case."""
+    """Return a complete optional in-test performance gate for one case."""
     if test_config is None:
         return None
     case_expected = expected.get(test_config)
@@ -770,9 +771,8 @@ def _expected_for_case(expected, test_config, *, device_name=None):
     if missing_metrics:
         missing_names = ", ".join(sorted(missing_metrics))
         message = f"No complete in-test performance gate for {test_config}; missing {missing_names}."
-        if device_name in _BH_DEVICE_NAMES:
-            raise ValueError(f"{device_name}: {message} Blackhole qualification gates fail closed.")
-        logger.warning(f"{message} Centralized post-run validation remains authoritative.")
+        device_context = f" on {device_name}" if device_name else ""
+        logger.warning(f"{message} Running{device_context} without an in-test performance gate.")
         return None
     return {metric: case_expected[metric] for metric in ("tok_s_u", "ttft_ms")}
 

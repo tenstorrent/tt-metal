@@ -64,10 +64,9 @@ def test_demo_exposes_seeded_bh_cross_cardinality_qualification_node():
     assert "llm.runtime_config.disable_batched_prefill is True" in _DEMO_SOURCE
 
 
-def test_bh_performance_targets_fail_closed_when_missing_or_incomplete():
+def test_missing_or_incomplete_performance_targets_do_not_block_measurement_on_bh():
     warnings = []
     namespace = {
-        "_BH_DEVICE_NAMES": frozenset({"P150", "P300", "P150x4"}),
         "logger": SimpleNamespace(warning=warnings.append),
     }
     exec(
@@ -75,21 +74,22 @@ def test_bh_performance_targets_fail_closed_when_missing_or_incomplete():
         namespace,
     )
 
-    with pytest.raises(ValueError, match="P150.*missing tok_s_u, ttft_ms.*fail closed"):
-        namespace["_expected_for_case"]({}, "batch-1", device_name="P150")
-    with pytest.raises(ValueError, match="P150x4.*missing ttft_ms.*fail closed"):
-        namespace["_expected_for_case"](
-            {"batch-32": {"tok_s_u": 1.0}},
-            "batch-32",
-            device_name="P150x4",
-        )
-    assert warnings == []
+    assert namespace["_expected_for_case"]({}, "batch-1", device_name="P150") is None
+    assert namespace["_expected_for_case"](
+        {"batch-32": {"tok_s_u": 1.0}},
+        "batch-32",
+        device_name="P150x4",
+    ) is None
+    assert len(warnings) == 2
+    assert "missing tok_s_u, ttft_ms" in warnings[0]
+    assert "Running on P150 without an in-test performance gate" in warnings[0]
+    assert "missing ttft_ms" in warnings[1]
+    assert "Running on P150x4 without an in-test performance gate" in warnings[1]
 
 
 def test_performance_target_preflight_preserves_wormhole_missing_target_semantics_and_accepts_valid_targets():
     warnings = []
     namespace = {
-        "_BH_DEVICE_NAMES": frozenset({"P150", "P300", "P150x4"}),
         "logger": SimpleNamespace(warning=warnings.append),
     }
     exec(
@@ -98,7 +98,7 @@ def test_performance_target_preflight_preserves_wormhole_missing_target_semantic
     )
 
     assert namespace["_expected_for_case"]({}, "batch-1", device_name="N150") is None
-    assert warnings and "Centralized post-run validation remains authoritative" in warnings[0]
+    assert warnings and "Running on N150 without an in-test performance gate" in warnings[0]
     assert namespace["_expected_for_case"](
         {"batch-32": {"tok_s_u": 12.5, "ttft_ms": 150.0, "unused": 1}},
         "batch-32",
