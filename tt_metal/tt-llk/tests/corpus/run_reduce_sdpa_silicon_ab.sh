@@ -7,6 +7,7 @@ TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/../../../.." && pwd)}"
 LLK_TESTS="$TT_METAL_HOME/tt_metal/tt-llk/tests"
 PYTEST="${PYTEST:-$LLK_TESTS/.venv/bin/pytest}"
 OBJDUMP="${OBJDUMP:-$LLK_TESTS/sfpi/compiler/bin/riscv-tt-elf-objdump}"
+OBJCOPY="${OBJCOPY:-$LLK_TESTS/sfpi/compiler/bin/riscv-tt-elf-objcopy}"
 PYTEST_WORKERID_PLUGIN_DIR="${PYTEST_WORKERID_PLUGIN_DIR:-/localdev/nkapre/sfpi-gcc-lreg-artifacts}"
 OUT="${1:-/localdev/nkapre/reduce-sdpa-bh-silicon-$(date -u +%Y%m%dT%H%M%SZ)}"
 PROFILE_KEY=test_sfpu_reduce_sdpa
@@ -37,6 +38,8 @@ archive_pack_elf() {
     hash="$(sha256sum "$elf" | awk '{print $1}')"
     cp "$elf" "$archive_dir/$hash.pack.elf"
     "$OBJDUMP" -D -C "$elf" > "$archive_dir/$hash.pack.objdump"
+    "$OBJCOPY" -O binary --only-section=.text "$elf" "$archive_dir/$hash.pack.text.bin"
+    sha256sum "$archive_dir/$hash.pack.text.bin" > "$archive_dir/pack-text.sha256"
     find "$run_dir/temp" -name build.h -type f -exec cp '{}' "$archive_dir/$hash.build.h" \;
     printf '%s  %s\n' "$hash" "$elf" > "$archive_dir/pack-elf.sha256"
 }
@@ -55,6 +58,7 @@ copy_profile_rows() {
     printf 'sfpi_target\t'; readlink -f "$LLK_TESTS/sfpi"
     printf 'compiler_sha256\t'; sha256sum "$LLK_TESTS/sfpi/compiler/bin/riscv-tt-elf-g++" | awk '{print $1}'
     printf 'objdump_sha256\t'; sha256sum "$OBJDUMP" | awk '{print $1}'
+    printf 'objcopy_sha256\t'; sha256sum "$OBJCOPY" | awk '{print $1}'
     printf 'host\t'; hostname
     printf 'utc_start\t'; date -u +%Y-%m-%dT%H:%M:%SZ
 } > "$OUT/provenance.tsv"
