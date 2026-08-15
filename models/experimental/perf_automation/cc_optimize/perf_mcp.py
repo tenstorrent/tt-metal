@@ -2907,6 +2907,10 @@ def _cooldown_after_clamp(target_c: float = 0.0) -> tuple:
         best, best_t = last, time.time()
         while True:
             time.sleep(_COOLDOWN_POLL_S)
+            # RE-ASSERT, EVERY POLL. The watchdog credits the gap between consecutive beats and
+            # nothing beyond them, so a wait that goes quiet stops being free -- which is what keeps
+            # a deadlock from buying itself unlimited time by claiming to be cooling.
+            _cooling_marker(_COOL_BEGIN)
             cur = _read_die_temp_c()
             if cur is None:
                 return True, None  # telemetry we cannot read is not a board we refuse to use
@@ -3058,6 +3062,7 @@ def _headroom_poll(t0, limit, cur):
     """The polling half of _wait_for_thermal_headroom, split out so the wait can be bracketed."""
     while time.time() - t0 < _THERMAL_WAIT_S:
         time.sleep(_THERMAL_POLL_S)
+        _cooling_marker(_COOL_BEGIN)  # re-assert; the watchdog credits beats, not a single claim
         cur = _read_die_temp_c()
         if cur is None:
             return True, None

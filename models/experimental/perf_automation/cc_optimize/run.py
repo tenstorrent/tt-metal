@@ -2713,6 +2713,9 @@ def _llm_child_alive(pgid: int) -> bool:
 # Defined by perf_mcp, which emits them; named here so the watchdog can recognise a cooling child.
 _COOL_BEGIN = "PERF_MCP_COOLING_BEGIN"
 _COOL_END = "PERF_MCP_COOLING_END"
+# A cooling child re-asserts itself every poll (perf_mcp._COOLDOWN_POLL_S, 20 s). Three missed beats
+# means it is no longer cooling, whatever it last claimed, and the clock starts again.
+_COOL_HEARTBEAT_S = float(os.environ.get("PERF_MCP_COOL_HEARTBEAT_S", "90"))
 
 
 def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
@@ -2836,21 +2839,39 @@ def _run_device_proc(
             # which is what actually broke it. The child brackets every thermal wait with these
             # markers; time spent between them is credited back, so a board that takes an hour to
             # cool costs an hour of waiting and none of the op's budget.
-            _cool = {"in": False, "since": 0.0, "total": 0.0}
+            # CREDIT IS EARNED PER HEARTBEAT, NEVER EXTRAPOLATED. The first version of this trusted
+            # a single BEGIN and credited every second until END arrived, which handed back the one
+            # protection the absolute cap exists to provide: a child that printed BEGIN and then
+            # busy-wait deadlocked would accrue credit as fast as wall clock, so the cap could never
+            # fire -- and the stall detector was told to ignore it too. Voxtral produced exactly that
+            # shape once before: 85 minutes, 91 minutes of CPU, no output after the first second.
+            # The child now re-asserts cooling every poll, and a gap longer than _COOL_HEARTBEAT_S
+            # earns nothing, so credit stops the moment the child does.
+            _cool = {"in": False, "last": None, "total": 0.0}
+
+            def _cool_beat():
+                now = time.monotonic()
+                prev = _cool["last"]
+                if prev is not None and now - prev <= _COOL_HEARTBEAT_S:
+                    _cool["total"] += now - prev
+                _cool["last"], _cool["in"] = now, True
 
             def _cool_total():
-                extra = (time.monotonic() - _cool["since"]) if _cool["in"] else 0.0
-                return _cool["total"] + extra
+                return _cool["total"]
+
+            def _cooling_now():
+                last = _cool["last"]
+                return bool(_cool["in"] and last is not None and time.monotonic() - last <= _COOL_HEARTBEAT_S)
 
             def _pump():
                 try:
                     for _ln in proc.stdout:
                         _buf.append(_ln)
-                        if _COOL_BEGIN in _ln and not _cool["in"]:
-                            _cool["in"], _cool["since"] = True, time.monotonic()
-                        elif _COOL_END in _ln and _cool["in"]:
-                            _cool["total"] += time.monotonic() - _cool["since"]
+                        if _COOL_BEGIN in _ln:
+                            _cool_beat()
+                        elif _COOL_END in _ln:
                             _cool["in"] = False
+                            _cool["last"] = None  # no open claim survives the end of the wait
                         if not capture:
                             _sys.stdout.write(_ln)
                             _sys.stdout.flush()
@@ -2872,7 +2893,7 @@ def _run_device_proc(
                 # A cooling child is idle ON PURPOSE: it is sleeping against a thermometer, so it
                 # burns no CPU and prints only when the temperature moves. Both of this loop's
                 # liveness signals read that as a wedge, which is exactly wrong.
-                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid) or _cool["in"]
+                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid) or _cooling_now()
                 last_cpu = cpu
                 if moved:
                     max_gap = max(max_gap, now - last_progress)

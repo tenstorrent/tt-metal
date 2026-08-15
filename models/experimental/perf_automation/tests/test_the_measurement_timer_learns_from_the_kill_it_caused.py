@@ -66,6 +66,11 @@ def test_the_blind_backstop_stays_blind():
     exists precisely for the case where those are fooled -- a busy-wait deadlock. Voxtral produced
     one: 85 minutes, 91 minutes of CPU, no log output after the first second."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index("if now - start >= timeout_s:")
+    i = src.index("if now - start - _cool_total() >= timeout_s:")
     stanza = src[i : i + 200]
     assert "moved" not in stanza and "cpu" not in stanza, "the absolute cap now consults activity"
+    # The ONE thing it may subtract is declared cooling, and only what was earned beat by beat --
+    # never an open-ended claim, or a deadlock could buy itself unlimited time by announcing a
+    # cooldown and going quiet. _cool_total() returns banked time only; see _cool_beat.
+    j = src.index("def _cool_total()")
+    assert 'return _cool["total"]' in src[j : j + 120], "the credit is extrapolated past the last beat"

@@ -67,16 +67,23 @@ def test_a_cooling_child_is_not_a_stall():
     """It burns no CPU and prints only when the temperature moves -- both wedge signals, wrongly."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
     i = src.index("moved = cpu > last_cpu")
-    assert '_cool["in"]' in src[i : i + 200], "a cooling child still reads as a no-progress stall"
+    assert "_cooling_now()" in src[i : i + 200], "a cooling child still reads as a no-progress stall"
 
 
-def test_the_credit_is_computed_over_an_unfinished_cooldown_too():
-    """The kill can land mid-cooldown. If only completed waits counted, the longest one -- the one
-    actually in progress when the limit hits -- would be the one that never gets credited."""
+def test_an_unfinished_cooldown_is_credited_beat_by_beat_not_extrapolated():
+    """This test used to assert the opposite, and the opposite was the bug.
+
+    The worry was real -- a kill landing mid-cooldown must not lose the credit for the wait in
+    progress -- but crediting `now - since` for an open claim meant a child could announce a cooldown,
+    deadlock, and accrue credit as fast as wall clock, so the absolute cap could never fire. The
+    in-progress wait is still credited; it is credited by the beats already banked, which stop the
+    moment the child does. See test_cooling_credit_cannot_buy_a_deadlock_time.py."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index("def _cool_total()")
-    body = src[i : src.index("def _pump()", i)]
-    assert '_cool["in"]' in body and 'time.monotonic() - _cool["since"]' in body
+    i = src.index("def _cool_beat()")
+    beat = src[i : src.index("def _cool_total()", i)]
+    assert '_cool["total"] += now - prev' in beat, "an in-progress wait banks nothing until it ends"
+    j = src.index("def _cool_total()")
+    assert "time.monotonic()" not in src[j : j + 120], "the total is extrapolated past the last beat"
 
 
 # ------------------------------------------------------------------ no timer on physics
