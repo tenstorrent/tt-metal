@@ -307,6 +307,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             block_wt * tile_width);
     }
 
+    // Non-tile-aligned H*W: corrected reduce scaler + the row-masked mask set. See
+    // compute/groupnorm.cpp and GroupNormPadCorrection. Unlike the interleaved paths the scaler and the
+    // row-masked set's start id ship as RUNTIME args (8, 9).
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]),
+        static_cast<uint32_t>(a.padded_shape()[2]),
+        use_welford,
+        tile_height);
+    // The mask carries two sets when the correction is active; cores stride through the first, and
+    // the row-masked one sits mask_set_tiles beyond it.
+    const uint32_t mask_sets = pad.active ? 2 : 1;
+    const uint32_t mask_set_tiles =
+        input_mask.has_value() ? (input_mask.value().physical_volume() / tile_hw) / mask_sets : 0;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -337,8 +351,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     // input mask
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
+    // Not welford: double-buffered, doubled again for the row-masked set.
     uint32_t in_mask_CB_size =
-        block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2);  // double buffer
+        block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2 * mask_sets);
     // negative mask
     uint32_t in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;  // double buffer
     // repack cb
@@ -575,11 +590,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
-    // Non-tile-aligned H*W (#50682): corrected reduce scaler + K for the variance correction.
-    // Derivation in compute/groupnorm.cpp, `active` semantics in GroupNormPadCorrection.
-    // Unlike the interleaved paths these ship as RUNTIME args (8, 9).
-    const auto pad = make_group_norm_pad_correction(
-        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
     const uint32_t pad_scaler_bits = pad.scaler_bits(num_rows_per_batch_per_core * num_datum_row_per_group);
 
     // writer defines
@@ -690,7 +700,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         num_groups_per_reset,
         single_tile_size,
         per_core_Mt * per_core_Nt / num_batches_per_core,
-        num_groups_per_core * block_wt,
+        num_groups_per_core * block_wt * mask_sets,
         block_wt_last,
         static_cast<uint32_t>((num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
         static_cast<uint32_t>(num_datum_row_per_group < tile_width),
@@ -703,6 +713,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // above shifts them). Only the two-pass kernel reads them.
     mcast_sender_compute_compile_time_args.push_back(pad.kernel_logical_hw);
     mcast_sender_compute_compile_time_args.push_back(pad.padded_hw);
+    mcast_sender_compute_compile_time_args.push_back(static_cast<uint32_t>(pad.active));
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         0,
         static_cast<uint32_t>(gamma.has_value()),
@@ -728,7 +739,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         num_groups_per_reset,
         single_tile_size,
         per_core_Mt * per_core_Nt / num_batches_per_core,
-        num_groups_per_core * block_wt,
+        num_groups_per_core * block_wt * mask_sets,
         block_wt_last,
         static_cast<uint32_t>((num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
         static_cast<uint32_t>(num_datum_row_per_group < tile_width),
@@ -739,6 +750,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
     mcast_receiver_compute_compile_time_args.push_back(pad.kernel_logical_hw);
     mcast_receiver_compute_compile_time_args.push_back(pad.padded_hw);
+    mcast_receiver_compute_compile_time_args.push_back(static_cast<uint32_t>(pad.active));
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1147,15 +1159,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
-    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
-    append_group_norm_pad_correction_cbs(
-        desc.cbs,
-        pad,
-        {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20},
-        all_cores,
-        cb_data_format,
-        single_tile_size);
-
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
@@ -1282,7 +1285,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t gamma_tile_start_id = 0;
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
-    for (const auto& core : core_coords) {
+    for (uint32_t core_index = 0; core_index < core_coords.size(); ++core_index) {
+        const auto& core = core_coords[core_index];
+        // Which shard of the height dimension this core holds. core_coords is ordered row-wise for
+        // ROW_MAJOR shards and column-wise for COL_MAJOR, and in both cases the N dimension is the
+        // fast axis, so dividing by the number of N-shards recovers the M index.
+        const uint32_t m_index = core_index / num_shards_c;
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
         // 8 base args plus the two #50682 pad-correction args pushed unconditionally below.
         writer_mcast_sender_args.reserve(10);
@@ -1312,7 +1320,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         // args 8, 9: only read when PAD_CORRECTION.
         writer_mcast_sender_args.push_back(pad_scaler_bits);
-        writer_mcast_sender_args.push_back(pad.k_bits);
+        // Where this core reads the row-masked set from. Only the core holding a batch's final
+        // row-tile needs it; the rest get the normal set again, making compute's switch a no-op
+        // there. Deciding it here keeps the compute kernel compile-time-only.
+        writer_mcast_sender_args.push_back(
+            input_mask_tile_start_id +
+            (pad.active && group_norm_core_owns_pad_tile(m_index, num_cores_per_batch) ? mask_set_tiles : 0));
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {
@@ -1324,9 +1337,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                                  (beta.value().physical_volume() / tile_width);
         }
         if (input_mask.has_value()) {
-            // Tile id for negative mask is same as input mask
-            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
-                                       (input_mask.value().physical_volume() / tile_hw);
+            // Tile id for negative mask is same as input mask. Wrap on the set size, not the whole
+            // tensor: the row-masked set is an offset off this.
+            input_mask_tile_start_id =
+                (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
         }
     }
 

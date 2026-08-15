@@ -490,6 +490,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -1483,6 +1484,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -3484,6 +3486,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -4451,6 +4454,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);

@@ -491,6 +491,18 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Quad-galaxy mixed 4x8+4x4+4x2 10-stage ring (128 ASICs) on subtorus mock
 # Currently disabled because complex heterogeneous multi-stage mesh graphs are not supported yet.
 # TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_quad_galaxy_4x8_4x4_4x2_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins"
+
+# Llama + audio quad 7-mesh ring (3x 4x8 RING+LINE + 2x 4x2 RING+LINE + 2x 2x2 audio, 120/128 ASICs).
+# Heterogeneous multi-mesh ring with STRICT inter-mesh links: the ring closes and the whole graph maps
+# (Phase-1 control-plane init). Only the two 2x2 audio meshes are pinned (tray 4). Verified on all four
+# SC4 single-pod (128-ASIC quad) mocks: revAB aisle-C/D and revC aisle-C/D.
+for mock in \
+    "${SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
+  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_3galaxy_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
+done
 # Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+LINE on subtorus mock.
 # Homogeneous 4x2 hops use NESW (no assign_z_direction); heterogeneous 4x8<->4x2 hops use assign_z_direction.
 # Runs the pipeline-builder and layout checks. Corner-pin checks are not run because the corner-fold
