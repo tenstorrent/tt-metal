@@ -817,13 +817,15 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         constexpr uint32_t k_range_page_size = 16;
         cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
         windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
+        // Reader scratch, always a REAL dedicated CB whenever windowed: it holds the cu_window tile
+        // (block-diagonal) and/or stages the per-device Q offset (both sub-modes, incl. 3D-neighborhood
+        // which has no cu tensor). It must never alias the Q input CB -- a stray reserve_back there
+        // desyncs Q streaming. UInt32 tile fits both the cu array and the 4-byte offset read.
+        cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(tt::DataFormat::UInt32), tt::DataFormat::UInt32);
         if (tensor_args.cu_window_seqlens.has_value()) {
             const auto& cu = tensor_args.cu_window_seqlens.value();
             tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
             cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-            // The reader gets its OWN cu_window copy (sharing the writer's CB would put two producers on
-            // one CB).
-            cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
             cu_window_buffer = cu.buffer();
             cu_window_seqlens_eles = cu.logical_shape()[-1];
         }

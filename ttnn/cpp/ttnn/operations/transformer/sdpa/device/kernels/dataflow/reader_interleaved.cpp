@@ -303,25 +303,23 @@ void kernel_main() {
         }
     }
 
-    // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own
-    // CB with its own producer contract), resolving the per-device Q-offset override first so the
-    // 4-byte read can stage through the same landing spot before the full array overwrites it.
+    // Windowed narrowing setup. cb_id_windowed_cu_reader is now a real dedicated CB in BOTH sub-modes
+    // (see program factory), so the reserve here is always safe -- unlike before, it never aliases the
+    // Q input CB. The per-device Q-offset override is staged first (both sub-modes: 3D-neighborhood
+    // uses it for SP-over-T); then, block-diagonal only, the cu_window array overwrites the same
+    // landing spot (the offset value has already been captured into windowed_q_tok_offset).
     volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
-    // Block-diagonal only: the cu_window reader CB is a real, dedicated CB (allocated only when a
-    // cu_window_seqlens tensor is present). In 3D-neighborhood mode (nb_T != 0) there is no cu tensor and
-    // cb_id_windowed_cu_reader aliases the Q input CB, so we must NOT touch it (a stray reserve_back would
-    // desync Q streaming and corrupt the output). Skip the whole cu-reader setup for 3D.
     if constexpr (use_windowed_narrowing) {
-        if (nb_T == 0) {
-            CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
-            cb_cu_reader.reserve_back(1);
-            const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
-            if (windowed_q_tok_offset_addr != 0) {
-                const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
-                noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
-                noc.async_read_barrier();
-                windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
-            }
+        CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
+        cb_cu_reader.reserve_back(1);
+        const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
+        if (windowed_q_tok_offset_addr != 0) {
+            const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
+            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+        }
+        if (nb_T == 0) {  // block-diagonal: load the cu_window array into the same scratch
             const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
             constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
             noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});

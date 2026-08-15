@@ -127,13 +127,20 @@ void kernel_main() {
             sliding_window_size>(noc);
     }
 
-    // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
-    // Q chunk from it (so the reader streams Q/K/V only).
-    // Block-diagonal only (nb_T == 0): the cu_window CB is a real, dedicated CB and there is a cu_window
-    // tensor to load. In 3D-neighborhood mode (nb_T != 0) there is no cu tensor (cu_window_seqlens_addr is
-    // 0) and cb_cu_window_in is not a dedicated CB, so touching it (reserve/read/push) would read a null
-    // tensor and desync a shared CB. The 3D mask needs no cu load, so skip this whole block.
+    // Windowed setup. The per-device Q origin (if passed as a tensor) lands in its OWN dedicated CB
+    // and is read in both sub-modes -- 3D-neighborhood uses it for SP-over-T. The cu_window array load
+    // is block-diagonal only (3D has no cu tensor; cu_window_seqlens_addr is 0 and cb_cu_window_in is
+    // not dedicated there, so touching it would read null and desync a shared CB).
     if constexpr (use_windowed_mask) {
+        if (q_tok_offset_addr != 0) {
+            const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
+            CircularBuffer cb_off(cb_windowed_q_offset);
+            cb_off.reserve_back(1);
+            const uint32_t off_ptr = cb_off.get_write_ptr();
+            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+        }
         if (nb_T == 0) {
             const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
             constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
@@ -142,18 +149,6 @@ void kernel_main() {
             noc.async_read(
                 cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
             noc.async_read_barrier();
-            // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
-            // every other CB here has a producer/consumer contract with another kernel that a writer-side
-            // reserve/push would break.
-            if (q_tok_offset_addr != 0) {
-                const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
-                CircularBuffer cb_off(cb_windowed_q_offset);
-                cb_off.reserve_back(1);
-                const uint32_t off_ptr = cb_off.get_write_ptr();
-                noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
-                noc.async_read_barrier();
-                q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
-            }
             cb_cu.push_back(1);
         }
     }

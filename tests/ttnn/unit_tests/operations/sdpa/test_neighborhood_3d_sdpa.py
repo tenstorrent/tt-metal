@@ -57,9 +57,12 @@ def test_neighborhood_3d_matches_na3d_torch(device, dims, kernel):
 # T-shards (frame ranges) whose token offset t_lo*H*W lands on a TILE_HEIGHT boundary, so the shard
 # is expressible as a windowed_q_token_offset. HW = 64 here (a multiple of 32).
 @pytest.mark.parametrize("t_lo, t_hi", [(0, 4), (4, 8), (2, 6)])
-def test_neighborhood_3d_q_offset_shard(device, t_lo, t_hi):
+@pytest.mark.parametrize("offset_as_tensor", [False, True], ids=["scalar", "tensor"])
+def test_neighborhood_3d_q_offset_shard(device, t_lo, t_hi, offset_as_tensor):
     """SP-over-T capability: a globally-offset Q shard against full K/V reproduces the same slice of
-    the full result. This is what lets the host split Q over T across a mesh (K/V replicated)."""
+    the full result. This is what lets the host split Q over T across a mesh (K/V replicated). The
+    offset is supplied as a baked scalar or, for a real mesh where one program serves differently-
+    offset chips, as a per-device tensor read on device."""
     torch.manual_seed(0)
     dims, kernel, head_dim = (8, 8, 8), (3, 3, 3), 64
     t_, h_, w_ = dims
@@ -84,6 +87,13 @@ def test_neighborhood_3d_q_offset_shard(device, t_lo, t_hi):
 
     lo, hi = t_lo * hw, t_hi * hw
     q_shard = q[:, t_lo:t_hi].reshape(1, 1, hi - lo, head_dim)
+    off_tensor = (
+        ttnn.from_torch(
+            torch.tensor([lo], dtype=torch.int32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        if offset_as_tensor
+        else None
+    )
     got = ttnn.to_torch(
         ttnn.transformer.scaled_dot_product_attention(
             ttnn.from_torch(q_shard, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
@@ -91,7 +101,8 @@ def test_neighborhood_3d_q_offset_shard(device, t_lo, t_hi):
             tv,
             is_causal=False,
             neighborhood_3d=(t_, h_, w_, *kernel),
-            windowed_q_token_offset=lo,
+            windowed_q_token_offset=0 if offset_as_tensor else lo,
+            windowed_q_token_offset_tensor=off_tensor,
         )
     ).reshape(hi - lo, head_dim)
 
