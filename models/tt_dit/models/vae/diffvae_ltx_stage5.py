@@ -28,8 +28,11 @@ import ttnn
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
+from ...layers.na3d import AxisShard, build_mesh_device_plan
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
+from ...layers.na3d import plan_na3d_mesh, uniform_halo
 from ...layers.normalization import RMSNorm
+from .diffvae_ltx import MeshShardConfig, _even_shards
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -119,19 +122,21 @@ def neighborhood_attention_3d(
     *,
     kernel_size: tuple[int, int, int],
     scale: float = 1.0,
+    device_plan=None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors.
 
     Q/K/V arrive already RMS-normed, RoPE'd and (for Q) pre-scaled, so ``scale`` is 1.0.
     Returns ``(B, T, H, W, num_heads * head_dim)``. Mirrors upstream's
-    ``NAAttentionCallable`` contract.
+    ``NAAttentionCallable`` contract. With ``device_plan`` the volume is one mesh shard and
+    the result covers that shard's queries, narrower than the input by the halo.
 
     This was a swap point for a host fallback while the device primitive was being written.
     The dispatch is now direct and unconditional on purpose: a fallback selected by
     ``except ImportError`` would move attention to the host silently, and every parity test
     here would still pass — slower, and no longer measuring the device.
     """
-    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale)
+    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale, device_plan=device_plan)
 
 
 # ---------------------------------------------------------------------------
@@ -401,9 +406,26 @@ class _NeighborhoodAttention3D(Module):
         swapped = ttnn.matmul(x, self.pair_swap, compute_kernel_config=self.swap_compute_config)
         return ttnn.add(ttnn.multiply(x, tables.cos), ttnn.multiply(swapped, tables.sin))
 
-    def forward(self, y: ttnn.Tensor, grid: Grid, tables: _RopeTables) -> ttnn.Tensor:
-        """``y``: ``(1, batch, sites, dim)``. Returns the same shape."""
+    def forward(
+        self,
+        y: ttnn.Tensor,
+        grid: Grid,
+        tables: _RopeTables,
+        *,
+        device_plan=None,
+        exchange=None,
+    ) -> ttnn.Tensor:
+        """``y``: ``(1, batch, sites, dim)``. Returns the same shape.
+
+        Sharded, ``y`` holds this device's sites and ``exchange`` attaches the halo, so ``grid``
+        and ``tables`` describe the padded buffer while the result covers only the queries.
+        Exchanging before the projections rather than after keeps it to one tensor instead of
+        three, at the price of projecting the halo on both sides of a seam.
+        """
         cfg = self.config
+        if exchange is not None:
+            y = exchange(y)
+        out_sites = grid.sites if device_plan is None else math.prod(device_plan.plan.output_dims)
         heads_shape = (1, grid.batch, grid.sites * cfg.num_heads, cfg.head_dim)
         volume_shape = (grid.batch, grid.t, grid.h, grid.w, cfg.num_heads, cfg.head_dim)
 
@@ -420,8 +442,9 @@ class _NeighborhoodAttention3D(Module):
             _reshape_row_major(v, volume_shape),
             kernel_size=cfg.kernel_size,
             scale=1.0,
+            device_plan=device_plan,
         )
-        out = _reshape_retiled(out, (1, grid.batch, grid.sites, cfg.dim))
+        out = _reshape_retiled(out, (1, grid.batch, out_sites, cfg.dim))
         return self.proj(out)
 
 
@@ -477,8 +500,15 @@ class DiffusionNABlock(Module):
         shared_modulation: ttnn.Tensor,
         grid: Grid,
         tables: _RopeTables,
+        *,
+        device_plan=None,
+        exchange=None,
     ) -> ttnn.Tensor:
-        """``x``/``context``: ``(1, batch, sites, dim)``. Returns the updated ``x`` half."""
+        """``x``/``context``: ``(1, batch, sites, dim)``. Returns the updated ``x`` half.
+
+        Sharded, every step here is per-site except the attention, so the block's whole
+        communication cost is the one exchange that feeds it.
+        """
         dim = self.config.dim
         # Adding the table to all 7 chunks and then reading 4 is upstream's
         # _modulation: the gate chunks are computed and discarded.
@@ -489,7 +519,16 @@ class DiffusionNABlock(Module):
         shift_mlp = _slice_last(mod, 4 * dim, 5 * dim)
 
         x = ttnn.add(x, self.context_proj(context))
-        x = ttnn.add(x, self.attn(_modulate(self.norm1(x), scale_msa, shift_msa), grid, tables))
+        x = ttnn.add(
+            x,
+            self.attn(
+                _modulate(self.norm1(x), scale_msa, shift_msa),
+                grid,
+                tables,
+                device_plan=device_plan,
+                exchange=exchange,
+            ),
+        )
         return ttnn.add(x, self.mlp_down(self.mlp_gate_up(_modulate(self.norm2(x), scale_mlp, shift_mlp))))
 
 
@@ -553,6 +592,7 @@ class DiffVAEStage5(Module):
         # otherwise multiply against whatever the weight's own tile pad happens to hold.
         self.padded_patch_channels = math.ceil(cfg.patch_channels / TILE) * TILE
         self._rope_cache: dict[Grid, _RopeTables] = {}
+        self._mesh_plan_cache: dict[tuple, tuple] = {}
 
         self.conv_in_x_t = Linear(self.padded_patch_channels, cfg.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
         # The timestep sinusoid and everything downstream of it feed multiplicative
@@ -614,12 +654,17 @@ class DiffVAEStage5(Module):
         context_and_x: ttnn.Tensor,
         timestep: ttnn.Tensor,
         grid: Grid,
+        *,
+        shard: "MeshShardConfig | None" = None,
     ) -> ttnn.Tensor:
         """One stage-5 step on the block-ready buffer.
 
         ``context_and_x`` is ``[context | conv_in_x_t(x)]`` at ``(1, batch, sites, 2 * dim)``.
         Splitting it once here rather than per block is equivalent because no block writes
         the context half. Returns padded patch channels at ``(1, batch, sites, ·)``.
+
+        With ``shard``, ``grid`` is still the whole volume but the buffer holds this device's
+        share of it: every tensor here is per-site, so only the attention needs a neighbour.
         """
         cfg = self.config
         context = _slice_last(context_and_x, 0, cfg.context_channels)
@@ -627,11 +672,69 @@ class DiffVAEStage5(Module):
 
         scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
         modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
-        tables = self.rope_tables(grid)
+
+        device_plan = exchange = None
+        if shard is None:
+            block_grid = grid
+        else:
+            device_plan, buffer, halo = self._mesh_plan(grid, shard)
+            block_grid = buffer
+            exchange = self._halo_exchange(shard, halo, self.shard_grid(grid, shard), cfg.dim)
+        tables = self.rope_tables(block_grid)
+
         for block in self.diff_blocks:
-            x = block(x, context, modulation, grid, tables)
+            x = block(x, context, modulation, block_grid, tables, device_plan=device_plan, exchange=exchange)
 
         return self.conv_out(self.norm_out(x))
+
+    @staticmethod
+    def shard_grid(grid: Grid, shard: "MeshShardConfig") -> Grid:
+        """This device's share of ``grid``, split H over cluster axis 0 and W over axis 1."""
+        assert (
+            grid.h % shard.mesh[0] == 0 and grid.w % shard.mesh[1] == 0
+        ), f"grid {grid} does not split evenly over {shard.mesh}"
+        return Grid(batch=grid.batch, t=grid.t, h=grid.h // shard.mesh[0], w=grid.w // shard.mesh[1])
+
+    def _mesh_plan(self, grid: Grid, shard: "MeshShardConfig"):
+        key = (grid, shard.mesh)
+        if key not in self._mesh_plan_cache:
+            kernel = self.config.kernel_size
+            dims = (grid.t, grid.h, grid.w)
+            halo = (0,) + tuple(uniform_halo(dims[i], shard.mesh[i - 1], kernel[i]) for i in (1, 2))
+            axes = [
+                (AxisShard(dims[0], 0, dims[0]), h, w)
+                for h in _even_shards(dims[1], shard.mesh[0])
+                for w in _even_shards(dims[2], shard.mesh[1])
+            ]
+            plans = plan_na3d_mesh(axes, kernel, halo=halo)
+            buffer = Grid(batch=grid.batch, t=plans[0].dims[0], h=plans[0].dims[1], w=plans[0].dims[2])
+            self._mesh_plan_cache[key] = (
+                build_mesh_device_plan(plans, mesh_device=self.mesh_device),
+                buffer,
+                halo,
+            )
+        return self._mesh_plan_cache[key]
+
+    def _halo_exchange(self, shard: "MeshShardConfig", halo, local: Grid, channels: int):
+        """Attach the neighbours' sites to ``(1, batch, sites, dim)`` and flatten back."""
+
+        def exchange(y: ttnn.Tensor) -> ttnn.Tensor:
+            volume = ttnn.reshape(
+                ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), (local.batch, local.t, local.h, local.w, channels)
+            )
+            padded = shard.ccl.neighbor_pad(
+                volume,
+                dims=[2, 3],
+                pad_left=[halo[1], halo[2]],
+                pad_right=[halo[1], halo[2]],
+                padding_mode="replicate",
+                axes=[0, 1],
+                neighbor_sems=[shard.ccl.get_np_ping_pong_semaphore(0), shard.ccl.get_np_ping_pong_semaphore(1)],
+                num_links=[1, 1],
+            )
+            return ttnn.to_layout(ttnn.reshape(padded, (1, local.batch, -1, channels)), ttnn.TILE_LAYOUT)
+
+        return exchange
 
     def forward(
         self,
