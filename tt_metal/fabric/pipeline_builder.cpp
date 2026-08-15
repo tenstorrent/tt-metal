@@ -348,74 +348,242 @@ GraphLayoutResult resolve_graph_layout(
     // the entry chip.  The corresponding entry chip on the next stage is
     // updated in the same step (they are a physically connected pair).
     // ------------------------------------------------------------------
-    for (size_t i = 1; i < stage_order.size(); ++i) {
-        size_t curr_sub = node_to_sub.at(stage_order[i]);
-
-        // Find the resolved entry edge for this stage (non-loopback, dst == stage_order[i]).
-        // Keep the edge itself: in a FORK graph the topological stage_order interleaves the
-        // branches, so stage_order[i-1] is NOT this stage's predecessor — the entry edge's
-        // own source is (that's what the connection lookup below must use).
-        ResolvedEdge* entry_re = nullptr;
-        for (auto& re : resolved_edges) {
-            if (!re.is_loopback && re.dst == stage_order[i]) {
-                entry_re = &re;
-                break;
-            }
-        }
-        if (entry_re == nullptr) {
-            continue;  // stage 0 — no entry edge
-        }
-        uint32_t entry_row = entry_re->entry_row;
-        uint32_t entry_col = entry_re->entry_col;
-
-        // Find the resolved exit edge for this stage (src == stage_order[i], any kind).
-        ResolvedEdge* exit_re = nullptr;
-        for (auto& re : resolved_edges) {
-            if (re.src == stage_order[i]) {
-                exit_re = &re;
-                break;
-            }
-        }
-        if (!exit_re) {
-            continue;  // no exit edge (shouldn't happen in a pipeline)
-        }
-
-        if (exit_re->exit_row == entry_row && exit_re->exit_col == entry_col) {
-            // Conflict: find an alternative link for the exit edge.
-            size_t next_sub = node_to_sub.at(exit_re->dst);
-            const auto& exit_links = connections.at({curr_sub, next_sub}).links;
-            bool resolved = false;
-            for (const auto& lp : exit_links) {
-                if (lp.exit_row != entry_row || lp.exit_col != entry_col) {
-                    exit_re->exit_row = lp.exit_row;
-                    exit_re->exit_col = lp.exit_col;
-                    exit_re->entry_row = lp.entry_row;
-                    exit_re->entry_col = lp.entry_col;
-                    resolved = true;
+    // Exact solve for linear chains/rings: greedy local repair (below) can ping-pong
+    // forever on constrained topologies (single-link inter-mesh hops pin the entry chip).
+    // Feasibility is a chain DP over per-edge link candidates with the per-stage
+    // constraint entry_chip != exit_chip; ring closure is handled by trying each
+    // loopback candidate. Falls back to the greedy pass for non-linear (fork) graphs.
+    bool dp_solved = false;
+    {
+        bool is_linear = true;
+        size_t lb_count = 0;
+        {
+            std::map<std::string, int> out_deg, in_deg;
+            for (const auto& re : resolved_edges) {
+                if (re.is_loopback) {
+                    lb_count++;
+                    continue;
+                }
+                if (++out_deg[re.src] > 1 || ++in_deg[re.dst] > 1) {
+                    is_linear = false;
                     break;
                 }
             }
-            if (!resolved) {
-                // No alternative exit link — try changing the entry edge instead. Use the
-                // entry edge's ACTUAL source submesh (not stage_order[i-1], which is the
-                // wrong branch in an interleaved fork topological order).
-                size_t prev_sub = node_to_sub.at(entry_re->src);
-                const auto& entry_links = connections.at({prev_sub, curr_sub}).links;
-                for (const auto& lp : entry_links) {
-                    if (lp.entry_row != exit_re->exit_row || lp.entry_col != exit_re->exit_col) {
-                        entry_re->exit_row = lp.exit_row;
-                        entry_re->exit_col = lp.exit_col;
-                        entry_re->entry_row = lp.entry_row;
-                        entry_re->entry_col = lp.entry_col;
+            if (lb_count > 1) {
+                is_linear = false;
+            }
+        }
+        if (is_linear && stage_order.size() >= 2) {
+            std::map<std::string, size_t> stage_idx;
+            for (size_t i = 0; i < stage_order.size(); ++i) {
+                stage_idx[stage_order[i]] = i;
+            }
+            std::vector<ResolvedEdge*> fwd(stage_order.size() - 1, nullptr);
+            ResolvedEdge* lb_edge = nullptr;
+            bool shape_ok = true;
+            for (auto& re : resolved_edges) {
+                if (re.is_loopback) {
+                    lb_edge = &re;
+                    continue;
+                }
+                auto its = stage_idx.find(re.src);
+                auto itd = stage_idx.find(re.dst);
+                if (its == stage_idx.end() || itd == stage_idx.end() || itd->second != its->second + 1) {
+                    shape_ok = false;
+                    break;
+                }
+                fwd[its->second] = &re;
+            }
+            if (shape_ok) {
+                for (auto* e : fwd) {
+                    if (e == nullptr) {
+                        shape_ok = false;
+                        break;
+                    }
+                }
+            }
+
+            if (shape_ok) {
+                const size_t M = fwd.size();
+                std::vector<const std::vector<ConnectionInfo::LinkPair>*> cand(M, nullptr);
+                bool cands_ok = true;
+                for (size_t i = 0; i < M && cands_ok; ++i) {
+                    auto it = connections.find({node_to_sub.at(fwd[i]->src), node_to_sub.at(fwd[i]->dst)});
+                    if (it == connections.end() || it->second.links.empty()) {
+                        cands_ok = false;
+                        break;
+                    }
+                    cand[i] = &it->second.links;
+                }
+                const std::vector<ConnectionInfo::LinkPair>* lb_cand = nullptr;
+                if (cands_ok && lb_edge != nullptr) {
+                    auto it = connections.find({node_to_sub.at(lb_edge->src), node_to_sub.at(lb_edge->dst)});
+                    if (it == connections.end() || it->second.links.empty()) {
+                        cands_ok = false;
+                    } else {
+                        lb_cand = &it->second.links;
+                    }
+                }
+
+                if (cands_ok) {
+                    auto same_chip = [](uint32_t r1, uint32_t c1, uint32_t r2, uint32_t c2) {
+                        return r1 == r2 && c1 == c2;
+                    };
+                    const size_t lb_choices = (lb_edge != nullptr) ? lb_cand->size() : 1;
+                    for (size_t li = 0; li < lb_choices && !dp_solved; ++li) {
+                        std::vector<std::vector<int>> parent(M);
+                        std::vector<std::vector<char>> ok(M);
+                        for (size_t i = 0; i < M; ++i) {
+                            ok[i].assign(cand[i]->size(), 0);
+                            parent[i].assign(cand[i]->size(), -1);
+                        }
+                        for (size_t k = 0; k < cand[0]->size(); ++k) {
+                            if (lb_edge != nullptr) {
+                                const auto& L = (*lb_cand)[li];
+                                const auto& l0 = (*cand[0])[k];
+                                if (same_chip(l0.exit_row, l0.exit_col, L.entry_row, L.entry_col)) {
+                                    continue;
+                                }
+                            }
+                            ok[0][k] = 1;
+                        }
+                        for (size_t i = 1; i < M; ++i) {
+                            for (size_t k = 0; k < cand[i]->size(); ++k) {
+                                const auto& cur = (*cand[i])[k];
+                                for (size_t pi = 0; pi < cand[i - 1]->size(); ++pi) {
+                                    if (!ok[i - 1][pi]) {
+                                        continue;
+                                    }
+                                    const auto& prev = (*cand[i - 1])[pi];
+                                    if (same_chip(prev.entry_row, prev.entry_col, cur.exit_row, cur.exit_col)) {
+                                        continue;
+                                    }
+                                    ok[i][k] = 1;
+                                    parent[i][k] = static_cast<int>(pi);
+                                    break;
+                                }
+                            }
+                        }
+                        int final_k = -1;
+                        for (size_t k = 0; k < cand[M - 1]->size(); ++k) {
+                            if (!ok[M - 1][k]) {
+                                continue;
+                            }
+                            if (lb_edge != nullptr) {
+                                const auto& L = (*lb_cand)[li];
+                                const auto& le = (*cand[M - 1])[k];
+                                if (same_chip(le.entry_row, le.entry_col, L.exit_row, L.exit_col)) {
+                                    continue;
+                                }
+                            }
+                            final_k = static_cast<int>(k);
+                            break;
+                        }
+                        if (final_k >= 0) {
+                            std::vector<int> pick(M);
+                            int k = final_k;
+                            for (size_t i = M; i-- > 0;) {
+                                pick[i] = k;
+                                k = parent[i][k];
+                            }
+                            for (size_t i = 0; i < M; ++i) {
+                                const auto& l = (*cand[i])[pick[i]];
+                                fwd[i]->exit_row = l.exit_row;
+                                fwd[i]->exit_col = l.exit_col;
+                                fwd[i]->entry_row = l.entry_row;
+                                fwd[i]->entry_col = l.entry_col;
+                            }
+                            if (lb_edge != nullptr) {
+                                const auto& L = (*lb_cand)[li];
+                                lb_edge->exit_row = L.exit_row;
+                                lb_edge->exit_col = L.exit_col;
+                                lb_edge->entry_row = L.entry_row;
+                                lb_edge->entry_col = L.entry_col;
+                            }
+                            dp_solved = true;
+                        }
+                    }
+                    if (!dp_solved) {
+                        throw std::runtime_error(
+                            "resolve_graph_layout: chain DP found no link assignment with distinct "
+                            "entry/exit chips at every stage - topology cannot host this pipeline "
+                            "without a same-chip entry/exit fold");
+                    }
+                }
+            }
+        }
+    }
+
+    if (!dp_solved) {
+        for (size_t i = 1; i < stage_order.size(); ++i) {
+            size_t curr_sub = node_to_sub.at(stage_order[i]);
+
+            // Find the resolved entry edge for this stage (non-loopback, dst == stage_order[i]).
+            // Keep the edge itself: in a FORK graph the topological stage_order interleaves the
+            // branches, so stage_order[i-1] is NOT this stage's predecessor — the entry edge's
+            // own source is (that's what the connection lookup below must use).
+            ResolvedEdge* entry_re = nullptr;
+            for (auto& re : resolved_edges) {
+                if (!re.is_loopback && re.dst == stage_order[i]) {
+                    entry_re = &re;
+                    break;
+                }
+            }
+            if (entry_re == nullptr) {
+                continue;  // stage 0 — no entry edge
+            }
+            uint32_t entry_row = entry_re->entry_row;
+            uint32_t entry_col = entry_re->entry_col;
+
+            // Find the resolved exit edge for this stage (src == stage_order[i], any kind).
+            ResolvedEdge* exit_re = nullptr;
+            for (auto& re : resolved_edges) {
+                if (re.src == stage_order[i]) {
+                    exit_re = &re;
+                    break;
+                }
+            }
+            if (!exit_re) {
+                continue;  // no exit edge (shouldn't happen in a pipeline)
+            }
+
+            if (exit_re->exit_row == entry_row && exit_re->exit_col == entry_col) {
+                // Conflict: find an alternative link for the exit edge.
+                size_t next_sub = node_to_sub.at(exit_re->dst);
+                const auto& exit_links = connections.at({curr_sub, next_sub}).links;
+                bool resolved = false;
+                for (const auto& lp : exit_links) {
+                    if (lp.exit_row != entry_row || lp.exit_col != entry_col) {
+                        exit_re->exit_row = lp.exit_row;
+                        exit_re->exit_col = lp.exit_col;
+                        exit_re->entry_row = lp.entry_row;
+                        exit_re->entry_col = lp.entry_col;
                         resolved = true;
                         break;
                     }
                 }
                 if (!resolved) {
-                    throw std::runtime_error(
-                        "resolve_graph_layout: stage " + std::to_string(i) + " (" + stage_order[i] +
-                        ") has only one chip at both the entry and exit "
-                        "boundary — cannot deconflict entry/exit on the same chip");
+                    // No alternative exit link — try changing the entry edge instead. Use the
+                    // entry edge's ACTUAL source submesh (not stage_order[i-1], which is the
+                    // wrong branch in an interleaved fork topological order).
+                    size_t prev_sub = node_to_sub.at(entry_re->src);
+                    const auto& entry_links = connections.at({prev_sub, curr_sub}).links;
+                    for (const auto& lp : entry_links) {
+                        if (lp.entry_row != exit_re->exit_row || lp.entry_col != exit_re->exit_col) {
+                            entry_re->exit_row = lp.exit_row;
+                            entry_re->exit_col = lp.exit_col;
+                            entry_re->entry_row = lp.entry_row;
+                            entry_re->entry_col = lp.entry_col;
+                            resolved = true;
+                            break;
+                        }
+                    }
+                    if (!resolved) {
+                        throw std::runtime_error(
+                            "resolve_graph_layout: stage " + std::to_string(i) + " (" + stage_order[i] +
+                            ") has only one chip at both the entry and exit "
+                            "boundary — cannot deconflict entry/exit on the same chip");
+                    }
                 }
             }
         }
