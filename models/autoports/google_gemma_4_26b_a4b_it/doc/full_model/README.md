@@ -42,7 +42,7 @@ config itself has no template), AIME24 prompt 0, 100 generated tokens, and HF
 top-100 predictions.
 
 - Full-model prefill: top-1 **96%**, top-5 **100%**, top-100 **100%**.
-- Traced teacher forcing: top-1 **95%**, top-5 **100%**, top-100 **100%**.
+- Traced teacher forcing: top-1 **98%**, top-5 **100%**, top-100 **100%**.
 - Mixed/nonaligned probe: prompt lengths 33 and 47, batch 2, one inactive row,
   two unchanged-table traced steps with zero refreshes, then a changed physical
   mapping that recaptured exactly once and stayed stable on its next replay.
