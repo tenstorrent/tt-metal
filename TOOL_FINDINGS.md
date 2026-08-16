@@ -98,6 +98,7 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
+| **F47** | "host-free" is certified by `host_op_selftest` with `early_stop=False`, while the demo takes the `early_stop=True` default and reads one value back to host every frame; matters once F46 lands | **YES** | small |
 | **F45** | `E2E_REQUIRE_TRACE` is satisfied by proving each stage CAN be captured; `run_tts` — the shipped generation path — never calls `execute_trace`, so an eager pipeline (~500 ms/frame per its own README) ships while perf is quoted from trace replay | **YES — first, with F42** | medium |
 | **F44** | the optimize objective times a capture-and-verify harness (eager pass + trace capture + 2 readbacks + release + host PCC, ONE decode step) rather than inference — so capture cost is weighted 4×/iteration and the 24-frame decode that dominates deployment enters once | **YES — with F42/F43** | medium |
 | **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
@@ -4568,6 +4569,112 @@ and dynamically (count trace replays during a real generation).
    the specific error, and it is what makes the perf story unfalsifiable from the outside.
 4. **State the execution mode in the report.** `RUN_REPORT.md` says nothing about whether the
    delivered pipeline is traced or eager.
+
+---
+
+## ★★ F47 — "host-free" is certified with the demo's per-frame host readback switched off
+
+**Status: live** · severity: the host-freedom claim does not cover the configuration that ships ·
+reported: not yet
+
+The shipped generation loop performs a device→host readback **every frame**:
+
+```python
+def _is_stop(self, codes):
+    """Host readback of ONE value -- generation control, not arithmetic (the graduated codec
+    stub draws the same line: its [END_AUDIO] cut is 'host-side generation control')."""
+    sem = int(ttnn.to_torch(ttnn.slice(codes, [0, 0], [1, 1])).flatten()[0])
+    return sem in self.stop_ids
+```
+
+`run_tts` declares `early_stop=True` by default, and `demo/demo_tts.py:66` calls
+`pipe.run_tts(inputs, max_frames=args.max_frames, verbose=True)` — so the demo takes that default and
+syncs once per frame.
+
+The check that certifies host-freedom does not:
+
+```python
+tt/pipeline.py:647   # `early_stop=False` because the [END_AUDIO] readback is generation control
+tt/pipeline.py:653   self.run_tts(uploaded, max_frames=max_frames, early_stop=False, ...)
+```
+
+So `host_op_selftest` observes "a pure device chain" only because the one host op in the loop was
+disabled for the observation.
+
+**The reasoning is defensible and openly stated.** A stop condition genuinely is generation control
+rather than model arithmetic, and every autoregressive implementation has to decide where that line
+sits. The objection is narrower: the certification is reported without the qualifier, so a reader of
+`RUN_REPORT.md` sees a host-free pipeline and the demo runs one that syncs 24 times per utterance.
+
+**It also becomes a real cost exactly when the other fixes land.** At today's ~500 ms/frame a
+single-value readback is noise. On a traced incremental decode at tens of ms/frame, a per-frame
+device sync serialises the pipeline and is a material fraction of the frame. F46's fix makes F47
+matter.
+
+### Fixes
+
+1. **State the configuration next to the claim** — "host-free with `early_stop=False`; the demo
+   default performs one readback per frame".
+2. **Or remove the readback from the loop**: compare the semantic code against the stop ids
+   on-device and read the flag every N frames, accepting up to N-1 frames of overrun; or read the
+   previous frame's flag while the current frame computes.
+3. **Certify the shipped configuration.** `host_op_selftest` should run what the demo runs, and
+   report the host ops it finds rather than removing them first.
+
+---
+
+## Sweep results — what was checked and found SOUND
+
+Recorded because a report that only lists defects misrepresents the artefact, and because knowing
+what was checked bounds what the findings claim.
+
+**Every stub forward is genuinely host-op free.** An AST walk of all seven `__call__` bodies found
+no `torch.*`, no `to_torch`, no `.item()`, no `.cpu()`:
+
+```
+attention CLEAN · codec_decoder CLEAN · decoder_layer CLEAN · flow_matching CLEAN
+m_l_p CLEAN · r_m_s_norm CLEAN · tts_backbone CLEAN
+```
+
+The `torch` usage that exists in `flow_matching.py` (8 sites) and `codec_decoder.py` (3) is all
+inside `build()` — staging constant tables, ALiBi rows and the pinned `x_0`. That is the documented
+consequence of F37's third defect, and it is the correct place for it.
+
+**F13's pattern is absent.** No `try/except` appears in any stub, so there is no swallowed fast-path
+exception silently degrading to torch. `_runtime_fallbacks.json` is `{}`.
+
+**Gate 1 is rigorous.** It byte-compares each live stub against its `.last_good_native` graduation
+snapshot, asserts `native_probe.torch_ops == 0` **and** `ttnn_dispatch > 0`, requires
+`_runtime_fallbacks.json == {}`, and then checks the objects actually wired into the chain are those
+classes. Editing a graduated stub de-graduates it and fails the suite.
+
+**Gate 2 is rigorous.** It uses *this run's* invocation deltas rather than lifetime totals — so
+another test's calls cannot stand in — and asserts exact counts: `tts_backbone == 1 + n_frames`,
+`decoder_layer == n_backbone`, `r_m_s_norm == 2 × n_backbone`, `flow_matching == n_frames`,
+`codec_decoder == 1`.
+
+**The golden is real.** `cached_reference_tts` runs the fp32 HF reference and caches it on disk under
+a key covering prompt, voice, horizon and `x_0`, so a stale golden cannot silently apply to different
+inputs. **And the correctness run uses the demo's own configuration** — `tt_run` calls
+`run_tts(inputs, max_frames=horizon)` with `early_stop` at its default `True`.
+
+**Only decode diverges.** Per the audit under F46: prefill, flow and vocode are measured on exactly
+the code that ships.
+
+### One consequence for whoever fixes F46
+
+Gate 2 encodes the current architecture as correct:
+
+```python
+n_backbone = 1 + tt_run["n_frames"]          # prompt prefill + one per emitted frame
+assert counts["tts_backbone"] == n_backbone
+```
+
+It **requires** the backbone to run once per frame — which is precisely the recomputation F46 says
+to remove. Wiring `decode_step` into `run_tts` would drop `tts_backbone` to 1 and fail this
+assertion. The gate is not wrong today; it simply describes the implementation it was written
+against, and the fix must update these expected counts in the same change. Worth knowing before
+someone starts, so a correct fix is not mistaken for a regression.
 
 ---
 
