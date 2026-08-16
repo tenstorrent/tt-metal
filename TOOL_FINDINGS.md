@@ -3965,6 +3965,36 @@ An edit that makes trace *capture* cheaper scores. An edit that makes steady-sta
 barely moves the number. The optimizer is not being dishonest — it is faithfully minimising what it
 was handed.
 
+### WHY it is shaped this way — and why the reason does not apply to the timing
+
+There is a real constraint behind the small workload, and it is worth stating fairly before the
+criticism. The tool documents it (`agent/perf_test_gen.py:1184`):
+
+> *"BOUNDED + profiler-safe so tracy's 12000-marker buffer never overflows: cap the work (decode …)"*
+
+Every device op writes markers into a fixed buffer holding ~12000. A 24-frame run drives the
+26-layer backbone 24 times plus flow and codec each frame — far past that. Overflow means dropped
+markers and a partial profile, which is the same failure `tt_metal/impl/profiler/profiler.cpp` was
+patched to tolerate. Capping the work so a profile is *valid* is correct engineering.
+
+A second, independent limit shapes the per-stage structure: the trace region is
+`DEFAULT_TRACE_REGION_SIZE = 200_000_000`, and `trace_capture_selftest` notes that **"stage traces
+must not co-reside"** — all four stage traces do not fit at once, so each is captured, executed and
+released in turn. That is also a real device constraint, not a choice.
+
+**The defect is that this bound is then applied to a measurement that does not profile.** The
+win/lose timing runs with Tracy off — the log says so plainly:
+
+```
+[optimize/cc] measuring FULL-model end-to-end (BEFORE) — ALL layers (uncapped), no tracy
+```
+
+With no profiler attached there is no marker buffer to overflow, so nothing stops the timing run
+from executing the real 24-frame workload. It inherits a restriction that exists solely for
+profiling. The two jobs — *attribute time to ops* (needs Tracy, must be small) and *decide whether
+an edit is faster* (needs realism, has no marker limit) — have been collapsed into one workload
+sized for the first.
+
 ### Why this is separable from F41 and F43
 
 F41 is about the depth knob failing to bound the window. F43 is about the per-token label being the
@@ -3982,6 +4012,10 @@ entirely.
 
 ### Fixes
 
+0. **Separate the profiled workload from the timed workload.** They answer different questions and
+   only one of them has a marker budget. Keep the small bounded job for Tracy attribution; run the
+   real 24-frame job for the accept/reject timing, which already runs with Tracy off. This is the
+   root fix — the other three are refinements of it.
 1. **Time replay, not capture.** Capture once outside the timed region; time `execute_trace` only.
    The pipeline already separates `<stage>_trace_setup` from `<stage>_trace_step`, so the split
    exists.
