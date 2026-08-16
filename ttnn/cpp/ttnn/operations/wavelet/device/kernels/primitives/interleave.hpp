@@ -118,6 +118,9 @@ ALWI void write_direct_interleaved_signal(
     Noc noc;
     constexpr uint32_t split_group_elements = ttnn::operations::wavelet::device_protocol::kLwtGroupOutputElements;
     constexpr uint32_t signal_group_elements = ttnn::operations::wavelet::device_protocol::kIlwtGroupOutputElements;
+    static_assert(
+        signal_group_elements % ttnn::operations::wavelet::kStickWidth == 0,
+        "ILWT direct-interleave groups must be stick aligned");
     const bool updates_even = route_type == static_cast<uint32_t>(ttnn::operations::wavelet::StepType::kUpdate);
     const auto* even = reinterpret_cast<volatile tt_l1_ptr float*>(even_addr);
     const auto* odd = reinterpret_cast<volatile tt_l1_ptr float*>(odd_addr);
@@ -135,10 +138,12 @@ ALWI void write_direct_interleaved_signal(
         const uint32_t group_output_length = output_length - group_signal_offset < signal_group_elements
                                                  ? output_length - group_signal_offset
                                                  : signal_group_elements;
-        const uint32_t output_end = output_begin + output_length;
-        const uint32_t first_stick = output_begin / ttnn::operations::wavelet::kStickWidth;
-        const uint32_t stick_count =
-            (output_length + ttnn::operations::wavelet::kStickWidth - 1U) / ttnn::operations::wavelet::kStickWidth;
+        const uint32_t group_begin = output_begin + group_signal_offset;
+        const uint32_t group_end = group_begin + group_output_length;
+        const uint32_t first_stick = group_begin / ttnn::operations::wavelet::kStickWidth;
+        const uint32_t last_stick =
+            (group_end + ttnn::operations::wavelet::kStickWidth - 1U) / ttnn::operations::wavelet::kStickWidth;
+        const uint32_t stick_count = last_stick - first_stick;
 
         static_assert(BatchSticks > 0, "ILWT direct-interleave batch must be non-zero");
         for (uint32_t batch_begin = 0; batch_begin < stick_count; batch_begin += BatchSticks) {
@@ -155,7 +160,7 @@ ALWI void write_direct_interleaved_signal(
                 for (uint32_t lane = 0; lane < ttnn::operations::wavelet::kStickWidth; ++lane) {
                     const uint32_t signal_index = signal_base + lane;
                     float value = 0.0F;
-                    if (signal_index >= output_begin && signal_index < output_end) {
+                    if (signal_index >= group_begin && signal_index < group_end) {
                         const uint32_t local_signal_index = signal_index - output_begin;
                         const uint32_t padded_index = left_pad + signal_index;
                         const uint32_t split_index = padded_index / 2U;
