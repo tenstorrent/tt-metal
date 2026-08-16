@@ -47,6 +47,7 @@ the measurement simply is not of the product. That is F46, and it is the first t
 
 | # | one line |
 |---|---|
+| **F27** | **ROOT CAUSE.** the captured 208-deep KV cache is DISCARDED where one `deepcopy` would have kept it — this is the origin of F36/F44/F45/F46: cacheless stub → demo must recompute → plan codifies it → trace gate unreachable → a second implementation gets all the perf work | **YES — fix this first** | one line |
 | **F46** | the optimizer measures `decode_step`, which the demo never calls, while the shipped loop recomputes the whole prefix every frame — it reported −17.2%, the product got −13.2% |
 | **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` — no range check on a value that cannot exceed 1.0 |
 | **F36 + F37** | the graduation gate feeds `torch.randn` to components whose real captured inputs sit unread on disk, and its defaults can silently corrupt the golden |
@@ -587,7 +588,6 @@ defect.
 | **F23** | ⚠ CORRECTED — capture drivers guess where the config already says they should not; 3 of the 4 misses were OURS (S5) | **partial** | small |
 | **F25** | decomposition children lose the parent path prefix, and the plan is copied from another model | **YES** | small |
 | **F26** | report what the gate MEASURED, not what was collected (`captured 7/7` ≠ used) | **YES** | small |
-| **F27** | the captured input is DISCARDED where one `deepcopy` would have kept it | **YES** | one line |
 | **F28** | the entire end-to-end verdict rests on ONE prompt (n=1) | **YES** | small |
 | **F29** | the CLI's 0.95 `--pcc-target` overrides the engine's documented 0.99 — the threshold SETS quality, it does not merely gate it | **YES — highest value of the three-block run** | one line |
 | **F30** | the drift gate detects the stale template and is wired never to block (*"Never raises"*) | **YES** | small |
@@ -603,7 +603,10 @@ defect.
 | **F40** | the baseline measurement completes (`756.4513 ms`, 8 iters, 4 stages PCC-clean) and is then discarded by a segfault in `close_mesh_device` at teardown; the run reports a missing CSV and optimizes on with no baseline | **YES — with F31** | small |
 | **F41** | the depth-knob sanity check compares op sequences truncated at 50000 and reads the shared limit as "cap never reached the builder"; the knob is also only backbone-deep while its comment claims every stack | **YES** | small |
 
-**If only one thing is taken: F46.** The optimize stage spent twelve hours improving a decode
+**If only one thing is taken: F27** — one `deepcopy` at the capture stage. It is the origin of the
+whole performance story (see THE ROOT CAUSE), and it is a one-line change.
+
+**If only one thing is taken about the SHAPE of the problem: F46.** The optimize stage spent twelve hours improving a decode
 function the product never calls (its gains reach the product only via shared code), while the shipped generation loop recomputes the entire prompt
 plus every prior frame, for every frame. No perf number in this report describes the delivered
 model. F42 is the next one, and is a one-line fix.
