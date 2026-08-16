@@ -5,6 +5,7 @@
 #include "ttnn/operations/wavelet/device/lwt_2d_device_operation.hpp"
 
 #include "ttnn/operations/wavelet/device/wavelet_2d_operation_impl.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_l1_budget.hpp"
 
 namespace ttnn::prim {
 
@@ -38,6 +39,7 @@ Lwt2DOutputs lwt_2d(
         Lwt2DParams{
             .scheme_id = scheme_id,
             .boundary_mode = boundary_mode,
+            .available_l1_bytes = detail::quantized_available_l1_bytes(input.device()),
             .output_memory_config = output_memory_config,
         },
         Lwt2DInputs{

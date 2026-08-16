@@ -152,17 +152,6 @@ struct Logical2DShape {
     return checked_u32(round_up(address, alignment), "2D wavelet workspace address");
 }
 
-[[nodiscard]] uint64_t available_static_l1_bytes_2d(tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const uint64_t base = mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t frontier = mesh_device.lowest_occupied_compute_l1_address().value_or(mesh_device.l1_size_per_core());
-    TT_FATAL(
-        frontier >= base,
-        "2D wavelet allocator reports occupied L1 frontier {} below unreserved base {}",
-        frontier,
-        base);
-    return frontier - base;
-}
-
 [[nodiscard]] uint32_t noc_scratch_tile_count(
     const BoundaryMode boundary_mode, const bool inverse, const size_t route_count) {
     TT_FATAL(
@@ -685,9 +674,9 @@ template <typename Scheme>
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const uint32_t height,
     const uint32_t width,
-    const BoundaryMode boundary_mode) {
-    const uint64_t l1_budget_bytes =
-        std::min<uint64_t>(kL1SignalBudgetBytes2D, available_static_l1_bytes_2d(mesh_device));
+    const BoundaryMode boundary_mode,
+    const uint32_t available_l1_bytes) {
+    const uint64_t l1_budget_bytes = std::min<uint64_t>(kL1SignalBudgetBytes2D, available_l1_bytes);
     Lwt2DExecutionPlan plan = make_lwt_2d_execution_plan<Scheme>(
         height,
         width,
@@ -703,10 +692,10 @@ template <typename Scheme>
             plan.input_width <= static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2),
         "2D LWT input dimensions exceed the signed boundary-index range");
     TT_FATAL(
-        plan.allocated_l1_bytes <= available_static_l1_bytes_2d(mesh_device),
+        plan.allocated_l1_bytes <= available_l1_bytes,
         "2D LWT allocation requires {} L1 bytes but only {} remain below allocator-managed L1 tensors",
         plan.allocated_l1_bytes,
-        available_static_l1_bytes_2d(mesh_device));
+        available_l1_bytes);
     return plan;
 }
 
@@ -715,9 +704,9 @@ template <typename Scheme>
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const uint32_t height,
     const uint32_t width,
-    const BoundaryMode boundary_mode) {
-    const uint64_t l1_budget_bytes =
-        std::min<uint64_t>(kL1SignalBudgetBytes2D, available_static_l1_bytes_2d(mesh_device));
+    const BoundaryMode boundary_mode,
+    const uint32_t available_l1_bytes) {
+    const uint64_t l1_budget_bytes = std::min<uint64_t>(kL1SignalBudgetBytes2D, available_l1_bytes);
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     Ilwt2DExecutionPlan plan = make_ilwt_2d_execution_plan<Scheme>(
         height,
@@ -732,10 +721,10 @@ template <typename Scheme>
             plan.output_width <= static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2),
         "2D ILWT output dimensions exceed the signed boundary-index range");
     TT_FATAL(
-        plan.allocated_l1_bytes <= available_static_l1_bytes_2d(mesh_device),
+        plan.allocated_l1_bytes <= available_l1_bytes,
         "2D ILWT allocation requires {} L1 bytes but only {} remain below allocator-managed L1 tensors",
         plan.allocated_l1_bytes,
-        available_static_l1_bytes_2d(mesh_device));
+        available_l1_bytes);
     return plan;
 }
 
@@ -759,7 +748,11 @@ template <typename Scheme>
     const std::array<const tt::tt_metal::Buffer*, device_protocol::kLwt2DBandCount> input_buffers = {
         &input_buffer, &input_buffer, &input_buffer, &input_buffer};
     Lwt2DExecutionPlan plan = make_forward_plan_2d<Scheme>(
-        mesh_device, input_shape.height, input_shape.width, operation_attributes.boundary_mode);
+        mesh_device,
+        input_shape.height,
+        input_shape.width,
+        operation_attributes.boundary_mode,
+        operation_attributes.available_l1_bytes);
 
     const uint32_t chunks_per_sample = checked_u32(plan.chunks.size(), "2D LWT chunks per sample");
     const uint32_t total_work_items =
@@ -873,7 +866,8 @@ template <typename Scheme>
         mesh_device,
         operation_attributes.output_height,
         operation_attributes.output_width,
-        operation_attributes.boundary_mode);
+        operation_attributes.boundary_mode,
+        operation_attributes.available_l1_bytes);
 
     const uint32_t chunks_per_sample = checked_u32(plan.chunks.size(), "2D ILWT chunks per sample");
     const uint32_t total_work_items =

@@ -5,6 +5,7 @@
 #include "ttnn/operations/wavelet/device/ilwt_2d_device_operation.hpp"
 
 #include "ttnn/operations/wavelet/device/wavelet_2d_operation_impl.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_l1_budget.hpp"
 
 namespace ttnn::prim {
 
@@ -45,6 +46,7 @@ Tensor ilwt_2d(
             .boundary_mode = boundary_mode,
             .output_height = output_height,
             .output_width = output_width,
+            .available_l1_bytes = detail::quantized_available_l1_bytes(ll.device()),
             .output_memory_config = output_memory_config,
         },
         Ilwt2DInputs{

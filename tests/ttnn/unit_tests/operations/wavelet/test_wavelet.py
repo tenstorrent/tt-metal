@@ -815,8 +815,9 @@ def test_wavelet_1d_interleaved_l1_program_cache_keys_and_address_override(
         assert device.num_program_cache_entries() == 1
 
         l1_input_a = to_device_1d(device, signal, ttnn.L1_MEMORY_CONFIG)
+        l1_input_b = to_device_1d(device, signal + 0.25, ttnn.L1_MEMORY_CONFIG)
         l1_outputs = ttnn.dwt(l1_input_a, "bior1.3")
-        ttnn.dwt(to_device_1d(device, signal + 0.25, ttnn.L1_MEMORY_CONFIG), "bior1.3")
+        ttnn.dwt(l1_input_b, "bior1.3")
         assert device.num_program_cache_entries() == 2
         coefficient_length = ttnn.dwt_coeff_len(signal.numel(), "bior1.3")
         for actual, expected in zip(l1_outputs, dram_outputs):
@@ -833,10 +834,10 @@ def test_wavelet_1d_interleaved_l1_program_cache_keys_and_address_override(
         assert device.num_program_cache_entries() == 1
 
         l1_coefficients_a = tuple(to_device_1d(device, tensor, ttnn.L1_MEMORY_CONFIG) for tensor in coefficient_values)
-        l1_reconstructed = ttnn.idwt(*l1_coefficients_a, "bior1.3", signal.numel())
         l1_coefficients_b = tuple(
             to_device_1d(device, tensor + 0.125, ttnn.L1_MEMORY_CONFIG) for tensor in coefficient_values
         )
+        l1_reconstructed = ttnn.idwt(*l1_coefficients_a, "bior1.3", signal.numel())
         ttnn.idwt(*l1_coefficients_b, "bior1.3", signal.numel())
         assert device.num_program_cache_entries() == 2
 
@@ -871,8 +872,9 @@ def test_wavelet_2d_interleaved_l1_program_cache_keys_and_address_override(
         assert device.num_program_cache_entries() == 1
 
         l1_input_a = to_device_2d(device, signal, ttnn.L1_MEMORY_CONFIG)
+        l1_input_b = to_device_2d(device, signal + 0.25, ttnn.L1_MEMORY_CONFIG)
         l1_outputs = ttnn.dwt_2d(l1_input_a, "bior1.3")
-        ttnn.dwt_2d(to_device_2d(device, signal + 0.25, ttnn.L1_MEMORY_CONFIG), "bior1.3")
+        ttnn.dwt_2d(l1_input_b, "bior1.3")
         assert device.num_program_cache_entries() == 2
         for actual, expected in zip(l1_outputs, dram_outputs):
             assert_fp32_identical(ttnn.to_torch(actual), ttnn.to_torch(expected))
@@ -888,8 +890,8 @@ def test_wavelet_2d_interleaved_l1_program_cache_keys_and_address_override(
         assert device.num_program_cache_entries() == 1
 
         l1_bands_a = tuple(to_device_2d(device, tensor, ttnn.L1_MEMORY_CONFIG) for tensor in band_values)
-        l1_reconstructed = ttnn.idwt_2d(*l1_bands_a, "bior1.3", shape)
         l1_bands_b = tuple(to_device_2d(device, tensor + 0.125, ttnn.L1_MEMORY_CONFIG) for tensor in band_values)
+        l1_reconstructed = ttnn.idwt_2d(*l1_bands_a, "bior1.3", shape)
         ttnn.idwt_2d(*l1_bands_b, "bior1.3", shape)
         assert device.num_program_cache_entries() == 2
 
@@ -912,6 +914,58 @@ def test_wavelet_2d_interleaved_l1_program_cache_keys_and_address_override(
         assert device.num_program_cache_entries() == 3
         assert_fp32_identical(ttnn.to_torch(l1_reconstructed), ttnn.to_torch(dram_reconstructed))
         assert_fp32_identical(ttnn.to_torch(mixed_reconstructed), ttnn.to_torch(dram_reconstructed))
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_wavelet_program_cache_specializes_for_available_l1_budget(device: ttnn.MeshDevice) -> None:
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        signal_1d = torch.sin(torch.arange(257, dtype=torch.float32) * 0.017)
+        input_1d = to_device_1d(device, signal_1d)
+        coefficients = ttnn.dwt(input_1d, "db1")
+        reconstructed_1d = ttnn.idwt(*coefficients, "db1", signal_1d.numel())
+
+        shape_2d = (65, 67)
+        signal_2d = torch.sin(torch.arange(shape_2d[0] * shape_2d[1], dtype=torch.float32).reshape(shape_2d) * 0.013)
+        input_2d = to_device_2d(device, signal_2d)
+        bands = ttnn.dwt_2d(input_2d, "db1")
+        reconstructed_2d = ttnn.idwt_2d(*bands, "db1", shape_2d)
+        assert device.num_program_cache_entries() == 4
+
+        pressure = ttnn.allocate_tensor_on_device(
+            (512, 1024),
+            ttnn.float32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            device,
+            ttnn.L1_MEMORY_CONFIG,
+        )
+        assert pressure.buffer_address() != 0
+
+        pressured_coefficients = ttnn.dwt(input_1d, "db1")
+        pressured_reconstructed_1d = ttnn.idwt(*coefficients, "db1", signal_1d.numel())
+        pressured_bands = ttnn.dwt_2d(input_2d, "db1")
+        pressured_reconstructed_2d = ttnn.idwt_2d(*bands, "db1", shape_2d)
+        assert device.num_program_cache_entries() == 8
+
+        ttnn.dwt(input_1d, "db1")
+        ttnn.idwt(*coefficients, "db1", signal_1d.numel())
+        ttnn.dwt_2d(input_2d, "db1")
+        ttnn.idwt_2d(*bands, "db1", shape_2d)
+        assert device.num_program_cache_entries() == 8
+
+        coefficient_length = ttnn.dwt_coeff_len(signal_1d.numel(), "db1")
+        for actual, expected in zip(pressured_coefficients, coefficients):
+            assert_fp32_identical_1d(ttnn.to_torch(actual), ttnn.to_torch(expected), coefficient_length)
+        assert_fp32_identical_1d(
+            ttnn.to_torch(pressured_reconstructed_1d),
+            ttnn.to_torch(reconstructed_1d),
+            signal_1d.numel(),
+        )
+        for actual, expected in zip(pressured_bands, bands):
+            assert_fp32_identical(ttnn.to_torch(actual), ttnn.to_torch(expected))
+        assert_fp32_identical(ttnn.to_torch(pressured_reconstructed_2d), ttnn.to_torch(reconstructed_2d))
     finally:
         device.disable_and_clear_program_cache()
 

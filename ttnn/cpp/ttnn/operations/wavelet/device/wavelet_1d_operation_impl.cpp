@@ -210,25 +210,16 @@ struct Logical1DShape {
                : 0U;
 }
 
-[[nodiscard]] uint32_t available_static_l1_bytes(tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const uint64_t base = mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t frontier = mesh_device.lowest_occupied_compute_l1_address().value_or(mesh_device.l1_size_per_core());
-    TT_FATAL(
-        frontier >= base, "LWT allocator reports occupied L1 frontier {} below unreserved base {}", frontier, base);
-    return checked_u32(frontier - base, "LWT available static L1 bytes");
-}
-
 [[nodiscard]] uint32_t output_group_count(const size_t output_length) {
     return checked_u32(
         ceil_div(output_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), "LWT group count");
 }
 
 [[nodiscard]] uint32_t planner_signal_budget_bytes(
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const uint32_t available_bytes,
     const ArchitecturePolicy& policy,
     const bool hybrid_tile_mirror,
     const uint32_t interleave_batch_sticks) {
-    const uint32_t available_bytes = available_static_l1_bytes(mesh_device);
     const L1Accounting fixed =
         make_l1_accounting(0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
     constexpr uint64_t mirror_rounding_reserve =
@@ -1082,7 +1073,10 @@ void append_programs(
 
 template <typename Scheme>
 [[nodiscard]] LwtExecutionPlan make_forward_execution_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const size_t input_length, const BoundaryMode boundary_mode) {
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const size_t input_length,
+    const BoundaryMode boundary_mode,
+    const uint32_t available_l1_bytes) {
     const SignalBuffer input{
         .dram_address = 0,
         .length = input_length,
@@ -1101,7 +1095,7 @@ template <typename Scheme>
     const bool initial_hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, initial_layout);
     const uint32_t signal_budget_bytes =
-        planner_signal_budget_bytes(mesh_device, architecture_policy, initial_hybrid_tile_mirror, 1U);
+        planner_signal_budget_bytes(available_l1_bytes, architecture_policy, initial_hybrid_tile_mirror, 1U);
     LwtExecutionPlan plan =
         make_lwt_execution_plan(std::move(full_plan), max_cores, signal_budget_bytes, initial_layout);
     const bool tile_native_preferred = prefer_tile_native_workspace(plan, architecture_policy.architecture);
@@ -1119,7 +1113,7 @@ template <typename Scheme>
         tile_mirror_elements(plan.workspace_elements, hybrid_tile_mirror),
         1U,
         architecture_policy.l1_scratch_bytes,
-        available_static_l1_bytes(mesh_device)));
+        available_l1_bytes));
     return plan;
 }
 
@@ -1128,14 +1122,15 @@ template <typename Scheme>
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const uint32_t original_length,
     const size_t coefficient_length,
-    const BoundaryMode boundary_mode) {
+    const BoundaryMode boundary_mode,
+    const uint32_t available_l1_bytes) {
     const std::optional<WorkspaceLayout> workspace_override = workspace_layout_override();
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch(), workspace_override);
     const uint32_t interleave_batch_sticks = ilwt_interleave_batch_sticks(architecture_policy.architecture);
     const bool initial_hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, architecture_policy.ilwt_layout);
     const uint32_t signal_budget_bytes = planner_signal_budget_bytes(
-        mesh_device, architecture_policy, initial_hybrid_tile_mirror, interleave_batch_sticks);
+        available_l1_bytes, architecture_policy, initial_hybrid_tile_mirror, interleave_batch_sticks);
     TT_FATAL(architecture_policy.inverse_scale_inline, "ILWT must preserve inline FP32 inverse scaling");
     LiftingInversePlan full_plan =
         make_inverse_lifting_plan<Scheme>(original_length, coefficient_length, boundary_mode);
@@ -1170,7 +1165,7 @@ template <typename Scheme>
         tile_mirror_elements(plan.workspace_elements, hybrid_tile_mirror),
         interleave_batch_sticks,
         architecture_policy.l1_scratch_bytes,
-        available_static_l1_bytes(mesh_device)));
+        available_l1_bytes));
     return plan;
 }
 
@@ -1183,8 +1178,8 @@ template <typename Scheme>
     auto& mesh_device = *tensor_args.input.device();
     const auto& input_buffer = *tensor_args.input.buffer();
     const Logical1DShape input_shape = logical_1d_signal_shape(tensor_args.input, "DWT input");
-    LwtExecutionPlan plan =
-        make_forward_execution_plan<Scheme>(mesh_device, input_shape.length, operation_attributes.boundary_mode);
+    LwtExecutionPlan plan = make_forward_execution_plan<Scheme>(
+        mesh_device, input_shape.length, operation_attributes.boundary_mode, operation_attributes.available_l1_bytes);
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     const bool hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, plan.workspace_layout);
@@ -1291,7 +1286,8 @@ template <typename Scheme>
         mesh_device,
         operation_attributes.original_length,
         coefficient_shape.length,
-        operation_attributes.boundary_mode);
+        operation_attributes.boundary_mode,
+        operation_attributes.available_l1_bytes);
     using InverseScheme = typename Scheme::inverse;
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     const uint32_t interleave_batch_sticks = ilwt_interleave_batch_sticks(architecture_policy.architecture);

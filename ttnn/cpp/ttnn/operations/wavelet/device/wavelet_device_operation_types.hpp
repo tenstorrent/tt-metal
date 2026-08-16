@@ -41,6 +41,7 @@ using Lwt2DOutputs = std::tuple<Tensor, Tensor, Tensor, Tensor>;
 struct Lwt1DParams {
     operations::wavelet::SchemeId scheme_id;
     operations::wavelet::BoundaryMode boundary_mode;
+    uint32_t available_l1_bytes;
     MemoryConfig output_memory_config;
 };
 
@@ -53,6 +54,7 @@ struct Ilwt1DParams {
     operations::wavelet::SchemeId scheme_id;
     operations::wavelet::BoundaryMode boundary_mode;
     uint32_t original_length;
+    uint32_t available_l1_bytes;
     MemoryConfig output_memory_config;
 };
 
@@ -65,6 +67,7 @@ struct Ilwt1DInputs {
 struct Lwt2DParams {
     operations::wavelet::SchemeId scheme_id;
     operations::wavelet::BoundaryMode boundary_mode;
+    uint32_t available_l1_bytes;
     MemoryConfig output_memory_config;
 };
 
@@ -78,6 +81,7 @@ struct Ilwt2DParams {
     operations::wavelet::BoundaryMode boundary_mode;
     uint32_t output_height;
     uint32_t output_width;
+    uint32_t available_l1_bytes;
     MemoryConfig output_memory_config;
 };
 
