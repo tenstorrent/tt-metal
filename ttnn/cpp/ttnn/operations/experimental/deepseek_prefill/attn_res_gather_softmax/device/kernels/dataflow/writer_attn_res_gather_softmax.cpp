@@ -21,13 +21,13 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/dataflow/attn_res_stats_layout.hpp"
 
 void kernel_main() {
     // compile-time args
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-    // Pages per plane of the statistics tensor, which is the token-row tile count:
-    // rank p's sum of squares for row-tile g is page 2p*Ht + g, its dots (2p+1)*Ht + g.
+    // Token row-tiles, which is what sizes a plane of the statistics tensor.
     constexpr uint32_t Ht = get_compile_time_arg_val(2);
     constexpr uint32_t ready_sem_id = get_compile_time_arg_val(3);
     constexpr uint32_t done_sem_id = get_compile_time_arg_val(4);
@@ -67,6 +67,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_local_stats = 7;
     constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t cb_id_total = 12;
+    constexpr uint32_t cb_id_packed = 13;
 
     constexpr uint32_t stat_tile_bytes = get_tile_size(cb_id_local_stats);
     constexpr uint32_t scalar_tile_bytes = get_tile_size(cb_id_scalars);
@@ -77,6 +78,12 @@ void kernel_main() {
     constexpr uint32_t kStatsPerRow = 2;
     constexpr uint32_t onetile = 1;
 
+    // The statistics cross the fabric packed by column, which turns a plane from Ht
+    // packets into one. Both the pack below and the un-pack in pass two are element
+    // strides through L1, which is why they sit here on the workers — one core per token
+    // row — rather than on the single core that runs the exchange.
+    constexpr uint32_t packed_row_bytes = stats_row_bytes(scalar_tile_bytes);
+
     constexpr uint32_t total_tile_bytes = get_tile_size(cb_id_total);
 
     Noc noc;
@@ -84,6 +91,11 @@ void kernel_main() {
     DataflowBuffer local_stats_buf(cb_id_local_stats);
     DataflowBuffer out_buf(cb_id_out);
     DataflowBuffer total_buf(cb_id_total);
+    // Scratch for the packed form, on both sides of the exchange: the columns this core
+    // parks in pass one, the columns it collects in pass two. Never pushed, so the two
+    // pointers stay at its base and it can be addressed directly.
+    DataflowBuffer packed_buf(cb_id_packed);
+    const uint32_t packed_base = packed_buf.get_write_ptr();
 
     // Page size is given explicitly: the accessor's compile-time value can be stale
     // on a program-cache hit, and the gather core reuses it as the fabric payload size.
@@ -121,13 +133,18 @@ void kernel_main() {
         }
 
         local_stats_buf.wait_front(kStatsPerRow);
+        const uint32_t tiles_base = local_stats_buf.get_read_ptr();
+        for (uint32_t s = 0; s < kStatsPerRow; ++s) {
+            stats_pack_column<stat_tile_bytes>(tiles_base + s * stat_tile_bytes, packed_base + s * packed_row_bytes);
+        }
         for (uint32_t s = 0; s < kStatsPerRow; ++s) {
             noc.async_write(
-                local_stats_buf,
+                packed_buf,
                 stats_accessor,
-                stat_tile_bytes,
-                {.offset_bytes = s * stat_tile_bytes},
-                {.page_id = (2 * my_rank + s) * Ht + g});
+                packed_row_bytes,
+                {.offset_bytes = s * packed_row_bytes},
+                {.page_id = stats_page_of(2 * my_rank + s, g, Ht, stat_tile_bytes),
+                 .offset_bytes = stats_page_offset_of(g, stat_tile_bytes)});
         }
         noc.async_write_barrier();
         local_stats_buf.pop_front(kStatsPerRow);
@@ -166,19 +183,25 @@ void kernel_main() {
                 {.page_id = g + mass_page_offset},
                 {.offset_bytes = scalar_tile_bytes});
 
-            uint32_t offset_bytes = kFixedScalars * scalar_tile_bytes;
-            for (uint32_t p = 0; p < ring_size; ++p) {
-                for (uint32_t s = 0; s < kStatsPerPartial; ++s) {
-                    noc.async_read(
-                        stats_accessor,
-                        cb_scalars,
-                        scalar_tile_bytes,
-                        {.page_id = (2 * p + s) * Ht + g},
-                        {.offset_bytes = offset_bytes});
-                    offset_bytes += scalar_tile_bytes;
-                }
+            // The gathered statistics arrive packed — one page per rank and statistic,
+            // one value per token — so they come in as a block rather than a page each.
+            for (uint32_t k = 0; k < kStatsPerPartial * ring_size; ++k) {
+                noc.async_read(
+                    stats_accessor,
+                    packed_buf,
+                    packed_row_bytes,
+                    {.page_id = stats_page_of(k, g, Ht, scalar_tile_bytes),
+                     .offset_bytes = stats_page_offset_of(g, scalar_tile_bytes)},
+                    {.offset_bytes = k * packed_row_bytes});
             }
             noc.async_read_barrier();
+
+            // Spread them back over the tiles compute reads.
+            const uint32_t scalars_base = cb_scalars.get_write_ptr();
+            for (uint32_t k = 0; k < kStatsPerPartial * ring_size; ++k) {
+                stats_unpack_column<scalar_tile_bytes>(
+                    packed_base + k * packed_row_bytes, scalars_base + (kFixedScalars + k) * scalar_tile_bytes);
+            }
             cb_scalars.push_back(kScalars);
             ++g;
         }

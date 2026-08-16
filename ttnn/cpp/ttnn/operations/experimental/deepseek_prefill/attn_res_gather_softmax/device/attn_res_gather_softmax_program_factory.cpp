@@ -155,11 +155,23 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
 
     const auto site_offsets = attn_res_gather_softmax_site_offsets(operation_attributes, tensor_args);
 
-    // A fabric packet carries one statistics tile whole, so the tile has to fit one.
+    // The statistics cross packed by column rather than tile-shaped, so what a packet
+    // carries is a page of them — a thousand tokens' worth of one rank's statistic
+    // instead of thirty-two. The fabric charges per packet almost regardless of payload,
+    // so this is most of what the exchange costs. Kernel-side layout in
+    // `kernels/dataflow/attn_res_stats_layout.hpp`.
+    // A packed token row is one value per token of a row-tile, so a page holds as many
+    // of them as a tile has columns. A worker's scratch has to hold the whole gathered
+    // set, which is the larger of the two things it packs.
+    const uint32_t packed_row_size = scalar_tile_size / TILE_WIDTH;
+    const uint32_t pages_per_plane = (Ht + TILE_WIDTH - 1) / TILE_WIDTH;
+    const uint32_t packed_tiles =
+        (kStatsPerPartial * ring_size * packed_row_size + scalar_tile_size - 1) / scalar_tile_size;
+
     const auto max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     TT_FATAL(
         scalar_tile_size <= max_payload,
-        "A {} B statistics tile exceeds the {} B fabric payload limit; narrow the statistics dtype",
+        "A {} B statistics page exceeds the {} B fabric payload limit; narrow the statistics dtype",
         scalar_tile_size,
         max_payload);
 
@@ -261,7 +273,8 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
                                  + scalar_tile_size                          // the reduce scaler
                                  + kScalars * scalar_tile_size               // shift, mass, gathered statistics
                                  + kRowWeights * scalar_tile_size + kStatsPerRow * scalar_tile_size +
-                                 2 * output_tile_size;
+                                 packed_tiles * scalar_tile_size  // the packed statistics
+                                 + 2 * output_tile_size;
     TT_FATAL(
         l1_per_core <= target_device->l1_size_per_core(),
         "attn_res_gather_softmax needs {} B of L1 per core at Wt {} but the core has {} B",
@@ -290,6 +303,9 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     make_cb(tt::CBIndex::c_6, all_fold_cores, Wt, wide_tile_size, wide_data_format);  // reduce input
     make_cb(tt::CBIndex::c_7, all_fold_cores, kStatsPerRow, scalar_tile_size, scalar_data_format);
     make_cb(tt::CBIndex::c_16, all_fold_cores, 2, output_tile_size, output_data_format);
+    // A worker's scratch for the packed statistics: the two columns it parks in pass
+    // one, and the whole gathered set it collects in pass two.
+    make_cb(tt::CBIndex::c_13, all_fold_cores, packed_tiles, scalar_tile_size, scalar_data_format);
 
     if (fuse_add) {
         make_cb(tt::CBIndex::c_10, all_fold_cores, Wt, wide_tile_size, wide_data_format);  // pending
@@ -310,12 +326,13 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     make_cb(tt::CBIndex::c_8, gather_core_set, kStatsPerRow * kPeers, packet_header_size, tt::DataFormat::UInt32);
 
-    // The gather stages a run of tiles and sends them behind a single read barrier.
-    // A barrier per tile would put the exchange on the DRAM latency ladder — one round
-    // trip per tile, serialized — at exactly the moment every fold core is prefetching
+    // The gather stages a run of pages and sends them behind a single read barrier.
+    // A barrier per page would put the exchange on the DRAM latency ladder — one round
+    // trip per page, serialized — at exactly the moment every fold core is prefetching
     // against the same DRAM. The cap bounds the buffer for sequences long enough that
-    // the whole plane would not fit L1.
-    const uint32_t stage_tiles = std::min(kStatsPerRow * Ht, kMaxStageTiles);
+    // the whole plane would not fit L1, which the packed layout puts far out of reach:
+    // a page carries a thousand tokens.
+    const uint32_t stage_tiles = std::min(kStatsPerRow * pages_per_plane, kMaxStageTiles);
     make_cb(tt::CBIndex::c_9, gather_core_set, stage_tiles, scalar_tile_size, scalar_data_format);
 
     // Local counters, so a program-launch reset is what we want: the workers that

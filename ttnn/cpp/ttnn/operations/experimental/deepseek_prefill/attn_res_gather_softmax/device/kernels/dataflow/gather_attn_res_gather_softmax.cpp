@@ -6,10 +6,15 @@
 // admits a single worker — every sender core in a fabric op takes its own link index
 // — so the exchange is funnelled here rather than run from each worker.
 //
-// What crosses is this rank's whole statistics plane: two tiles per token row-tile,
-// written into the slot the peers' fold cores read for this rank. Peers write
-// their own slots here symmetrically, so nothing has to be reordered on arrival and
-// the reduction is the slot-wise sum the fold already performs.
+// What crosses is this rank's whole statistics plane, written into the slot the peers'
+// fold cores read for this rank. Peers write their own slots here symmetrically, so
+// nothing has to be reordered on arrival and the reduction is the slot-wise sum the
+// fold already performs.
+//
+// The workers pack the plane by column before signalling, so a plane is a page rather
+// than a page per token row-tile. That is what makes this affordable from one core: the
+// fabric charges per packet almost regardless of payload, and a tile-shaped plane costs
+// Ht packets to carry 32 values each.
 //
 // Ordering: a peer's arrival increment is sent after every payload bound for that
 // peer, on the same connection, and the fabric preserves order per connection. A
@@ -30,6 +35,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/dataflow/attn_res_stats_layout.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -122,17 +128,17 @@ void kernel_main() {
     noc_semaphore_wait(ready_sem_ptr, num_stat_cores);
     noc_semaphore_set(ready_sem_ptr, 0);
 
-    // A rank's plane is a contiguous run of pages — every row's sum of squares, then
-    // every row's dots — so it is staged in chunks and sent behind one read barrier per
-    // chunk. Barriering per tile instead makes the exchange a ladder of DRAM round
-    // trips, one deep, which is the whole of its cost: the payload is well inside a
-    // single link's bandwidth, and every fold core is prefetching against the same DRAM
-    // while this runs.
-    constexpr uint32_t kPlaneTiles = kStatsPerRow * Ht;
-    const uint32_t first_page = kStatsPerRow * my_rank * Ht;
+    // A rank's plane is a contiguous run of pages, and the two planes it owns are
+    // adjacent, so the whole of what it sends is one run. It is staged in chunks and
+    // sent behind one read barrier per chunk rather than one per page: a barrier per
+    // page puts the exchange on the DRAM latency ladder, one round trip deep, at exactly
+    // the moment every fold core is prefetching against the same DRAM.
+    constexpr uint32_t pages_per_plane = stats_pages_per_plane(Ht, stat_tile_bytes);
+    constexpr uint32_t kPlanePages = kStatsPerRow * pages_per_plane;
+    const uint32_t first_page = kStatsPerRow * my_rank * pages_per_plane;
 
-    for (uint32_t base = 0; base < kPlaneTiles; base += stage_tiles) {
-        const uint32_t remaining = kPlaneTiles - base;
+    for (uint32_t base = 0; base < kPlanePages; base += stage_tiles) {
+        const uint32_t remaining = kPlanePages - base;
         const uint32_t chunk = remaining < stage_tiles ? remaining : stage_tiles;
 
         stage_buf.reserve_back(chunk);
