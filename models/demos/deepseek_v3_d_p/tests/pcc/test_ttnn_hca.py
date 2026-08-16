@@ -270,6 +270,7 @@ def test_hca_forward(device, seq_len, model_config):
     batch = 1
     config = _config(model_config)
     nh, hd, sw = config.num_attention_heads, config.head_dim, config.sliding_window
+    compress_rate = config.compress_rates["heavily_compressed_attention"]
     logger.debug(f"batch={batch}, seq_len={seq_len}, heads={nh}, head_dim={hd}, sw={sw}")
 
     ref = DeepseekV4Attention(config, layer_idx=0).eval()
@@ -295,19 +296,21 @@ def test_hca_forward(device, seq_len, model_config):
     logger.debug(f"Reference output shape: {tuple(out_ref.shape)}")
 
     tt_model = TtHCA.from_reference(device, ref, config)
+    # sp=1 here, so this only rounds up to a whole compression window -- the same call the mesh test makes.
+    hidden_padded, seq_len_actual = TtHCA.prepare_input(hidden, 1, compress_rate)
     tt_input = ttnn.from_torch(
-        hidden.unsqueeze(1),
+        hidden_padded.unsqueeze(1),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
     )
 
     logger.debug("Running ttnn TtHCA forward")
-    state = tt_model.alloc_state(seq_len)  # a one-chunk prefill still owns its state
+    state = tt_model.alloc_state(hidden_padded.shape[1])  # a one-chunk prefill still owns its state
     signpost("HCA_START")
-    out_tt = tt_model(tt_input, state=state)
+    out_tt = tt_model(tt_input, seq_len_actual=seq_len_actual, state=state)
     signpost("HCA_END")
-    out = ttnn.to_torch(out_tt).squeeze(1)  # [B, 1, S, hidden] -> [B, S, hidden]
+    out = ttnn.to_torch(out_tt).squeeze(1)[:, :seq_len_actual]  # [B, 1, S, hidden] -> [B, S_real, hidden]
     logger.debug(f"TTNN output shape: {tuple(out.shape)}")
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"

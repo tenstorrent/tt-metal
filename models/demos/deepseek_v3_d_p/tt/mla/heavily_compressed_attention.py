@@ -555,6 +555,12 @@ class TtHCA(_TtHCABase):
         # A write always rewrites whole tiles, so the last one can reach past the entries themselves.
         # ``chunk_tokens`` sizes that headroom.
         chunk = chunk_tokens or max_seq_len
+        align = self.compressor.compress_rate * self.sp_factor
+        assert chunk % align == 0, (
+            f"the slab is {chunk} wide, which is not a multiple of compress_rate * sp_factor "
+            f"({self.compressor.compress_rate} * {self.sp_factor} = {align}); every chip's share of it has "
+            f"to end on a compression-window boundary. prepare_input rounds a raw prompt up to that."
+        )
         width = -(-int(chunk) // self.compressor.compress_rate)
         capacity += _cache_write_rows(width)
         # Every one-hot the write can ever need: with chunks of differing real length r_e reaches every
