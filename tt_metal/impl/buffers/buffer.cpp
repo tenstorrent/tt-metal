@@ -94,18 +94,21 @@ void validate_buffer_parameters(
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
-    uint32_t num_dram_banks) {
+    const AllocatorImpl& allocator) {
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
-        // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
-        // A shard core off row 0 aliases onto an existing bank and corrupts data. The same is true of
-        // an x beyond the bank count -- there is no such bank, so the shard either faults when the
-        // channel is resolved or silently lands somewhere it should not. Applies to both the ND
-        // (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
-        if (buffer_type == BufferType::DRAM) {
+        // Every shard core must own a bank of this buffer type. Nothing else on the allocation path
+        // checks this: the allocator is handed a shard *count*, not the coordinates, so an invalid
+        // core survives construction and is only caught later by whichever op happens to resolve a
+        // bank id for it -- or not caught at all, in which case the shard lands on a bank that does
+        // not exist. Applies to both the ND (BufferDistributionSpec) and legacy (ShardSpecBuffer)
+        // paths.
+        const bool bank_backed =
+            buffer_type == BufferType::DRAM || buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL;
+        if (bank_backed) {
             std::vector<CoreCoord> shard_cores;
             if (buffer_distribution_spec.has_value()) {
                 shard_cores = buffer_distribution_spec->cores();
@@ -113,22 +116,28 @@ void validate_buffer_parameters(
                 shard_cores = corerange_to_cores(shard_spec->grid());
             }
             for (const auto& core : shard_cores) {
+                // Checked separately from the bank lookup below because a DRAM core off row 0 is a
+                // real coordinate -- logical y indexes a DRAM view's subchannels -- it is just not a
+                // bank. The allocator keys DRAM banks as {bank_id, 0}, so such a core aliases onto
+                // bank x and corrupts it, which a bare "no bank here" message would not explain.
+                if (buffer_type == BufferType::DRAM) {
+                    TT_FATAL(
+                        core.y == 0,
+                        "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
+                        "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
+                        core.x,
+                        core.y);
+                }
                 TT_FATAL(
-                    core.y == 0,
-                    "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
-                    "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
-                    core.x,
-                    core.y);
-                TT_FATAL(
-                    core.x < num_dram_banks,
-                    "Invalid DRAM shard grid: shard core ({}, {}) is outside the {} DRAM banks on this "
-                    "device. bank_id == logical x-coordinate, so every shard core must have "
-                    "x < num_banks. Note that a harvested device exposes fewer banks than the full "
-                    "grid -- derive the shard grid from the device (e.g. dram_grid_size().x) rather "
-                    "than assuming a fixed bank count.",
+                    allocator.has_bank(buffer_type, core),
+                    "Invalid shard grid: shard core ({}, {}) has no {} bank on this device, which has "
+                    "{} of them. Derive the shard grid from the device (dram_grid_size() for DRAM, "
+                    "compute_with_storage_grid_size() for L1) rather than assuming a fixed size -- a "
+                    "harvested device exposes fewer banks than an unharvested one of the same type.",
                     core.x,
                     core.y,
-                    num_dram_banks);
+                    enchantum::to_string(buffer_type),
+                    allocator.get_num_banks(buffer_type));
             }
         }
     } else {
@@ -370,13 +379,7 @@ Buffer::Buffer(
         this->allocator_ = device->allocator_impl().get();
     }
     validate_buffer_parameters(
-        size,
-        page_size,
-        buffer_type,
-        buffer_layout_,
-        shard_spec_,
-        buffer_distribution_spec_,
-        this->allocator_->get_num_banks(BufferType::DRAM));
+        size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_, *this->allocator_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
