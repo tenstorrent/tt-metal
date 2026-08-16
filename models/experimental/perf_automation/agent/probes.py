@@ -815,6 +815,11 @@ def _max_asic_temp(data) -> float | None:
 
 
 _SYSFS_HWMON = "/sys/class/hwmon"
+# WHAT A DIE TEMPERATURE CAN BE. Blackhole throttles around 90C and shuts down well under 125, so
+# 150 is far clear of any real reading while excluding the driver's all-ones "no data" value by a
+# factor of four hundred. 0 excludes the other sentinel shape -- an all-zeros register reads as a
+# perfectly plausible 0C and would drag a max-of-chips DOWN, which is the dangerous direction.
+_DIE_TEMP_MIN_C, _DIE_TEMP_MAX_C = 0.0, 150.0
 _TT_SMI_TEMP_TIMEOUT_S = float(os.environ.get("PERF_MCP_TT_SMI_TEMP_TIMEOUT_S", "15") or "15")
 
 
@@ -828,6 +833,23 @@ def _sysfs_asic_temps() -> list:
     Matched on the DRIVER, not the hwmon `name`. The name is the arch ("blackhole"), so keying on it
     would silently find zero chips on Wormhole and report no temperature at all -- the exact shape of
     failure this function exists to remove.
+
+    A READ THAT SUCCEEDS IS NOT A READING. The temperature comes from each chip's ARC management
+    core; when the ARC is not running the driver still publishes the file, filled with all ones:
+
+        cat temp1_input -> 76617      = 76.6C, a temperature
+        cat temp1_input -> 65535999   = 65535.999C, "no data" wearing a temperature's units
+
+    Identical file, identical format, identical successful read -- there is no error to catch and no
+    validity flag to consult, so the VALUE is the only thing that can tell them apart. Unchecked, one
+    such chip decided the whole board: _read_asic_temp takes the hottest chip, 65535 beats every real
+    number, and on 2026-08-16 that made every thermal gate wait its full 900s and then measure hot,
+    for a board whose live chips were sitting at 80C.
+
+    Implausible chips are DROPPED, not clamped: a chip with no telemetry is a chip whose temperature
+    nobody knows, and inventing one would be the same mistake in the other direction. Two dead ARCs
+    is also a fault worth acting on in its own right -- it meant a leaked process tree was holding
+    the board -- which is why they are counted and reported rather than quietly filtered.
     """
     out: list = []
     try:
@@ -838,10 +860,29 @@ def _sysfs_asic_temps() -> list:
         try:
             if (h / "device" / "driver").resolve().name != "tenstorrent":
                 continue
-            out.append(int((h / "temp1_input").read_text().strip()) / 1000.0)
+            t = int((h / "temp1_input").read_text().strip()) / 1000.0
         except (OSError, ValueError):
             continue
+        if not (_DIE_TEMP_MIN_C < t < _DIE_TEMP_MAX_C):
+            _NO_TELEMETRY_CHIPS.add(str(h.name))
+            continue
+        _NO_TELEMETRY_CHIPS.discard(str(h.name))
+        out.append(t)
     return out
+
+
+# Chips whose sensor answered with something that is not a temperature. Not a cache -- a record, so
+# the caller can say "this board has a chip with no telemetry" instead of silently measuring on the
+# ones that still work. Populated by _sysfs_asic_temps on every read, so it is always current.
+_NO_TELEMETRY_CHIPS: set = set()
+
+
+def chips_without_telemetry() -> list:
+    """hwmon names whose last read was not a temperature. Empty when every chip answered.
+
+    A chip in this list has a dead ARC: it is not merely unreadable, it is broken, and the run that
+    finds one is running on a board that needs attention rather than a board that is a bit warm."""
+    return sorted(_NO_TELEMETRY_CHIPS)
 
 
 def _tt_smi_asic_temp():
@@ -863,15 +904,39 @@ def _read_asic_temp():
     the safe direction: a source that says hot is evidence, a source that says nothing is not evidence
     of cool.
 
-    sysfs is tried first and usually settles it in under a millisecond; tt-smi is only consulted when
-    sysfs found no chips, so the common path costs nothing. None means NEITHER answered, and the
-    caller must treat that as unknown rather than as a cool board -- see _wait_for_thermal_headroom.
+    BOTH ARE ASKED, ALWAYS. This said "the hotter wins" and did not do it: tt-smi was consulted only
+    when sysfs found NO chips, so `max` ran across the four sysfs chips and never between the two
+    sources. Measured: sysfs 60C with tt-smi at 90C returned 60C -- the hotter source losing outright,
+    which is the exact direction the docstring calls unsafe. The test that guarded this passed only
+    because its sysfs value happened to be the higher one, so it would have passed against code that
+    ignored tt-smi entirely.
+
+    Fallback was the wrong shape for a reason. A fallback trusts the first source to know when it has
+    failed, and sysfs cannot: a dead ARC publishes 65535999 rather than an error, so sysfs "succeeds"
+    and the second opinion is never sought -- precisely when it is most needed. Asking both costs one
+    bounded subprocess and removes the case where a working source is never heard from.
+
+    Both are bounds-checked. tt-smi reads the same ARC telemetry over a different path, so it can
+    return the same sentinel, and a source is only evidence while its answer is possible.
+
+    None means NEITHER produced a usable reading, and the caller must treat that as unknown rather
+    than as a cool board -- see _wait_for_thermal_headroom.
     """
-    vals = [v for v in (max(_sysfs_asic_temps() or [0.0]) or None,) if v]
-    if not vals:
-        v = _tt_smi_asic_temp()
-        return float(v) if v else None
-    return max(vals)
+
+    def _usable(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if _DIE_TEMP_MIN_C < v < _DIE_TEMP_MAX_C else None
+
+    # PER CHIP, not on the max. Checking only the maximum lets a single sentinel discard every live
+    # chip with it -- the reading would go from "80.5C" to "unknown" because a neighbour is broken.
+    # _sysfs_asic_temps already drops them at the parse; this holds for any caller that does not.
+    vals = [
+        v for v in ([_usable(x) for x in (_sysfs_asic_temps() or [])] + [_usable(_tt_smi_asic_temp())]) if v is not None
+    ]
+    return max(vals) if vals else None
 
 
 def _await_cool(read_temp=_read_asic_temp, sleeper=time.sleep) -> None:
