@@ -574,6 +574,32 @@ confirmed free, and the next launch opened the mesh normally.
   tensor dumps, profiler CSVs, and the per-sample eval dumps.
 * The IRD reservation was not released (no monitor asked).
 
+## Commit
+
+Stage-owned changes are committed locally and **not pushed**, per the bringup
+contract.
+
+| repo | branch | commit |
+|---|---|---|
+| `tt-metal` | `agentic-research/hous/muse-glimmer-30b` | `ec69581f5d2a28d2eb8a3bf3c90be3e5ccc2a1ab` |
+
+105 files: `doc/tti_release/` (2.8 MB of evidence; raw `server.log` re-ignored,
+`logs/server_excerpt.log` committed instead), the new
+`tt/reasoning_parser.py` + `tests/test_reasoning_parser.py`, the shared seeding
+fix in `models/common/sampling/tt_sampling.py`, and `.gitignore`. No unrelated
+dirty state was swept in; the worktree is clean at this SHA.
+
+The `tt-inference-server` clone is scratch, outside this repo and not committed;
+its full local diff is committed here as
+`tti_local_edits/tt_inference_server_local_edits.patch`.
+
+Two pre-commit hooks acted on the staged tree and are worth noting because they
+touched evidence: `trailing-whitespace`/`end-of-file-fixer` normalised committed
+`*.log` and `*.json` artifacts (cosmetic; no number or token changed — the run
+spec, the eval health files and all 18 benchmark JSONs were re-checked after),
+and `black`/`isort`/`autoflake` reformatted the stage's Python. The 13
+reasoning-parser tests were re-run after the reformat and pass.
+
 ## Report path
 
 ```
