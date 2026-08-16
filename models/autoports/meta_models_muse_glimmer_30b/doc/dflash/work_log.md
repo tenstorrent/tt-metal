@@ -155,6 +155,33 @@ Both traps were hit while writing the waiter.
 
 ---
 
+### F5 — Projected device win: ~4.5×, from measured inputs
+
+Not yet measured on device (F4).  Stated as a projection so it can be checked
+against the real number rather than quietly forgotten:
+
+| term | value | source |
+|---|---|---|
+| baseline decode | 23.03 ms/token, 43.4 t/s/u | TTI sweep, ISL 128 batch 1 |
+| accepted tokens / target forward | 5.33 | CPU oracle (F1) |
+| drafter : target parameter ratio | 2.56 B : 30 B ≈ 8.5 % | checkpoint sizes |
+
+Decode at batch 1 is weight-bandwidth bound, so a 16-position verify forward
+costs about the same as a 1-position decode step, and the drafter forward scales
+roughly with its parameter share:
+
+```
+per iteration ≈ 23 ms (verify) + ~2-4 ms (draft)  ≈ 25-27 ms
+                → 5.33 tokens                     ≈ 4.7-5.1 ms/token
+                → ~195-210 t/s/u                  ≈ 4.5x over 43.4
+```
+
+That would put Muse-Glimmer-30B on 4 Blackhole dies at roughly the RTX 5090's
+DFlash figure (233.4 tok/s) rather than a third of it.  **The dominant
+uncertainty is the acceptance rate**, which is workload-dependent — 5.33 came
+from one coding prompt, and the sweep should measure it per ISL rather than
+assume it.
+
 ## Artifacts
 
 | file | what |
@@ -163,12 +190,17 @@ Both traps were hit while writing the waiter.
 | `tests/dflash_goldens.pt` | goldens at context 1 / 16 / 128 / 2048 / 4096 (4096 is the only one exceeding the window) |
 | `tests/dflash_cpu_oracle.py` + `.json` | end-to-end CPU oracle: acceptance rate, forward reduction, losslessness check |
 | `tests/dflash_divergence_probe.py` + `.json` | isolates F2 to target-model numerics |
-| `tt/dflash_drafter.py` | the TTNN drafter |
+| `tt/dflash_drafter.py` | the TTNN drafter, plus context/noise assembly helpers |
+| `tt/dflash_accept.py` | the accept/reject rule, device-free |
 | `tests/test_dflash_drafter.py` | PCC parity + mask-semantics unit tests |
+| `tests/test_dflash_accept.py` | 71 tests, incl. 64 randomised blocks vs the HF rule |
+| `tt/model.py` | `arm_hidden_state_taps()` / `take_hidden_state_taps()` |
 
 ## Next
 
-1. Device PCC (queued; fires when the chips free).
-2. Target hidden-state taps at layers 1/13/25/37/49.
-3. The draft/verify/accept loop in the generator.
-4. Batch-1 t/s/u sweep against the 43.4 t/s/u baseline.
+1. **Device PCC** — queued and armed; fires automatically when the chips free.
+2. **Wire the loop end to end** — the pieces exist (drafter, taps, context
+   assembly, accept rule); what remains is the generator glue and the
+   `DFlashCache` window-eviction bookkeeping.
+3. **Batch-1 t/s/u sweep** against the 43.4 t/s/u baseline, measuring the
+   acceptance rate per ISL rather than assuming F1's 5.33.
