@@ -212,11 +212,25 @@ The final fact-complete Claude review used the required command and timed out af
 output. Silence was not treated as approval. Ledger write-back follows the plan-authorized API-v11
 design and the independently completed mandatory gates; no API expansion was made.
 
+### C11 — Tier 2.13 SDPA-decode `read_k` star
+
+The fact-complete architecture consultation used the required Claude command and timed out after 240
+seconds without a verdict. No approval was inferred. The plan-authorized API-v11 design uses one
+no-handshake fixed `Mcast2D` per vertical replicated-Q sharing group, adopts the existing K semaphore,
+and retains the runtime sender-role scalar because the fixed helper wire intentionally has no role tag.
+The sender uses `CallerManaged` followed by the existing full write barrier, preserving source lifetime
+and the proven Blackhole post-signal completion point; the receiver conservatively retains its atomic
+barrier. No helper API change is proposed.
+
+A second fact-complete consultation after build, full correctness, LOC, and performance evidence used
+the required command and timed out after five minutes without a verdict. Silence was not treated as
+approval. The plan-authorized gates independently pass, and no API expansion was made.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 27 migrated, 2 pending, 75 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 28 migrated, 2 pending, 74 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
@@ -226,6 +240,7 @@ design and the independently completed mandatory gates; no API expansion was mad
 | Tier 2.10 Sharded LayerNorm post-allgather | complete | API v11 at `6cc49825476`; exact/full correctness, ABI guards, fresh JIT, host topology, and both matched performance gates passed |
 | Tier 2.11 Plain sharded LayerNorm | deferred-performance | Correctness passed, but single-stage matched performance regressed +2.086%; experimental changes reverted |
 | Tier 2.12 Interleaved GroupNorm | complete | API v11 at `40e209daad9`; all build, LOC, correctness, helper, source-audit, and matched-performance gates passed |
+| Tier 2.13 SDPA-decode `read_k` star | complete | API v11 at `f760425fe06`; full mapped correctness, fresh-JIT, shared-consumer audit, and q-factor 2/4 matched performance passed |
 
 ## Chronological findings
 
@@ -387,3 +402,24 @@ design and the independently completed mandatory gates; no API expansion was mad
     inferred. The source migration was committed at `40e209daad9`, then the four kernel rows and three
     host bindings were written back at API v11 from the independently satisfied gates. Rollout state is
     now 27 migrated, 2 pending, and 75 deferred kernels. API expansion: NO.
+39. Tier 2.13 replaces only the `read_k` vertical star. Host code emits an inactive singleton wire for
+    ordinary SDPA-decode and exact per-group wires for replicated-Q MLA; kernel code resumes both CT
+    and RT through `McastArgs`. Every touched production file has additions below deletions, the Release
+    build passed, and a fresh-cache factor-4 replicated-Q route passed with 0/16 JIT hits and PCCs above
+    0.9998. A first compile attempt exposed only that the shared header is also parsed by the writer;
+    moving the helper include into that header fixed all consumers without API expansion.
+40. Tier 2.13 mapped validation passed: unit SDPA 11 passed / 1 grid skip; flexible geometry 10/10;
+    unit MLA 2/2; replicated-Q q-factor 4 and q-factor 2 stress plus ordinary guards 4/4; nightly SDPA
+    75 passed / 13 declared skips; cache 10/10; nightly MLA 40/40. The sink file retained its 18 existing
+    Blackhole issue skips. The host helper suite passed 34/34, the device helper suite passed 80/80
+    under Watcher, and the expanded source audit passed 20/20. Release builds passed before and after
+    the matched source-state profiling cycle.
+41. Matched 800 MHz Tracy used three independent 25-operation sessions per source state and sharded
+    replicated-Q geometry, discarding the first five SDPA operation samples per session. The q-factor-4
+    median-of-run-medians improved from 52,478.5 ns to 51,850 ns (-1.20%); q-factor 2 improved from
+    51,833 ns to 51,473 ns (-0.69%). Raw production files were restored reversibly from the source
+    commit parent, rebuilt, then the migrated files were restored byte-identically and rebuilt.
+42. The second Tier 2.13 Claude review timed out after five minutes without a verdict; no approval was
+    inferred. Source was committed at `f760425fe06`, then the kernel and host binding were written back
+    at API v11 from the independently satisfied mandatory gates. Rollout state is now 28 migrated,
+    2 pending, and 74 deferred kernels. API expansion: NO.

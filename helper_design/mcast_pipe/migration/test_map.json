@@ -184,6 +184,23 @@
       "coverage": "operation guards plus direct source audit of the inactive three-wire ABI"
     },
     {
+      "id": "sdpa-decode:read-k-fixed-column-star",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp",
+      "dispatch": "replicated-Q single-device MLA decode with q_heads_parallel_factor greater than one",
+      "migration_unit": "sdpa-decode-read-k-star",
+      "inventory": [
+        "SDPA-DECODE-UNIT",
+        "SDPA-DECODE-FLEXIBLE-GEOMETRY",
+        "SDPA-DECODE-NIGHTLY",
+        "SDPA-DECODE-CACHE",
+        "MLA-DECODE-UNIT",
+        "MLA-DECODE-NIGHTLY",
+        "MLA-DECODE-REPLICATED-Q"
+      ],
+      "coverage": "complete with fresh-JIT q-factor-4 proof, q-factor-2 guard, every including single-device route, and matched performance"
+    },
+    {
       "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
       "classification": "required",
       "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
@@ -578,11 +595,6 @@
       "route": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_noncausal"
     },
     {
-      "candidate": "sdpa_decode dataflow_common.hpp",
-      "confidence": "discovery-only",
-      "route": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py; use a sharded case and confirm q_heads_parallel_factor>1 plus the including JIT kernel"
-    },
-    {
       "candidate": "reader_argmax_interleaved_multicore.cpp",
       "confidence": "discovery-only",
       "route": "tests/ttnn/unit_tests/operations/reduction/test_argmax.py; shape [64,128], dim=-1, use_multicore=True"
@@ -814,6 +826,13 @@
       "inventory": "CONV3D-WEIGHT-MCAST",
       "coverage": "high; exact fresh-cache Mcast/NOC1 writer proof, focused and complete Conv3D inventories, and two matched performance routes",
       "result": "API v11 migrated; focused 12 passed, unit 27 passed / 1 skip, nightly 1606 passed / 5 skips / 2 xfails, non-grouped -0.815%, grouped -0.298%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
+      "status": "migrated",
+      "inventory": "SDPA-DECODE single-device unit, nightly, cache, flexible-geometry, MLA, and replicated-Q routes",
+      "coverage": "high; fresh-JIT q-factor-4 route, q-factor-2 route, all shared-header consumers, and two matched performance cases",
+      "result": "API v11 at f760425fe06; mapped executable inventories passed, source audit 20/20, q-factor 4 -1.20%, q-factor 2 -0.69%"
     }
   ],
   "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."

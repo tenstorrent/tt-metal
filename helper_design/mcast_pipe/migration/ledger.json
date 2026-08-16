@@ -391,6 +391,28 @@
       "flags": ["tier:2.12", "inactive-helper-wire", "shared-cache-abi"]
     },
     {
+      "id": "sdpa-decode:read-k-fixed-column-star",
+      "factory": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp",
+      "dispatch": "replicated-Q single-device MLA decode with q_heads_parallel_factor greater than one",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+      ],
+      "migration_unit": "sdpa-decode-read-k-star",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "f760425fe06",
+      "validation_set": [
+        "build_metal.sh: passed; fresh-JIT q-factor-4 replicated-Q route passed with 0/16 cache hits",
+        "unit SDPA 11 passed / 1 grid skip; flexible geometry 10 passed; unit MLA 2 passed; replicated-Q stress 4 passed",
+        "nightly SDPA 75 passed / 13 expected skips; cache 10 passed; nightly MLA 40 passed; sink 18 existing Blackhole skips",
+        "source audit 20 passed; all three production files independently satisfy additions below deletions",
+        "matched 800 MHz Tracy: q-factor 4 -1.20%, q-factor 2 -0.69%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.13", "fully-end-to-end", "fresh-jit-verified", "fixed-column-star"]
+    },
+    {
       "id": "sort:single-row-multi-core:control",
       "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
       "dispatch": "single-row multicore DRAM factory selected when Wt exceeds the hybrid full-grid capacity",
@@ -1538,19 +1560,23 @@
       "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
       "op_family": "transformer + sdpa",
       "role": "both",
-      "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "f760425fe06",
       "validation_set": [
-        "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_sharded (use_k_mcast=1)"
+        "fresh-JIT replicated-Q q-factor-4 route passed with 0/16 hits and both including reader/writer sources",
+        "unit SDPA 11 passed / 1 grid skip; flexible geometry 10 passed; unit MLA 2 passed; replicated-Q stress 4 passed",
+        "nightly SDPA 75 passed / 13 expected skips; cache 10 passed; nightly MLA 40 passed; sink 18 existing Blackhole skips",
+        "source audit 20 passed; matched q-factor-4 and q-factor-2 performance improved -1.20% and -0.69%"
       ],
-      "coverage_confidence": "med",
-      "last_verified": "2026-06-20",
-      "inventory_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED: the factory materializes one fixed API-v11 Mcast2D per replicated-Q sharing group, so recipient count is host-known per wire. The shared binary keeps only its operation-owned runtime sender-role scalar and chooses send versus receive on the same opaque helper argument block. Ordinary non-multicast routes receive an inactive singleton block. The proven Blackhole sender write barrier and receiver atomic barrier remain.",
       "flags": [
-        "tier:2c",
-        "design-gap"
+        "tier:2.13",
+        "fully-end-to-end",
+        "fixed-column-star"
       ]
     },
     {
