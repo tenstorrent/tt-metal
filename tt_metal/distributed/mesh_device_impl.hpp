@@ -326,10 +326,14 @@ public:
     // prefetcher on `device`: element 0 is the free non-endpoint subchannel
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set. Indices are derived
-    // per-bank and per-device from the SOC descriptor (they are not fixed across banks,
-    // nor across devices with different DRAM harvest masks), so callers must name the
-    // device whose topology they mean — there is no mesh-wide answer.
+    // pair lets two DRISC cores share a bank's receiver set.
+    //
+    // A logical DRAM coord names an endpoint role, not a raw subchannel (see
+    // metal_SocDescriptor::dram_bank_endpoint_coords), so the returned (bank, role) pair is the
+    // same on every device in the mesh. What varies per device is which physical subchannel each
+    // role resolves to, which tracks that device's DRAM harvest mask — hence the `device`
+    // argument. Callers wanting the mesh-wide mapping may resolve it against any one device;
+    // callers addressing hardware must translate through the device they mean.
     std::vector<CoreCoord> dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const;
 
     bool close() override;

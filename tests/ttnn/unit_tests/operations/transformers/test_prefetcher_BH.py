@@ -585,7 +585,17 @@ def run_prefetcher_all_matmuls(
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
-    """Minimal public-API data-flow test for per-device harvested DRAM sender placement."""
+    """Minimal public-API data-flow test for per-device harvested DRAM sender placement.
+
+    This drives the prefetcher across a two-device mesh and validates the delivered bytes on
+    every device. Whether it distinguishes per-device sender translation from the mesh-wide
+    reference translation it replaced depends on the silicon: a pair of devices with identical
+    DRAM harvest masks resolves every bank to the same physical sender on both, so this passes
+    either way. The discriminating check -- comparing each bank's resolved sender across the mesh
+    and reporting when the pair is homogeneous -- lives in the C++ regression
+    (DramSenderGCBMultiDeviceFixture.ConfigAndSenderStateUsePerDeviceDramTopology), which can
+    reach the per-device SOC descriptors that are not exposed to Python.
+    """
     if not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
         pytest.skip("programmable DRAM cores unavailable (need Blackhole and firmware >= 19.12.0.0)")
 
@@ -627,7 +637,7 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
         )
         for bank in range(num_dram_banks)
     ]
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         mesh_device, bank_to_receivers, 4 * push_page_size
     )
 

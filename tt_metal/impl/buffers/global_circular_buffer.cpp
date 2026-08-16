@@ -118,7 +118,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
         receiver_cores_,
         all_cores_,
         max_num_receivers_per_sender);
-    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
+    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender, /*dram_sender_mesh_device=*/nullptr);
 }
 
 GlobalCircularBuffer::GlobalCircularBuffer(

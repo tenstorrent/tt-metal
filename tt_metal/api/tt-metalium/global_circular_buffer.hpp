@@ -64,10 +64,13 @@ public:
     }
 
 private:
+    // `dram_sender_mesh_device` is required for the DRAM-sender flavour (it drives per-device
+    // sender placement) and must be null for the worker flavour. No default: both callers name
+    // the mode they mean.
     void setup_cb_buffers(
         BufferType buffer_type,
         uint32_t max_num_receivers_per_sender,
-        distributed::MeshDevice* dram_sender_mesh_device = nullptr);
+        distributed::MeshDevice* dram_sender_mesh_device);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(
         distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender);
