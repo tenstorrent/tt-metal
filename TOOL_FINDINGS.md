@@ -4318,6 +4318,70 @@ answer yes, honestly, for a decode step that exists. Nothing asks whether the ge
 reaches that code. Coverage was checked by op signature, and both paths run backbone ops — so an
 op-level check sees the same signatures and reports the model covered.
 
+### AUDIT — is anything else in the port like F46?
+
+F46 is severe enough that the rest of the generated port was swept for the same class of defect:
+code that a gate or a measurement exercises but the product never runs. **The result bounds the
+problem: decode is the only stage that diverges.** Recorded because a finding that overstates its
+own blast radius is worth less than one that fences it.
+
+**Method.** Four passes over `models/demos/voxtral_tts_full/`:
+
+1. compare each `<stage>_trace_step` against what `run_tts` calls for that stage;
+2. AST sweep for parameters accepted and never referenced in the body (the `cache` pattern);
+3. reachability sweep for methods reachable only from trace/perf code;
+4. check whether the depth caps differ between the traced and shipped builds.
+
+**Result 1 — stage-by-stage, only decode differs:**
+
+| stage | traced / profiled | shipped (`run_tts`) | same code? |
+|---|---|---|---|
+| prefill | `_run_backbone(x, depths["prefill"])` | `_run_backbone(x)` | **yes** — see result 4 |
+| flow | `self.flow(h)` | `self.flow(h)` via `_run_flow` | **yes** |
+| vocode | `_run_codec(codes)` | `_run_codec(codes)` | **yes** |
+| **decode** | `decode_step` — incremental, resident KV | `_run_backbone(full padded seq)` | **NO** |
+
+Decode is also the stage that runs 24× per utterance, so the one divergence is in the one place that
+dominates the cost.
+
+**Result 2 — accepted-and-ignored parameters.** Two matter, both supporting F46 rather than adding
+to it:
+
+```python
+_stubs/attention.py:44
+    def __call__(self, h, cis=None, bias=None, cache=None, cache_key=None):
+        return self.attn(h, causal=bias is not None)      # cache, cache_key dropped
+
+_stubs/decoder_layer.py:33
+    def __call__(self, x, cis=None, bias=None, cache=None):
+        return self.layer(x, causal=bias is not None)     # cache dropped
+```
+
+Both accept a KV cache and discard it, confirming that no cache can reach the shipped path even if a
+caller supplied one. The ignored `cis` is the documented consequence of F37's third defect (the
+native probe forbids marshalling side inputs, so stubs rebuild them in `build()`). The remaining
+hits are benign: pytest's `device_params` indirect-fixture idiom, an abstract base raising
+`NotImplementedError`, and the F37 repair conftest deliberately choosing staging dtype from the
+tensor rather than the argument.
+
+**Result 3 — no other dead paths.** Every `<stage>_trace_*` method is reached, via
+`getattr(self, f"{stage}_trace_setup")` inside `trace_capture_selftest`. (A naive static grep reports
+them as uncalled; that is a false positive and was checked.) Nothing else in `tt/pipeline.py` is
+unreachable from either path.
+
+**Result 4 — depths match.** `_depth(None, total)` returns `total`, and `demo_tts.py` builds with
+`layers=args.layers`, defaulting to `None`. So `depths["prefill"] == 26` and
+`_run_backbone(x, 26)` takes the `n == len(layers)` branch, which is exactly `self.backbone(x)` —
+byte-identical behaviour to the shipped call. The capped path exists only for depth-limited
+profiling builds.
+
+**Conclusion.** The defect is real, confined to decode, and not symptomatic of a port that is
+divergent throughout. Three of four stages are measured on precisely the code that ships. That makes
+F46 a specific bug with a specific fix, rather than grounds for distrusting the whole artefact — and
+it is the reason the correctness result (0.9999834 through `run_tts`) can still be believed.
+
+---
+
 ### Fixes
 
 1. **Profile what the entry point reaches.** Derive the profiled workload from the demo's own call
