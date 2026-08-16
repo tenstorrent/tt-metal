@@ -201,10 +201,9 @@ bool validate_bmm_result(
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
-    if (dev->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         p.Mt = 4; p.Kt = 2; p.Nt = 3;
         p.B_total = 2; p.B_per_core = 2;
         p.num_input_tiles = 2; p.num_output_tiles = 2;
@@ -220,7 +219,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
     const experimental::NodeCoord node{0, 0};
-    const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
+    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
     auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
