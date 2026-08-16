@@ -16,8 +16,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -54,6 +58,14 @@ class GateComputeMode(Enum):
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Entries in mm_configs keyed at this depth override the any-depth (None) entries there.
 GATE_PRODUCTION_SP_DIM = 640
+
+# GPT-OSS is the one model whose per-device gate width is not tile-aligned: EMB_SIZE 2880 over TP 4
+# is 720, i.e. 22.5 tiles. The gate tests' adjust_shapes_for_testing rounds the model dim up to a
+# multiple of 32*TP (2880 -> 2944), so the width _device_matmul actually looks up under test is 736.
+# Its entry below is keyed to that width deliberately; a production run at the raw 2880 would look
+# up (640, 720, 128), miss, and fall back to TTNN's default tiling. Closing that gap needs the
+# non-tile-aligned width handled on the gate path, not another mm_configs entry.
+GPT_OSS_TEST_PER_DEVICE_EMB_DIM = 736
 
 
 @dataclass
@@ -165,6 +177,79 @@ class TtMoEGateConfig:
                     out_block_w=7,
                     per_core_M=1,
                     per_core_N=28,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            # The four below are these models' only entries at any depth; without them all four fell
+            # back to TTNN's default tiling at 640. Swept like the three above, but timed with the
+            # DEVICE profiler (python -m tracy -r -p): a call here is ~130us of enqueue overhead
+            # around a 12-43us kernel, so host wall time cannot rank candidates. DEVICE KERNEL
+            # DURATION, medians of 11 rotated rounds, PCC >= 0.999, spread 0.1-0.7us:
+            #   glm_5_1      K/dev 1536, 256 exp  (8,1) 42.6 | (4,1) 45.4 | default 46.3 | (1,1) 52.0
+            #   dsv4_flash   K/dev 1024, 256 exp  (8,1) 29.0 | default 29.5 | (4,1) 30.9 | (1,1) 37.8
+            #   minimax_m2_7 K/dev  768, 256 exp  (8,1) 22.7 | default 23.3 | (4,1) 24.1 | (1,1) 30.6
+            #   gpt_oss_120b K/dev  736, 128 exp  (4,1) 11.8 | default 12.5 | (2,1) 13.1 | (1,1) 14.4
+            # Widest out_block_w wins and out_subblock_w wants to be narrow, as at 4096; (4,1) is
+            # slower than TTNN's default at every 256-expert shape, as it was there too.
+            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=48,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=24,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (
+                GATE_PRODUCTION_SP_DIM,
+                DeepSeekV4FlashConfig.EMB_SIZE // 4,
+                DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS,
+            ): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=32,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            # Keyed at the tile-aligned test width, not EMB_SIZE // 4 -- see
+            # GPT_OSS_TEST_PER_DEVICE_EMB_DIM.
+            (GATE_PRODUCTION_SP_DIM, GPT_OSS_TEST_PER_DEVICE_EMB_DIM, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=23,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=4,
+                    per_core_M=1,
+                    per_core_N=4,
                     fuse_batch=True,
                     mcast_in0=False,
                 )
