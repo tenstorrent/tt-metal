@@ -132,14 +132,6 @@ class PrefillModelAdapter(ABC):
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
 
-    # --- model capabilities ---
-    # DFlash speculative drafting (PREFILL_DFLASH=1) is per-model opt-in, not a global knob: the drafter is
-    # a SEPARATE checkpoint whose dims and residual taps target one verifier architecture, and only the
-    # Kimi-K2.6/K2.7 adapters ship a matching one. It has to be an identity check — the DeepSeek-V3 family
-    # is dimensionally identical to Kimi (61 layers, hidden 7168), so a wrong pairing there builds cleanly
-    # and writes silently meaningless drafter KV. The runner refuses PREFILL_DFLASH=1 when this is False.
-    supports_dflash: bool = False
-
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
     # where this model's config / weights live and how to build its runtime. All

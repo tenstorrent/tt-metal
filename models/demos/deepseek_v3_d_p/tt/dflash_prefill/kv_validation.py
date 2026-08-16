@@ -19,8 +19,8 @@ device cache's global axes with the slot axis folded out, so the golden indexes 
 readback. Comparing a prefix is sound: context K/V at position p depends only on tokens <= p (causal), so
 the first ``out_len`` rows of a full-length golden equal an ``out_len``-token run's cache.
 
-The device cache is ``bfloat8_b`` while the golden is fp32, which costs ~1e-4 of PCC — hence a threshold
-near 0.999 rather than 0.9999. Measured 0.9998 on the single-galaxy Stage-1 run.
+The device cache is ``bfloat8_b`` while the golden is fp32, which costs ~1e-4 of PCC (measured 0.9998 on
+the single-galaxy Stage-1 run), so 0.9999 is unreachable; the default bar is 0.99 (``PREFILL_DFLASH_PCC``).
 """
 
 from __future__ import annotations
