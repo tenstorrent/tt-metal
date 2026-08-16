@@ -7,7 +7,10 @@
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/conv3d_weight_share.hpp"
+
+using namespace dataflow_kernel_lib;
 
 template <
     uint32_t tile_bytes,
@@ -63,6 +66,11 @@ void kernel_main() {
     constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
     constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
     constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
+    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 19>;
+    constexpr WeightMcastArgs weights_mcast_args;
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -85,12 +93,7 @@ void kernel_main() {
     const uint32_t weight_src_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_succ_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_succ_noc_y = get_arg_val<uint32_t>(argidx++);
-    // Mcast bbox + counts. Only mcast sender (role 4) needs the bbox; passive (role 6) needs iters.
-    const uint32_t mcast_bbox_start_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_bbox_start_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_bbox_end_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_bbox_end_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
+    argidx = WeightMcastArgs::next_runtime_args_offset();
     const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
@@ -119,9 +122,6 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<26>();
-    constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto weight_reader = TensorAccessor(weight_args, weight_addr);
     const auto bias_reader = TensorAccessor(bias_args, bias_addr);
@@ -137,10 +137,9 @@ void kernel_main() {
     // exit before any work-dependent code below.
     if constexpr (enable_weight_mcast) {
         if (weight_share_role == WeightShareRole::McastPassive) {
+            auto weights_pipe = weights_mcast_args.receiver(noc);
             for (uint32_t i = 0; i < mcast_num_iters; i++) {
-                weights_mcast_sender_sem.up(noc, weight_src_noc_x, weight_src_noc_y, 1);
-                weights_mcast_receiver_sem.wait(1);
-                weights_mcast_receiver_sem.set(0);
+                weights_pipe.receive();
             }
             noc.async_atomic_barrier();
             return;
@@ -197,58 +196,16 @@ void kernel_main() {
                 } else if constexpr (enable_weight_mcast) {
                     cb_weight.reserve_back(weight_tiles);
                     if (weight_share_role == WeightShareRole::McastSender) {
-                        // Sender: DRAM read into local L1, then hardware multicast over the
-                        // bbox. The mcast call below uses EXCLUDE_SRC; sender keeps the
-                        // DRAM-read copy in cb_weight so it doesn't need to receive its own
-                        // multicast.
                         read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
                             noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
 
-                        // mcast_num_dests is the number of receivers (= number of acks expected
-                        // = num_dests passed to EXCLUDE_SRC mcast API). Host always places the
-                        // sender inside the bbox, so mcast_num_dests = bbox_cores - 1.
-                        weights_mcast_sender_sem.wait(mcast_num_dests);
-                        weights_mcast_sender_sem.set(0);
-
-                        // EXCLUDE_SRC: sender already has the data from its DRAM read, so don't
-                        // loopback. linked=true lets the API's internal burst-splitting
-                        // (~324 KiB → ~20 × 16 KiB on BH) amortize per-burst setup.
                         const uint32_t weight_block_bytes = weight_tiles * tile_bytes;
                         const uint32_t local_addr = cb_weight.get_write_ptr();
-                        MulticastEndpoint mcast_dst;
-                        noc.async_write_multicast(
-                            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
-                            mcast_dst,
-                            weight_block_bytes,
-                            mcast_num_dests,
-                            {},
-                            {.noc_x_start = mcast_bbox_start_x,
-                             .noc_y_start = mcast_bbox_start_y,
-                             .noc_x_end = mcast_bbox_end_x,
-                             .noc_y_end = mcast_bbox_end_y,
-                             .addr = local_addr},
-                            /*linked=*/true);
-
-                        // No write_barrier between data and flag mcast (per conv2d pattern):
-                        // both go through the same NoC and VC (NOC_CMD_STATIC_VC), so the flag
-                        // can never overtake the data on any receiver. Sender's push_back is
-                        // also correct without a barrier — EXCLUDE_SRC means sender's own L1 is
-                        // not a destination, so the data already in cb_weight from the DRAM read
-                        // is what compute consumes.
-                        weights_mcast_receiver_sem.set(VALID);
-                        weights_mcast_receiver_sem.set_multicast(
-                            noc,
-                            mcast_bbox_start_x,
-                            mcast_bbox_start_y,
-                            mcast_bbox_end_x,
-                            mcast_bbox_end_y,
-                            mcast_num_dests,
-                            false);
+                        auto weights_pipe = weights_mcast_args.sender(noc);
+                        weights_pipe.send(local_addr, local_addr, weight_block_bytes);
                     } else if (weight_share_role == WeightShareRole::McastReceiver) {
-                        // Active receiver: ack sender, wait for VALID, reset for next iteration.
-                        weights_mcast_sender_sem.up(noc, weight_src_noc_x, weight_src_noc_y, 1);
-                        weights_mcast_receiver_sem.wait(1);
-                        weights_mcast_receiver_sem.set(0);
+                        auto weights_pipe = weights_mcast_args.receiver(noc);
+                        weights_pipe.receive();
                     }
                     cb_weight.push_back(weight_tiles);
                 } else {
