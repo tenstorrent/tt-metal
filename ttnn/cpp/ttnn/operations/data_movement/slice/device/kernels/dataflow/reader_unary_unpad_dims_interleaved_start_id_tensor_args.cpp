@@ -100,7 +100,8 @@ void kernel_main() {
             uint32_t upper_dims_offset = 0;
             uint32_t multiplier = (input_height / tile_height) * num_pages_width;
 
-            for (int32_t i = num_dims - 3; i >= 0; i--) {
+            // Row-major Horner; must match get_upper_start_offset() in slice_device_operation.cpp
+            for (uint32_t i = 0; i + 2 < num_dims; ++i) {
                 upper_dims_offset = upper_dims_offset * input_shape_args[i] + start_indices[i];
             }
             start_offset += upper_dims_offset * multiplier;

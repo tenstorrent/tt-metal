@@ -17,10 +17,12 @@ import os
 import pytest
 from loguru import logger
 
+import ttnn
+
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from ....utils.test import ring_params_req_exact_devices
 from ..wan2_2.common import check_output_sanity
+from .common import GALAXY_MESHES
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -54,14 +56,6 @@ DURATIONS_S = [5, 10, 15]
 # factor measured at 16:9 / 5 s.
 EXPECTED_S_PER_VIDEO_SECOND = 77.0
 
-# Ring collectives require FABRIC_1D_RING; a LINE fabric fails as `fabric.cpp:174 forwarding_direction.has_value()`.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": 65536},
-        id="4x8",
-    )
-]
 
 # calibrated 2026-08-04, fox prompt, seed 0 (single sample; margins are generous)
 VBENCH_THRESHOLDS = {
@@ -85,7 +79,7 @@ SWEEP = [
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     artifacts = artifact_dir("h3_t2va_artifacts")
@@ -160,26 +154,45 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     (y_starts, _, _), (x_starts, _, _) = pipeline.vae.decode_tile_grid(HEIGHT // ratio, WIDTH // ratio)
     check_spatial_seams(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
 
-    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
-    check_written_file(paths, expected_frames, height=HEIGHT, width=WIDTH)
+    # Rank 0 alone writes and scores, and its outcome is held rather than raised: every other rank
+    # goes straight to the barrier below, so a gate failure, a VBench `pytest.skip` or an artifact I/O
+    # error raised here would leave them blocked and skip the trace release. `pytest.skip.Exception`
+    # is named alongside `Exception` because `Skipped` does not derive from it.
+    outcome: BaseException | None = None
+    is_distributed = ttnn.using_distributed_env()
+    if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+        try:
+            paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+            check_written_file(paths, expected_frames, height=HEIGHT, width=WIDTH)
 
-    # CLIP_THRESHOLD was measured at 16:9 / 5 s. Applying it across the sweep is an extrapolation,
-    # but a generous one: the calibrated point measures ~37 against a bar of 33, and the score is a
-    # prompt-alignment number rather than a resolution-dependent one. A prompt change would
-    # invalidate it outright -- recalibrate before swapping PROMPT.
-    gate_clip(frames, prompt, CLIP_THRESHOLD, stem)
-    # RUN_VBENCH=0 drops the VBench gate. It needs its own interpreter (~/vbench_env, pinned to
-    # numpy<2 / transformers 4.33), and without one `run_vbench` skips -- which marks the whole
-    # test SKIPPED *after* the full generation, hiding the perf and A/V results behind a
-    # non-result. Off means "not measured": everything above still gates.
-    if os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
-        gate_vbench(paths, prompt, VBENCH_THRESHOLDS, stem)
-    else:
-        logger.warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
+            # CLIP_THRESHOLD was measured at 16:9 / 5 s. Applying it across the sweep is an extrapolation,
+            # but a generous one: the calibrated point measures ~37 against a bar of 33, and the score is a
+            # prompt-alignment number rather than a resolution-dependent one. A prompt change would
+            # invalidate it outright -- recalibrate before swapping PROMPT.
+            gate_clip(frames, prompt, CLIP_THRESHOLD, stem)
+            # RUN_VBENCH=0 drops the VBench gate. It needs its own interpreter (~/vbench_env, pinned to
+            # numpy<2 / transformers 4.33), and without one `run_vbench` skips -- which marks the whole
+            # test SKIPPED *after* the full generation, hiding the perf and A/V results behind a
+            # non-result. Off means "not measured": everything above still gates.
+            if os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
+                gate_vbench(paths, prompt, VBENCH_THRESHOLDS, stem)
+            else:
+                logger.warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
 
-    logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
+            logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
+        except (Exception, pytest.skip.Exception) as exc:
+            outcome = exc
+    if is_distributed:
+        ttnn.distributed_context_barrier()
     logger.info(
         "REMINDER: read the artifact rubric against these frames -- the seam and flicker scores above "
         "are statistics, and only looking at the output catches what they average away"
     )
+    # Every rank, and before the fixture closes the mesh: a captured trace holds device buffers
+    # for the request. Only the 4x32 preset traces, so this is a no-op at 4x8.
+    pipeline.release_traces()
+    # Now that every rank has resynchronised and released its trace, rank 0 reports. mpirun surfaces
+    # a single failing rank as a failing job, so the run fails rather than hanging.
+    if outcome is not None:
+        raise outcome
     assert sync["video_seconds"] > 0

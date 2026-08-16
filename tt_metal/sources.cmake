@@ -20,7 +20,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/cluster.hpp
     api/tt-metalium/constants.hpp
     api/tt-metalium/core_coord.hpp
-    api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/device_types.hpp
     api/tt-metalium/dispatch_core_common.hpp
@@ -164,7 +163,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_backend_api_types.hpp
     api/tt-metalium/tt_metal.hpp
     api/tt-metalium/tt_metal_profiler.hpp
-    api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
 )
 
