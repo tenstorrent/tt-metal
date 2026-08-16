@@ -482,8 +482,12 @@ def test_no_stage_name_is_guessed(fid, facts):
     """Only the DECLARED prefill counts. Matching 'whatever looks like a prefill' would put a
     decode-path number in a TTFT cell on any pipeline that names its stages differently."""
     out = _render(stage_ms={"encode": 35.80, "generate": 138.49})
-    body = out[out.index("PREFILL") : out.index("DECODE")]
-    assert "35.80" not in body and "not measured" in body, body
+    # This model declares ENCODE and GENERATE. It has no prefill, so it now gets no PREFILL row at
+    # all -- stronger than the old assertion, which only checked that encode's number stayed out of
+    # a prefill cell that should not have existed in the first place.
+    assert "PREFILL" not in out, out
+    assert "ENCODE" in out and "GENERATE" in out, out
+    assert "35.80" in out, "the declared stage was measured and must be shown"
 
 
 def test_the_compute_peak_is_the_fidelity_the_model_runs(fid, facts):
@@ -491,7 +495,9 @@ def test_the_compute_peak_is_the_fidelity_the_model_runs(fid, facts):
     Blackhole -- so a LoFi model was priced against 175 TFLOPS instead of 702, making its compute roof
     4x too slow and its utilisation 4x too flattering."""
     out = _render(stage_ms={"prefill": 30.0})
-    blk = out[out.index("PREFILL") : out.index("DECODE")]
+    # Only prefill is declared, so PREFILL is the last section -- there is no DECODE heading to slice
+    # against any more.
+    blk = out[out.index("PREFILL") :]
     row = next(l for l in blk.splitlines() if "TFLOPS" in l and "LoFi" not in l and "HiFi" not in l)
     assert "702" in row, row
 

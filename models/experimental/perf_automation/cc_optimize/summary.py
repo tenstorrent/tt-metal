@@ -887,7 +887,26 @@ def _prefill_batch() -> int:
     return 1
 
 
-def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
+def _stage_measured_bytes(profile, stage) -> int:
+    """Bytes the ops of ONE stage actually read, or 0 when the profile does not say.
+
+    Zero is a refusal, not an estimate: a stage whose read set is unknown gets no memory roof rather
+    than the backbone's, which would be the wrong divisor entirely for a separate tower.
+    """
+    total = 0.0
+    for b in (profile or {}).get("buckets") or []:
+        if not isinstance(b, dict) or b.get("id") == "host_overhead":
+            continue
+        if str(b.get("stage") or b.get("regime") or "").strip().lower() != str(stage).strip().lower():
+            continue
+        try:
+            total += float(b.get("bytes") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return int(total)
+
+
+def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
     THE ROOFS ARE ANALYTIC, WHICH IS WHY THIS NEEDS NO PER-OP STAGE LABEL. A stage's memory floor is
@@ -981,10 +1000,30 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
     # a model that does not consume a prompt has no prefill to price, so it gets one stage, not two.
     # DECODE'S unit is one token per USER (tok/s/u is per user), so batch does not multiply it.
     # PREFILL'S unit is the whole in-flight request set: seq_len tokens for each of `batch`.
-    stages = [("decode", 1)]
+    # THE MODEL SAYS WHICH STAGES IT HAS, and nothing else does.
+    #
+    # This was the literal [("decode", 1)] plus an optional prefill, so the table could only ever
+    # describe an autoregressive text model. Two ways that is wrong. A stage the model declares and
+    # the harness MEASURES could not appear -- voxtral's audio encoder, timed at 12.79 ms, twice its
+    # own decode, shown in the stage breakdown and then absent from the roofline with no indication
+    # the reader was looking at 116 of 129 ms. And a model with no decode at all -- a classifier, a
+    # vision tower, a vocoder, a diffusion denoiser -- was still given a DECODE row it does not have.
+    #
+    # stage_ms is written from the model's own PIPELINE_STAGES by the run that measured them, so it
+    # is the authority. Declared order is kept: it is the order the pipeline runs in.
     _pt = _prefill_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
-    if _pt:
-        stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
+    _declared = [str(k) for k in (stage_ms or {}) if k]
+    if _declared:
+        stages = [
+            (n, (_pt * max(1, _prefill_batch())) if n == "prefill" else (1 if n == "decode" else 0)) for n in _declared
+        ]
+    else:
+        # NOTHING DECLARED. A model that never reported its stages still gets the recurring unit --
+        # every model has one -- and prefill when it consumes a prompt. This is the old behaviour, now
+        # reached only when there is nothing better to go on.
+        stages = [("decode", 1)]
+        if _pt:
+            stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
     _L = int((mf or {}).get("layers") or 0)
     _H = int((mf or {}).get("hidden_size") or 0)
     for name, toks in stages:
@@ -997,8 +1036,19 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
         _attn = (4.0 * _L * float(toks) * float(toks) * _H) if (_L and _H) else 0.0
         flops = ((2.0 * float(params) * float(toks) + _attn) / tp) if params else 0.0
         comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
-        _b = _bytes_for("prefill" if name == "prefill" else "decode", toks if name == "prefill" else 0)
-        mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0
+        if name in ("prefill", "decode"):
+            _b = _bytes_for("prefill" if name == "prefill" else "decode", toks if name == "prefill" else 0)
+        else:
+            # A THIRD TOWER IS NOT THE BACKBONE. active_bytes prices the read set of an autoregressive
+            # step; an audio encoder streams its own weights and nothing of the language model, so the
+            # params rule is the wrong divisor for it -- perf_target says exactly this under
+            # MULTI-TOWER ("a token reads the language backbone, not the audio encoder"). The read set
+            # it recorded is the only honest figure, so the roof exists when the profile carries
+            # per-stage bytes and is WITHHELD when it does not. A stage with no roof still gets its
+            # row: the measurement is real and the gap is worth seeing, which is the whole complaint
+            # against leaving it out.
+            _b = _stage_measured_bytes(profile, name)
+        mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {
             "memory_ms": mem_ms,
             "compute_ms": comp_ms,
@@ -1010,7 +1060,11 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
             # The binding roof is the SLOWEST one -- the stage cannot beat its tightest floor. Stated
             # per stage because it genuinely differs: prefill's FLOPs scale with the sequence and
             # decode's do not, so the same model can be compute-bound in one stage and not the other.
-            "binds": ("compute" if (comp_ms is not None and comp_ms > mem_ms) else ("memory" if mem_ms else None)),
+            "binds": (
+                "compute"
+                if (comp_ms is not None and mem_ms is not None and comp_ms > mem_ms)
+                else ("memory" if mem_ms else ("compute" if comp_ms else None))
+            ),
         }
     return out
 
@@ -1169,6 +1223,23 @@ def _roofline_tables(
         return "\u2500" * W
 
     out.append("Roofline")
+    # SAY WHAT THE NUMBERS BELOW ARE PER. Every figure in this table is per unit -- per request, per
+    # token, per pass -- and the batch decides how many of those a single step retires, so the same
+    # measurement reads eight ways on an eight-user run. Voxtral serves 8 and the table said nothing,
+    # so a reader had no way to tell a per-user figure from an aggregate one.
+    #
+    # Stated as UNKNOWN rather than 1 when nothing resolved it: TT_PERF_BATCH carries 0 for "ask the
+    # pipeline", so a 1 here would be a guess dressed as a fact, and it is exactly the guess that made
+    # an 8-user step get priced as a 1-user step.
+    _bs = _prefill_batch()
+    _bs_declared = any(
+        str(os.environ.get(v) or "").strip().isdigit() and int(os.environ.get(v)) > 0
+        for v in ("TT_PERF_BATCH", "PERF_MCP_BATCH", "TT_PERF_BATCH_SIZE")
+    )
+    out.append(
+        "  batch: %s   (every figure below is PER unit -- per request, per token, per pass)"
+        % (("%d" % _bs) if _bs_declared else "not reported by the run; ceilings assume 1")
+    )
     out.append(rule)
     out.append(_row("", "THEORETICAL", "ACHIEVABLE %.0f-%.0f%%" % (_LOF * 100, _HIF * 100), "MEASURED"))
     out.append(_rule4())
@@ -1179,7 +1250,7 @@ def _roofline_tables(
     _exceeds = bool(measured and theo and measured > theo)
     _pf_measured = (stage_ms or {}).get("prefill")
     _pf_measured = float(_pf_measured) if isinstance(_pf_measured, (int, float)) and _pf_measured > 0 else None
-    _roofs = _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile)
+    _roofs = _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile, stage_ms)
     # ONE CEILING, NOT TWO THAT NEARLY AGREE. `theo` is what perf_target published and what the stop
     # gate judges against -- and on the anchored path it is recomputed from the ledger, not from the
     # snapshot this function was handed. Re-deriving the decode memory roof from bytes here would put
@@ -1267,14 +1338,22 @@ def _roofline_tables(
         return _o
 
     _STAGE_UNIT = {"prefill": "req/s", "decode": unit}
+    # A DECLARED STAGE GETS A UNIT TOO. Only prefill and decode were named here, so a third stage --
+    # voxtral's audio encoder, measured at 12.79 ms -- had no unit, no title, and no row. Its unit is
+    # one pass of that tower, which is what "per pass" says without pretending it emits tokens.
+    for _extra in _roofs:
+        _STAGE_UNIT.setdefault(_extra, "pass/s")
     # The recurring stage is named for the unit the model actually reports, so a diffusion run reads
     # "per step" rather than being told it decodes.
     _STAGE_TITLE = {
         "prefill": "PREFILL \u2014 per request",
         "decode": "%s \u2014 per %s" % (("DECODE" if _step == "token" else _step.upper()), _step),
     }
+    for _extra in _roofs:
+        _STAGE_TITLE.setdefault(_extra, "%s \u2014 per pass" % str(_extra).upper())
     _rendered = []
-    for _st in ("prefill", "decode"):
+    # EVERY STAGE THE MODEL DECLARED, in the order _stage_roofs built them -- not a hardcoded pair.
+    for _st in _roofs:
         _rf = _roofs.get(_st)
         if not _rf:
             continue
@@ -1287,7 +1366,17 @@ def _roofline_tables(
         # diagnosed as eager twice from the label alone, once wrongly.
         _ndisp = (stage_ops or {}).get(_st)
         _lab = "%s, %d op dispatches" % (_path, _ndisp) if isinstance(_ndisp, int) else _path
-        _ms = _pf_measured if _st == "prefill" else (float(per_unit_ms) if per_unit_ms else None)
+        # THE MEASURED COLUMN FOLLOWS THE SAME AUTHORITY AS THE STAGE LIST. prefill and decode keep
+        # their existing sources; any other declared stage reads its own measurement out of stage_ms,
+        # which is where it was recorded. Without this a declared stage rendered as an empty row --
+        # present in the table and blank in the only column the reader looks at first.
+        if _st == "prefill":
+            _ms = _pf_measured
+        elif _st == "decode":
+            _ms = float(per_unit_ms) if per_unit_ms else None
+        else:
+            _sv = (stage_ms or {}).get(_st)
+            _ms = float(_sv) if isinstance(_sv, (int, float)) and _sv > 0 else None
         # EVERY ROW CARRIES ALL THREE COLUMNS. The stage wall-clock was hoisted to this heading to
         # avoid repeating it, which left each roof row holding a bare tick -- MEASURED no longer
         # sitting beside the THEORETICAL and ACHIEVABLE it is the verdict on. A roofline row is read
@@ -1314,7 +1403,19 @@ def _roofline_tables(
                 # needs a param count and a peak; "not measured" for both named neither, so a
                 # report missing its model facts looked identical to one whose model has no
                 # compute term at all.
-                out.append(_row(_lbl, "not measured", "not measured", ""))
+                # THE MEASUREMENT IS NOT MISSING JUST BECAUSE THE ROOF IS. A declared stage with no
+                # modelled read set -- a separate tower, whose bytes are not the backbone's -- still
+                # has a real time, and blanking that column made the row look like a failed
+                # measurement rather than an unpriced one. Show what was measured, and say the
+                # ceiling is the part that is absent.
+                out.append(
+                    _row(
+                        _lbl,
+                        "not modelled" if _st not in ("prefill", "decode") else "not measured",
+                        "not measured",
+                        ("%-8.2f ms" % _ms) if (_ms and _roof == "memory") else "",
+                    )
+                )
                 # WHY, on its own line rather than in the cell -- the columns are 16 wide and a
                 # reason does not fit one. "not measured" for both halves named nothing, so a report
                 # missing its model facts looked identical to one whose model has no compute term.
@@ -1534,11 +1635,19 @@ def _roofline_tables(
     # one-sided view the roofline had, which left "is decode compute-bound?" unanswerable from the
     # report. An empty compute bar beside a two-thirds-full memory bar is the whole optimisation
     # story at a glance: there is no compute headroom to win because compute was never the constraint.
-    for _st in ("prefill", "decode"):
+    for _st in _roofs:
         _rf = _roofs.get(_st)
         if not _rf:
             continue
-        _ms = _pf_measured if _st == "prefill" else (float(per_unit_ms) if per_unit_ms else None)
+        # The measured time for a declared stage comes from stage_ms, the same place the stage list
+        # does; prefill and decode keep their existing sources so nothing about them changes.
+        if _st == "prefill":
+            _ms = _pf_measured
+        elif _st == "decode":
+            _ms = float(per_unit_ms) if per_unit_ms else None
+        else:
+            _sv = (stage_ms or {}).get(_st)
+            _ms = float(_sv) if isinstance(_sv, (int, float)) and _sv > 0 else None
         if not _ms:
             continue
         # ONE BAR PER STAGE: the roof that BINDS it. Same rule the ms and rate rows follow above --
