@@ -106,6 +106,57 @@ def hf_cache_dir(model_id: str):
     return None
 
 
+def _safetensors_section_bytes(path: Path) -> dict:
+    """{top-level prefix: bytes} from one shard's JSON header, reading no tensor data.
+
+    The header already states every tensor's byte span in `data_offsets`, so the size of a tower is
+    a sum over names -- no device, no load, no dtype table to keep in step with the loader.
+
+    WHY A TOWER AND NOT THE WHOLE FILE. A decode token reads the language backbone and none of the
+    audio encoder, but the checkpoint's byte total covers both, so pricing any single stage from it
+    is wrong for a multi-tower model -- weight_census says exactly this and declines to guess. The
+    prefix IS the tower: `audio_tower.layers.31.mlp.fc2.bias` and `language_model.layers.29...` are
+    the names the model itself ships, and the stack survey already reports stacks by that same path.
+    """
+    out: dict = {}
+    try:
+        with path.open("rb") as fh:
+            raw = fh.read(8)
+            if len(raw) < 8:
+                return out
+            n = struct.unpack("<Q", raw)[0]
+            if n <= 0 or n > 100_000_000:
+                return out
+            head = json.loads(fh.read(n).decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return out
+    for k, v in head.items():
+        if k == "__metadata__" or not isinstance(v, dict):
+            continue
+        off = v.get("data_offsets") or []
+        if len(off) != 2:
+            continue
+        try:
+            nbytes = int(off[1]) - int(off[0])
+        except (TypeError, ValueError):
+            continue
+        if nbytes > 0:
+            out[str(k).split(".", 1)[0]] = out.get(str(k).split(".", 1)[0], 0) + nbytes
+    return out
+
+
+def section_bytes(snapshot) -> dict:
+    """{top-level prefix: bytes} across every shard of a checkpoint snapshot."""
+    total: dict = {}
+    snap = Path(snapshot)
+    if not snap.is_dir():
+        return total
+    for f in sorted(snap.glob("*.safetensors")):
+        for k, v in _safetensors_section_bytes(f).items():
+            total[k] = total.get(k, 0) + v
+    return total
+
+
 def _index_keys(snapshot: Path) -> list:
     """Every tensor name from a shard index, without opening a single shard.
 

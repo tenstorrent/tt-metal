@@ -1569,6 +1569,89 @@ def stacks_by_stage(seq) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
+def _model_id_for_facts(model_root) -> str:
+    """The model's HF id, via the one extractor that owns that question. "" when there is none."""
+    try:
+        from agent.model_contract import _hf_repo_ids
+
+        ids = _hf_repo_ids(Path(model_root)) or []
+        return str(ids[0]) if ids else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _merge_model_facts(model_root, extra: dict) -> None:
+    """Merge keys into perf_target_inputs.json, leaving everything else in it untouched.
+
+    Merged rather than rewritten for the same reason the census does it: a hand-tuned per-tensor list
+    beside these keys has to survive. Best-effort -- a fact that cannot be written costs a ceiling,
+    never a run.
+    """
+    try:
+        p = Path(model_root) / "perf_target_inputs.json"
+        doc = {}
+        if p.is_file():
+            try:
+                doc = json.loads(p.read_text()) or {}
+            except Exception:  # noqa: BLE001
+                doc = {}
+        if not isinstance(doc, dict):
+            return
+        if all(doc.get(k) == v for k, v in (extra or {}).items()):
+            return
+        doc.update(extra or {})
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(doc, indent=2) + "\n")
+        os.replace(str(tmp), str(p))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def stage_roots(seq, model_root, model_id: str = "") -> dict:
+    """{stage: the top-level module its blocks live under}, or {} when it cannot be established.
+
+    THE LINK THE ROOFLINE NEEDED. A stage streams the weights of the subtree it runs and nothing
+    else, so pricing every stage from one whole-model byte count overcharges the backbone stages and
+    leaves a third tower unpriced entirely -- an audio encoder measured at 12.8 ms with no ceiling
+    beside it. weight_census declines to guess at the split; this establishes it instead.
+
+    BY BLOCK COUNT, which is evidence rather than naming. The probe reports stacks positionally
+    (stack2, stack3) and the checkpoint reports them by path (audio_tower.layers: 32,
+    language_model.model.layers: 30), and nothing connects the two vocabularies -- but a stack of 32
+    blocks and a section of 32 blocks are the same stack. No string matching, no per-model table, and
+    it works for a tower whose name nobody has seen.
+
+    AMBIGUITY IS REFUSED, NOT RESOLVED. Two sections of equal depth cannot be told apart this way, and
+    a stage spanning two roots has no single answer, so both are left out: the roofline then falls
+    back to the whole-model figure for backbone stages and withholds the ceiling for the rest, which
+    is what it did before this existed. A wrong divisor is worse than a missing one.
+    """
+    try:
+        from agent.checkpoint_sections import declared_sections
+    except Exception:  # noqa: BLE001
+        return {}
+    secs = declared_sections(model_root, model_id) or {}
+    if not secs:
+        return {}
+    by_count: dict = {}
+    for path, n in secs.items():
+        try:
+            by_count.setdefault(int(n), []).append(str(path))
+        except (TypeError, ValueError):
+            continue
+    counts = {sid: n for sid, n, _kind in _stack_paths(seq)}
+    out: dict = {}
+    for stage, sids in (stacks_by_stage(seq) or {}).items():
+        roots = set()
+        for sid in sids or []:
+            cands = by_count.get(int(counts.get(sid) or 0)) or []
+            if len(cands) == 1:
+                roots.add(cands[0].split(".", 1)[0])
+        if len(roots) == 1:
+            out[str(stage)] = roots.pop()
+    return out
+
+
 def depth_per_stage(per_stack_cov: dict, seq) -> dict:
     """{stage: depth} -- each stage deep enough for every stack that runs in it.
 
@@ -2247,6 +2330,18 @@ def _coverage_layers(
                 # variables the generated test actually reads (TT_PERF_<STAGE>_LAYERS) and the repair
                 # actually creates (`<stage>_layers`). It used to reach the log and nothing else.
                 facts["per_stage"] = dict(_per_stage)
+                # AND WHICH SUBTREE EACH STAGE RUNS. Same publication, same reason: the mapping was
+                # derivable and reached nobody, so the roofline priced every stage from one
+                # whole-model byte count -- overcharging the backbone for a tower it never reads and
+                # leaving that tower with a measurement and no ceiling. Written into the model's own
+                # facts file, which is where the report reads facts from.
+                try:
+                    _roots = stage_roots(seq, _root, _model_id_for_facts(_root))
+                    if _roots:
+                        _merge_model_facts(_root, {"stage_roots": _roots})
+                        print("  [optimize/cc] stage subtrees: %s" % _roots, flush=True)
+                except Exception:  # noqa: BLE001 -- a missing mapping is the old behaviour, not a failure
+                    pass
                 print(
                     "  [optimize/cc] coverage per stack: %s%s"
                     % (

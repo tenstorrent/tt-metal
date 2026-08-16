@@ -906,6 +906,58 @@ def _stage_measured_bytes(profile, stage) -> int:
     return int(total)
 
 
+_SECTION_BYTES = None
+
+
+def _section_bytes_cached() -> dict:
+    """{tower: bytes} from the checkpoint header, read once per report.
+
+    Header-only: every tensor's byte span is in `data_offsets`, so a tower's size is a sum over names
+    with no tensor data read and no device involved.
+    """
+    global _SECTION_BYTES
+    if _SECTION_BYTES is not None:
+        return _SECTION_BYTES
+    _SECTION_BYTES = {}
+    try:
+        from agent.checkpoint_sections import hf_cache_dir, section_bytes
+        from agent.model_contract import _hf_repo_ids
+
+        for _mid in _hf_repo_ids(Path(_MODEL_ROOT_HINT)) if _MODEL_ROOT_HINT else []:
+            snap = hf_cache_dir(_mid)
+            if snap:
+                _SECTION_BYTES = section_bytes(snap) or {}
+                if _SECTION_BYTES:
+                    break
+    except Exception:  # noqa: BLE001 -- no checkpoint reachable: every stage keeps the whole-model share
+        _SECTION_BYTES = {}
+    return _SECTION_BYTES
+
+
+def _stage_units(stage, prompt_tokens) -> int:
+    """How many items this stage retires in one unit of work.
+
+    NOT FROM THE NAME. A stage that consumes the prompt retires every prompt token for every request
+    in flight; a recurring stage retires one item. Which is which is a question about the byte model's
+    regimes, and perf_target owns those -- asking it means a regime added there works here with no
+    edit, where a literal `if n == "prefill"` meant this file had to be changed for every new stage
+    and left anything unrecognised at zero, which is what zeroed the FLOPs term for a third tower.
+    """
+    try:
+        from agent.perf_target import active_bytes as _ab
+
+        _mf = _model_facts() or {}
+        # A prompt-consuming regime is one whose read set GROWS with the prompt. That is a property of
+        # the regime, measurable by asking, rather than a name to recognise.
+        _flat = float(_ab(_mf, regime=str(stage), seq_len=0, batch=1) or 0.0)
+        _long = float(_ab(_mf, regime=str(stage), seq_len=max(1, int(prompt_tokens or 1)), batch=1) or 0.0)
+    except Exception:  # noqa: BLE001 -- unknown regime: one item, which is what a recurring stage does
+        return 1
+    if prompt_tokens and _long > _flat:
+        return int(prompt_tokens) * max(1, _prefill_batch())
+    return 1
+
+
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -933,62 +985,90 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     tp = max(1, int(tp_degree or 1))
     per_dev_bytes = float(active_bytes) / tp
 
-    def _bytes_for(regime, toks):
-        """This stage's read set, from perf_target -- which owns the byte model for every regime.
+    def _stage_share(stage) -> float:
+        """Fraction of the model's weights the subtree THIS stage runs holds, or 1.0 when unknown.
 
-        `active_bytes` (the argument) is the DECODE read set, and using it for prefill printed the
-        same memory ceiling on both stages: the weights term IS shared, since each stage streams the
-        model exactly once, but prefill also writes KV for every token and carries activations
-        through each layer. Both scale with the prompt; neither exists for a single decode step.
-        Falls back to the passed-in figure when the facts are too thin to model the extra terms, so a
-        model with no layer geometry still gets its weights floor rather than nothing.
+        A stage streams its own tower and nothing else -- a decode token reads the language backbone
+        and never the audio encoder -- so handing every stage the whole-model byte count overprices
+        the backbone stages and leaves a third tower with nothing at all. weight_census declines to
+        guess at the split; the checkpoint does not have to guess, because tensor names state which
+        tower each weight belongs to and their byte spans are in the header.
+
+        A SHARE, not the checkpoint bytes outright: the ceiling divides by what is RESIDENT on the
+        device, which is not the checkpoint total (1.72 GB against 9.36 GB here, the loader having
+        chosen its own widths). The split is the part the checkpoint can state and the resident
+        census cannot, so the resident figure is apportioned by it. 1.0 -- the whole model -- when the
+        mapping or the checkpoint is unavailable, which is exactly the behaviour before this existed.
         """
-        # DECODE CARRIES KV TOO, AND KV IS PER USER. Decode returned the anchor untouched, so its
-        # ceiling was weights-only: no KV term at all, and therefore nothing for batch to scale. Every
-        # user re-reads their whole history on every token, so an 8-user run at 128 context reads that
-        # history eight times and the ceiling counted none of it.
-        #
-        # Added the same way prefill's extra is: as a DIFFERENCE against the anchor, never as a second
-        # opinion on it. The weights stay exactly the figure perf_target published -- which is the
-        # reason decode was excluded in the first place, two ceilings 2.18x apart with the stop gate
-        # judging one and the reader seeing the other -- and only the per-user terms are added on top.
-        if mf and regime == "decode":
+        root = str(((mf or {}).get("stage_roots") or {}).get(str(stage)) or "").strip()
+        if not root:
+            # NO MAPPING. Decided by how many towers the checkpoint has, not by the stage's NAME.
+            # A single-tower model has only one subtree, so every stage streams all of it and the
+            # whole-model figure is exactly right -- the behaviour before any of this existed. With
+            # two or more towers there is no such answer: pricing one at another's byte count is the
+            # wrong divisor rather than an approximation, and a refused ceiling beside a real
+            # measurement is more use to a reader than a confident wrong one.
+            if len(_section_bytes_cached()) == 1:
+                return 1.0  # one tower: every stage streams all of it, so the whole model IS its share
+            # OTHERWISE ASK THE BYTE MODEL, not a list of stage names. perf_target owns which regimes
+            # it can price and raises for the rest; a regime it prices is one whose read set IS the
+            # backbone, which is what the whole-model figure describes. Keeping a second list here
+            # meant summary.py had to be edited every time perf_target learned a regime -- and it is
+            # exactly the hardcoding that left a third tower unpriced.
             try:
                 from agent.perf_target import active_bytes as _ab
-            except Exception:  # noqa: BLE001 -- no byte model, so no extra term; the anchor stands
-                return per_dev_bytes
-            _b = max(1, _prefill_batch())
-            _ctx = int(_prefill_tokens() or 0)
-            if _ctx:
-                _kv = float(_ab(mf, regime="decode", seq_len=_ctx, batch=_b) or 0.0) - float(
-                    _ab(mf, regime="decode", seq_len=0, batch=1) or 0.0
-                )
-                return per_dev_bytes + max(0.0, _kv) / tp
-            return per_dev_bytes
-        if not mf or regime != "prefill":
-            # DECODE IS THE CEILING'S OWN BYTE COUNT, NOT A SECOND OPINION ON IT. This recomputed the
-            # read set from weight_bytes while the headline ceiling came from the params rule, so one
-            # report carried two figures for one model: 24.37 GB (47.61 ms) in the stage roof against
-            # 11.18 GB (21.84 ms) in the headline -- 2.18x apart, with the stop gate judging against
-            # one and the reader looking at the other. `active_bytes` (the argument) already went
-            # through the agreed precedence: pinned anchor, then measured per-op bytes, then the
-            # params rule. Whatever it decided is THE answer for this run.
-            return per_dev_bytes
+
+                _ab(mf or {}, regime=str(stage), seq_len=0, batch=1)
+                return 1.0
+            except Exception:  # noqa: BLE001 -- not a regime the byte model knows: refuse the share
+                return 0.0
+        secs = _section_bytes_cached()
+        total = float(sum(secs.values()) or 0.0)
+        mine = float(secs.get(root) or 0.0)
+        return (mine / total) if (total > 0 and mine > 0) else 1.0
+
+    def _bytes_for(stage, toks):
+        """This stage's read set: the weights its subtree streams, plus what it alone carries.
+
+        ONE RULE FOR EVERY STAGE. prefill and decode had a branch each and everything else fell
+        through to zero, so a declared third stage got a row with no ceiling and a model declaring
+        neither of those two got nothing at all. They are not special: they are stages whose subtree
+        happens to be the language backbone.
+
+        The per-item terms still come from perf_target, which owns the byte model and prices KV and
+        activations from the model's own geometry. It knows two regimes; a stage outside them has no
+        extra term, which is a missing addend rather than a missing ceiling -- the subtree's weights
+        still give it a floor.
+
+        The extra is a DIFFERENCE against the same regime with nothing in flight, so the weights
+        cancel and this can never become a second opinion on them -- which is what kept decode
+        excluded before, two ceilings 2.18x apart with the gate and the report disagreeing.
+        """
+        base = per_dev_bytes * _stage_share(stage)
+        if not mf:
+            return base
+        # NO NAME TEST. perf_target owns which regimes it can price and raises for the rest, so ASK
+        # it rather than keeping a second list here that has to be updated in step. A stage it cannot
+        # price simply has no extra term -- a missing addend, not a missing ceiling, since the
+        # subtree's weights already give it a floor.
+        # CONTEXT IS THE WORKLOAD'S, NOT THE STAGE'S. Every stage in a run sees the same prompt; what
+        # differs is how many units each retires, and that is `toks`, which prices FLOPs above. Passing
+        # `toks` here conflated the two -- decode's unit count of 1 became a context of one token -- so
+        # the run's ISL is passed uniformly and batch is passed beside it, exactly as the byte model
+        # expects. For a prompt-consuming stage that reproduces seq_len x batch as before.
+        _seq = int(_prefill_tokens() or 0)
+        if not _seq:
+            return base
         try:
             from agent.perf_target import active_bytes as _ab
 
-            # PREFILL IS DECODE PLUS WHAT PREFILL ALONE READS. Taking the difference between the two
-            # regimes isolates the KV it writes and the activations it carries, and adds them to the
-            # agreed figure -- so the two stages can never disagree about the weights they share,
-            # however that figure was established.
-            # batch is already folded into `toks` (seq_len x batch) for the terms that are linear in
-            # both, and passed explicitly so the model applies it wherever it is not.
-            _extra = float(_ab(mf, regime="prefill", seq_len=int(toks or 0), batch=1) or 0.0) - float(
-                _ab(mf, regime="decode", seq_len=0, batch=1) or 0.0
+            _b = max(1, _prefill_batch())
+            _extra = float(_ab(mf, regime=stage, seq_len=_seq, batch=_b) or 0.0) - float(
+                _ab(mf, regime=stage, seq_len=0, batch=1) or 0.0
             )
-            return per_dev_bytes + max(0.0, _extra) / tp
-        except Exception:  # noqa: BLE001
-            return per_dev_bytes
+        except Exception:  # noqa: BLE001 -- regime unknown to the byte model, or no byte model at all
+            return base
+        return base + max(0.0, _extra) / tp
 
     params = 0
     try:
@@ -1038,9 +1118,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     _pt = _prefill_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
     _declared = [str(k) for k in (stage_ms or {}) if k]
     if _declared:
-        stages = [
-            (n, (_pt * max(1, _prefill_batch())) if n == "prefill" else (1 if n == "decode" else 0)) for n in _declared
-        ]
+        stages = [(n, _stage_units(n, _pt)) for n in _declared]
     else:
         # NOTHING DECLARED. A model that never reported its stages still gets the recurring unit --
         # every model has one -- and prefill when it consumes a prompt. This is the old behaviour, now
@@ -1060,9 +1138,8 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         _attn = (4.0 * _L * float(toks) * float(toks) * _H) if (_L and _H) else 0.0
         flops = ((2.0 * float(params) * float(toks) + _attn) / tp) if params else 0.0
         comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
-        if name in ("prefill", "decode"):
-            _b = _bytes_for("prefill" if name == "prefill" else "decode", toks if name == "prefill" else 0)
-        else:
+        _b = _bytes_for(name, toks)
+        if not _b:
             # A THIRD TOWER IS NOT THE BACKBONE. active_bytes prices the read set of an autoregressive
             # step; an audio encoder streams its own weights and nothing of the language model, so the
             # params rule is the wrong divisor for it -- perf_target says exactly this under
@@ -1260,10 +1337,7 @@ def _roofline_tables(
         str(os.environ.get(v) or "").strip().isdigit() and int(os.environ.get(v)) > 0
         for v in ("TT_PERF_BATCH", "PERF_MCP_BATCH", "TT_PERF_BATCH_SIZE")
     )
-    out.append(
-        "  batch: %s   (every figure below is PER unit -- per request, per token, per pass)"
-        % (("%d" % _bs) if _bs_declared else "not reported by the run; ceilings assume 1")
-    )
+    out.append("  batch: %s" % (("%d" % _bs) if _bs_declared else "not reported; ceilings assume 1"))
     out.append(rule)
     out.append(_row("", "THEORETICAL", "ACHIEVABLE %.0f-%.0f%%" % (_LOF * 100, _HIF * 100), "MEASURED"))
     out.append(_rule4())
@@ -1316,7 +1390,8 @@ def _roofline_tables(
         It is not a measurement, it is a what-if: what the arithmetic WOULD cost at each precision.
         That is its own kind of statement and gets its own section, and since the peaks are the same
         for every stage the stages are columns rather than repeated blocks."""
-        _cols = [(st, _roofs[st]) for st in ("prefill", "decode") if _roofs.get(st) and _roofs[st].get("flops")]
+        # EVERY STAGE WITH A COMPUTE TERM, in declared order -- not the two an LLM has.
+        _cols = [(st, _roofs[st]) for st in _roofs if _roofs.get(st) and _roofs[st].get("flops")]
         if not (_fid and _cols):
             # NAME THE MISSING INPUT. This returned [] and the section simply was not there, which
             # reads as "the tool does not do that" rather than "the tool could not". On gemma-3 the
@@ -1394,18 +1469,21 @@ def _roofline_tables(
         # their existing sources; any other declared stage reads its own measurement out of stage_ms,
         # which is where it was recorded. Without this a declared stage rendered as an empty row --
         # present in the table and blank in the only column the reader looks at first.
-        if _st == "prefill":
-            _ms = _pf_measured
-        elif _st == "decode":
-            _ms = float(per_unit_ms) if per_unit_ms else None
-        else:
-            _sv = (stage_ms or {}).get(_st)
-            _ms = float(_sv) if isinstance(_sv, (int, float)) and _sv > 0 else None
-        # EVERY ROW CARRIES ALL THREE COLUMNS. The stage wall-clock was hoisted to this heading to
-        # avoid repeating it, which left each roof row holding a bare tick -- MEASURED no longer
-        # sitting beside the THEORETICAL and ACHIEVABLE it is the verdict on. A roofline row is read
-        # ACROSS; a column that empties out on the rows that matter is not a column.
-        _mrate = measured if (_st == "decode" and measured) else ((1000.0 / _ms) if _ms else None)
+        # THE RUN'S OWN PER-STAGE TIMING, for every stage alike. This read stage_ms for prefill, the
+        # headline for decode and stage_ms again for anything else -- three sources keyed on two
+        # names. stage_ms is written by the run that measured each stage, so it is the authority;
+        # the headline stays only as the fallback for a stage the run did not time separately.
+        _sv = (stage_ms or {}).get(_st)
+        _ms = float(_sv) if isinstance(_sv, (int, float)) and _sv > 0 else None
+        # THE HEADLINE BELONGS TO THE RECURRING STAGE -- the one retiring a single item per unit,
+        # which is what a per-token/per-step figure measures. Handing it to a prompt-consuming
+        # stage would print one stage's measurement under another's heading.
+        if _ms is None and per_unit_ms and int((_rf or {}).get("tokens") or 0) == 1:
+            _ms = float(per_unit_ms)
+        # The headline RATE describes the recurring stage -- the one retiring a single item per
+        # unit -- which is a property of the stage, not its name.
+        _recurring = int((_rf or {}).get("tokens") or 0) == 1
+        _mrate = measured if (_recurring and measured) else ((1000.0 / _ms) if _ms else None)
         out.append(
             _row(
                 "%s%s"
@@ -1435,7 +1513,10 @@ def _roofline_tables(
                 out.append(
                     _row(
                         _lbl,
-                        "not modelled" if _st not in ("prefill", "decode") else "not measured",
+                        # A REFUSED roof and an UNCOMPUTABLE one read differently: the first means this
+                        # stage's read set could not be attributed, the second that an input was missing.
+                        # Told apart by whether a share was found, not by the stage's name.
+                        "not modelled" if (_roof == "memory" and not _rf.get("bytes")) else "not measured",
                         "not measured",
                         ("%-8.2f ms" % _ms) if (_ms and _roof == "memory") else "",
                     )
@@ -1480,7 +1561,7 @@ def _roofline_tables(
                 if _roof == "memory" and peak_bw_gbps:
                     _mb0 = (
                         bw_gbps
-                        if (_st == "decode" and bw_gbps)
+                        if (int((_rf or {}).get("tokens") or 0) == 1 and bw_gbps)
                         else (((_rf["bytes"] / (_ms / 1000.0)) / 1e9) if _ms else None)
                     )
                     out.append(
@@ -1523,7 +1604,7 @@ def _roofline_tables(
                 # differs in the last digit and puts two nearly-equal bandwidths in one report.
                 _mb = (
                     bw_gbps
-                    if (_st == "decode" and bw_gbps)
+                    if (int((_rf or {}).get("tokens") or 0) == 1 and bw_gbps)
                     else (((_rf["bytes"] / (_ms / 1000.0)) / 1e9) if _ms else None)
                 )
                 out.append(
@@ -1663,15 +1744,12 @@ def _roofline_tables(
         _rf = _roofs.get(_st)
         if not _rf:
             continue
-        # The measured time for a declared stage comes from stage_ms, the same place the stage list
-        # does; prefill and decode keep their existing sources so nothing about them changes.
-        if _st == "prefill":
-            _ms = _pf_measured
-        elif _st == "decode":
-            _ms = float(per_unit_ms) if per_unit_ms else None
-        else:
-            _sv = (stage_ms or {}).get(_st)
-            _ms = float(_sv) if isinstance(_sv, (int, float)) and _sv > 0 else None
+        # Same authority as the table above: the run's own per-stage timing, with the pipeline
+        # headline only as the fallback for a single-stage model.
+        _sv = (stage_ms or {}).get(_st)
+        _ms = float(_sv) if isinstance(_sv, (int, float)) and _sv > 0 else None
+        if _ms is None and per_unit_ms and int((_rf or {}).get("tokens") or 0) == 1:
+            _ms = float(per_unit_ms)
         if not _ms:
             continue
         # ONE BAR PER STAGE: the roof that BINDS it. Same rule the ms and rate rows follow above --
@@ -1681,14 +1759,18 @@ def _roofline_tables(
         if _bind == "memory" and peak_bw_gbps and _rf.get("bytes"):
             # Same figure as the roofline row above, not a second computation of it: recomputing from
             # bytes differed in the last digit and put 345.0 and 344.4 in one report.
-            _g = bw_gbps if (_st == "decode" and bw_gbps) else (_rf["bytes"] / (_ms / 1000.0)) / 1e9
+            _g = (
+                bw_gbps
+                if (int((_rf or {}).get("tokens") or 0) == 1 and bw_gbps)
+                else (_rf["bytes"] / (_ms / 1000.0)) / 1e9
+            )
             _rows.append(
                 (
                     "%-9s memory" % _st,
-                    (None if _exceeds and _st == "decode" else _g / peak_bw_gbps),
+                    (None if (_exceeds and int((_rf or {}).get("tokens") or 0) == 1) else _g / peak_bw_gbps),
                     (
                         "inconsistent \u2014 see above"
-                        if (_exceeds and _st == "decode")
+                        if (_exceeds and int((_rf or {}).get("tokens") or 0) == 1)
                         else "%.1f / %.1f GB/s" % (_g, peak_bw_gbps)
                     ),
                     "\u2191 better",

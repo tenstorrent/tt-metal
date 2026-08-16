@@ -134,7 +134,7 @@ def test_the_batch_is_stated_above_the_table(monkeypatch):
 
     monkeypatch.setenv("TT_PERF_BATCH", "8")
     line = next(l for l in T._render(stage_ms={"prefill": 30.0}).splitlines() if "batch:" in l)
-    assert "8" in line and "PER unit" in line, line
+    assert "batch: 8" in line, line
 
 
 def test_an_unresolved_batch_says_so_instead_of_printing_one(monkeypatch):
@@ -217,3 +217,60 @@ def test_the_theoretical_moves_not_just_the_measured(monkeypatch):
     eight = _roofs_at_batch(monkeypatch, 8)
     assert eight["prefill"]["memory_ms"] > one["prefill"]["memory_ms"]
     assert eight["decode"]["memory_ms"] > one["decode"]["memory_ms"]
+
+
+# ------------------------------------------------------------------ one rule, no per-stage branches
+
+
+_ROOTS = {"encode": "audio_tower", "prefill": "language_model", "decode": "language_model"}
+_SECS = {"audio_tower": 1278000000, "language_model": 8028000000, "multi_modal_projector": 50000000}
+
+
+def _roofs_with_roots(monkeypatch, roots=_ROOTS, secs=_SECS):
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_model_facts", lambda: dict(_MF, stage_roots=roots))
+    monkeypatch.setattr(S, "_prefill_tokens", lambda: 128)
+    monkeypatch.setattr(S, "_prefill_batch", lambda: 8)
+    monkeypatch.setattr(S, "_SECTION_BYTES", secs)
+    return S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "prefill": 110.1, "decode": 6.11})
+
+
+def test_a_third_tower_is_priced_from_its_own_weights(monkeypatch):
+    """THE POINT. encode is 13.7% of the checkpoint, so it streams 13.7% of what is resident -- not
+    the whole model, and not nothing."""
+    r = _roofs_with_roots(monkeypatch)
+    assert r["encode"]["memory_ms"] is not None
+    assert r["encode"]["bytes"] < r["decode"]["bytes"], "the audio tower priced as heavy as the backbone"
+
+
+def test_the_backbone_stops_paying_for_the_tower_it_never_reads(monkeypatch):
+    """A decode token reads the language backbone and never the audio encoder, but it was charged for
+    the whole resident figure -- both towers."""
+    r = _roofs_with_roots(monkeypatch)
+    assert r["decode"]["bytes"] < _BYTES, "decode still carries the audio tower's weights"
+
+
+def test_the_shares_are_the_checkpoints_own_split(monkeypatch):
+    """Not a guess: tensor names state the tower and the header states the bytes."""
+    r = _roofs_with_roots(monkeypatch)
+    share = r["encode"]["bytes"] / _BYTES
+    assert abs(share - 1278000000 / sum(_SECS.values())) < 0.01, share
+
+
+def test_an_unmapped_third_stage_is_refused_not_guessed(monkeypatch):
+    """Pricing an audio encoder at the language model's byte count is the wrong divisor, not an
+    approximation. A refused ceiling beside a real measurement is more use than a confident wrong one."""
+    r = _roofs_with_roots(monkeypatch, roots={})
+    assert r["encode"]["memory_ms"] is None
+    assert r["decode"]["memory_ms"] is not None, "the backbone fallback must still work"
+
+
+def test_there_is_one_byte_rule_and_no_per_stage_branches():
+    """prefill and decode are not special: they are stages whose subtree is the backbone."""
+    src = (_PA / "cc_optimize" / "summary.py").read_text()
+    i = src.index("    def _bytes_for(")
+    body = src[i : src.index("\n    params = 0", i)]
+    code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+    assert code.count("_stage_share(") == 1, "the subtree share is applied more than once"
+    assert 'regime="prefill"' not in code and 'regime="decode"' not in code, "a hardcoded regime is back"
