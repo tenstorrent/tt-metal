@@ -1154,7 +1154,11 @@ def _classify_edge_pair(mathop, a, b):
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
-    golden = get_golden_generator(BinarySFPUGolden)
+    # Instantiate directly rather than via get_golden_generator: the harness swaps
+    # in a DummyGoldenGenerator (which has no .ops) during compile-producer, and the
+    # class partition must be identical in the producer and consumer passes or the
+    # two would disagree about which variants skip — and thus which ELFs exist.
+    golden = BinarySFPUGolden()
     result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
     if math.isnan(result):
         return _EDGE_CLASS_NAN
@@ -1772,9 +1776,7 @@ def test_sfpu_binary_bcast(
 @pytest.mark.parametrize(
     "binary_bcast_impl,label", [(0, "handwritten_replay"), (1, "generated_sfpi")]
 )
-def test_sfpu_binary_bcast_device_profile(
-    perf_report, binary_bcast_impl, label
-):
+def test_sfpu_binary_bcast_device_profile(perf_report, binary_bcast_impl, label):
     """Profile the same one-tile COL/ADD body for the handwritten/generated A/B."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -1816,6 +1818,4 @@ def test_sfpu_binary_bcast_device_profile(
     # scoped marker row; summing would make the second selector look 2x slower.
     cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
     assert cycles > 0
-    print(
-        f"BINARY_BCAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}"
-    )
+    print(f"BINARY_BCAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
