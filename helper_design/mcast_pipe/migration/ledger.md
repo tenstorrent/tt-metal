@@ -17,9 +17,9 @@ its plan-mandated historical matched performance baseline requires a separately 
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v11 | 21 | 21 |
+| migrated at ledger API v11 | 23 | 21 |
 | pending | 2 | 5 |
-| deferred | 81 | 0 |
+| deferred | 79 | 0 |
 | quarantined | 0 | 0 |
 
 All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
@@ -63,6 +63,13 @@ Tier 2.9 `conv3d-weight-sharing-mcast` is migrated at v11 in `a290ce20281`. The 
 strips now use independent `Mcast2D` objects with an unconditional four-word runtime ABI; Chain and
 Disabled paths remain unchanged. Fresh-JIT, focused and complete correctness, and all helper guards
 passed. Matched 800 MHz non-grouped and grouped medians improved 0.815% and 0.298%.
+
+Tier 2.10 `layernorm-sharded-post-allgather` is migrated at v11 in `6cc49825476`. Dense `mcast_1d`
+uses helper loopback; each non-1D line uses an outside-sender remote pipe plus an operation-owned local
+copy. Build, exact fresh JIT, all 136 post, 126 pre, and 208 plain-sharded cases, plus helper and host
+guards passed. Matched 800 MHz LayerNorm and RMSNorm medians improved 3.2% and 10.0%. The operation's
+non-1D route remains unexercised because its existing one-core stats contract cannot supply every sender
+line; the outside-sender geometry is host-tested and required no helper API expansion.
 
 ## Closed `needs_recheck`
 

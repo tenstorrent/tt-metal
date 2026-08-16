@@ -1,20 +1,20 @@
-# reader_mcast_receiver_unary_sharded_ln_post_allgather — v7→v8 re-verify (NO code edit)
+# Post-allgather sharded LayerNorm receiver — API-v11 migration
 
-> Historical v8 log. Current v9 status (2026-07-30): **blocked and restored to
-> baseline** with its sender. Migration conventions require protocol pairs to
-> remain together and prohibit a half-raw, half-helper channel. The prior
-> migrated result remains historical. The baseline-restored pair passed all
-> 136 mapped cases on 2026-07-30; that validates the rollback only because
-> those cases remain `mcast_1d`.
+**Tier:** 2.10
+**Status:** migrated at API v11
+**Production commit:** `6cc49825476de78c4a86f3aada72c175ddffe095`
+**Verified:** 2026-08-16 on single-chip Blackhole p100a
 
-**Tier:** 0b (layernorm sharded), v7→v8 REMIGRATION run.
-**Status:** migrated, migrated_api_version=8 (RE-VERIFIED, code unchanged).
+The receiver is migrated atomically with its sender twin. It consumes the helper-generated wire through
+`McastArgs<0, 0>::receiver()` and `ReceiverPipe::receive()`, replacing the raw Flag wait/clear sequence.
+The operation's circular-buffer reserve and publish remain outside the helper.
 
-## Transform: NONE
-`ReceiverPipe` is UNCHANGED across v7->v8. Receiver-only kernel: no edit. Bumped
-migrated_api_version 7 -> 8 after device re-verify.
+Validation shared with the sender:
 
-## Validation
-`tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm`
-- Full (--run-all): 64 passed, 0 failed, no hang. (Same run that validated the sender twin.)
-- JIT build confirmed.
+- Release build and exact fresh-cache post-allgather JIT passed; both artifacts were present.
+- `LN-POST-ALLGATHER` 136/136, `LN-PRE-ALLGATHER` 126/126, and `LN-SHARDED` 208/208 passed.
+- Host fixture 34/34, helper device suite 80/80, and source audit before and after write-back 18/18 passed.
+- Receiver LOC gate: 10 additions / 12 deletions.
+
+No helper API change was needed. The operation-level non-`mcast_1d` coverage boundary is documented in
+the sender log; its outside-sender receiver geometry is host-tested.

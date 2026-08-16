@@ -11,7 +11,9 @@ This is the resumption-oriented progress log requested by the user. The machine 
 
 - Tier 0 units 1-2.
 - Tier 1 unit 6.
-- Tier 2 units 7-9 only.
+- Tier 2 units 7-9 in the initial authorization.
+- Tier 2 units 10-16, including independent units 16a-16c, authorized by the user's 2026-08-16
+  continuation instruction after units 7-9 completed.
 - API v11 as-is. Any API extension remains separately approval-gated by the plan.
 - No rebase, push, reset, worktree, or historical checkout.
 
@@ -151,6 +153,18 @@ was treated as approval. A final bounded, fact-complete review returned PASS, AP
 YES. Claude confirmed that active Mcast roles use existing API-v11 `Mcast2D`, the Chain/Disabled paths
 remain untouched, and the evidence justifies write-back.
 
+### C8 — Tier 2.10 post-allgather LayerNorm
+
+The architecture consultation returned API EXPANSION NO: API v11 can express the dense `mcast_1d`
+channel directly, and the plan's operation-owned local copy plus helper remote pipe preserves the
+outside-sender non-1D protocol without a loopback knob. It also confirmed that dense landed cells own
+the required CB/semaphore state on ragged logical grids.
+
+Two final post-validation review attempts used the required Opus command and timed out after 240 and
+150 seconds without output. Neither silence was treated as a new verdict. Ledger write-back follows the
+earlier explicit API-v11 architecture decision and the completed mandatory build, correctness, fresh-JIT,
+LOC, host/helper, and matched-performance gates; no helper API expansion was made.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
@@ -162,6 +176,7 @@ remain untouched, and the evidence justifies write-back.
 | Tier 2.7 DRAM-sharded Matmul | deferred-design-gap | API v11 cannot preserve sender-only EXCLUDE plus type-2 signal-only INCLUDE behavior; API expansion is not authorized |
 | Tier 2.8 group-attention Matmul | complete | API v11 at `6e8eb763885`; exact/full correctness, fresh JIT, barrier proof, and both matched performance gates passed |
 | Tier 2.9 Conv3D weight sharing | complete | API v11 at `a290ce20281`; exact/full correctness, fresh JIT, helper guards, and both matched performance gates passed |
+| Tier 2.10 Sharded LayerNorm post-allgather | complete | API v11 at `6cc49825476`; exact/full correctness, ABI guards, fresh JIT, host topology, and both matched performance gates passed |
 
 ## Chronological findings
 
@@ -256,3 +271,24 @@ remain untouched, and the evidence justifies write-back.
     discarding the first five Conv3d samples per session. The non-grouped median improved from 14,977 ns
     to 14,855 ns (-0.815%); the grouped median improved from 70,343 ns to 70,133.5 ns (-0.298%). Claude's
     final decision was PASS with no API expansion and approval for ledger write-back.
+24. The user authorized the remainder of Tier 2 in the same unattended, Claude-reviewed fashion. API
+    v11 remains the implementation ceiling: any unit that cannot satisfy its observable protocol with
+    the existing API stops before production edits and is recorded as deferred; no API expansion is
+    inferred from this continuation.
+25. Migrated Tier 2.10 in `6cc49825476`: generalized the shared host descriptor across distributed
+    LayerNorm variants. Dense post-allgather uses helper loopback. Each non-1D row/column uses a helper
+    remote rectangle with the sender outside it, while the kernel retains an operation-owned local
+    CB21-to-CB15 copy and completes it before publishing the CB. Pre-allgather behavior is preserved.
+26. The production LOC gate passed independently: receiver 10/12, sender 26/45,
+    `layernorm_op_multi_core_sharded.cpp` 8/13, shared helper cpp 52/53, and shared helper hpp 12/20
+    additions/deletions. No helper source or API changed.
+27. Tier 2.10 validation passed: Release build; a fresh-cache exact `--dev --no-precompile` node with
+    0/47 JIT hits and both artifacts; post 136/136; pre 126/126; plain sharded 208/208; host 34/34;
+    helper 80/80; and source audit both before and after write-back 18/18.
+28. Matched 800 MHz Tracy used three independent 25-operation sessions per source state and norm type,
+    discarding the first five samples. LayerNorm improved from 4009 to 3880 ns (-3.2%); RMSNorm improved
+    from 4020 to 3617.5 ns (-10.0%).
+29. The mapped post inventory is `mcast_1d` only. A non-1D probe exposes the existing operation contract:
+    stats must be sharded on one core, but multiple sender lines each require stats, so only the first
+    line has valid input. This is recorded as an operation coverage limit, not a helper API gap; the
+    outside-sender wire is covered by the host fixture.

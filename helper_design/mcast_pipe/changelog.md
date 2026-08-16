@@ -6,6 +6,21 @@ feedback round lands.
 
 ---
 
+## Round 31 — Tier 2.10 post-allgather LayerNorm (2026-08-16)
+
+- Production commit `6cc49825476` migrates the post-allgather sender/receiver pair at API v11. Dense
+  one-dimensional multicast uses helper loopback; a non-1D sender keeps its local CB21-to-CB15 copy
+  operation-owned while an independent per-line `Mcast2D` serves the remote rectangle.
+- Generalized the shared LayerNorm multicast descriptor across pre- and post-allgather without changing
+  the ordinary sharded path. Added offset-dense and outside-sender row geometry host coverage.
+- Release build, exact fresh JIT, all post/pre/plain LayerNorm inventories, 34 host tests, 80 helper
+  tests, and the source audit passed. Every production file shrank independently.
+- Matched 800 MHz medians improved from 4009 to 3880 ns for LayerNorm and 4020 to 3617.5 ns for RMSNorm.
+  API expansion: NO. Current rollout state: 23 migrated, 2 pending, and 79 deferred kernel rows; 21
+  migrated and 5 pending host bindings.
+
+---
+
 ## Round 30 — approved Tier 0/1/2 rollout completion (2026-08-16)
 
 - Reconciled the approved plan inventory to 104 kernel paths, advanced the existing migrated fleet to
@@ -18,7 +33,7 @@ feedback round lands.
   instances. Chain and Disabled modes remain unchanged. Build, fresh-JIT, focused and complete Conv3D
   correctness, 32 host tests, 80 Watcher device tests, 18 source audits, and two matched 800 MHz
   performance routes passed; non-grouped and grouped medians improved 0.815% and 0.298%.
-- The helper API remains v11. Final rollout state: 21 migrated, 2 pending, and 81 deferred kernel rows;
+- The helper API remains v11. Rollout state after the initial scope: 21 migrated, 2 pending, and 81 deferred kernel rows;
   21 migrated and 5 pending host bindings.
 
 ## Round 29 — revert experimental Conv streaming send (2026-08-14)

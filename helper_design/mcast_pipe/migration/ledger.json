@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v11 status carries 19 migrated kernels and 19 host bindings on the self-describing six-word CT wire. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v11 status carries 23 migrated kernels and 21 host bindings on the self-describing six-word CT wire. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358, and post-allgather by 6cc49825476. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
   "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
   "inventory_group_notes": {
@@ -410,31 +410,34 @@
       "flags": ["tier:2", "atomic-unit:topk-multicore-final-readiness", "fully-end-to-end", "counter-signal-only"]
     },
     {
-      "id": "layernorm:sharded:pre-allgather-reduce",
+      "id": "layernorm:sharded:distributed-reduce",
       "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
-      "dispatch": "is_pre_all_gather=true; pre-allgather-specific reader arguments from the split shared builder",
+      "dispatch": "is_pre_all_gather || is_post_all_gather; variant-specific reader arguments and helper topology from the shared builder",
       "kernels": [
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp"
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp"
       ],
-      "migration_unit": "layernorm-sharded-pre-allgather",
+      "migration_unit": "layernorm-sharded-distributed-reduce",
       "status": "migrated",
       "migrated_api_version": 11,
-      "commit": "e58c66ef53167a05703190700f884107da0bddc4",
+      "commit": "6cc49825476de78c4a86f3aada72c175ddffe095",
       "validation_set": [
         "separate builder-split prerequisite 4ef7e9a57a6: build passed; LN-PRE-ALLGATHER 126 passed; LN-POST-ALLGATHER 136 passed; LN-SHARDED 208 passed",
         "build_metal.sh: passed",
-        "exact 8x4 BFLOAT8_B RMSNorm pre-allgather node under --dev from fresh isolated cache: passed; sender and receiver JIT artifacts confirmed",
-        "LN-PRE-ALLGATHER: 126 passed, 74 deselected",
-        "LN-POST-ALLGATHER: 136 passed, 64 deselected",
+        "exact post-allgather LayerNorm node under --dev and --no-precompile from a fresh isolated cache: passed with 0/47 hits; sender and receiver JIT artifacts confirmed",
+        "LN-PRE-ALLGATHER: 126 passed",
+        "LN-POST-ALLGATHER: 136 passed",
         "LN-SHARDED: 208 passed",
-        "McastHostFixture: 28 passed, including offset whole-grid and row/column two-stage geometry",
-        "test_mcast_pipe.py: 77 passed",
-        "exact-node profile: four LayerNorm device-kernel durations 2583, 2564, 2563, and 2656 ns (median 2563.5 ns); no operation-matched pre-migration bakeoff exists, so per-kernel delta is not comparable"
+        "McastHostFixture: 34 passed, including offset dense post-allgather and per-row outside-sender geometry",
+        "test_mcast_pipe.py: 80 passed; source audit before and after write-back: 18 passed",
+        "800 MHz LayerNorm median of three run medians: raw 4009 ns vs migrated 3880 ns (-3.2%)",
+        "800 MHz RMSNorm median of three run medians: raw 4020 ns vs migrated 3617.5 ns (-10.0%)"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-06",
-      "flags": ["tier:3", "atomic-unit:layernorm-sharded-pre-allgather", "fully-end-to-end", "builder-split-prerequisite:d0c459f8358", "handshaked-flag-signal-only"]
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2", "atomic-unit:layernorm-sharded-distributed-reduce", "fully-end-to-end", "builder-split-prerequisite:d0c459f8358"]
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:legacy",
@@ -1103,21 +1106,25 @@
       "op_family": "normalization",
       "role": "sender",
       "tag": "clean",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "6cc49825476de78c4a86f3aada72c175ddffe095",
       "validation_set": [
-        "LN-POST-ALLGATHER rollback: baseline-restored pair passed 136 mapped cases on 2026-07-30; inventory covers only mcast_1d",
-        "non-mcast-1D audit: baseline INCLUDE_SRC loopback is independent of rectangle membership",
-        "ragged-grid audit: raw num_blocks is host-provided while SenderPipe derives fan-out from rectangle area"
+        "./build_metal.sh: passed",
+        "fresh-cache exact --dev/--no-precompile post-allgather LayerNorm node passed with 0/47 JIT hits and sender/receiver artifacts",
+        "LN-POST-ALLGATHER: 136 passed; LN-PRE-ALLGATHER: 126 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 34 passed; test_mcast_pipe.py: 80 passed; source audit before and after write-back: 18 passed",
+        "all five production files independently satisfy additions < deletions",
+        "800 MHz LayerNorm raw 4009 ns vs migrated 3880 ns (-3.2%); RMSNorm raw 4020 ns vs migrated 3617.5 ns (-10.0%)"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "inventory_note": "V9 PORT BLOCKED: baseline MCAST_INCL_SRC loops back to an out-of-rectangle sender on the non-mcast-1D host path, while SenderPipe infers loopback only from rectangle membership. The raw host count can also differ from McastRect::area() on ragged grids. Expanding the rectangle is an operation change and exposes pre-existing multi-sender/one-core-stats behavior. Target-baseline sender preserved.",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 migration. The mcast_1d path uses dense Mcast2D loopback. Each non-mcast-1D line uses an outside-sender Mcast2D for the remote rectangle plus an operation-owned local CB21-to-CB15 copy, so helper loopback inference needs no new knob. The dense rectangle owns CB/semaphore state even on inactive ragged cells. Current operation tests exercise mcast_1d only; non-mcast-1D is limited by the pre-existing one-core stats-tensor contract, while its outside-sender topology is covered by the host fixture.",
       "flags": [
-        "v9-port-blocked",
-        "design-gap",
-        "exact-baseline-restored"
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "operation-coverage-limit:non-mcast-1d-stats"
       ]
     },
     {
@@ -1125,20 +1132,22 @@
       "op_family": "normalization",
       "role": "receiver",
       "tag": "clean",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "6cc49825476de78c4a86f3aada72c175ddffe095",
       "validation_set": [
-        "paired with blocked post-allgather sender",
-        "LN-POST-ALLGATHER rollback: baseline-restored pair passed 136 mapped cases on 2026-07-30"
+        "./build_metal.sh: passed",
+        "fresh-cache exact --dev/--no-precompile post-allgather LayerNorm node passed with sender/receiver artifacts",
+        "LN-POST-ALLGATHER: 136 passed; LN-PRE-ALLGATHER: 126 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 34 passed; test_mcast_pipe.py: 80 passed; source audit before and after write-back: 18 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "inventory_note": "V9 PORT BLOCKED as the receiver half of the post-allgather protocol pair. Migration conventions prohibit leaving a half-raw, half-helper channel. Target-baseline receiver preserved.",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 receiver half of the post-allgather protocol pair. It consumes the helper-generated wire and uses ReceiverPipe::receive; the sender twin is migrated in the same production commit.",
       "flags": [
-        "v9-port-blocked",
-        "paired-rollback",
-        "exact-baseline-restored"
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified"
       ]
     },
     {

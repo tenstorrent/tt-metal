@@ -188,13 +188,13 @@
       "coverage": "high; exact fresh-cache sender/receiver JIT evidence on 2026-08-06 and complete mapped inventory (14 passed, 12 expected BFLOAT8_B pad xfails)"
     },
     {
-      "id": "layernorm:sharded:pre-allgather-reduce",
+      "id": "layernorm:sharded:distributed-reduce",
       "classification": "required",
       "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
-      "dispatch": "is_pre_all_gather=true; kernel paths and reader arguments supplied by sharded_layernorm_factory_helpers.cpp",
-      "migration_unit": "layernorm-sharded-pre-allgather",
+      "dispatch": "is_pre_all_gather || is_post_all_gather; kernel paths, helper topology, and reader arguments supplied by sharded_layernorm_factory_helpers.cpp",
+      "migration_unit": "layernorm-sharded-distributed-reduce",
       "inventory": ["LN-PRE-ALLGATHER", "LN-POST-ALLGATHER", "LN-SHARDED"],
-      "coverage": "high; exact fresh-cache sender/receiver JIT evidence on 2026-08-06; LN-PRE-ALLGATHER 126 passed, LN-POST-ALLGATHER 136 passed, LN-SHARDED 208 passed; post/plain inventories guard the builder split"
+      "coverage": "high; exact fresh-cache post sender/receiver JIT evidence on 2026-08-16; LN-PRE-ALLGATHER 126 passed, LN-POST-ALLGATHER 136 passed, LN-SHARDED 208 passed; outside-sender non-mcast-1D geometry host-tested"
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:legacy",
@@ -423,7 +423,7 @@
         "test_simulated_distributed_norm_tile_aligned_width: xfail(run=False), issue #48661",
         "test_simulated_distributed_norm_non_tile_aligned_width: xfail(run=False), issue #48661"
       ],
-      "coverage_limit": "The current inventory exercises mcast_1d only; it does not cover the accepted non-mcast-1D host branch."
+      "coverage_limit": "The current operation inventory exercises mcast_1d only. The non-mcast-1D branch requires one stats source per sender line, but the existing operation contract validates a stats tensor sharded on exactly one core; its outside-sender wire geometry is covered by McastHostFixture."
     },
     "LN-SHARDED": {
       "path": "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py",
@@ -640,17 +640,17 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
-      "status": "blocked",
+      "status": "migrated",
       "inventory": "LN-POST-ALLGATHER",
-      "coverage": "existing inventory is mcast_1d-only; non-mcast-1D protocol audited",
-      "result": "migration reverted; baseline-restored pair passed 136 mapped cases on 2026-07-30; helper cannot preserve out-of-rectangle INCLUDE_SRC loopback or an explicit host fan-out that differs from rectangle area"
+      "coverage": "complete mapped mcast_1d inventory plus host coverage for outside-sender non-mcast-1D geometry",
+      "result": "API-v11 migrated at 6cc49825476; fresh exact JIT passed; post 136, pre 126, and plain sharded 208 passed; LayerNorm and RMSNorm performance improved 3.2% and 10.0%"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp",
-      "status": "blocked",
+      "status": "migrated",
       "inventory": "LN-POST-ALLGATHER",
-      "coverage": "paired rollback",
-      "result": "migration reverted with sender; baseline-restored pair passed 136 mapped cases on 2026-07-30; partial protocol migrations are prohibited"
+      "coverage": "paired sender/receiver migration with exact fresh-cache artifact",
+      "result": "API-v11 migrated with sender at 6cc49825476; complete mapped inventories and helper guards passed"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
