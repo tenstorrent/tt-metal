@@ -652,6 +652,96 @@ def neighborhood_attention_3d_op_sp(
     return ttnn.reshape(full, (batch, t, h, w, width))
 
 
+def neighborhood_attention_3d_op_sp_w(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    kernel_size: tuple[int, int, int],
+    sp_axis: int,
+    ccl_manager,
+    scale: float | None = None,
+) -> ttnn.Tensor:
+    """Spatial sequence-parallelism over W. Same replicated in/out contract as
+    :func:`neighborhood_attention_3d_op` (q/k/v full ``(B, T, H, W, NH, HD)``, returns full
+    ``(B, T, H, W, NH*HD)``), but the attention compute is split ``sp`` ways over the W axis.
+
+    Mirrors :func:`neighborhood_attention_3d_op_sp` exactly -- shard Q, keep K/V full/replicated,
+    one all_gather, no halo exchange -- so it reuses that path's deadlock-free CCL pattern rather
+    than the ``neighbor_pad`` + ``all_gather`` chain (which hangs the fabric). The only twist is that
+    W is the *inner* spatial axis, so a flat-sequence slice is not a W-band. The volume is therefore
+    permuted to W-outer ``(B, W, T, H, ...)`` before flattening, which makes each chip's
+    ``ttnn.mesh_partition`` slice a contiguous W-band; the neighborhood mask is axis-order-agnostic,
+    so it is simply told its grid as ``(W, T, H)`` with the matching ``(kw, kt, kh)`` kernel and each
+    chip's flattened W-outer origin. Outputs are all-gathered along the sequence (chip order = W
+    order) and permuted back to ``(B, T, H, W, width)``.
+
+    Costs full K/V per chip (like the T-shard path), trading the halo path's ~1/sp K/V memory for a
+    known-good CCL sequence. Requires W divisible by ``mesh.shape[sp_axis]`` and a tile-aligned shard
+    origin (``(W/sp) * T * H`` a multiple of ``TILE_HEIGHT``).
+    """
+    mesh = q.device()
+    sp = int(list(mesh.shape)[sp_axis])
+    batch, t, h, w, heads, head_dim = tuple(q.shape)
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+    width = heads * head_dim
+    if sp == 1:  # nothing to split -- fall back to the plain replicated op path
+        return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
+    assert w % sp == 0, f"W={w} must split evenly over sp={sp}"
+    seq_full = w * t * h  # W-outer flatten
+    seq_local = seq_full // sp
+    tile_height = 32
+    assert seq_local % tile_height == 0, f"shard origin (W/sp)*T*H={seq_local} must be a multiple of {tile_height}"
+    if scale is None:
+        scale = head_dim**-0.5
+    kt, kh, kw = (min(kk, d) for kk, d in zip(kernel_size, (t, h, w)))
+
+    # Flatten W-outer so a contiguous sequence slice is a W-band; heads are merged then re-split so the
+    # spatial reorder is a single 5D permute (heads kept out of it). The mask is axis-order-agnostic,
+    # so it later reads the grid as (W, T, H) -- see the neighborhood_3d argument below.
+    def to_seq(x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (batch, t, h, w, width))
+        x = ttnn.permute(x, (0, 3, 1, 2, 4))  # (B, W, T, H, width)
+        x = ttnn.reshape(x, (batch, seq_full, heads, head_dim))
+        x = ttnn.permute(x, (0, 2, 1, 3))  # (B, NH, S, HD)
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    tk = to_seq(k)
+    tv = to_seq(v)
+    # (B, NH, S, HD) full -> this chip's W-band (B, NH, S/sp, HD). mesh_partition slices S/sp per
+    # device along sp_axis at S/sp boundaries = whole W-columns (W divisible by sp), so no fabric.
+    tq = ttnn.mesh_partition(to_seq(q), dim=2, cluster_axis=sp_axis)
+
+    # One flattened W-outer origin per chip along sp_axis: chip at position p holds seq
+    # [p*seq_local, ...), the same slice mesh_partition assigns. The mask adds it to each local query
+    # index to recover the query's global (w, t, h).
+    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
+    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+
+    attended = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        neighborhood_3d=(w, t, h, kw, kt, kh),  # grid given W-outer to match the flatten
+        scale=scale,
+        windowed_q_token_offset=0,
+        windowed_q_token_offset_tensor=off_tt,
+    )
+    for tensor in (tq, tk, tv):
+        ttnn.deallocate(tensor)
+
+    # (B, NH, S/sp, HD) -> (B, S/sp, width) local, all-gather along seq across sp_axis (chip order is
+    # W order, so no reshuffle) -> full W-outer (B, W, T, H, width), permuted back to (B, T, H, W, width).
+    attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+    attended = ttnn.permute(attended, (0, 2, 1, 3))
+    local = ttnn.reshape(attended, (batch, seq_local, width))
+    full = ccl_manager.all_gather(local, dim=1, mesh_axis=sp_axis, use_hyperparams=False)
+    full = ttnn.reshape(full, (batch, w, t, h, width))
+    return ttnn.permute(full, (0, 2, 3, 1, 4))  # (B, T, H, W, width)
+
+
 def neighborhood_attention_3d_op_sp_sharded(
     q: ttnn.Tensor,
     k: ttnn.Tensor,

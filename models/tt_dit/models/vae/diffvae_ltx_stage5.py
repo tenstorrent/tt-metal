@@ -617,7 +617,15 @@ class _NeighborhoodAttention3D(Module):
         k = to_volume(self._rope(self._normed(self.k_norm, self._projected(self.to_k, y, heads_shape)), tables))
         v = to_volume(self._projected(self.to_v, y, heads_shape))
 
-        out = neighborhood_attention_3d(q, k, v, kernel_size=cfg.kernel_size, scale=1.0, ccl_manager=self.ccl_manager)
+        out = neighborhood_attention_3d(
+            q,
+            k,
+            v,
+            kernel_size=cfg.kernel_size,
+            scale=1.0,
+            ccl_manager=self.ccl_manager,
+            backend=os.environ.get("DIFFVAE_NA3D_BACKEND", "gather"),
+        )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
 

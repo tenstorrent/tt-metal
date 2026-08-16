@@ -16,6 +16,7 @@ require: splitting the fused QKV, and the RoPE reordering described in :func:`ro
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -539,6 +540,7 @@ class DeterministicStages(Module):
                             stage_kernels[stage],
                             head_dim=head_dim,
                             mesh_device=mesh_device,
+                            na3d_backend=os.environ.get("DIFFVAE_NA3D_BACKEND", "gather"),
                         )
                         for _ in range(stage_depths[stage])
                     ]
