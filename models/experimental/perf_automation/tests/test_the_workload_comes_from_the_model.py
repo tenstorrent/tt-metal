@@ -60,15 +60,26 @@ def test_zero_means_ask_the_pipeline_and_is_not_a_cap():
     assert invented_workload_vars('n = int(os.environ.get("TT_PERF_CLIPS", "4"))') == [("TT_PERF_CLIPS", 4)]
 
 
-def test_the_real_generated_test_is_caught():
-    """Against the file that actually shipped, if this tree has it."""
+def test_the_shipped_defect_is_caught():
+    """The line as it actually shipped, kept as a fixture rather than read from the live file.
+
+    IT USED TO READ THE FILE, and named the variable it expected to find in it. Both halves were
+    wrong. The file is a GENERATED perf test -- the tool rewrites it whenever the workload changes --
+    so the assertion pinned one snapshot of a moving target, and by 2026-08-16 that model's test
+    invented TT_PERF_FLUSH_EVERY instead: the detector was working perfectly and the test failed
+    anyway. Worse, it failed only in a tree that HAS the model, because the missing-file branch
+    returned early -- so the tool's own suite was green everywhere except the trees where preflight
+    runs it, which is the one place a red suite stops a run.
+
+    It also named a model. Nothing else in this file does, and the detector knows nothing about
+    audio: it looks for a work-capping literal in an environment default, whatever the stage.
+
+    The regression is real, so the LINE is kept -- with the name it shipped under -- and the
+    dependency on a file that regenerates is not."""
     from agent.perf_test_gen import invented_workload_vars
 
-    p = _PA.parent.parent.parent / "models/tt_transformers/demo/voxtral_mini_3b_2507/tests/e2e/test_main_perf.py"
-    if not p.is_file():
-        return
-    names = {v for v, _ in invented_workload_vars(p.read_text(errors="ignore"))}
-    assert "TT_PERF_AUDIO_STREAMS" in names
+    src = 'streams = int(os.environ.get("TT_PERF_AUDIO_STREAMS", "1"))\n'
+    assert invented_workload_vars(src) == [("TT_PERF_AUDIO_STREAMS", 1)]
 
 
 def test_the_run_reports_them():
