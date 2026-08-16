@@ -282,3 +282,27 @@ def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
     assert factory.count("DataReadyMode::Counter") == 1
     assert factory.count("reader_runtime_args.append(group0_start_mcast.runtime_args(core));") == 2
     assert factory.count("reader_runtime_args.append(group1_start_mcast.runtime_args(core));") == 2
+
+
+def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():
+    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/data_movement/move/device"
+    kernels = [
+        (base / "kernels/dataflow/move_interleaved_with_overlap.cpp").read_text(),
+        (base / "kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp").read_text(),
+    ]
+    factory = (base / "move_overlap_program_factory.cpp").read_text()
+    cache_override = (base / "move_sharded_program_factory.cpp").read_text()
+
+    for kernel in kernels:
+        assert kernel.count("McastArgs<") == 3
+        assert kernel.count("send_signal();") == 3
+        assert kernel.count("receive_signal();") == 3
+        assert "return_sem.up(" in kernel and "return_sem.wait(num_workers)" in kernel
+        assert "set_multicast" not in kernel
+
+    assert "std::vector<ttnn::kernel_lib::host::Mcast2D> release_mcasts" in factory
+    assert factory.count("mcast.compile_time_args()") == 1
+    assert factory.count("runtime_args.append(mcast.runtime_args(core));") == 1
+    assert "mcast_dest_noc" not in factory
+    assert "case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP" in cache_override
+    assert "a[0] = src_addr;" in cache_override and "a[1] = dst_addr;" in cache_override
