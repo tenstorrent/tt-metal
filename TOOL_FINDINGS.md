@@ -4292,9 +4292,24 @@ valid at every step. **The builder stopped precisely where the gate stopped aski
 "can this stage be captured?" — yes, at one position. It never asks "is the capture replayable at
 the next position?", which is the property that makes traced decode useful.
 
-So the fix in F45 ("wire the existing hooks into `run_tts`") is understated: wiring `decode_step` in
-*eagerly* is easy and wins the algorithmic factor, but winning the trace factor as well requires
-making the capture position-independent first.
+**`decode_step` itself is not broken — this matters for the fix.** Read as ordinary Python it is
+correct at *any* position: `pos` is a parameter (`def decode_step(self, emb, pos=None)`), and a
+caller advancing it 200, 201, 202… gets the right answer every time, with a real cache and no
+recomputation. It is a proper incremental decode. The position-locking bites **only at trace-capture
+time**, when the Python integer is frozen into the recording.
+
+So there are two independent wins here, not one blocked one:
+
+| | what it needs | difficulty |
+|---|---|---|
+| **1. call `decode_step` from `run_tts`** | wire it up, pass an advancing `pos` | **easy, available today** |
+| **2. trace that loop** | move the position on-device as an index tensor so one recording is valid at every step | real work |
+
+Win 1 removes the recompute-everything cost on its own and needs no tracing at all. Win 2 is where
+the remaining distance to a hand-written port's numbers lives. The accurate summary is therefore:
+**the demo runs a wasteful implementation while a correct, efficient one sits unused in the same
+file — and the efficient one was additionally built in a form that can only be traced at one fixed
+position.**
 
 ### Why nothing caught it
 
