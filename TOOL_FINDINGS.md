@@ -42,6 +42,9 @@ the measurement simply is not of the product. That is F46, and it is the first t
 
 ### The five that matter most
 
+*(All but F42 share a single root cause — one dropped `deepcopy` at the capture stage. See
+**THE ROOT CAUSE** below, which traces it end to end in plain terms.)*
+
 | # | one line |
 |---|---|
 | **F46** | the optimizer measures `decode_step`, which the demo never calls, while the shipped loop recomputes the whole prefix every frame — it reported −17.2%, the product got −13.2% |
@@ -170,6 +173,156 @@ it does it well. Its correctness checking is honest and strict. But its *perform
 code path the product never runs, and its correctness gate can hand back a number that is not a
 correlation coefficient and call it verified. Neither defect broke this run. Both would, given a
 different roll of the dice.
+
+---
+
+## ★★★★★ THE ROOT CAUSE — one dropped argument, traced step by step
+
+The single most useful thing in this document for the PR author. F27, F36, F44, F45 and F46 are not
+five independent defects; they are one missing `deepcopy` at the very first stage, propagating
+outward. Written in plain terms, with the evidence at each link, because the chain is only obvious
+once you see it end to end.
+
+### 1. The original model keeps a KV cache
+
+`modeling_voxtral_tts.py:198`:
+
+```python
+def prefill_then_step(self, inputs_embeds, step_embeds):
+    cache, P = {}, inputs_embeds.shape[1]        # an empty notebook
+    for layer in self.layers:
+        x = layer(x, cis, causal_bias(P), cache) # read the prompt, FILL the notebook
+    for t in range(step_embeds.shape[1]):
+        x = step_embeds[:, t: t + 1]             # ONE position
+        for layer in self.layers:
+            x = layer(x, cis_t, None, cache)     # consult and extend it
+```
+
+The cache is an ordinary argument threaded through every layer. Cost per frame stays flat.
+
+### 2. How a stub is built
+
+For each component the tool: captures a real example call → generates a test comparing the rewrite
+against the original on that example → iterates the TTNN implementation until PCC ≥ 0.99 → marks it
+**graduated**. **The generated test is the only signal that says "done".**
+
+### 3. The captured example HAD a cache, and the harness dropped it
+
+`_captured/attention/args.pt` recorded a genuine mid-generation call: `h=[1,1,3072]` with a
+**208-deep KV cache**. The obstacle was real, and the tool documented it:
+
+> *"The cache dict is MUTATED by `VoxtralAttention.forward` (`cache[cache_key] = (k, v)`), and the
+> harness hands the same object to the torch reference and then to the ttnn stub — so the stub would
+> attend over a cache one position longer than the golden did."*
+
+Hand the same mutable notebook to both sides and the first writes in it before the second reads. The
+fix is one line — give each side a `deepcopy`. Instead the cache was dropped, and the tool recorded
+the consequence itself:
+
+> *"Dropping the cache instead makes the test **vacuous**: at S=1 with no cache the softmax is over a
+> single key, so it returns 1.0 whatever q and k are."*
+
+**It knew the test became meaningless, and dropped it anyway.** That is F27.
+
+### 4. The generated test would not have passed a cache regardless
+
+Independently of the capture, the test builds arguments by **name**
+(`tests/pcc/test_attention.py:461`):
+
+```python
+is_well_known = name in _WELL_KNOWN_INPUTS
+if not is_required and not is_well_known:
+    continue                      # `cache=None` is optional and unrecognised -> skipped
+```
+
+`cache` is not in `_WELL_KNOWN_INPUTS`, and the same file explicitly nulls the standard HF names:
+
+```python
+if arg_name in ("past_key_values", "cache_position", "use_cache", ...):
+    return None
+```
+
+So a cache reaches the component under test by **no route at all**.
+
+### 5. So the graduated stub ignores caches — and is right to, by its own spec
+
+A cache-using rewrite and a cache-ignoring rewrite score **identically (0.9999)** against a test that
+never passes one. The simpler one was written:
+
+```python
+_stubs/attention.py:44
+    def __call__(self, h, cis=None, bias=None, cache=None, cache_key=None):
+        return self.attn(h, causal=bias is not None)     # accepted, never used
+
+tt_backbone.py:103
+    def __call__(self, h, causal=True):                  # no cache parameter at all
+```
+
+The signature keeps `cache` — mirroring the reference — while the body has nowhere to put it.
+**Nothing is forbidden here; nothing was asked.**
+
+### 6. The demo is obliged to use those stubs
+
+From the plan's `gate_1_native`:
+
+> *"assert each routed object is an instance of the class defined in `_stubs/<name>.py`; assert live
+> `_stubs/<name>.py` is byte-identical to its `.last_good_native` snapshot; the pipeline imports the
+> stubs as-is and never monkey-patches their forwards"*
+
+### 7. A cacheless component leaves exactly one correct option
+
+To compute position 200 without memory, you must supply positions 1–200 again:
+
+```python
+embeds = ttnn.concat([embeds, emb], dim=1)
+h = self._row(self._run_backbone(self._pin(embeds, length, cap)), length - 1)
+```
+
+Re-run all 26 layers over the whole padded sequence, keep one row, discard 223. **This is not a
+blunder — it is the only correct construction available** given components that cannot remember.
+
+### 8. The plan then froze the waste into the specification
+
+```json
+"gate_2_invoked": { "how": "... tts_backbone == 1 + n_frames ..." }
+```
+
+The backbone **must** run once per frame plus prefill — a count only achievable by recomputing. The
+inefficiency is now a requirement that a correct fix would violate.
+
+### 9. The trace gate demands the opposite structure
+
+A recording can only be replayed if the shapes are identical every time. Recompute-everything grows
+by a position per frame. A fixed-size step needs a cache — so `decode_step` was written, **bypassing
+the stubs**, with a resident cache and static shapes.
+
+### 10. Two implementations, and no gate compares them
+
+| gate | code it exercises | verdict |
+|---|---|---|
+| correctness (PCC) | the demo's recompute path | ✅ passes |
+| trace / host-free | `decode_step` | ✅ passes |
+| performance | `decode_step` | measured, optimised 17 h |
+
+Every gate is satisfied. **None asks whether the thing measured for speed is the thing measured for
+correctness.**
+
+### What this means for the fix
+
+The fix is **not** "point the demo at `decode_step`" — that breaks Gate 1 (the stubs would no longer
+be the routed bodies) and Gate 2 (`tts_backbone` drops to 1). Work upstream instead, cheapest first:
+
+1. **`deepcopy` the captured cache** instead of dropping it (F27's one-line fix). The capture already
+   holds real 208-deep contents.
+2. **Add `cache` to the test's recognised inputs** so the component is specified against it. Then a
+   cacheless rewrite stops scoring 0.9999 on a vacuous comparison.
+3. **Let the stub carry the cache** — its signature already has the parameter, and the reference
+   already defines the contract.
+4. **Re-derive the plan's invocation counts** from the cached structure (`tts_backbone == 1`, not
+   `1 + n_frames`).
+
+Then one implementation satisfies correctness, invocation counts and the trace gate together — and
+the performance work lands on the code the user actually runs.
 
 ---
 
@@ -2907,7 +3060,13 @@ is right, and it is honest.
 
 ---
 
-## ★ F27 — the captured input is DISCARDED where one `deepcopy` would have kept it
+## ★★★★★ F27 — the captured input is DISCARDED where one `deepcopy` would have kept it
+
+> **Re-rated 2026-08-16, from ★ to ★★★★★.** This was first filed as a test-quality complaint. It is
+> the origin of the port's entire performance architecture: the dropped cache produced a cacheless
+> stub, which forced the demo into per-frame recomputation, which the plan then codified, which made
+> the trace gate unreachable through the stubs, which produced a second implementation that received
+> all 17 hours of optimisation. See **THE ROOT CAUSE** near the top for the full chain.
 
 The harness captures a real deployment activation for `attention`, correctly works out that it
 cannot hand the same object to both sides, and then **throws it away** rather than copying it.
