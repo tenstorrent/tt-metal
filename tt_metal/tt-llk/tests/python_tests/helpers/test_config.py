@@ -1317,7 +1317,7 @@ class TestConfig:
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} "
                     # Compute-only flags.  Only the three TRISCs build with the
                     # Tensix extension, so Tensix-specific options (e.g.
-                    # -mtensix-config-diagnose) must not go in OPTIONS_ALL --
+                    # -mtensix-config-diagnose) must not go in OPTIONS_ALL:
                     # the BRISC/NCRISC build uses plain -mcpu=tt-bh and rejects
                     # them outright.
                     f"{os.environ.get('TT_LLK_COMPUTE_CFLAGS', '')} "

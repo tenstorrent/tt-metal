@@ -259,9 +259,9 @@ inline void tensix_sync()
 {
     // PC_BUF_BASE rather than pc_buf_base: the global is a PTR_CONST holding
     // exactly this macro (trisck.cc), but it is defined in another TU, so
-    // every use costs a load and -- the reason it matters here -- the address
-    // reaching pass_rvtt_config is not a compile-time constant, leaving the
-    // store an unresolvable barrier that discards the tracked config state.
+    // every use costs a load.  What matters here is that the address reaching
+    // pass_rvtt_config is then not a compile-time constant, leaving the store
+    // an unresolvable barrier that discards the tracked config state.
     // These two addresses are Manual TTSync's CoprocessorDoneCheck and
     // MOPExpanderDoneCheck, not PCBufs; the legacy name is misleading.
     store_blocking(reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE + 1 * sizeof(std::uint32_t)), 0);
@@ -388,7 +388,7 @@ inline std::uint32_t cfg_addr(std::uint32_t cfg_addr32)
 
 // Memory-mapped Config write: cfg[addr32] = data, issued by the RISC-V core.
 // Routed through __builtin_rvtt_cfg_store, which emits exactly the same store
-// -- no extra instruction, no extra register -- but carries the word index so
+// (no extra instruction, no extra register) but carries the word index so
 // pass_rvtt_config forgets that one word instead of discarding everything it
 // knows.  A naked cfg[...] = ... store is invisible to the pass, which has to
 // treat it as an opaque barrier.

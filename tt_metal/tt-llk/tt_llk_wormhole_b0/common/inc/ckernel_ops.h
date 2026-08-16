@@ -971,14 +971,14 @@
 // (-mcpu=tt-wh-tensix); BRISC/NCRISC use plain -mcpu=tt-wh, where these
 // builtins are not registered at all.  Those cores still issue the odd Tensix
 // instruction (boot.h's TTI_ZEROACC/TTI_SFPCONFIG) as a raw .ttinsn word,
-// which needs no codegen support -- so leave the legacy macros in place there.
+// which needs no codegen support, so leave the legacy macros in place there.
 // Without this guard the declarations below turn every call into an ordinary
 // extern function and the failure surfaces as an undefined reference at link.
 #if defined(__riscv_xtttensixwh)
 
 // The instruction-issue macros below expand to compiler builtins.  Many of
 // those expansions land inside templates, where a non-dependent name must be
-// declared at the point of definition -- so pull in sfpi's declarations rather
+// declared at the point of definition, so pull in sfpi's declarations rather
 // than relying on the builtin being known implicitly.  Declaring a __builtin_
 // name is a redundant redeclaration of what the compiler already knows, hence
 // the suppression.
@@ -1001,7 +1001,7 @@
 // asm-issued instruction is opaque to it, so every .ttinsn was a barrier that
 // stopped config folding dead.
 //
-// TT_OP_<OP> is deliberately NOT redirected -- it yields the instruction
+// TT_OP_<OP> is deliberately NOT redirected: it yields the instruction
 // *word* as a value, which MOP templates and the replay buffer store rather
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
@@ -1181,7 +1181,7 @@
 #define TTI_MULDMAREG(a0, a1, a2, a3) TT_MULDMAREG(a0, a1, a2, a3)
 // TTI_NOP and TTI_DMANOP take no operands, so they are object-like macros
 // rather than function-like ones, and there is no TT_ (runtime) spelling to
-// redirect -- a NOP has nothing to compute at runtime.  Routing them through
+// redirect: a NOP has nothing to compute at runtime.  Routing them through
 // intrinsics matters out of proportion to what they do: as inline asm they
 // were opaque to pass_rvtt_config, and the packer pads its config sequences
 // with them, so each one discarded the tracked config state mid-sequence.
