@@ -20,7 +20,7 @@ The nine sub-audits span **four synchronization surfaces** (not just cross-threa
   - `mailbox-sync-audit` — RISC↔RISC mailbox FIFO handshakes (push/pop balance, call-count symmetry, fence ordering caveat).
 - **Cross-core (NoC):**
   - `dataflow-cb-sync-audit` — circular-buffer producer/consumer credits (reserve/push/wait/pop balance, data-before-credit ordering, capacity, remote CBs).
-  - `noc-sync-audit` — raw `noc_semaphore_*` + barrier data-before-signal ordering and multicast fan-out (the non-CB half of dataflow).
+  - `noc-sync-audit` — raw `noc_semaphore_*` + barrier data-before-signal ordering and multicast fan-out, plus the read-side / exit / coherency half of the same surface (an inbound read consumed before its read-barrier, a non-posted atomic left in flight at kernel exit, and on Blackhole a hand-rolled L1 poll missing `invalidate_l1_cache`) — the non-CB half of dataflow.
 - **Intra-thread (micro-architectural):**
   - `instruction-latency-audit` — pipeline result-latency / NOP padding on hand-written instruction sequences (compiler-grounded, arch-divergent).
 
@@ -36,8 +36,9 @@ schema reconciliation):
     #                                    semaphore-handshake, reconfig-stall,
     #                                    srcreg-bank, mailbox-sync, cb-sync, noc-sync,
     #                              noc-atomic-exit, noc-read-barrier, noc-l1-invalidate}]
-    #   (cb-sync/noc-sync are committed + deterministic but need a KERNEL fact base
-    #    to yield findings — over tt-llk they are trivially empty; see kernel tier.)
+    #   (cb-sync + the four noc-* checks are committed + deterministic but need a
+    #    KERNEL fact base to yield findings — over tt-llk all five are trivially
+    #    empty; see kernel tier. mailbox-sync does yield its in-tree surface.)
 
 Hand each sub-audit agent its check's `findings[]` as the pre-enumerated worklist,
 and instruct it to **widen beyond the tool** per that check's `blind_spots` (the
@@ -45,10 +46,12 @@ tool recalls KNOWN patterns only — the agents must still hunt the unknown). Th
 tool ships committed deterministic checkers for **8 of the 9** classes — all but
 `instruction-latency` (its surface is the SFPU files clang can't parse + its
 verdict needs the out-of-tree pinned `sfpi-gcc` latency table → fully LLM-driven).
-Of the 8, **`cb-sync` / `noc-sync`** only produce findings when fed a **kernel
-fact base** (the committed kernel tier's capture — see *Full-audit kernel tier*
-below); over the tt-llk fact base they are trivially empty, and without a capture
-run their kernel surface stays LLM-driven (each skill's ttnn-widened grep).
+Of the 8, **`cb-sync` and the `noc-sync` class (4 checkers: `noc-sync`,
+`noc-atomic-exit`, `noc-read-barrier`, `noc-l1-invalidate`)** only produce findings
+when fed a **kernel fact base** (the committed kernel tier's capture — see
+*Full-audit kernel tier* below); over the tt-llk fact base all five are trivially
+empty, and without a capture run their kernel surface stays LLM-driven (each
+skill's ttnn-widened grep).
 `srcreg-bank` recalls only the dvalid control points + the raw-`SETDVALID`-on-BH
 flag (not the bank-flip lockstep verdict), and `mailbox-sync` recalls only the
 IN-TREE mailbox surface — mailbox use in ttnn/models kernels (one-to-one channels
@@ -67,6 +70,15 @@ low/zero finding count, scan `out/parse.log` for a header that should NOT fail (
 NON-SFPU file):** an unexpected parse failure there is a silent coverage hole (that
 class's writes in that file were never analyzed → its "0" is meaningless). This is
 the consuming-side half of the never-false-all-clear contract.
+
+**Read the envelope's `degraded` list too — it is the tool's own "I did not analyze
+this" channel.** `cli.py` records there every surface it could not analyze this run
+(empty/near-empty fact base, unreadable cfg defines, a `--changed` file that parsed
+to 0 facts, a kernel-tier capture coverage hole, uncertain attribution under a
+partial parse), and `run.sh` prints it as `*** DEGRADED — NOT a clean all-clear ***`.
+A non-empty `degraded` makes a low/zero count **unanalyzed, not clean**: carry each
+note into the report, treat the named surface as LLM-only for that class, and never
+let a degraded run close a class.
 
 **Tool-drift contract — detect a stale registry, surface it, offer the fix (do NOT silently edit).**
 The deterministic tier is only as complete as `llkaudit/registry.py`'s name→meaning
@@ -89,7 +101,16 @@ treat these as **tool-drift tells** and act on them:
   new `CircularBuffer`/`Noc`/`Semaphore` flow-control method shows up only as a
   site the LLM found that the tool's candidate list didn't.
 
-On any such observation, **name the stale entry** (which `registry.py` table +
+**Before calling anything drift, check `KNOWN_GAPS.md`** (next to `registry.py` — the
+tool's single canonical list of *deliberately deferred* gaps, each with its risk
+class, live-today count, and why the obvious fix was refused). A gap listed there is
+real but consciously not fixed, usually because the naive fix trades recall for
+false-positives — so do **not** re-file it as newly-discovered drift: cite its `L#`/`X#`
+and move on. If this sweep establishes a NEW gap the user chooses to defer, record it
+**in `KNOWN_GAPS.md`**, not in the run report (a report rots; the ledger is read by
+the next run).
+
+On any such observation the ledger does not already own, **name the stale entry** (which `registry.py` table +
 which checker under-recalls, and the concrete API missed), tell the user the
 deterministic tier is drifting, and **offer to add it**. Apply the enhancement
 **only if the user allows** — never silently. The fix is almost always a one-line
@@ -101,6 +122,14 @@ authoritative header (e.g. `circular_buffer.h`, `noc.h`, `dataflow_api.h`,
 follow the commit-twice pre-commit discipline. Then re-run recall so the sweep
 reflects the widened tables. This keeps the tool a living superset of the codebase
 instead of decaying into a false all-clear as the APIs move.
+
+**Drift runs both ways.** Under-recall (`CAP-REDUCTION`) is the more serious class, but
+a checker can also **over-report** (`FALSE-FLAG`) — a flush or credit form its registry
+doesn't yet recall, or a receiver-type text heuristic admitting a non-CB/non-NoC object.
+So a tool `findings[]` entry is a **candidate, not a verdict**: confirm it at the site
+before it enters a report. Dismissing an unconfirmed *tool candidate* with shown
+evidence is **not** a monotonic-contract downgrade — that rule protects the sub-audits'
+own verdicts (below), not the recall tool's pre-verdict worklist.
 
 ## Full-audit kernel tier (opt-in) — the committed JIT capture for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync
 The `cb-sync`, `noc-sync`, `noc-atomic-exit`, `noc-read-barrier`, `noc-l1-invalidate`, and `mailbox-sync` **checkers are committed and
@@ -188,10 +217,11 @@ A naive "run them + concatenate" can catch *less* than the audits alone (summari
    | `reconfig-stall`: per-thread drain present (e.g. `STALLWAIT(STALL_CFG, PACK)`) | (drains *this* thread's unit only) | does another **thread** write the same word? → hand to `cfg-word-overlap`; a per-thread drain never excludes a cross-thread writer |
    | `semaphore-handshake`: semaphore protocol SAFE | (verifies counting, not payload) | which config words/dest/src rely on this semaphore for mutual exclusion? → confirm each such write is actually inside the ordered window |
    | `mailbox-sync`: mailbox handshake SAFE | "the memory the mailbox value refers to is ready, and all threads reach the mailbox handshake equally (including hand-written mailbox_write in ttnn/models kernels)" | the referenced memory (L1 tile, dest offset) is ordered-ready — a plain `fence` does NOT order a mailbox write against a prior store to a different region (a no-op on WH; on BH it drains the store queue but not to *processed*), so cross with `mmio-race`/memory-ordering AND hand the "is the CB page ready?" half to `dataflow-cb-sync`; and the call-count symmetry holds on every branch (same control-flow that `semaphore-handshake` balance depends on) |
-   | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering; the address `mailbox-sync` sends (over its directed tile-address channel) derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
+   | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering — this holds for the Metal 2.0 `DataflowBuffer` object form too, whose credit quartet IS recalled but whose per-buffer `dfb.write_barrier(noc)` is NOT recognized as a flush, so confirm the flush at the site instead of trusting a no-flush candidate; the address `mailbox-sync` sends (over its directed tile-address channel) derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
    | `mmio-race`: MMIO-vs-MOP write SAFE | "a `mop_sync()`/`tensix_sync()` drains it" | the drain provably covers the consumer at the site (right primitive, every path, cross-call window). ALSO: is the drain heavier than needed (OVER-SYNC) or unnecessary (REDUNDANT)? → perf finding, never suppresses the race verdict |
    | `srcreg-bank-sync`: SrcA/SrcB bank handoff SAFE | "the FPU op waits for `AllowedClient`, and Dst/LReg is ordered" | bank-flip is lockstep on both sides; the Dst/LReg half rides `MATH_PACK`/`mutex::SFPU` → hand that half to `semaphore-handshake`; single-thread ownership of the bank state holds |
-   | `noc-sync`: cross-core credit SAFE | "the remote write is flushed before the credit, and the wait count matches the fan-out" | a WRITE credit (`set`/`set_multicast`/`relay_*`) same-NoC/VC/dest is ordered by issue-order; an ATOMIC credit (`noc_semaphore_inc`/`inc_multicast`/remote `up`) needs the payload write **committed** — `noc_async_write_barrier` (ACK), not a bare `writes_flushed` (departure only, per `data_movement_doc/general/posted_writes.md`). Do NOT clear a flush-only atomic (the checker tags it `FLUSH_NOT_BARRIER`) as safe on a same-VC-unicast assumption — confirm against `<arch>/NoC/Ordering.md` + `posted_writes.md`. Cross with `dataflow-cb-sync` when the same buffer is also a CB page |
+   | `noc-sync`: cross-core credit SAFE | "the remote write is flushed before the credit, and the wait count matches the fan-out" | a WRITE credit (`set_remote`/`set_multicast`/`relay_*` — **bare `noc_semaphore_set` is a LOCAL reset store, not a credit**) same-NoC/VC/dest is ordered by issue-order; an ATOMIC credit (`noc_semaphore_inc`/`inc_multicast`/remote `up`) needs the payload write **committed** — `noc_async_write_barrier` (ACK), not a bare `writes_flushed` (departure only, per `data_movement_doc/general/posted_writes.md`). Do NOT clear a flush-only atomic (the checker tags it `FLUSH_NOT_BARRIER`, or `POSTED_FLUSH_ONLY` when the only preceding flush drains the posted-write counter — a no-op for a non-posted write/inc) as safe on a same-VC-unicast assumption — confirm against `<arch>/NoC/Ordering.md` + `posted_writes.md`. Cross with `dataflow-cb-sync` when the same buffer is also a CB page |
+   | `dataflow-cb-sync`: credit-counter read SAFE | "the counter read observes the other side's update" | on **Blackhole** that is a *cache*-coherency claim, not a CB-API one: a HAND-ROLLED poll of a CB/credit word (anything not going through `cb_wait_front`/`cb_reserve_back`) needs `invalidate_l1_cache` — the invariant `noc-sync`'s L1-coherency lens owns → hand it there. Latent while the RISC L1 D-cache is off by default; a real hang once it is enabled |
    | `instruction-latency`: sequence SAFE | "the compiler scheduled the NOPs" / "Blackhole HW scoreboards it" | the code is actually sfpi-compiled (provenance lens), not raw `TTI_*`; and for BH the consuming insn is NOT in the freshly-derived `xtt_dynamic_bug` errata set — re-derive from the pinned `sfpi-gcc`, never a baked list |
    | any: "value-invariant / unit-idle / single-thread" | (assumption about another class's state) | re-confirm the assumption at the site with the other audit's lens |
 
@@ -259,7 +289,7 @@ Then state, **per unreachable source, which verdicts will be bounded or abstaine
 **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings (you lose at most the in-flight wave).
 
 ## Architecture note
-WH/BH: all nine classes apply; cross-references as above. **Quasar**: HW AutoTTSync changes the RISC↔Tensix MMIO-ordering class (WH/BH need manual ordering; read Confluence `1340276980` at audit for what AutoTTSync actually guarantees), so seams touching `mmio-race` resolve differently; `instruction-latency` is also arch-divergent (BH/QSR scoreboarding vs WH always-pad). The cfg-word / semaphore / reconfig / mailbox / dataflow-cb / srcreg-bank / noc seams still apply (verify Quasar mailbox + NoC + unpack-to-dest HW semantics before extending verdicts there; the CB API is arch-agnostic but its NOC ordering primitives are arch-specific). Each sub-audit carries its own Quasar caveat — honor them in the join, and ground every HW claim per the **Ground-truth source ladder** above (a superset of the sage agents' corpus, `assembly.yaml` excluded — tt-isa-docs/DeepWiki for WH/BH, tt-isa-docs+Confluence for Quasar, sfpi-gcc for latency, BH-inference caveated-last-resort), ground-or-abstain — flagging any fallback verdict as such.
+WH/BH: all nine classes apply; cross-references as above. **Quasar**: HW AutoTTSync changes the RISC↔Tensix MMIO-ordering class (WH/BH need manual ordering; read Confluence `1340276980` at audit for what AutoTTSync actually guarantees), so seams touching `mmio-race` resolve differently — and note the recall tool blanket-tags QSR cfg/GPR writes `AUTOTTSYNC_ORDERED`, i.e. **pre-clears them out of `findings[]`**, while TTSync's RQ tracking *excepts* `MOP_CFG` / `REPLAY(load=1)` / `RESOURCEDECL` / post-load-replay consumers: a QSR mmio seam must be discharged against the actual consumer, never against the tool's silence; `instruction-latency` is also arch-divergent (BH/QSR scoreboarding vs WH always-pad). The cfg-word / semaphore / reconfig / mailbox / dataflow-cb / srcreg-bank / noc seams still apply (verify Quasar mailbox + NoC + unpack-to-dest HW semantics before extending verdicts there; the CB API is arch-agnostic but its NOC ordering primitives are arch-specific). Each sub-audit carries its own Quasar caveat — honor them in the join, and ground every HW claim per the **Ground-truth source ladder** above (a superset of the sage agents' corpus, `assembly.yaml` excluded — tt-isa-docs/DeepWiki for WH/BH, tt-isa-docs+Confluence for Quasar, sfpi-gcc for latency, BH-inference caveated-last-resort), ground-or-abstain — flagging any fallback verdict as such.
 
 ## Thoroughness — exhaustive tier (Workflow pipeline)
 **Default = parallel.** Fan out as **concurrent `Agent` calls** per `(class, arch, file-group)` (per the Execution rule above), each a fresh context; then do the JOIN inline (it must follow the per-audit results). Run fully inline only for a trivial diff. Concurrent `Agent` fan-out does **not** require multi-agent opt-in.
