@@ -83,7 +83,7 @@
 <!-- /EXEC_NUMBERS -->
       <tr><td>callsite</td><td class="n flat">— (model)</td><td class="n flat">— (FusedProgram-internal)</td><td class="n ours gl"><code>topk_large_indices(x, k=…)</code></td><td class="n gr">same call</td><td class="n ours gl"><code>ttnn.topk(x, k, …)</code> — unchanged signature</td><td class="n gr">same call</td></tr>
       <tr><td>returns</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">indices; <code>return_values=True</code> → (values, indices)</td><td class="n gr">indices only</td><td class="n ours gl">(values, indices), as always</td><td class="n gr">(values, indices)</td></tr>
-      <tr><td>attribution</td><td class="n flat">Davor Capalija; proven below the bitonic floor</td><td class="n flat">Nikhil/Radomir/Ligang; fused SDPA+topk, not callable</td><td class="n ours gl"><strong>ours:</strong> multi-core factory + log-tree, values, num_slices (op by Pavle Josipović #46833 on blaze TopK-XL LLK)</td><td class="n gr">Pavle Josipović (PR #46833), row-parallel</td><td class="n ours gl"><strong>ours:</strong> internal routing (BH·bf16·last-dim·64&lt;k≤2048·largest·non-stable); else old path bit-for-bit</td><td class="n gr">—</td></tr>
+      <tr><td>attribution</td><td class="n flat">Davor Capalija; proven below the bitonic floor</td><td class="n flat">Nikhil/Radomir/Ligang; fused SDPA+topk, not callable</td><td class="n ours gl"><strong>ours:</strong> multi-core factory + log-tree, values, num_slices (op by Pavle Josipović #46833 on blaze TopK-XL LLK)</td><td class="n gr">Pavle Josipović (PR #46833), row-parallel</td><td class="n ours gl"><strong>ours:</strong> internal routing (BH·bf16·last-dim·largest·non-stable: 64&lt;k≤2048, plus k≤64 rows the multi-core bitonic cannot take — padded W≥65535 or non-pow2, ≥4096); else old path bit-for-bit</td><td class="n gr">—</td></tr>
       <tr><td>upstream PR</td><td class="n flat">—</td><td class="n flat">theirs (#1971)</td><td class="n ours gl"><strong><span class="prn">③</span></strong> (after <span class="prn">①</span><span class="prn">②</span>)</td><td class="n gr">already upstream</td><td class="n ours gl"><strong><span class="prn">④</span></strong> (needs <span class="prn">③</span>)</td><td class="n gr">—</td></tr>
       <tr><td>gates</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">op suite 154 ✓ (2 env-gated)</td><td class="n gr">its own nightly suite</td><td class="n ours gl">220/220 ✓</td><td class="n gr">—</td></tr>
     </tbody>
@@ -93,10 +93,10 @@
   <p class="sub">‡stock topk_large_indices measured as a deterministic competition layer via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core wall time). †blaze runs its fused SDPA+localTopK program at exactly this shape (k=2048, 64K global context) on this box — includes SDPA work the other layers don't, so its row flatters it.</p>
 
   <div class="takeaway">
-    <b class="num">8,921×</b><span>The user-facing win: <code>ttnn.topk</code> at the anchor shape went from 631.5 <em>milli</em>seconds to 70.8 <em>micro</em>seconds (tree-powered, values and indices, full test parity); k=512@65536 is 161.6 ms → 93.4 µs. The k&gt;64 cliff no longer exists.</span>
-    <b class="num">13–23×</b><span>Gap to the llm_perf roofline across the k×N plane (24 measured points, N = 2K → 262K). The log-tree final stage (landed) converted the P curve from reversing (serial chain: P=32 as slow as P=4) to monotonic (k=2048@65536: 69.6→41.9 µs at P=32; k=512@262144: 64.2→32.0 µs at P=64), cutting the roofline gap to 13–23×. The roofline itself is proven infeasible for bitonic kernels — it sits below the comparator critical-path floor (roofline-v2 derivation, fits all 11 silicon points within 14.1%).</span>
-    <b class="num">1.7×</b><span>Distance to the best internal kernel (blaze's fused SDPA+topk, 24.5 µs measured on this box): ttnn.experimental.topk_large_indices (with our multi-core path) is at 41.9 µs on the same shape — and theirs includes SDPA work ours doesn't, inside a FusedProgram that isn't an op. The remaining levers are the threshold-select algorithm family (designed, shelved) and leaf-level fusion.</span>
-    <b class="num">32 µs</b><span>The 1M-context CSA decode shape (262,144 candidates → top-512) — the workload the roofline was written for — runs today as a callable op at 32.0 µs (was 67 µs pre-tree, still descending at the P=64 cap).</span>
+    <b class="num">9,956×</b><span>The user-facing win: <code>ttnn.topk</code> at the anchor shape went from 631.5 <em>milli</em>seconds to 63.4 <em>micro</em>seconds (tree-powered, values and indices, full test parity); k=512@65536 is 161.6 ms → 91.7 µs. The k&gt;64 cliff no longer exists — and neither does the k≤64 one: wide/non-pow2 small-k rows that fell to the linear single-core factory (9.49–17.95 ms at N=65536, 695 µs at N=5000) now route too, at 40–423×.</span>
+    <b class="num">10–21×</b><span>Gap to the llm_perf roofline on the N≥32K cells (9.7–29.9× over all 24 points). Two structural raises landed after the log-tree: the P-cap moved 64→128 slices and the slice rectangle became cost-optimal (the full-rows-only fit had capped k2048@65536 at 13×2=26 cores when 8×4=32 was free) — anchor op 41.9→34.4 µs, k512@262144 32.0→23.3 µs at P=104. The roofline itself is proven infeasible for bitonic kernels — it sits below the comparator critical-path floor (roofline-v2 derivation, fits all 11 silicon points within 14.1%).</span>
+    <b class="num">1.4×</b><span>Distance to the best internal kernel (blaze's fused SDPA+topk, 24.4 µs measured on this box): ttnn.experimental.topk_large_indices (with our multi-core path) is at 34.3 µs on the same shape — and theirs includes SDPA work ours doesn't, inside a FusedProgram that isn't an op. The threshold-select family was evaluated gate-by-gate on silicon and closed (RADIX_BUCKET_GPU.md §7: its remaining margin fell inside the model's own uncertainty as the incumbent absorbed these fixes); its machinery did yield the row-parallel chunk skip (−45% at rows=2 k32@65536). The remaining lever is leaf-level fusion.</span>
+    <b class="num">23.3 µs</b><span>The 1M-context CSA decode shape (262,144 candidates → top-512) — the workload the roofline was written for — runs today as a callable op at 23.3 µs on 104 cores (was 67 µs pre-tree, 32.0 µs at the old P=64 cap; the curve finally flattens near the grid's 130-core capacity).</span>
   </div>
 
   <h2>The competition table — every layer, every cell (measured, deterministic)</h2>
@@ -134,7 +134,7 @@
   </table></div>
 <!-- /COMPETITION_TABLE -->
 
-  <details><summary>What shipped — 7 commits, all silicon-gated</summary><div>
+  <details><summary>What shipped — two campaigns, all silicon-gated</summary><div>
   <div class="tablewrap"><table>
     <thead><tr><th>commit</th><th>deliverable</th><th>result</th></tr></thead>
     <tbody>
@@ -145,30 +145,35 @@
       <tr><td class="commit">7257487</td><td>Unfused SFPLOADMACRO merge/rebuild, <code>ckernel_sfpu_topk_xl.h</code></td><td>merge 1.195–1.235×, step <span class="win">1.053–1.090×</span> on the shipping path</td></tr>
       <tr><td class="commit">c203fd3</td><td>Docs: audit corrections + close-out</td><td>disputed figures adjudicated from fresh silicon</td></tr>
       <tr><td class="commit">809cf5b</td><td><strong>PR 2: <code>ttnn.topk</code> large-k routing</strong></td><td><span class="win">158.6 ms → 134.0 µs</span> (gather-era; now 93.4 µs values-native+tree); found + worked around an upstream RM-gather bug</td></tr>
+      <tr><td class="commit">0fbf7af·27c6da7·338ed26</td><td><strong>Gate benches + contract suite</strong> (agent-storm campaign 2)</td><td>topk contract pinned 62 ✓ incl. the bf16 datapath canonicalization rule (NaN→same-sign Inf, −0/±subn→+0, fp32 bit-exact); RISC scan floor 3.02 cyc/elem; (Cgt,Ceq) engine priced (81 cyc/decision, bisect p50 14) — the data that closed the threshold-select track</td></tr>
+      <tr><td class="commit">15f5659</td><td><strong>ttnn.topk small-k routing arm</strong></td><td><span class="win">40–423×</span>: k≤64 rows the bitonic can't take (W≥65535 or non-pow2) routed off the linear single-core factory; k64@65536 17.95 ms → 42.4 µs; contract+220-suite green</td></tr>
+      <tr><td class="commit">79709d1</td><td><strong>P-cap 64→128 + cost-optimal slice rectangle</strong></td><td><span class="win">8–27%</span> op-level: anchor 41.9→34.4 µs @32c (8×4), k512@262144 32.0→23.3 µs @104c</td></tr>
+      <tr><td class="commit">7d0b76b</td><td><strong>Row-parallel chunk skip</strong> (chunk-max vs running USER_K-th via Dst-MMIO rendezvous, USER_K/4 gate)</td><td><span class="win">−45%/−36%</span> at rows={2,8} k32@65536; k512/k1536 ≤+0.5%; column path byte-identical; 154 ✓ + adversarial battery bit-exact</td></tr>
+      <tr><td class="commit">9d22032·da8a0b7</td><td>Ledger refresh (this page, comp3+psweep4) + RADIX_BUCKET_GPU.md §7 closure report</td><td>honest P-sweep core counts (override fit was silently clamping 16→13/24→13/32→26); dossier verdict: diagnostic, not executive</td></tr>
       <tr><td class="commit">68ff59f·8794fbb</td><td><strong>Values output + log-tree final stage</strong> in <code>topk_large_indices</code></td><td>values from DST (drops the routed gather chain); serial P−1 chain → in-place log₂P tree: <span class="win">69.6→41.9 µs</span> @k2048/65536, <span class="win">64.2→32.0 µs</span> @k512/262144; P now scales monotonically. Bonus root-cause: <code>state_configure</code> is a compiled-out no-op — the *_with_dt reconfig rule proven for copy_tile</td></tr>
     </tbody>
   </table></div>
   </div></details>
 
-  <details><summary>Full k × N grid vs roofline (24 points, core counts)</summary><div>
+  <details><summary>Full k × N grid vs roofline (24 points, core counts — comp3, post P-cap raise)</summary><div>
   <div class="tablewrap"><table>
     <thead><tr><th class="n">N</th><th class="n" colspan="3">k=512 (µs · cores · gap)</th><th class="n" colspan="3">k=1024</th><th class="n" colspan="3">k=2048</th><th class="n">roofline µs (512/1024/2048)</th></tr></thead>
     <tbody>
-      <tr><td class="n">2,048</td><td class="n">7.7</td><td class="n">4</td><td class="n">23.8×</td><td class="n">11.4</td><td class="n">rp</td><td class="n">25.5×</td><td class="n">15.5</td><td class="n">rp</td><td class="n">29.5×</td><td class="n">0.32 / 0.45 / 0.53</td></tr>
-      <tr><td class="n">4,096</td><td class="n">8.8</td><td class="n">5</td><td class="n">19.3×</td><td class="n">14.9</td><td class="n">4</td><td class="n">23.5×</td><td class="n">24.4</td><td class="n">rp</td><td class="n">32.7×</td><td class="n">0.46 / 0.63 / 0.75</td></tr>
-      <tr><td class="n">8,192</td><td class="n">12.7</td><td class="n">7</td><td class="n">21.4×</td><td class="n">16.7</td><td class="n">5</td><td class="n">20.2×</td><td class="n">31.3</td><td class="n">4</td><td class="n">32.3×</td><td class="n">0.59 / 0.82 / 0.97</td></tr>
-      <tr><td class="n">16,384</td><td class="n">16.8</td><td class="n">9</td><td class="n">23.1×</td><td class="n">24.4</td><td class="n">7</td><td class="n">24.1×</td><td class="n">34.8</td><td class="n">5</td><td class="n">29.3×</td><td class="n">0.73 / 1.01 / 1.19</td></tr>
-      <tr><td class="n">32,768</td><td class="n">24.0</td><td class="n">13</td><td class="n">27.4×</td><td class="n">32.4</td><td class="n">9</td><td class="n">26.6×</td><td class="n">51.9</td><td class="n">7</td><td class="n">36.3×</td><td class="n">0.88 / 1.22 / 1.43</td></tr>
-      <tr><td class="n">65,536</td><td class="n">34.2</td><td class="n">14</td><td class="n">30.4×</td><td class="n">47.5</td><td class="n">13</td><td class="n">30.4×</td><td class="n">69.7</td><td class="n">9</td><td class="n">37.9×</td><td class="n">1.13 / 1.56 / 1.84</td></tr>
-      <tr><td class="n">131,072</td><td class="n">55.7</td><td class="n">14</td><td class="n">35.6×</td><td class="n">68.8</td><td class="n">14</td><td class="n">31.6×</td><td class="n">103.5</td><td class="n">13</td><td class="n">40.5×</td><td class="n">1.57 / 2.17 / 2.56</td></tr>
-      <tr><td class="n">262,144</td><td class="n">67.4</td><td class="n">27</td><td class="n">28.2×</td><td class="n">116.6</td><td class="n">14</td><td class="n">35.2×</td><td class="n">151.6</td><td class="n">14</td><td class="n">38.9×</td><td class="n">2.39 / 3.32 / 3.90</td></tr>
+      <tr><td class="n">2,048</td><td class="n">5.9</td><td class="n">4</td><td class="n">18.4×</td><td class="n">9.4</td><td class="n">2</td><td class="n">21.1×</td><td class="n">15.7</td><td class="n">130</td><td class="n">29.9×</td><td class="n">0.32 / 0.45 / 0.53</td></tr>
+      <tr><td class="n">4,096</td><td class="n">7.1</td><td class="n">8</td><td class="n">15.6×</td><td class="n">11.4</td><td class="n">4</td><td class="n">18.0×</td><td class="n">19.6</td><td class="n">2</td><td class="n">26.2×</td><td class="n">0.46 / 0.64 / 0.75</td></tr>
+      <tr><td class="n">8,192</td><td class="n">8.4</td><td class="n">16</td><td class="n">14.2×</td><td class="n">13.3</td><td class="n">8</td><td class="n">16.2×</td><td class="n">22.9</td><td class="n">4</td><td class="n">23.6×</td><td class="n">0.59 / 0.82 / 0.97</td></tr>
+      <tr><td class="n">16,384</td><td class="n">9.7</td><td class="n">32</td><td class="n">13.3×</td><td class="n">15.2</td><td class="n">16</td><td class="n">15.0×</td><td class="n">26.4</td><td class="n">8</td><td class="n">22.2×</td><td class="n">0.73 / 1.01 / 1.19</td></tr>
+      <tr><td class="n">32,768</td><td class="n">11.0</td><td class="n">64</td><td class="n">12.6×</td><td class="n">17.2</td><td class="n">32</td><td class="n">14.1×</td><td class="n">30.2</td><td class="n">16</td><td class="n">21.1×</td><td class="n">0.88 / 1.22 / 1.43</td></tr>
+      <tr><td class="n">65,536</td><td class="n">13.2</td><td class="n">64</td><td class="n">11.7×</td><td class="n">19.7</td><td class="n">64</td><td class="n">12.6×</td><td class="n">34.3</td><td class="n">32</td><td class="n">18.7×</td><td class="n">1.12 / 1.56 / 1.84</td></tr>
+      <tr><td class="n">131,072</td><td class="n">17.4</td><td class="n">88</td><td class="n">11.1×</td><td class="n">23.5</td><td class="n">64</td><td class="n">10.8×</td><td class="n">39.7</td><td class="n">64</td><td class="n">15.5×</td><td class="n">1.56 / 2.17 / 2.56</td></tr>
+      <tr><td class="n">262,144</td><td class="n">23.3</td><td class="n">104</td><td class="n">9.8×</td><td class="n">32.1</td><td class="n">88</td><td class="n">9.7×</td><td class="n">49.7</td><td class="n">64</td><td class="n">12.7×</td><td class="n">2.39 / 3.32 / 3.90</td></tr>
     </tbody>
   </table></div>
   <p class="sub">"rp" = the op chose its row-parallel factory. Roofline = llm_perf main
   (PR 671 table + PR 676 K-multipliers 0.612 / 0.850 / 1.000); its provenance claims a measured
   128-core prototype, but no such kernel exists in tt-metal and its leaf budget is ~3× faster than
-  the measured LLK — treat as aspirational. Residual gap decomposition: core count (4–27 vs 128),
-  serial P−1 merge chain vs log tree, op envelope.</p>
+  the measured LLK — treat as aspirational. Residual gap decomposition: core count (2–130 vs 128) and op
+  envelope; the serial-chain term is gone (log tree + cost-optimal rectangles, P-cap 128).</p>
   </div></details>
 
   <details><summary>ttnn.topk / sort three-arm A/B (replay LOAD vs STORE)</summary><div>
@@ -223,11 +228,46 @@
   </div></details>
 
 
-  <details><summary>Empirical P sweep (num_slices override) — the negative result that scopes the tree merge</summary><div>
+  <details><summary>Empirical P sweep (num_slices override) — monotone post-tree curves, honest core counts</summary><div>
 <!-- PSWEEP_TABLE -->
   <div class="tablewrap"><table><thead><tr><th>k=512 N=262,144</th><th class="n">P=2</th><th class="n">P=4</th><th class="n">P=8</th><th class="n">P=16</th><th class="n">P=32</th><th class="n">P=48</th><th class="n">P=64</th><th class="n">P=96</th><th class="n">P=104</th><th>speedup range</th></tr></thead><tbody><tr><td>runtime (µs)</td><td class="n">560.2</td><td class="n">283.8</td><td class="n">146.2</td><td class="n">78.0</td><td class="n">44.5</td><td class="n">34.2</td><td class="n">28.5</td><td class="n">24.0</td><td class="n win">23.3</td><td class="n">1,157×–27,834× vs stock ttnn.topk</td></tr></tbody></table></div>
   <div class="tablewrap"><table><thead><tr><th>k=2,048 N=65,536</th><th class="n">P=2</th><th class="n">P=4</th><th class="n">P=8</th><th class="n">P=16</th><th class="n">P=24</th><th class="n">P=32</th><th>speedup range</th></tr></thead><tbody><tr><td>runtime (µs)</td><td class="n">183.0</td><td class="n">97.9</td><td class="n">57.3</td><td class="n">39.0</td><td class="n">42.8</td><td class="n win">34.4</td><td class="n">3,450×–18,380× vs stock ttnn.topk</td></tr></tbody></table></div>
 <!-- /PSWEEP_TABLE -->
+  </div></details>
+
+  <details open><summary>Model scenarios — real LLM shapes through the canonical pipeline</summary><div>
+  <p class="sub">Named production call-site shapes measured end-to-end through the same per-cell Tracy
+  subprocess + correctness gate as the competition table (composite-summed device-kernel time).
+  <strong>today</strong> = the engine the model hits pre-branch, measured as <code>ttnn.topk largest=False</code>
+  (the stock-factory proxy: <code>largest</code> is only the router on this branch, and pre-branch both
+  largest values hit the same stock factory) — except the <code>topk_large_indices</code> callers, whose
+  today is the op itself. <strong>ttnn.topk (this branch)</strong> = <code>ttnn.topk largest=True</code> with
+  no extra arguments; <strong>op direct</strong> = <code>topk_large_indices</code> called by name.
+  † = linear-model estimate (cell too slow for the watchdog), not a measurement; — = engine not applicable.</p>
+  <p class="sub">Two structural findings this table has to carry honestly. <strong>(1)</strong> Every production
+  <em>sampling</em> call site passes <code>indices_tensor=</code> and usually <code>sub_core_grids=</code>
+  (the <code>tt_sampling.py</code> family adds <code>stable=True</code>) — each of which independently
+  disqualifies the routed path (<code>topk.cpp:271–279</code>). The routed column for the sampling rows is
+  therefore the CANONICAL form of the call — what the model would get after dropping those arguments — not a
+  free win; capturing it requires a model-side call-site change. <strong>(2)</strong> Qwen3 on BH p150 at TP=4
+  pads its per-device vocab shard to exactly 65,536 — the one power-of-two width that fails the multi-core
+  bitonic's <code>W &lt; 65535</code> gate (<code>topk_device_operation.cpp:70</code>) and falls onto the
+  linear single-core factory in production today.</p>
+<!-- MODEL_SCENARIOS -->
+  <div class="tablewrap"><table>
+    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th><th class="n">today: engine</th><th class="n">today µs</th><th class="n ours">ttnn.topk (this branch)</th><th class="n ours">op direct</th><th class="n">best speedup</th><th>note</th></tr></thead>
+    <tbody>
+      <tr><td>sampling_qwen36_tp4</td><td>Qwen3 decode sampling, BH p150 TP=4 (vocab 151936 -&gt; 37984/dev -&gt; pad 65536)<br><code>models/common/sampling/tt_sampling.py:847 (shard: models/demos/blackhole/qwen36/tt/model.py:43-61)</code></td><td class="n">32×65,536, k=32</td><td class="n">stocknow</td><td class="n">9,596.3</td><td class="n win">217.0</td><td class="n win">193.6</td><td class="n win">49.6×</td><td>65536 is the one pow2 width that fails the bitonic W&lt;65535 gate -&gt; linear single-core in production today; prod call passes indices_tensor+sub_core_grids+stable=True, so the routed column is the CANONICAL form (args dropped), not a free win <span class="flat">[1x/token/device]</span></td></tr>
+      <tr><td>sampling_tp8_pow2</td><td>Qwen2.5-72B / gpt-oss / MiniMax-M3 decode sampling, TP=8 (pad 32768)<br><code>models/common/sampling/tt_sampling.py:847 / models/common/modules/sampling/sampling_1d.py:568</code></td><td class="n">32×32,768, k=32</td><td class="n">stocknow</td><td class="n">171.3</td><td class="n win">171.3</td><td class="n win">120.7</td><td class="n win">1.4×</td><td>today IS the multi-core bitonic (pow2, 8192&lt;=W&lt;65535, k&lt;=64) -- the honest already-fast row; routing does not engage here, so routed measures the same bitonic <span class="flat">[1x/token/device]</span></td></tr>
+      <tr><td>sampling_1chip_split</td><td>Llama-3.2-1B/3B single chip, split-vocab sampling (128256/2, deliberately unpadded)<br><code>models/common/modules/sampling/sampling_1d.py:530 / models/common/sampling/tt_sampling.py:807</code></td><td class="n">32×64,128, k=32</td><td class="n">stocknow</td><td class="n">8,923.5</td><td class="n win">215.2</td><td class="n win">187.9</td><td class="n win">47.5×</td><td>non-pow2 -&gt; linear single-core today; routed small-k arm engages (non-pow2, &gt;=4096); canonical-form caveat as above (prod passes indices_tensor/stable) <span class="flat">[2x/token (vocab halved)]</span></td></tr>
+      <tr><td>dsa_indexer_k2048</td><td>DeepSeek-V3.2 / GLM-5.x / Kimi-K2.6 DSA indexer top-2048 (Galaxy SP8xTP4, chunk 5120)<br><code>models/demos/deepseek_v3_d_p/tt/mla/indexer.py:737</code></td><td class="n">160×65,536, k=2048</td><td class="n">op</td><td class="n">712.5</td><td class="n">892.7</td><td class="n">712.5</td><td class="n flat">1.0×</td><td>model already calls topk_large_indices by name -- today IS the op; rows=160 exercises the row-parallel path with the chunk skip live; stocknow omitted (no call site, ~100 s/iter at k=2048) <span class="flat">[per sparse-MLA layer per prefill chunk (61 layers DS-v3.2)]</span></td></tr>
+      <tr><td>dsa_indexer_v4_k512</td><td>DeepSeek-V4 DSA indexer top-512 (same geometry, index_topk=512)<br><code>models/demos/deepseek_v3_d_p/tt/mla/indexer.py:737 (k: reference/deepseek_v4/configuration_deepseek_v4.py:173)</code></td><td class="n">160×65,536, k=512</td><td class="n">op</td><td class="n">559.5</td><td class="n">691.1</td><td class="n">559.5</td><td class="n flat">1.0×</td><td>today IS the op (row-parallel, chunk skip live); stocknow omitted (no call site) <span class="flat">[per sparse-MLA layer per prefill chunk]</span></td></tr>
+      <tr><td>msa_blocks_k16</td><td>MiniMax-M3 MSA block selection, top-16 of 8192 blocks (1M ctx / block 128)<br><code>models/demos/minimax_m3/tt/attention/msa.py:147</code></td><td class="n">1×8,192, k=16</td><td class="n">op</td><td class="n">8.4</td><td class="n">116.1</td><td class="n">8.4</td><td class="n flat">1.0×</td><td>the op&#x27;s floor-k corner; model already ships the op. routed/stocknow both land on the stock multi-core bitonic here (pow2 8192, k&lt;=64) -- context columns, not wins <span class="flat">[57 sparse layers per prefill chunk]</span></td></tr>
+      <tr><td>gate_gptoss_k4</td><td>gpt-oss MoE expert gate, top-4 of 128 experts [NO-CHANGE CONTROL]<br><code>models/demos/gpt_oss/tt/topk.py:26</code></td><td class="n">32×128, k=4</td><td class="n">stocknow</td><td class="n">24.2</td><td class="n flat">—</td><td class="n flat">—</td><td class="n flat">—</td><td>no-change control: k=4 violates the op&#x27;s k&gt;=16/k%16 gate and N=128 is below every routing threshold -- routing provably cannot fire; expected tiny and unchanged. (decode B=32 actually uses the fused topk_router_gpt kernel) <span class="flat">[per MoE layer per forward (36 layers)]</span></td></tr>
+      <tr><td>gate_qwen35_k10</td><td>Qwen3.5 MoE gate fallback, top-10 of 512 experts [NO-CHANGE CONTROL]<br><code>models/common/modules/moe/tt_moe_gate.py:639 (fallback fires for k not in {4,6,8} or N&gt;512)</code></td><td class="n">32×512, k=10</td><td class="n">stocknow</td><td class="n">77.5</td><td class="n flat">—</td><td class="n flat">—</td><td class="n flat">—</td><td>no-change control: k=10 violates the op gate, N=512 below every routing threshold; expected tiny and unchanged <span class="flat">[per MoE layer per forward]</span></td></tr>
+    </tbody>
+  </table></div>
+<!-- /MODEL_SCENARIOS -->
   </div></details>
 
   <details><summary>Gates, trust-nothing findings, internal alignment, open items</summary><div>
@@ -248,16 +288,21 @@
   internal kernel (19.9 µs, FusedProgram-locked, core-time equal to ours) · <strong>coordinate topk_xl
   macro commits with blaze #1971</strong> (LLK→metal migration) to avoid shadow-tree divergence.
   No one contacted yet, per instruction.</p>
-  <p><strong>Open items:</strong> values-output in the op (in flight — halves the routed composite) ·
-  P-cap raise + tree merge (path to the ~20 µs class) · file the upstream RM-gather bug ·
+  <p><strong>Open items:</strong> file the upstream RM-gather bug ·
   LOAD-arm hang root-cause · WH ports · upstream doc reports (packer histogram sampling, zero-run
-  counter direction, ENABLE_ACC_STATS delta, ROW_2/3_MAX encodings).</p>
+  counter direction, ENABLE_ACC_STATS delta, ROW_2/3_MAX encodings, SFPSWAP mod1=1 max-in-VC
+  comment inversion) · refresh the IOMMU perf-runner expected_duration pins
+  (test_topk_large_indices.py:206–210 — stale after the P-cap raise) · two LLK-harness findings
+  for upstream: PerfConfig.run() never writes variant_stimuli; fill-arm MATH_PACK semaphore leak
+  poisons later tests on an un-reset device. Done since last edition: values-output ✓ ·
+  P-cap raise + tree merge ✓ · small-k routing ✓ · row-parallel chunk skip ✓ · threshold-select
+  track evaluated and closed (RADIX_BUCKET_GPU.md §7).</p>
   </div></details>
 
   <div class="foot">
     Method: Tracy device-kernel duration at op level; MATH_ISOLATE two-point slope with the 2.00×
     control tripwire at LLK level; one device process at a time; per-cell subprocess isolation;
     correctness exact/bit-exact vs torch goldens, never PCC. Branch <code>nkapre/sorting</code>,
-    commits d64993c…809cf5b, nothing pushed. Roofline: tenstorrent/llm_perf main (PR 671 + 676 + 825).
+    commits d64993c…da8a0b7, nothing pushed. Roofline: tenstorrent/llm_perf main (PR 671 + 676 + 825).
   </div>
 </main>

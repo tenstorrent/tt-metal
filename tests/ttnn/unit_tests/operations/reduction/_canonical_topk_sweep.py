@@ -125,6 +125,7 @@ import glob
 import json
 import math
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -317,6 +318,168 @@ BLAZE_CAVEAT = (
 )
 BLAZE_K, BLAZE_W = 2048, 65536
 
+# ---------------------------------------------------------------------------
+# Model-scenario mode constants (--model-scenarios).
+# Engines reuse the competition child ops verbatim; seed_index values are the
+# SAME pinned indices as COMPETITION_LAYERS so a scenario that coincides with
+# a competition cell reproduces the identical input tensor.
+#
+# SEMANTICS: the `routed` engine is honestly "ttnn.topk largest=True on this
+# branch, canonical call form (no indices_tensor / sub_core_grids / stable)".
+# For shapes where routing does not engage (e.g. pow2 W in [8192, 65535) with
+# k<=64, which stays on the stock multi-core bitonic) it measures that
+# bitonic -- exactly what a model calling ttnn.topk gets post-branch with
+# zero code change. The per-cell attrs/cores in the result JSON disambiguate
+# which factory actually ran. `stocknow` is ttnn.topk largest=False = the
+# stock factory on the committed header (the largest flag is only the router;
+# pre-branch, both largest values hit the same stock factory).
+#
+# engine -> (child op, composite, strict, seed_index)
+# ---------------------------------------------------------------------------
+SCENARIO_ENGINES = {
+    "op": ("topk_large_indices", False, True, 0),  # our op, called directly
+    "routed": ("topk_routed", True, True, 1),  # ttnn.topk largest=True (this branch)
+    "stocknow": ("topk_stock", True, True, 2),  # ttnn.topk largest=False = stock factory
+}
+SCENARIO_ENGINE_ORDER = ["op", "routed", "stocknow"]  # fixed run order, cheap engines first
+# Ledger-measured linear single-core stock rate at small k (k~32: 9.49 ms at
+# N=65536 -> ~145 ns/elem; 137 is the conservative fit). SIZING ONLY -- feeds
+# the tier-C/D bounding of stock cells, never a reported number. NOTE: the
+# rate scales ~linearly with k (k=2048 measures ~9,600 ns/elem); this constant
+# is calibrated for the small-k (k<=64) stock cells the built-in scenarios
+# actually run. A future large-k stocknow scenario must scale it by k/32.
+SCENARIO_STOCK_NS_PER_ELEM = 137
+SCENARIO_DEFAULT_ITERS = COMPETITION_DEFAULT_ITERS  # 5
+SCENARIO_SLOW_ITERS = COMPETITION_SLOW_ITERS  # 3
+
+# Built-in scenario grid: shapes from real call sites (see the ledger's
+# MODEL_SCENARIOS region for the two structural findings these rows carry).
+# These are DATA -- override with --scenarios-file, subset with --scenarios.
+# `today_engine` = what the model gets pre-branch. `engines` lists are
+# deliberately permissive (unsupported => recorded error => em-dash), except:
+# the DSA/MSA rows omit stocknow (those models never call ttnn.topk, and the
+# k=2048 stock single-core cell would cost ~100 s/iter for a comparison no
+# call site makes), and the MoE-gate control rows are STOCK-ONLY by design
+# (k=4/k=10 violate the op's k%16==0/k>=16 gate and N=128/512 sit below every
+# routing threshold, so routing provably cannot fire -- the rows exist purely
+# as no-change proof).
+MODEL_SCENARIOS = [
+    {
+        "name": "sampling_qwen36_tp4",
+        "model": "Qwen3 decode sampling, BH p150 TP=4 (vocab 151936 -> 37984/dev -> pad 65536)",
+        "callsite": "models/common/sampling/tt_sampling.py:847 (shard: models/demos/blackhole/qwen36/tt/model.py:43-61)",
+        "rows": 32,
+        "n": 65536,
+        "k": 32,
+        "dtype": "bf16",
+        "engines": ["op", "routed", "stocknow"],
+        "today_engine": "stocknow",
+        "calls_note": "1x/token/device",
+        "notes": "65536 is the one pow2 width that fails the bitonic W<65535 gate -> linear "
+        "single-core in production today; prod call passes indices_tensor+sub_core_grids+"
+        "stable=True, so the routed column is the CANONICAL form (args dropped), not a free win",
+    },
+    {
+        "name": "sampling_tp8_pow2",
+        "model": "Qwen2.5-72B / gpt-oss / MiniMax-M3 decode sampling, TP=8 (pad 32768)",
+        "callsite": "models/common/sampling/tt_sampling.py:847 / models/common/modules/sampling/sampling_1d.py:568",
+        "rows": 32,
+        "n": 32768,
+        "k": 32,
+        "dtype": "bf16",
+        "engines": ["op", "routed", "stocknow"],
+        "today_engine": "stocknow",
+        "calls_note": "1x/token/device",
+        "notes": "today IS the multi-core bitonic (pow2, 8192<=W<65535, k<=64) -- the honest "
+        "already-fast row; routing does not engage here, so routed measures the same bitonic",
+    },
+    {
+        "name": "sampling_1chip_split",
+        "model": "Llama-3.2-1B/3B single chip, split-vocab sampling (128256/2, deliberately unpadded)",
+        "callsite": "models/common/modules/sampling/sampling_1d.py:530 / models/common/sampling/tt_sampling.py:807",
+        "rows": 32,
+        "n": 64128,
+        "k": 32,
+        "dtype": "bf16",
+        "engines": ["op", "routed", "stocknow"],
+        "today_engine": "stocknow",
+        "calls_note": "2x/token (vocab halved)",
+        "notes": "non-pow2 -> linear single-core today; routed small-k arm engages (non-pow2, >=4096); "
+        "canonical-form caveat as above (prod passes indices_tensor/stable)",
+    },
+    {
+        "name": "dsa_indexer_k2048",
+        "model": "DeepSeek-V3.2 / GLM-5.x / Kimi-K2.6 DSA indexer top-2048 (Galaxy SP8xTP4, chunk 5120)",
+        "callsite": "models/demos/deepseek_v3_d_p/tt/mla/indexer.py:737",
+        "rows": 160,
+        "n": 65536,
+        "k": 2048,
+        "dtype": "bf16",
+        "engines": ["op", "routed"],
+        "today_engine": "op",
+        "calls_note": "per sparse-MLA layer per prefill chunk (61 layers DS-v3.2)",
+        "notes": "model already calls topk_large_indices by name -- today IS the op; rows=160 "
+        "exercises the row-parallel path with the chunk skip live; stocknow omitted (no call "
+        "site, ~100 s/iter at k=2048)",
+    },
+    {
+        "name": "dsa_indexer_v4_k512",
+        "model": "DeepSeek-V4 DSA indexer top-512 (same geometry, index_topk=512)",
+        "callsite": "models/demos/deepseek_v3_d_p/tt/mla/indexer.py:737 (k: reference/deepseek_v4/configuration_deepseek_v4.py:173)",
+        "rows": 160,
+        "n": 65536,
+        "k": 512,
+        "dtype": "bf16",
+        "engines": ["op", "routed"],
+        "today_engine": "op",
+        "calls_note": "per sparse-MLA layer per prefill chunk",
+        "notes": "today IS the op (row-parallel, chunk skip live); stocknow omitted (no call site)",
+    },
+    {
+        "name": "msa_blocks_k16",
+        "model": "MiniMax-M3 MSA block selection, top-16 of 8192 blocks (1M ctx / block 128)",
+        "callsite": "models/demos/minimax_m3/tt/attention/msa.py:147",
+        "rows": 1,
+        "n": 8192,
+        "k": 16,
+        "dtype": "bf16",
+        "engines": ["op", "routed", "stocknow"],
+        "today_engine": "op",
+        "calls_note": "57 sparse layers per prefill chunk",
+        "notes": "the op's floor-k corner; model already ships the op. routed/stocknow both land "
+        "on the stock multi-core bitonic here (pow2 8192, k<=64) -- context columns, not wins",
+    },
+    {
+        "name": "gate_gptoss_k4",
+        "model": "gpt-oss MoE expert gate, top-4 of 128 experts [NO-CHANGE CONTROL]",
+        "callsite": "models/demos/gpt_oss/tt/topk.py:26",
+        "rows": 32,
+        "n": 128,
+        "k": 4,
+        "dtype": "bf16",
+        "engines": ["stocknow"],
+        "today_engine": "stocknow",
+        "calls_note": "per MoE layer per forward (36 layers)",
+        "notes": "no-change control: k=4 violates the op's k>=16/k%16 gate and N=128 is below "
+        "every routing threshold -- routing provably cannot fire; expected tiny and unchanged. "
+        "(decode B=32 actually uses the fused topk_router_gpt kernel)",
+    },
+    {
+        "name": "gate_qwen35_k10",
+        "model": "Qwen3.5 MoE gate fallback, top-10 of 512 experts [NO-CHANGE CONTROL]",
+        "callsite": "models/common/modules/moe/tt_moe_gate.py:639 (fallback fires for k not in {4,6,8} or N>512)",
+        "rows": 32,
+        "n": 512,
+        "k": 10,
+        "dtype": "bf16",
+        "engines": ["stocknow"],
+        "today_engine": "stocknow",
+        "calls_note": "per MoE layer per forward",
+        "notes": "no-change control: k=10 violates the op gate, N=512 below every routing "
+        "threshold; expected tiny and unchanged",
+    },
+]
+
 
 def roofline_us(k, w):
     """Piecewise-linear in W over the candidates table (clamped at the ends),
@@ -507,6 +670,7 @@ def run_child(spec_path):
         # (k, W, layer); the classic grid keeps the historical fixed 0.
         torch.manual_seed(cell.get("seed", 0))
         cell_iters = cell.get("iters", iters)
+        cell_warmup = cell.get("warmup", warmup)  # additive; absent key == old behavior
         try:
             entry["phase"] = "setup"
             call, correctness = _build_cell_callable(ttnn, torch, device, cell)
@@ -529,7 +693,7 @@ def run_child(spec_path):
                 continue
 
             entry["phase"] = "warmup"
-            for _ in range(warmup):
+            for _ in range(cell_warmup):
                 call()
             ttnn.synchronize_device(device)
 
@@ -1842,6 +2006,270 @@ def write_competition_reports(table, outdir):
     print(f"REPORT: {md_path}")
 
 
+# ---------------------------------------------------------------------------
+# Model-scenario mode (--model-scenarios): named LLM call-site shapes through
+# the same per-cell subprocess + watchdog + correctness gate as the
+# competition, on the COMMITTED header only (no engine edits the header, so
+# no --allow-header-edit, no finally-restore). Output: scenarios_table.csv/.md
+# and per-cell result JSONs named scen_{scenario}_{engine}.{engine}.t0.json --
+# the scen_ prefix keeps the namespace disjoint from comp_* and classic ids.
+# ---------------------------------------------------------------------------
+_SCENARIO_RESERVED_PREFIXES = ("comp_", "topk_", "sort_", "moe_")
+
+
+def load_scenario_specs(args):
+    if args.scenarios_file:
+        with open(args.scenarios_file) as f:
+            specs = json.load(f)["scenarios"]
+    else:
+        specs = [dict(s) for s in MODEL_SCENARIOS]
+    if args.scenarios:  # comma-list subset, like --layers-competition
+        wanted = set(args.scenarios.split(","))
+        missing = wanted - {s["name"] for s in specs}
+        if missing:
+            sys.exit(f"unknown scenario(s) {sorted(missing)}")
+        specs = [s for s in specs if s["name"] in wanted]
+    for s in specs:
+        if not re.fullmatch(r"[a-z0-9_]+", s["name"]):
+            sys.exit(f"scenario name {s['name']!r} must be [a-z0-9_]+ (it becomes a filename/glob key)")
+        if s["name"].startswith(_SCENARIO_RESERVED_PREFIXES):
+            sys.exit(f"scenario name {s['name']!r} must not begin with {_SCENARIO_RESERVED_PREFIXES}")
+        unknown = set(s["engines"]) - set(SCENARIO_ENGINES)
+        if unknown:
+            sys.exit(
+                f"scenario {s['name']!r}: unknown engine(s) {sorted(unknown)}; choose from {SCENARIO_ENGINE_ORDER}"
+            )
+        if s["today_engine"] not in s["engines"]:
+            sys.exit(f"scenario {s['name']!r}: today_engine {s['today_engine']!r} not in its engines list")
+    return specs
+
+
+def _scenario_iters(engine, rows, n, k, base_iters, warmup, timeout):
+    """Bounding tiers (extends the competition's stock-cell rule to rows>1).
+    Tier A: default iters / given warmup.
+    Tier B: stock engine with rows*n*k >= COMPETITION_SLOW_WK -> 3 iters, warmup 1
+            (the competition rule with rows folded into the work term).
+    Tier C: predicted stock iter time (rows*n*SCENARIO_STOCK_NS_PER_ELEM) puts
+            first_call+warmup+iters over timeout/2 -> iters=1, warmup=0
+            (single-sample, still a REAL measurement; iters rides in the record).
+    Tier D: even ONE predicted iter > timeout -> (0 iters, est ms) -- the
+            orchestrator writes the result JSON itself with the linear-model
+            estimate in notes; the estimate renders as an estimate, never as a
+            measurement.
+    Returns (iters, warmup, est_ms_or_None)."""
+    if engine != "stocknow":
+        return base_iters, warmup, None
+    iters, wu = base_iters, warmup
+    if rows * n * k >= COMPETITION_SLOW_WK:
+        iters, wu = min(base_iters, SCENARIO_SLOW_ITERS), 1
+    est_iter_s = rows * n * SCENARIO_STOCK_NS_PER_ELEM * 1e-9
+    if est_iter_s > timeout:
+        return 0, 0, est_iter_s * 1e3  # tier D: skip, carry the estimate (ms)
+    if est_iter_s * (1 + wu + iters) > timeout / 2:
+        iters, wu = 1, 0  # tier C
+    return iters, wu, None
+
+
+def build_scenario_cells(specs, args):
+    base_iters = args.iters if args.iters is not None else SCENARIO_DEFAULT_ITERS
+    cells = []
+    for s in specs:
+        rows, n, k, dt = s.get("rows", 1), s["n"], s["k"], s.get("dtype", "bf16")
+        for engine in SCENARIO_ENGINE_ORDER:
+            if engine not in s["engines"]:
+                continue
+            child_op, composite, strict, seed_index = SCENARIO_ENGINES[engine]
+            iters, wu, est_ms = _scenario_iters(engine, rows, n, k, base_iters, args.warmup, args.timeout)
+            num_slices = s.get("num_slices") if (engine == "op" and rows == 1) else None
+            cells.append(
+                {
+                    "id": f"scen_{s['name']}_{engine}",
+                    "scenario": s["name"],
+                    "layer": engine,
+                    "op": child_op,
+                    "num_slices": num_slices,
+                    "batch": rows,
+                    "n": n,
+                    "k": k,
+                    "dtype": dt,
+                    "dim": -1,
+                    "anchor": "model_scenario",
+                    "valid_length": s.get("valid_length"),
+                    "apriori": "",
+                    "expected_factory": "",
+                    "composite": composite,
+                    "strict": strict,
+                    "seed": competition_seed(k, n, seed_index),
+                    "iters": iters,
+                    "warmup": wu,
+                    "est_ms": est_ms,
+                    "arm": None,
+                }
+            )
+    return cells
+
+
+def run_scenarios(args):
+    specs = load_scenario_specs(args)
+    cells = build_scenario_cells(specs, args)
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "scenario_grid.json"), "w") as f:
+        json.dump({"specs": specs, "cells": cells}, f, indent=1)
+    if args.report:
+        write_scenario_reports(build_scenario_table(specs, cells, args.out), args.out)
+        return 0
+
+    def _done(cell):  # same resume semantics as competition + SKIPPED_SLOW
+        path = result_path(args.out, cell["id"], cell["layer"], 0)
+        if not (args.resume and os.path.exists(path)):
+            return False
+        with open(path) as f:
+            return json.load(f)["status"] in ("MEASURED", "UNSUPPORTED", "WRONG", "SKIPPED_SLOW")
+
+    for engine in SCENARIO_ENGINE_ORDER:  # engine-major, like competition
+        for cell in [c for c in cells if c["layer"] == engine]:
+            if _done(cell):
+                print(f"SKIP (resume) {cell['id']}", flush=True)
+                continue
+            if cell["iters"] == 0:  # tier D: never dispatch
+                r = {
+                    "cell": cell,
+                    "arm": engine,
+                    "trial": 0,
+                    "status": "SKIPPED_SLOW",
+                    "error": "",
+                    "ns_median": None,
+                    "cores": None,
+                    "max_abs_err": None,
+                    "notes": (
+                        f"est~{cell['est_ms']:.0f}ms/iter (linear {SCENARIO_STOCK_NS_PER_ELEM}ns/elem "
+                        "model, NOT measured) exceeds --timeout"
+                    ),
+                }
+                r.update(provenance_stamp())
+                _write_result(args.out, f"{cell['id']}.{engine}.t0", r)
+            else:
+                r = run_cell(cell, cell["layer"], 0, args)
+            print(
+                f"{r['status']:<12} {cell['id']} iters={cell['iters']} " f"{r['ns_median'] or ''} {r['error'][:80]}",
+                flush=True,
+            )
+            # Rewrite the table after every cell: early stop keeps data.
+            write_scenario_reports(build_scenario_table(specs, cells, args.out), args.out)
+    write_scenario_reports(build_scenario_table(specs, cells, args.out), args.out)
+    return 0
+
+
+def build_scenario_table(specs, cells, outdir):
+    """One row per scenario, engines pivoted into columns. {e}_us is filled
+    ONLY from status == MEASURED; anything else leaves it blank and carries
+    the verbatim status+error in {e}_status -- WRONG/FAILED/UNSUPPORTED/
+    SKIPPED_SLOW timings never enter numeric columns."""
+    results = {}
+    for cell in cells:
+        path = result_path(outdir, cell["id"], cell["layer"], 0)
+        if os.path.exists(path):
+            with open(path) as f:
+                results[(cell["scenario"], cell["layer"])] = json.load(f)
+
+    provenance_seen = set()
+    rows = []
+    for s in specs:
+        row = {
+            "scenario": s["name"],
+            "model": s.get("model", ""),
+            "callsite": s.get("callsite", ""),
+            "rows": s.get("rows", 1),
+            "n": s["n"],
+            "k": s["k"],
+            "dtype": s.get("dtype", "bf16"),
+            "today_engine": s["today_engine"],
+            "calls_note": s.get("calls_note", ""),
+            "notes": s.get("notes", ""),
+        }
+        us = {}
+        for engine in SCENARIO_ENGINE_ORDER:
+            row[f"{engine}_us"] = row[f"{engine}_cores"] = row[f"{engine}_iters"] = row[f"{engine}_status"] = ""
+            if engine not in s["engines"]:
+                continue
+            r = results.get((s["name"], engine))
+            if r is None:
+                row[f"{engine}_status"] = "PENDING"
+                continue
+            provenance_seen.add((r.get("head_sha"), r.get("tree_diff_md5"), r.get("so_md5")))
+            row[f"{engine}_iters"] = r["cell"].get("iters", "")
+            if r["status"] == "MEASURED" and r["ns_median"]:
+                us[engine] = r["ns_median"] / 1000.0
+                row[f"{engine}_us"] = round(us[engine], 2)
+                row[f"{engine}_cores"] = r.get("cores") or ""
+                row[f"{engine}_status"] = "MEASURED"
+            elif r["status"] == "SKIPPED_SLOW":
+                est_ms = r["cell"].get("est_ms")
+                row[f"{engine}_status"] = f"SKIPPED_SLOW(est~{est_ms:.0f}ms)" if est_ms else "SKIPPED_SLOW"
+            else:
+                row[f"{engine}_status"] = f"{r['status']}({r['error'][:60]})" if r.get("error") else r["status"]
+        today = us.get(s["today_engine"])
+        row["today_us"] = round(today, 2) if today is not None else ""
+        row["speedup_today_over_routed"] = f"{today / us['routed']:.2f}x" if today and us.get("routed") else ""
+        row["speedup_today_over_op"] = f"{today / us['op']:.2f}x" if today and us.get("op") else ""
+        rows.append(row)
+
+    drift = ""
+    if len(provenance_seen) > 1:
+        drift = (
+            f"PROVENANCE DRIFT: {len(provenance_seen)} distinct (head_sha, tree_diff_md5, so_md5) "
+            f"combinations across cells -- the tree or _ttnn.so changed MID-RUN; cross-engine "
+            f"comparisons are suspect. Combos: {sorted(provenance_seen)}"
+        )
+    elif provenance_seen:
+        sha, tree, so = next(iter(provenance_seen))
+        drift = f"provenance: head={str(sha)[:12]} tree_diff_md5={str(tree)[:8]} so_md5={str(so)[:8]} (uniform)"
+    for row in rows:
+        row["provenance"] = "DRIFT -- see .md" if drift.startswith("PROVENANCE DRIFT") else drift
+    return {"rows": rows, "provenance_note": drift}
+
+
+SCENARIO_CSV_COLUMNS = (
+    ["scenario", "model", "callsite", "rows", "n", "k", "dtype", "today_engine", "calls_note"]
+    + [f"{e}_{c}" for e in SCENARIO_ENGINE_ORDER for c in ("us", "cores", "iters", "status")]
+    + ["today_us", "speedup_today_over_routed", "speedup_today_over_op", "notes", "provenance"]
+)
+
+
+def write_scenario_reports(table, outdir):
+    rows, note = table["rows"], table["provenance_note"]
+    if not rows:
+        return
+    csv_path = os.path.join(outdir, "scenarios_table.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=SCENARIO_CSV_COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        for row in rows:
+            w.writerow({c: row.get(c, "") for c in SCENARIO_CSV_COLUMNS})
+
+    md_path = os.path.join(outdir, "scenarios_table.md")
+    with open(md_path, "w") as f:
+        f.write("# Model scenarios: real LLM call-site shapes through the canonical pipeline\n\n")
+        f.write(
+            "Engines: op = topk_large_indices called directly; routed = ttnn.topk largest=True "
+            "on this branch, CANONICAL call form (no indices_tensor/sub_core_grids/stable -- "
+            "production sampling call sites pass those and stay on stock, topk.cpp:271-279); "
+            "stocknow = ttnn.topk largest=False = the stock factory on the committed header "
+            "(largest is only the router; pre-branch both largest values hit the same factory). "
+            "today = the engine the model gets pre-branch. us columns filled only from MEASURED "
+            "cells; SKIPPED_SLOW carries a linear-model estimate that is NOT a measurement.\n\n"
+        )
+        if note:
+            f.write(f"> {note}\n\n")
+        hdr = [c for c in SCENARIO_CSV_COLUMNS if any(str(r.get(c, "")) != "" for r in rows)]
+        f.write("| " + " | ".join(hdr) + " |\n")
+        f.write("|" + "|".join("---" for _ in hdr) + "|\n")
+        for r in rows:
+            f.write("| " + " | ".join(str(r.get(c, "")).replace("|", "/") for c in hdr) + " |\n")
+    print(f"REPORT: {csv_path}")
+    print(f"REPORT: {md_path}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--layers", default="ttnn", help="ttnn,llk")
@@ -1895,6 +2323,22 @@ def main():
         + " with a tt-metal symlink into this repo)",
     )
     p.add_argument(
+        "--model-scenarios",
+        action="store_true",
+        help="named LLM model-scenario sweep (engines: op/routed/stocknow on the committed "
+        "header; no header edits) -> scenarios_table.csv",
+    )
+    p.add_argument(
+        "--scenarios-file",
+        default=None,
+        help="JSON scenario grid ({'scenarios': [...]}) overriding the built-in MODEL_SCENARIOS",
+    )
+    p.add_argument(
+        "--scenarios",
+        default=None,
+        help="comma-list of scenario names to (re)run (subset of the grid)",
+    )
+    p.add_argument(
         "--child", action="store_true", help="internal: run as measurement child (or set " + CHILD_SPEC_ENV + ")"
     )
     args = p.parse_args()
@@ -1906,8 +2350,15 @@ def main():
         run_child(spec_path or sys.argv[sys.argv.index("--child") + 1])
         return 0
 
+    if args.competition and args.model_scenarios:
+        sys.exit("--competition and --model-scenarios are separate modes; pick one")
     if args.competition:
         return run_competition(args)
+    if args.model_scenarios:
+        # Shapes and grid come from the scenario specs; the classic-grid axis
+        # flags (--ks/--ns/--dtypes/--ops/--layers-competition/--op-num-slices)
+        # are ignored in this mode.
+        return run_scenarios(args)
     if args.iters is None:
         args.iters = 10  # classic-grid default; competition resolves its own
 

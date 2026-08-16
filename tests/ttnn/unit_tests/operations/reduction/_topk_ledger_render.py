@@ -59,6 +59,11 @@ def load_competition(comp_dir):
     return list(csv.DictReader(open(path)))
 
 
+def load_scenarios(scen_dir):
+    path = os.path.join(scen_dir, "scenarios_table.csv")
+    return list(csv.DictReader(open(path)))
+
+
 def load_psweep(psweep_dir):
     """Return {(k, W): {P: us}} from per-cell result JSONs (op layer, _pN ids)."""
     out = {}
@@ -122,6 +127,64 @@ def render_psweep_table(psweep, comp_rows):
     return "\n".join(body)
 
 
+def render_model_scenarios(rows):
+    """MODEL_SCENARIOS region: one row per scenario. Columns: scenario |
+    model + callsite | shape | today engine | today µs | routed µs | op µs |
+    best speedup | note. Numbers come only from MEASURED cells (us_fmt's
+    em-dash rule); a SKIPPED_SLOW today cell renders as '≈ X ms †' -- a
+    linear-model estimate, visibly distinct from a measurement."""
+    import html as _html
+
+    body = []
+    for r in rows:
+        esc = lambda s: _html.escape(s or "")  # noqa: E731
+        shape = f"{int(r['rows'])}×{int(r['n']):,}, k={int(r['k'])}"
+        today_e = r.get("today_engine", "")
+        today = fnum(r.get("today_us"))
+        ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
+        if today is not None:
+            today_td = us_fmt(today)
+        else:
+            est = re.search(r"SKIPPED_SLOW\(est~(\d+)ms\)", r.get(f"{today_e}_status", "") or "")
+            today_td = f'<td class="n flat">≈ {int(est.group(1)):,} ms †</td>' if est else '<td class="n flat">—</td>'
+        best = min((v for v in (ro, op) if v is not None), default=None)
+        if today is not None and best:
+            ratio = today / best
+            rs = f"{ratio:,.0f}×" if ratio >= 100 else f"{ratio:,.1f}×"
+            sp = f'<td class="n win">{rs}</td>' if ratio >= 1.05 else f'<td class="n flat">{rs}</td>'
+        else:
+            sp = '<td class="n flat">—</td>'
+
+        # "win" styling only when the engine actually beats today; a routed
+        # cell 14x SLOWER than the model's current engine must not render
+        # bold-green.
+        def eng_td(v):
+            return us_fmt(v, "win" if (v is not None and today is not None and v < today) else "")
+
+        note = esc(r.get("notes", ""))
+        if r.get("calls_note"):
+            note = f'{note} <span class="flat">[{esc(r["calls_note"])}]</span>' if note else esc(r["calls_note"])
+        body.append(
+            f'      <tr><td>{esc(r["scenario"])}</td>'
+            f'<td>{esc(r.get("model", ""))}<br><code>{esc(r.get("callsite", ""))}</code></td>'
+            f'<td class="n">{shape}</td>'
+            f'<td class="n">{esc(today_e)}</td>{today_td}'
+            f"{eng_td(ro)}{eng_td(op)}{sp}"
+            f"<td>{note}</td></tr>"
+        )
+    head = (
+        '<thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th>'
+        '<th class="n">today: engine</th><th class="n">today µs</th>'
+        '<th class="n ours">ttnn.topk (this branch)</th><th class="n ours">op direct</th>'
+        '<th class="n">best speedup</th><th>note</th></tr></thead>'
+    )
+    return (
+        f'  <div class="tablewrap"><table>\n    {head}\n    <tbody>\n'
+        + "\n".join(body)
+        + "\n    </tbody>\n  </table></div>"
+    )
+
+
 def render_exec_numbers(rows, psweep):
     r = next((x for x in rows if int(x["k"]) == ANCHOR_K and int(x["W"]) == ANCHOR_W), None)
     if r is None:
@@ -173,6 +236,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--competition-dir", required=True)
     ap.add_argument("--psweep-dir", required=True)
+    ap.add_argument(
+        "--scenarios-dir", default=None, help="dir with scenarios_table.csv (optional; MODEL_SCENARIOS region)"
+    )
     ap.add_argument("--ledger", default=os.path.join(REPO, "TOPK_LEDGER.html"))
     args = ap.parse_args()
 
@@ -183,8 +249,13 @@ def main():
     t = splice(t, "EXEC_NUMBERS", render_exec_numbers(rows, psweep))
     t = splice(t, "COMPETITION_TABLE", render_competition_table(rows))
     t = splice(t, "PSWEEP_TABLE", render_psweep_table(psweep, rows))
+    n_scen = ""
+    if args.scenarios_dir:
+        scen_rows = load_scenarios(args.scenarios_dir)
+        t = splice(t, "MODEL_SCENARIOS", render_model_scenarios(scen_rows))
+        n_scen = f", {len(scen_rows)} scenario rows"
     open(args.ledger, "w").write(t)
-    print(f"rendered {args.ledger}: {len(rows)} competition rows, {len(psweep)} P-sweep shapes")
+    print(f"rendered {args.ledger}: {len(rows)} competition rows, {len(psweep)} P-sweep shapes{n_scen}")
 
 
 if __name__ == "__main__":
