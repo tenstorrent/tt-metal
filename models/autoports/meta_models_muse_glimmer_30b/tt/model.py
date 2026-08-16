@@ -649,6 +649,10 @@ class MuseGlimmerModel(LightweightModule):
         self.mesh_device = mesh_device
         self.plan = plan
         self.layers = layers
+        #: Decoder layers whose *output* is captured for the DFlash drafter.  Empty
+        #: unless a caller arms it, so the non-speculative path pays nothing.
+        self._tap_indices: frozenset[int] = frozenset()
+        self._tap_outputs: dict[int, ttnn.Tensor] = {}
         self.embed_weight = embed_weight
         self.embed_norm = embed_norm
         self.final_norm = final_norm
@@ -1409,6 +1413,7 @@ class MuseGlimmerModel(LightweightModule):
                 ttnn.deallocate(tails[position][0])
                 ttnn.deallocate(tails[position][1])
                 tails[position] = None
+            self._capture_tap(layer, out)
             ttnn.deallocate(hidden)
             hidden = out
         self._sliding_tails = next_tails if keep_sliding_tails else None
@@ -1493,9 +1498,52 @@ class MuseGlimmerModel(LightweightModule):
                 page_table=page_table,
                 rope_pos_ids=rope_pos_ids if layer.config.uses_rope else None,
             )
+            self._capture_tap(layer, out)
             ttnn.deallocate(hidden)
             hidden = out
         return hidden
+
+    # ------------------------------------------------------------- DFlash taps
+
+    def arm_hidden_state_taps(self, layer_indices: Sequence[int] | None) -> None:
+        """Capture the *output* of the named decoder layers on subsequent forwards.
+
+        The DFlash drafter is conditioned on the target's hidden states at
+        ``target_layer_ids`` (``[1, 13, 25, 37, 49]`` for this checkpoint).  HF
+        expresses that as ``model_outputs.hidden_states[i + 1]``, i.e. the output
+        of layer ``i`` -- ``hidden_states[0]`` there is the embedding, so the
+        ``+ 1`` is an offset into that list and *not* a layer-index shift.
+
+        Pass ``None`` to disarm.  Indices are true checkpoint layer indices
+        (``layer.config.layer_idx``), which matters because a partially
+        instantiated model's ``self.layers`` is not indexed by them.
+        """
+        self.release_hidden_state_taps()
+        wanted = frozenset(int(i) for i in layer_indices) if layer_indices else frozenset()
+        if wanted:
+            available = {layer.config.layer_idx for layer in self.layers}
+            missing = sorted(wanted - available)
+            if missing:
+                raise ValueError(f"cannot tap layers {missing}: not instantiated in this model")
+        self._tap_indices = wanted
+
+    def _capture_tap(self, layer, out: ttnn.Tensor) -> None:
+        """Clone a tapped layer output; the caller frees it as the next residual."""
+        if not self._tap_indices:
+            return
+        layer_idx = layer.config.layer_idx
+        if layer_idx in self._tap_indices:
+            self._tap_outputs[layer_idx] = ttnn.clone(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def take_hidden_state_taps(self) -> dict[int, ttnn.Tensor]:
+        """Hand over the captured tensors; ownership transfers to the caller."""
+        captured, self._tap_outputs = self._tap_outputs, {}
+        return captured
+
+    def release_hidden_state_taps(self) -> None:
+        for tensor in self._tap_outputs.values():
+            ttnn.deallocate(tensor)
+        self._tap_outputs = {}
 
     def decode_logits(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
         """Terminal norm + LM head on the decode boundary layout."""

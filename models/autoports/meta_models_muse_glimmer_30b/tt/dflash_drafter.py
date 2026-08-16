@@ -147,6 +147,40 @@ def bidirectional_sliding_mask(
     return mask.reshape(1, 1, *allowed.shape)
 
 
+def build_context_hidden_states(
+    taps: dict[int, ttnn.Tensor], target_layer_ids: tuple[int, ...], *, deallocate: bool = True
+) -> ttnn.Tensor:
+    """Assemble the drafter's context input from the target's tapped hidden states.
+
+    HF builds it as ``torch.cat([hidden_states[i + 1] for i in target_layer_ids],
+    dim=-1)``.  **Order matters**: ``encoder.fc`` is a single dense projection
+    over the concatenated 33280-wide vector, so permuting the layers permutes
+    that weight's input columns and silently produces a wrong - but entirely
+    plausible - projection.
+    """
+    missing = [i for i in target_layer_ids if i not in taps]
+    if missing:
+        raise ValueError(f"missing tapped hidden states for layers {missing}")
+    ordered = [taps[i] for i in target_layer_ids]
+    out = ttnn.concat(ordered, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if deallocate:
+        for tensor in ordered:
+            ttnn.deallocate(tensor)
+    return out
+
+
+def build_noise_ids(anchor_token_id: int, block_size: int, mask_token_id: int) -> list[int]:
+    """``[anchor] + [mask] * (block_size - 1)``.
+
+    The anchor is the last token the *target* committed; the rest are mask tokens
+    the drafter denoises.  Embeddings come from the target's table via a plain
+    lookup - HF uses ``F.embedding(ids, weight)`` explicitly rather than the
+    target's own embedding module, which for this checkpoint also applies a
+    normaliser that must NOT be applied here.
+    """
+    return [int(anchor_token_id)] + [int(mask_token_id)] * (block_size - 1)
+
+
 class _PlainNorm(LightweightModule):
     """``rms_norm(x) * w`` - the drafter's norm, *not* the target's centered variant."""
 
