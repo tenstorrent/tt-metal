@@ -120,7 +120,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 4
+      timeout: 3
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
   sp_config: sc1
