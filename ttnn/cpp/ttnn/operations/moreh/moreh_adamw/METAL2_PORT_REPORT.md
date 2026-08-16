@@ -10,6 +10,10 @@ exactly: **23 passed, 8 skipped**, both before and after
 (`tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_adamw.py`; the 8 skips are the tests' own
 `bfloat8_b`-without-`fp32_dest_acc` guards, unchanged by the port).
 
+Verified twice: once on the pre-commit tree, and again after `clang-format` reflowed the factory during the
+first commit attempt (Friction 6), so the passing result belongs to the exact committed source rather than to
+a semantically-identical predecessor.
+
 ## Provenance
 
 - **Recipe docs (this port):** `086a669ff5e 2026-08-15 docs(metal_2.0): two porter-facing gaps a blind cold read turned up`
@@ -188,7 +192,17 @@ the writer gets no `kernel_run_args` entry at all.
    only in the fp32 configuration of an op with no fp32 tensors."* Ten entries were needed here
    (`device/multi_core_program_factory.cpp:468-476`), all `UnpackToSrc` per the legacy all-`Default` vector.
 
-6. **Minor — the `TT_FATAL` census command's `BASE` is wrong on a branch that already carries commits.** The
+6. **Minor — the `clang-format` pre-commit hook rejects the first commit attempt, and the recipe's
+   verification step doesn't mention it.** The hook reflows the factory (here: two hunks, both joining lines
+   that fit the column limit once the port's shorter expressions replaced the legacy ones), modifies the
+   working tree, and **fails** the commit; a second `git add` + commit then passes. Harmless once expected,
+   but a porter who reads the failure as a real problem may start debugging it, and one who does not notice
+   the tree was modified will have tested a binary built from pre-format source. **Suggest** a line under
+   *Verification*: *"expect `clang-format` to reflow the factory and fail your first commit; re-`git add` and
+   commit again, then re-run the build and tests so the verified binary matches the committed tree."*
+   (Followed here — see Outcome.)
+
+7. **Minor — the `TT_FATAL` census command's `BASE` is wrong on a branch that already carries commits.** The
    recipe sets `BASE=$(git merge-base origin/main HEAD)` and calls it "the pre-port revision." This branch
    already had a prior port and several doc commits, so the merge-base is well behind the port's true
    starting point; it happened not to matter here (this op's directory was untouched by those commits, and
