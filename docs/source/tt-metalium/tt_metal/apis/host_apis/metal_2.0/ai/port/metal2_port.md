@@ -571,6 +571,8 @@ DFBBinding{
 
 — **not** the `ProducerOf(...)` / `ConsumerOf(...)` / `StridedConsumerOf(...)` / `AllConsumerOf(...)` convenience factories. Those factories exist to trim boilerplate in unit tests, but inside a block of designated-initializer specs a call expression reads as an outlier, and it hides the `endpoint_type` and `access_pattern` that the full form states inline. Keep the spec uniform and the roles explicit.
 
+**End every braced initializer's last field with a trailing comma**, as the example above does. Without it `clang-format` aligns the whole list to the opening brace instead of block-indenting it, and the result is unreadable and churns the diff. This is worth getting right *as you write*, not at the end: a port declares one of these per binding — dozens across a normal factory — and the pre-commit hook reformats all of them at once, so the cost of the habit not being there arrives as a large unexpected diff on top of a failed first commit.
+
 **`Table`s are maps, not vectors.** Several spec fields that look list-like — `compile_time_args`, `runtime_arg_values` / `common_runtime_arg_values`, `unpack_modes`, `defines`, `tensor_args` — are `Table` (a hash-friendly map type), *not* `std::vector`. `Table` has **no `push_back` and no iterator-pair constructor**; building one the way you'd build a vector won't compile. Use brace-init `{{key, value}, …}`, `insert` / `emplace`, `operator[]`, or the single-argument range constructor `Table(existing_map)` (e.g. to convert a legacy `std::map` of defines). When a `Table` must be built conditionally, declare it and `insert`/`emplace` into it — don't reach for `push_back`.
 
 For each resource type, construct the spec entry and its run-args entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
@@ -966,6 +968,8 @@ Anything the porter discovered that is in scope for *some* future work but not t
 **Substance over comprehensiveness** — 5–15 well-targeted entries across the four sections beats 30 shallow ones. Be specific: cite file paths, line numbers, doc sections.
 
 Commit `METAL2_PORT_REPORT.md` alongside the port code, audit brief, audit report, and port plan. All five artifacts (port code + the four `METAL2_*.md` files) form the port's PR.
+
+**Check that your first commit actually landed.** The `clang-format` pre-commit hook reformats the factory and then **aborts** the commit, leaving `HEAD` where it was — so a commit that printed a wall of passing hook output can still not exist. Confirm `HEAD` moved (`git log -1`) rather than assuming; if it didn't, re-stage the hook's changes and commit again. Before re-staging, **read what the hook changed** (`git diff`): reflowing braced initializers is what it normally does, and a pure reformat needs no re-verification. Only if it changed something you can't account for as formatting is the build and test run worth repeating — your green result was measured on the pre-reformat source, so it is evidence about that tree rather than the committed one.
 
 ---
 
