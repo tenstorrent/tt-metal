@@ -1,0 +1,4 @@
+test_sfpu_binary.py
+test_sfpu_reduce_sdpa.py
+test_sfpu_ternary.py
+test_sfpu_welford_prefix_snapshot.py

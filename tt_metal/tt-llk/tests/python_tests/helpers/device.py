@@ -313,11 +313,15 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
     for idx, entry in enumerate(callstack):
         # Format PC hex like Rust does
         pc = f"0x{entry.pc:016x}" if entry.pc is not None else "0x????????????????"
-        file_path = (TESTS_DIR / Path(entry.file)).resolve()
+        # tt-exalens 0.3.29 can return a stripped entry for a device-side
+        # assertion (PC/function only). Keep the original assert visible instead
+        # of masking it with AttributeError while formatting this diagnostic.
+        source_file = getattr(entry, "file", None)
+        file_path = (TESTS_DIR / Path(source_file)).resolve() if source_file else Path("<unresolved>")
         # first line: idx, pc, function
         temp_str += f"{idx:>4}: {pc} - {entry.function_name}\n"
         # second line: file, line, column
-        temp_str += f"{' '*25}| at {file_path}:{entry.line}:{entry.column}\n"
+        temp_str += f"{' '*25}| at {file_path}:{getattr(entry, 'line', '?')}:{getattr(entry, 'column', '?')}\n"
 
     return temp_str
 

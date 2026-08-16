@@ -1,0 +1,7 @@
+tt_metal_head	7211b82fca4a7748900833493ff73417ed810554
+craq_sim_head	5b73c068d79a11b36e9e4946246c75aab07b468b
+arch	bh
+tier	2
+sample	1
+workerid_plugin_dir	/localdev/nkapre/sfpi-gcc-lreg-artifacts
+workerid_plugin	pytest_workerid_plugin
