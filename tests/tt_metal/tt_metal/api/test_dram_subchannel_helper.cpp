@@ -66,10 +66,12 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
     }
 }
 
-// Pins the ordering contract documented on metal_SocDescriptor::dram_bank_endpoint_coords: y=0 is
-// the NOC0 worker endpoint, y=1 the NOC1 worker endpoint when that is a different subchannel, then
-// the bank's remaining subchannels ascending. That role ordering is what lets one logical sender
-// coord mean the same thing on every device in a mesh.
+// A DRAM sender mapping is resolved against one device and then reused for the whole mesh, which
+// only holds while a logical y names the same endpoint role on every bank and every device. That is
+// the property to hold the descriptor to -- not the order it happens to build the table in: y=0 the
+// syseng-owned NOC0 worker endpoint, y=1 the NOC1 worker endpoint, and the free subchannels a
+// sender may actually run on above both. dram_sender_logical_cores enforces the same invariant at
+// runtime.
 TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
@@ -78,35 +80,44 @@ TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
     ASSERT_GT(num_banks, 0u);
+    ASSERT_GT(num_subchannels, 2u) << "a bank needs a subchannel beyond its two worker endpoints to host a sender";
 
     for (uint32_t bank = 0; bank < num_banks; ++bank) {
         SCOPED_TRACE(fmt::format("bank {}", bank));
         const CoreCoord noc0_endpoint = soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank), 0);
         const CoreCoord noc1_endpoint = soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank), 1);
+        const auto& endpoints = soc_desc.dram_bank_endpoint_coords.at(bank);
 
-        // Rebuild the table the contract calls for -- role-named entries first, then the leftover
-        // subchannels ascending -- and compare it whole, rather than re-deriving each entry's
-        // subchannel index and re-checking the ordering rule piecewise.
+        // The table renames this bank's subchannels; it must not drop, duplicate, or invent one.
         const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank));
-        std::vector<CoreCoord> subchannel_coords;
-        subchannel_coords.reserve(num_subchannels);
+        std::set<std::pair<size_t, size_t>> subchannel_coords;
         for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
             const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
                 static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-            subchannel_coords.push_back({coord.x, coord.y});
+            subchannel_coords.emplace(coord.x, coord.y);
         }
+        std::set<std::pair<size_t, size_t>> table_coords;
+        for (const CoreCoord& coord : endpoints) {
+            table_coords.emplace(coord.x, coord.y);
+        }
+        ASSERT_EQ(endpoints.size(), num_subchannels);
+        EXPECT_EQ(table_coords, subchannel_coords) << "the table is not a permutation of the bank's subchannels";
 
-        std::vector<CoreCoord> expected{noc0_endpoint};
-        if (noc1_endpoint != noc0_endpoint) {
-            expected.push_back(noc1_endpoint);
-        }
-        for (const CoreCoord& coord : subchannel_coords) {
-            if (coord != noc0_endpoint && coord != noc1_endpoint) {
-                expected.push_back(coord);
-            }
-        }
-        ASSERT_EQ(expected.size(), num_subchannels) << "the NOC endpoints are not subchannels of their own bank";
-        EXPECT_EQ(soc_desc.dram_bank_endpoint_coords.at(bank), expected);
+        // Roles sit at fixed logical y. The NOC0/NOC1 split is what keeps them there: a descriptor
+        // naming one subchannel for both NOCs would let the free and NOC1 roles trade places
+        // between devices, and a mesh-wide sender mapping would then drive the wrong DRISC core.
+        ASSERT_NE(noc1_endpoint, noc0_endpoint) << "bank's NOC0 and NOC1 worker endpoints must be distinct";
+        EXPECT_EQ(endpoints.at(0), noc0_endpoint) << "logical y=0 must be the NOC0 worker endpoint";
+        EXPECT_EQ(endpoints.at(1), noc1_endpoint) << "logical y=1 must be the NOC1 worker endpoint";
+
+        // A sender only ever runs on a subchannel above the endpoints, on every bank alike.
+        const CoreCoord free_logical = mesh_device->impl().pick_unused_dram_logical_core(device, bank);
+        EXPECT_EQ(free_logical.x, bank);
+        EXPECT_GE(free_logical.y, 2u) << "the free subchannel collides with a worker endpoint role";
+
+        // The two sender roles the prefetcher provisions are exactly [free, NOC1 endpoint].
+        const std::vector<CoreCoord> senders = mesh_device->impl().dram_sender_logical_cores(device, bank);
+        EXPECT_EQ(senders, (std::vector<CoreCoord>{free_logical, CoreCoord(bank, 1)}));
     }
 }
 

@@ -411,12 +411,9 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     // the rest agree, because everything downstream (socket placement, kernel placement, GCB sender
     // indices) indexes senders by slot and would otherwise silently drive another device's wrong
     // DRISC core.
-    sender_logical_cores_.clear();
-    sender_logical_cores_.reserve(2 * num_banks_);
-    std::vector<CoreCoord> device_senders;
-    for (IDevice* device : devices_) {
-        device_senders.clear();
-        device_senders.reserve(2 * num_banks_);
+    const auto senders_on = [this](const IDevice* device) {
+        std::vector<CoreCoord> senders;
+        senders.reserve(2 * num_banks_);
         for (uint32_t b = 0; b < num_banks_; ++b) {
             // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
             const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
@@ -426,18 +423,20 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
                 b,
                 device->id(),
                 bank_senders.size());
-            device_senders.insert(device_senders.end(), bank_senders.begin(), bank_senders.end());
+            senders.insert(senders.end(), bank_senders.begin(), bank_senders.end());
         }
-        if (device == devices_.front()) {
-            sender_logical_cores_ = device_senders;
-        } else {
-            TT_FATAL(
-                device_senders == sender_logical_cores_,
-                "Tensor prefetcher: DRAM sender slots on device {} name different logical cores than on reference "
-                "device {}; every device must resolve slot s to the same (bank, role)",
-                device->id(),
-                devices_.front()->id());
-        }
+        return senders;
+    };
+
+    const IDevice* reference_device = devices_.front();
+    sender_logical_cores_ = senders_on(reference_device);
+    for (size_t d = 1; d < devices_.size(); ++d) {
+        TT_FATAL(
+            senders_on(devices_[d]) == sender_logical_cores_,
+            "Tensor prefetcher: DRAM sender slots on device {} name different logical cores than on reference "
+            "device {}; every device must resolve slot s to the same (bank, role)",
+            devices_[d]->id(),
+            reference_device->id());
     }
     num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
@@ -1268,6 +1267,7 @@ void TensorPrefetcherManager::stop() {
     sender_logical_cores_.clear();
     trace_requests_.clear();
     num_senders_ = 0;
+    num_banks_ = 0;
     active_ = false;
 }
 

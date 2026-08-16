@@ -377,7 +377,15 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     const auto make_config_host_buffer = [&](IDevice* config_device) {
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
         for (const auto& [sender_logical, receiver_cores] : sender_receiver_core_mapping_) {
-            const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
+            // Row-wise: this vector's index is the receiver's credit slot -- it picks both the
+            // sender's NOC XY table order and each receiver's pages_sent/pages_acked offsets below,
+            // and the sender walks the two in lockstep. A DRAM sender's table is built from
+            // receiver_logical_cores_per_sender_ (also row-wise), so a column-wise order here would
+            // credit the wrong receiver whenever a sender's receiver set spans several rows and
+            // columns. Worker senders take their table from this same vector, so they stay
+            // self-consistent either way.
+            const auto& receiver_cores_vec =
+                corerange_to_cores(receiver_cores, /*max_cores=*/std::nullopt, /*row_wise=*/true);
             uint32_t num_receivers = receiver_cores.num_cores();
 
             // Worker senders have their own config page in the sharded buffer; DRAM senders don't
@@ -451,6 +459,13 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         std::vector<distributed::ShardDataTransfer> shard_data_transfers;
         shard_data_transfers.reserve(device_coords.shape().mesh_size());
         for (const auto& coord : device_coords) {
+            // A mesh view can span slots whose devices belong to another host/rank; get_device
+            // TT_FATALs on those. Writing only the local shards matches what the broadcast path
+            // below does (enqueue_write_shard_to_sub_grid skips non-local coords) -- each rank
+            // fills in its own.
+            if (!mesh_device->is_local(coord)) {
+                continue;
+            }
             per_device_config.push_back(make_config_host_buffer(mesh_device->get_device(coord)));
             shard_data_transfers.push_back(
                 distributed::ShardDataTransfer(coord).host_data(per_device_config.back().data()));
@@ -578,7 +593,13 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     bool dual_senders_per_bank) {
     // Sender coords name endpoint roles, so resolving them against any one device gives the
     // mapping for the whole mesh; the GCB ctor rechecks that against every device.
-    const IDevice* reference_device = mesh_device->get_devices().at(0);
+    const auto& devices = mesh_device->get_devices();
+    TT_FATAL(
+        !devices.empty(),
+        "Cannot build a DRAM sender mapping for a mesh with no local devices (shape {}); a submesh whose slots are "
+        "all owned by another host/rank has no device to resolve the senders' endpoint roles against.",
+        mesh_device->shape());
+    const IDevice* reference_device = devices.front();
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     mapping.reserve((dual_senders_per_bank ? 2 : 1) * bank_to_receivers.size());
     std::unordered_set<uint32_t> seen_banks;

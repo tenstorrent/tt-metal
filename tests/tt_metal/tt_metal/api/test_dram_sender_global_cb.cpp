@@ -209,23 +209,24 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     }
 }
 
-TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
-    // Layout: 4 receivers, each receives one 64-byte page.
-    constexpr uint32_t kNumReceivers = 4;
+// One DRISC sender pushes a per-receiver page to every core in `receiver_cores` and checks each
+// landed its own stripe. Parameterized on the receiver set: a receiver's credit slot is its index
+// in a row-wise flatten of that set, so a set spanning both rows and columns is what catches a
+// sender NOC XY table ordered differently than the receivers' config pages.
+void run_one_sender_smoke(distributed::MeshDevice* mesh_device, const CoreRangeSet& receiver_cores) {
+    const uint32_t kNumReceivers = receiver_cores.num_cores();
     constexpr uint32_t kPageSize = 64;  // multiple of L1_ALIGNMENT (16 on BH)
     constexpr uint32_t kNumPages = 1;
     constexpr uint32_t kRemoteCBId = 31;
 
     // Sender: bank 0
     const uint32_t bank_id = 0;
-    // Receivers
-    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
 
     // Size: per-receiver fifo. Use 1KB.
     constexpr uint32_t kGcbSize = 1024;
     auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-        *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1, /*support_multi_receiver_shards=*/true);
+        *mesh_device, bank_to_receivers, kGcbSize, BufferType::L1, /*support_multi_receiver_shards=*/true);
     // Use the sender coord the factory resolved; recomputing via pick_unused_dram_logical_core
     // would couple this test to the picker's current strategy.
     const CoreCoord sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
@@ -263,14 +264,14 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
             pattern[r * kPageSize / sizeof(uint32_t) + w] = 0xABCD0000u + r * 0x100u + w;
         }
     }
-    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t data_noc_addr = drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved);
     MetalContext::instance().get_cluster().write_core(
         pattern.data(),
         pattern.size() * sizeof(uint32_t),
-        tt_cxy_pair(mesh_device_->build_id(), sender_virtual),
+        tt_cxy_pair(mesh_device->build_id(), sender_virtual),
         data_noc_addr);
 
     // Build a single program with both sender (DRISC) and receiver (worker) kernels.
@@ -296,7 +297,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
         sender_logical,
         DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
 
-    const std::vector<uint32_t> sender_rt_args = receiver_noc_xy_rt_args(gcb, mesh_device_);
+    const std::vector<uint32_t> sender_rt_args = receiver_noc_xy_rt_args(gcb, mesh_device);
     SetRuntimeArgs(program, sender_kernel_id, sender_logical, sender_rt_args);
 
     CircularBufferConfig cb_config(kPageSize);
@@ -313,19 +314,23 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device_->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
 
-    // Verify each receiver's L1 slice
-    auto receivers_vec = corerange_to_cores(receiver_cores);
+    // Verify each receiver's L1 slice. Walk the GCB's own receiver order (the same order the
+    // sender's NOC XY table and each receiver's credit slot are built from), not a fresh flatten
+    // of receiver_cores -- reusing the contract's order is what makes slot r mean receiver r.
+    const auto& receivers_vec = experimental::receiver_logical_cores_per_sender(gcb).at(0);
+    ASSERT_EQ(receivers_vec.size(), kNumReceivers);
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
         slow_dispatch::ReadFromL1(
-            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+            *mesh_device, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xABCD0000u + r * 0x100u + w;
-            EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w << " mismatch (expected 0x" << std::hex
-                                           << expected << ", got 0x" << result[w] << std::dec << ")";
+            EXPECT_EQ(result[w], expected)
+                << "Receiver " << r << " (" << receivers_vec[r].str() << ") word " << w << " mismatch (expected 0x"
+                << std::hex << expected << ", got 0x" << result[w] << std::dec << ")";
         }
     }
 
@@ -336,7 +341,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     MetalContext::instance().get_cluster().read_core(
         pages_buf.data(),
         pages_buf.size() * sizeof(uint32_t),
-        tt_cxy_pair(mesh_device_->build_id(), sender_virtual),
+        tt_cxy_pair(mesh_device->build_id(), sender_virtual),
         pages_sent_noc_addr);
     for (uint32_t r = 0; r < kNumReceivers; ++r) {
         uint32_t sent = pages_buf[2 * r];
@@ -345,6 +350,20 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
                                << ", acked=" << acked << ")";
         EXPECT_GT(sent, 0u) << "Sender did not push any pages to receiver " << r;
     }
+}
+
+TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
+    // 4 receivers in one row, each receiving one 64-byte page.
+    run_one_sender_smoke(mesh_device_, CoreRangeSet(CoreRange({0, 0}, {3, 0})));
+}
+
+TEST_F(DramSenderGCBFixture, SmokeReceiverGridSpansRowsAndColumns) {
+    // Same flow over a 2x2 receiver grid, where row-wise and column-wise flattening disagree:
+    // (1,0) and (0,1) trade places. A sender whose NOC XY table is ordered one way while the
+    // receivers' pages_sent/pages_acked slots are assigned the other way credits the wrong
+    // receiver -- each side then waits on a counter nobody advances, so this hangs rather than
+    // returning bad data.
+    run_one_sender_smoke(mesh_device_, CoreRangeSet(CoreRange({0, 0}, {1, 1})));
 }
 
 // Same data flow as SmokeOneSenderFourReceivers, but the sender (DRISC) and receiver

@@ -1593,11 +1593,26 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* 
         if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
             const CoreCoord noc1_core =
                 soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            // A sender mapping resolves logical DRAM coords against one reference device and is then
+            // reused mesh-wide (see build_dram_sender_mapping), so a role must land on the same
+            // logical y on every device. dram_bank_endpoint_coords orders a bank as [NOC0 endpoint,
+            // NOC1 endpoint, remaining subchannels ascending], which pins the NOC1 endpoint to y == 1
+            // and every free subchannel above it -- but only while the bank's two worker endpoints are
+            // distinct subchannels. A descriptor that names one subchannel for both NOCs (Wormhole
+            // does) collapses that ordering and would let the free and NOC1 roles swap logical y
+            // between devices, which the per-device membership check cannot see. Wormhole has no DRAM
+            // senders, so require the split here rather than in the descriptor.
             TT_FATAL(
-                noc1_core != free_core,
-                "DRAM bank {} on device {}: NOC1-endpoint subchannel collides with the free subchannel ({}, {})",
+                noc1_core.y == 1 && free_core.y > noc1_core.y,
+                "DRAM bank {} on device {}: expected the NOC1 worker endpoint at logical y=1 with the free "
+                "subchannel above it, but found NOC1 at ({}, {}) and free at ({}, {}). A bank's NOC0 and NOC1 "
+                "worker endpoints must be distinct subchannels so that a sender's logical coord names the same "
+                "endpoint role on every device in the mesh; check this view's worker_endpoint pair in the SoC "
+                "descriptor.",
                 bank_id,
                 device->id(),
+                noc1_core.x,
+                noc1_core.y,
                 free_core.x,
                 free_core.y);
             return {free_core, noc1_core};

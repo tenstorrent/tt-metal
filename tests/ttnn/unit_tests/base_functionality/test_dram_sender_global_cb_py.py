@@ -6,7 +6,7 @@ import pytest
 import ttnn
 
 from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.prefetcher_common import require_tensor_prefetcher
+from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
 
 
 pytestmark = run_for_blackhole("DramSenderGCB requires Blackhole")
