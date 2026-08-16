@@ -400,12 +400,17 @@ static void TestRingAttention(
         // power is intact.
         const float bw_rtol = 3e-2F;
         const float bw_atol = 5e-2F;
+        const auto report = [](const xt::xarray<float>& ref, const xt::xarray<float>& got) {
+            const float max_abs = xt::amax(xt::abs(got - ref))();
+            const float max_rel = xt::amax(xt::abs(got - ref) / (xt::abs(ref) + 1e-6F))();
+            return "max_abs_diff=" + std::to_string(max_abs) + " max_rel_diff=" + std::to_string(max_rel);
+        };
         EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, bw_rtol, bw_atol))
-            << "Ring attention dQ gradient does not match reference";
+            << "Ring attention dQ gradient does not match reference: " << report(ref_grads.dQ, gathered_dQ);
         EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, bw_rtol, bw_atol))
-            << "Ring attention dK gradient does not match reference";
+            << "Ring attention dK gradient does not match reference: " << report(ref_grads.dK, gathered_dK);
         EXPECT_TRUE(xt::allclose(ref_grads.dV, gathered_dV, bw_rtol, bw_atol))
-            << "Ring attention dV gradient does not match reference";
+            << "Ring attention dV gradient does not match reference: " << report(ref_grads.dV, gathered_dV);
     }
 }
 

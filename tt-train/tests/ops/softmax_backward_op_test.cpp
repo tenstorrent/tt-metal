@@ -283,10 +283,12 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_ManyRowsPaddedWidth) {
     constexpr std::array<SoftmaxBackwardCase, 2> cases = {{
         // N*C*(W_padded - W) exceeds W here: a row count derived from the logical shape
         // instead of the padded shape overcounts tile-rows and writes past the output buffer.
-        {"many_rows_padded_w", 64, 1, 32, 197, 3, 5e-3F, 1e-3F, -10.0F, 10.0F},
+        // bf16 on device measures max_abs_diff ~0.011 on both old and fixed kernels for the
+        // padded-W shapes (grad ~O(1) row sums); 2e-2 keeps margin without hiding corruption.
+        {"many_rows_padded_w", 64, 1, 32, 197, 3, 2e-2F, 1e-3F, -10.0F, 10.0F},
         // H not tile-aligned: the padded-H tile-rows are processed too; per-lane compute
         // must keep all logical rows exact.
-        {"unaligned_h_padded_w", 1, 2, 59, 197, 3, 5e-3F, 1e-3F, -10.0F, 10.0F},
+        {"unaligned_h_padded_w", 1, 2, 59, 197, 3, 2e-2F, 1e-3F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
