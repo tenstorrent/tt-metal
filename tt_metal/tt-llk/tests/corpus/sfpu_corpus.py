@@ -391,6 +391,360 @@ AUDITED_SEEDS = {
         silicon_result="BH p150b TILE_LOOP mean(MATH_ISOLATE)/tile, 3 fresh procs: sem OFF 61.970052083 (mean of 495.75/495.765625/495.765625 raw) -> ON 57.9716796875 (causal -6.45%, dst-autoincr) vs hand 45.990234375 (+26.05% LOSS; hand OFF==ON byte-identical). Measured with cc1plus 33221397ebb2... (cd0af49-era stale build; re-measures under the true pin e302718c... on the next sweep).",
         silicon_source="sfpu_device_baseline_p150_v1.tsv; convert-addsub-evidence-20260816; ADD_SUB_INT_GENERATED_AB.md",
     ),
+    # ---- coverage-parity per-row semantic-C++ audit seeds (Lane P) ----
+    "legacy__ckernel_sfpu_abs": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_clamp": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_ema": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "legacy__ckernel_sfpu_expm1_cw": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_fill": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_generalized_moe_gate_topk_single_face": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=1), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "legacy__ckernel_sfpu_hardtanh": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_isinf_isnan": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_log": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_relu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_rounding_ops": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "legacy__ckernel_sfpu_silu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_tanh_derivative": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "legacy__ckernel_sfpu_threshold": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_activations": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_add1": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_add_top_row": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_addcdiv": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_atan2": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_binary": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_binary_bitwise": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_binary_comp": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_binary_fmod": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_binary_remainder": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_cast_fp32_to_fp16a": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_cbrt": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_celu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_comp": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_digamma": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_div_int32_floor": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_elu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_erf": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_erfc": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_erfinv": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_exp2": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_expm1": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_fmod": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_gcd": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_gelu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_generalized_moe_gate_topk_single_face": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_hardmish": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_hardshrink": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_heaviside": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_i0": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_i1": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_identity": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_isclose": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_lcm": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_lgamma": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_log1p": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_logical_not": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_logsigmoid": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_mask": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_mish": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_mul_int32": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_negative": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_polygamma": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_prelu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_rdiv": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_reduce": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=1, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_remainder": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_rpow": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_rsqrt": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_rsub_int32": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_sampling": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_sdpa": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_sdpa_exp_unclamped": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_sdpa_fw": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_selu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_shift": dict(
+        semantic_cpp_class="typed_wrapper_needed",
+        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+    ),
+    "metal__ckernel_sfpu_sigmoid": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_sign": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_snake_beta": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_softplus": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_softshrink": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_softsign": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_sqrt": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_sqrt_custom": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_square": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_tanh": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_tanh_derivative": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_tanhshrink": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_topk": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_trigonometry": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_unary_comp": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_unary_power": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_unary_shift": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_xielu": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    # ---- end coverage-parity audit seeds ----
 }
 
 AUDITED_MAPPINGS = {
@@ -454,6 +808,360 @@ AUDITED_MAPPINGS = {
         perf_modules="test_topk.py::test_topk_device_profile",
         notes="Audited paired production/typed-multiresult TopK selector (TOPK_IMPL, test-only interception header topk_typed_multiresult.h): every TTI_SFPSWAP -> __builtin_rvtt_sfpswap_indexed and every TTI_SFPTRANSP -> __builtin_rvtt_sfptransp8, values and companion indices modeled soundly (sfpi-gcc c4e4e809a) and checked together; perf A/B still open (impl-parameterized TOPK_BODY profiler node is in-tree).",
     ),
+    # ---- coverage-parity audited mappings (Lane P, mechanical per-row audit) ----
+    "legacy__ckernel_sfpu_abs": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Abs-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_abs_ (SfpuType::abs) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_clamp": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Clamp-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_clamp_ (SfpuType::clamp) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_ema": dict(
+        functional_modules="test_sfpu_ema.py::test_sfpu_ema",
+        notes="Audited chain: sfpu_ema_test.cpp -> llk_sfpu/llk_math_ema_sfpu_entry.h -> sfpu/ckernel_sfpu_ema.h (stateful two-tile EMA entry); functional-only mapping, no isolated perf fixture.",
+    ),
+    "legacy__ckernel_sfpu_expm1_cw": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Expm1Cw-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): expm1_cw_clamped (SfpuType::expm1_cw) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_fill": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Fill-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_fill_ (SfpuType::fill) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_generalized_moe_gate_topk_single_face": dict(
+        functional_modules="test_generalized_moe_gate.py::test_generalized_moe_gate",
+        notes="Audited chain: the metal single-face wrapper (included by generalized_moe_gate_test.cpp) includes sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h; exercised through the same full-pipeline test.",
+    ),
+    "legacy__ckernel_sfpu_hardtanh": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Hardtanh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_hardtanh_ (SfpuType::hardtanh) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_isinf_isnan": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isfinite-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isinf-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isnan-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isneginf-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isposinf-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_sfpu_isinf_isnan_ (SfpuType::isfinite); _calculate_sfpu_isinf_isnan_ (SfpuType::isinf); _calculate_sfpu_isinf_isnan_ (SfpuType::isnan); _calculate_sfpu_isinf_isnan_ (SfpuType::isneginf); _calculate_sfpu_isinf_isnan_ (SfpuType::isposinf) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_log": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Log-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:LogWithBase-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_log_ (SfpuType::log_with_base); _calculate_log_ (SfpuType::log) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_relu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:ReluMax-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Lrelu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_lrelu_ (SfpuType::lrelu); _relu_max_ (SfpuType::relu_max) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_rounding_ops": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Ceil-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Floor-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Frac-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Trunc-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Round-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_ceil_ (SfpuType::ceil); _calculate_floor_ (SfpuType::floor); _calculate_frac_ (SfpuType::frac); _calculate_round_ (SfpuType::round); _calculate_trunc_ (SfpuType::trunc) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_silu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Silu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_silu_ (SfpuType::silu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_tanh_derivative": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:TanhDerivativeLut-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_tanh_derivative_ (SfpuType::tanh_derivative_lut) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_threshold": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Threshold-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_threshold_ (SfpuType::threshold) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_activations": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Hardsigmoid-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_activation (SfpuType::hardsigmoid) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_add1": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Add1-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_add1 (SfpuType::add1) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_add_top_row": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_add_top_row[formats:Int32->Int32-mathop:SfpuAddTopRow-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_add_top_row (BinaryOp::ADD_TOP_ROW) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_addcdiv": dict(
+        functional_modules="test_sfpu_ternary.py::test_sfpu_ternary[formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuAddcdiv]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_addcdiv (SfpuType::addcdiv) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_atan2": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_atan2[formats:Float16_b->Float16_b-mathop:SfpuAtan2-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_atan2 (BinaryOp::ATAN2) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_binary": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_edges[formats:Float16_b->Float16_b-mathop:SfpuElwdiv-dest_acc:No-edge_class:ordinary],test_sfpu_binary.py::test_sfpu_binary_float[formats:Float16_b->Float16_b-bcast_dim:Row-mathop:SfpuElwsub-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_binary_div (BinaryOp::DIV); calculate_sfpu_binary (BinaryOp::SUB) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_binary_bitwise": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_bitwise[formats:Int32->Int32-mathop:SfpuBitwiseAnd-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_bitwise[formats:Int32->Int32-mathop:SfpuBitwiseOr-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_bitwise[formats:Int32->Int32-mathop:SfpuBitwiseXor-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_AND); calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_OR); calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_XOR) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_binary_comp": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_eq_ne[formats:Float16_b->Float16_b-mathop:SfpuElwEq-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_eq_ne[formats:Float16_b->Float16_b-mathop:SfpuElwNe-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_eq_ne_int[formats:Int32->Int32-mathop:SfpuEqInt-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_eq_ne_int[formats:Int32->Int32-mathop:SfpuNeInt-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwGe-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwGt-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwLe-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwLt-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_binary_eq_int (BinaryOp::EQ_INT); calculate_binary_comp_fp32 (BinaryOp::EQ); calculate_binary_comp_fp32 (BinaryOp::GE); calculate_binary_comp_fp32 (BinaryOp::GT); calculate_binary_comp_fp32 (BinaryOp::LE); calculate_binary_comp_fp32 (BinaryOp::LT); calculate_binary_eq_int (BinaryOp::NE_INT); calculate_binary_comp_fp32 (BinaryOp::NE) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_binary_fmod": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_float_extended[formats:Float16_b->Float16_b-mathop:SfpuBinaryFmod-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuFmodInt32-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_fmod_int32 (BinaryOp::FMOD_INT32); calculate_sfpu_binary_fmod (BinaryOp::FMOD) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_binary_remainder": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_float_extended[formats:Float16_b->Float16_b-mathop:SfpuBinaryRemainder-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuRemainderInt32-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuRemainderUint32-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_remainder_int32 (BinaryOp::REMAINDER_INT32); calculate_remainder_uint32 (BinaryOp::REMAINDER_UINT32); calculate_sfpu_binary_remainder (BinaryOp::REMAINDER) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_cast_fp32_to_fp16a": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:CastFp32ToFp16a-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): cast_fp32_to_fp16a (SfpuType::cast_fp32_to_fp16a) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_cbrt": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Cbrt-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_cube_root (SfpuType::cbrt) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_celu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Celu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_celu (SfpuType::celu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_comp": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:EqualZero-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:GreaterThanEqualZero-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:GreaterThanZero-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:LessThanEqualZero-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:LessThanZero-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:NotEqualZero-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_comp_int (SfpuType::equal_zero); calculate_comp_int (SfpuType::greater_than_equal_zero); calculate_comp_int (SfpuType::greater_than_zero); calculate_comp_int (SfpuType::less_than_equal_zero); calculate_comp_int (SfpuType::less_than_zero); calculate_comp (SfpuType::not_equal_zero) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_digamma": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Digamma-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_digamma (SfpuType::digamma) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_div_int32_floor": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuDivInt32-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuDivInt32Floor-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_div_int32_floor (BinaryOp::DIV_INT32_FLOOR); calculate_div_int32_trunc (BinaryOp::DIV_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_elu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Elu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_elu (SfpuType::elu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_erf": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Erf-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_erf (SfpuType::erf) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_erfc": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Erfc-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_erfc (SfpuType::erfc) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_erfinv": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Erfinv-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_erfinv (SfpuType::erfinv) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_exp2": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Exp2-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exp2 (SfpuType::exp2) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_expm1": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Expm1-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_expm1 (SfpuType::expm1) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_fmod": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Fmod-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_fmod (SfpuType::fmod) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_gcd": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuGcd-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_gcd (BinaryOp::GCD) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_gelu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Gelu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:GeluTanh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:GeluAppx-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:GeluDerivative-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_gelu_appx (SfpuType::gelu_appx); calculate_gelu_derivative_polynomial (SfpuType::gelu_derivative); calculate_gelu_tanh (SfpuType::gelu_tanh); calculate_gelu (SfpuType::gelu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_generalized_moe_gate_topk_single_face": dict(
+        functional_modules="test_generalized_moe_gate.py::test_generalized_moe_gate",
+        notes="Audited chain: generalized_moe_gate_test.cpp includes experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h and calls generalized_moe_gate_sum_top2/top8 via GMG_SFPU_CALL in the full-pipeline test.",
+    ),
+    "metal__ckernel_sfpu_hardmish": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Hardmish-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): hardmish (SfpuType::hardmish) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_hardshrink": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Hardshrink-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_hardshrink (SfpuType::hardshrink) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_heaviside": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Heaviside-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_heaviside (SfpuType::heaviside) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_i0": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:I0-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_i0 (SfpuType::i0) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_i1": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:I1-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_i1 (SfpuType::i1) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_identity": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Identity-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_identity (SfpuType::identity) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_isclose": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_isclose[formats:Float16_b->Float16_b-mathop:SfpuIsclose-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_isclose (BinaryOp::ISCLOSE) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_lcm": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuLcm-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_lcm (BinaryOp::LCM) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_lgamma": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Lgamma-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_lgamma_stirling (SfpuType::lgamma) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_log1p": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Log1p-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_log1p (SfpuType::log1p) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_logical_not": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_threshold[formats:Float32->Float32-approx_mode:No-mathop:LogicalNot-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_logical_not (SfpuType::logical_not_unary) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_logsigmoid": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_logsigmoid[formats:Float16_b->Float16_b-mathop:SfpuLogsigmoid-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_logsigmoid (BinaryOp::LOGSIGMOID) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_mask": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_mask[formats:Float16_b->Float16_b-mathop:SfpuMask-dest_acc:No]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_mask (BinaryOp::MASK) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_mish": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Mish-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_mish (SfpuType::mish) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_mul_int32": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuMulInt32-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): mul_int32 (BinaryOp::MUL_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_negative": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Neg-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_negative_ (SfpuType::negative) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_polygamma": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Polygamma-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_polygamma (SfpuType::polygamma) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_prelu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Prelu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_prelu (SfpuType::prelu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_rdiv": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Rdiv-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_rdiv (SfpuType::rdiv) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_reduce": dict(
+        functional_modules="test_sfpu_reduce.py::test_int32_reduce_extreme[mixed-INT32_MAX-ReducePool.Max-MathOperation.ReduceRow],test_sfpu_reduce_multidim.py::test_sfpu_reduce_multidim[formats:Int32->Int32-reduce_pool:Max-num_row_tiles:2-dest_acc:Yes-input_bounds:(-1000, 0)]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_reduce (direct:sfpu_reduce_multidim_test.cpp); calculate_reduce (direct:sfpu_reduce_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_remainder": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Remainder-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_remainder (SfpuType::remainder) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_rpow": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Rpow-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_rpow (SfpuType::rpow) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_rsqrt": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Rsqrt-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:RsqrtCompat-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_rsqrt (SfpuType::rsqrt_compat); calculate_rsqrt (SfpuType::rsqrt) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_rsub_int32": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_rsub_int32[formats:Int32->Int32-mathop:SfpuRsubInt32-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_rsub_int (BinaryOp::RSUB_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sampling": dict(
+        functional_modules="test_sfpu_sampling.py::test_sfpu_sampling[formats:Float16_b->Float16_b-dest_acc:No-op:ge-legacy_compat:True-vector_mode:C]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sampling_binary_comp_first_column (direct:sfpu_sampling_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sdpa": dict(
+        functional_modules="test_sfpu_sdpa.py::test_sfpu_sdpa[variant:ExpPoly_scale1-precision:Fp32E2E]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sdpa_exp_unclamped": dict(
+        functional_modules="test_sfpu_sdpa_exp_unclamped.py",
+        notes="Audited chain: sfpu_sdpa_exp_unclamped_test.cpp includes experimental/llk_sfpu/ckernel_sfpu_sdpa_exp_unclamped.h (this metal wrapper), which wraps sfpu/experimental/ckernel_sfpu_sdpa_exp_unclamped.h; the metal-surface twin of the measured legacy row rides the same module.",
+    ),
+    "metal__ckernel_sfpu_sdpa_fw": dict(
+        functional_modules="test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw[variant:(<SdpaFwOp.Exp: 1>, 16000, <DestSync.Full: 'SyncFull'>, <ApproximationMode.No: False>)-precision:Fp32E2E]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_fw_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_selu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Selu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_selu (SfpuType::selu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_shift": dict(
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_int[formats:Int32->Int32-mathop:SfpuElwLeftShift-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_int[formats:Int32->Int32-mathop:SfpuElwLogicalRightShift-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_int[formats:Int32->Int32-mathop:SfpuElwRightShift-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_logical_right_shift (BinaryOp::LOGICAL_RSHFT); calculate_binary_left_shift (BinaryOp::LSHFT); calculate_binary_right_shift (BinaryOp::RSHFT) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sigmoid": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Sigmoid-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sigmoid (SfpuType::sigmoid) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sign": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Sign-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sign (SfpuType::sign) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_snake_beta": dict(
+        functional_modules="test_sfpu_ternary.py::test_sfpu_ternary[formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuSnakeBeta]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_snake_beta (SfpuType::snake_beta) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_softplus": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Softplus-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_softplus (SfpuType::softplus) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_softshrink": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Softshrink-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_softshrink (SfpuType::softshrink) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_softsign": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Softsign-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_softsign (SfpuType::softsign) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sqrt": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Sqrt-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sqrt (SfpuType::sqrt) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_sqrt_custom": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:SqrtCustom-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): sfpu_sqrt_custom (SfpuType::sqrt_custom) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_square": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Square-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_square (SfpuType::square) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_tanh": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Tanh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_tanh (SfpuType::tanh) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_tanh_derivative": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:TanhDerivative-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_tanh_derivative_sech2 (SfpuType::tanh_derivative) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_tanhshrink": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Tanhshrink-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_tanhshrink (SfpuType::tanhshrink) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_topk": dict(
+        functional_modules="test_topk.py::test_topk_sfpu",
+        notes="Audited chain: topk_test.cpp includes llk_sfpu/ckernel_sfpu_topk.h (this metal wrapper over sfpu/ckernel_sfpu_topk.h); implementation:0 exercises the production path; joint value+index contract as on the legacy topk row.",
+    ),
+    "metal__ckernel_sfpu_trigonometry": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Acosh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Asinh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Atanh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Cos-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Sin-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Acos-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Asin-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Atan-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Cosh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Sinh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Tan-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_acosh (SfpuType::acosh); calculate_acos (SfpuType::acos); calculate_asinh (SfpuType::asinh); calculate_asin (SfpuType::asin); calculate_atanh (SfpuType::atanh); calculate_atan (SfpuType::atan); calculate_cosh (SfpuType::cosh); calculate_cosine (SfpuType::cosine); calculate_sine (SfpuType::sine); calculate_sinh (SfpuType::sinh); calculate_tangent (SfpuType::tan) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_unary_comp": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:UnaryGe-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:UnaryGt-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:UnaryLe-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:UnaryLt-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_threshold[formats:Float32->Float32-approx_mode:No-mathop:UnaryEq-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_threshold[formats:Float32->Float32-approx_mode:No-mathop:UnaryNe-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_unary_eq (SfpuType::unary_eq); calculate_unary_ge (SfpuType::unary_ge); calculate_unary_gt (SfpuType::unary_gt); calculate_unary_le (SfpuType::unary_le); calculate_unary_lt (SfpuType::unary_lt); calculate_unary_ne (SfpuType::unary_ne) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_unary_power": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:UnaryPower-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_unary_power (SfpuType::power) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_unary_shift": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_int[mathop:LeftShift-dest_acc:Yes-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_int[mathop:RightShift-dest_acc:Yes-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_left_shift (SfpuType::left_shift); calculate_right_shift (SfpuType::right_shift) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "metal__ckernel_sfpu_xielu": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Xielu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_xielu (SfpuType::xielu) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    # ---- end coverage-parity audited mappings ----
 }
 
 DEFAULT_AUDIT = dict(
@@ -722,7 +1430,28 @@ def classify_artifact_pair(off, on):
 
 
 def split_selectors(value):
-    return [x for x in value.split(",") if x and " " not in x]
+    # Selector fields can hold prose ("no isolated perf module") alongside real
+    # selectors, and exact pytest node ids contain bracketed parameter lists
+    # whose commas and spaces are part of the id (e.g. "input_dimensions:[64, 64]").
+    # Split on commas at bracket depth zero only; keep fragments that name a
+    # pytest module (".py") and have no space outside the bracketed id part.
+    fragments, buf, depth = [], [], 0
+    for ch in value:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            fragments.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    fragments.append("".join(buf))
+
+    def is_selector(x):
+        return ".py" in x and " " not in x.split("[", 1)[0]
+
+    return [x.strip() for x in fragments if x.strip() and is_selector(x.strip())]
 
 
 def row_selectors(row, mode):
