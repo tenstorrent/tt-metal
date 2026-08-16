@@ -116,6 +116,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

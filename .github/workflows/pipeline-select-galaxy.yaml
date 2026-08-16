@@ -221,6 +221,7 @@ jobs:
           esac
   build-artifact:
     needs: [check-harbor, determine-tests]
+    if: ${{ !cancelled() && needs.determine-tests.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

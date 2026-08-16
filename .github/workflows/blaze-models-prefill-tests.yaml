@@ -78,6 +78,7 @@ jobs:
 
   build-artifact:
     needs: [validate-test-type, check-harbor]
+    if: ${{ !cancelled() && needs.validate-test-type.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
