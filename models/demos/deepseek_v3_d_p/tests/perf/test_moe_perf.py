@@ -15,6 +15,8 @@ Sum of per-op approximation approximates one glx column's MoE block kernel time;
 the 8x4 ground-truth test is the reference the approximation is compared against.
 """
 
+import os
+
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
@@ -41,7 +43,26 @@ def test_deepseek_v3_moe_perf_loudbox():
     Run 8x1 + 2x4 proxies once each on loudbox (BH-LoudBox, 8xP150).
     Validates each proxy against its own baseline AND computes the approximate
     8x4 total from the same two CSVs (no extra device work).
+
+    DEEPSEEK_MOE_PERF_SKIP_8X1=1 runs only the 2x4 gate proxy: the 8x1 proxy
+    pins the gate to HOST_ALL, which has no production counterpart, so
+    pipelines that only track the production path opt out of it (and of the
+    8x4 approximation, which needs both CSVs).
     """
+    if os.getenv("DEEPSEEK_MOE_PERF_SKIP_8X1") == "1":
+        run_model_device_perf_test_with_merge(
+            command=_CMD_2X4,
+            # Recalibrated 2026-07-27 on BH LoudBox 2x4 for. Was 23_956_009.
+            expected_device_perf_ns_per_iteration=15_954_784,
+            subdir="deepseek_v3_moe",
+            model_name="deepseek_v3_moe_lb_2x4_gate",
+            num_iterations=1,
+            batch_size=1,
+            margin=0.03,
+            comments="seq3200_lb_2x4_gate_proxy",
+        )
+        return
+
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
         # Recalibrated 2026-07-27 on BH LoudBox 8x1 after routed expert optimization with removing prezeroing
