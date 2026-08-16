@@ -1110,7 +1110,7 @@
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
 //
-// Redirected: 129 of 137.  These have no matching intrinsic or a
+// Redirected: 133 of 137.  These have no matching intrinsic or a
 // different operand shape, and keep their original definitions:
 //   MOP_CFG, PACR, PACR_SETREG, RAREB, REPLAY, SFPLUTFP32, SFPSETMAN, TRNSPSRCA
 //
@@ -1632,6 +1632,56 @@
 #define TTI_TBUFCMD __builtin_rvtt_tbufcmd()
 #undef TTI_TRNSPSRCB
 #define TTI_TRNSPSRCB __builtin_rvtt_trnspsrcb()
+
+// All 12 fields now, so Concat=MEGAROW from llk_pack.h survives the trip.
+#undef TT_PACR
+#define TT_PACR(CfgContext, RowPadZero, DstAccessMode, AddrMode, AddrCntContext, ZeroWrite, ReadIntfSel, OvrdThreadId, Concat, CtxtCtrl, Flush, Last) \
+    __builtin_rvtt_bh_pacr(                                                                                                                           \
+        (unsigned)(CfgContext),                                                                                                                       \
+        (unsigned)(RowPadZero),                                                                                                                       \
+        (unsigned)(DstAccessMode),                                                                                                                    \
+        (unsigned)(AddrMode),                                                                                                                         \
+        (unsigned)(AddrCntContext),                                                                                                                   \
+        (unsigned)(ZeroWrite),                                                                                                                        \
+        (unsigned)(ReadIntfSel),                                                                                                                      \
+        (unsigned)(OvrdThreadId),                                                                                                                     \
+        (unsigned)(Concat),                                                                                                                           \
+        (unsigned)(CtxtCtrl),                                                                                                                         \
+        (unsigned)(Flush),                                                                                                                            \
+        (unsigned)(Last))
+#undef TTI_PACR
+#define TTI_PACR(CfgContext, RowPadZero, DstAccessMode, AddrMode, AddrCntContext, ZeroWrite, ReadIntfSel, OvrdThreadId, Concat, CtxtCtrl, Flush, Last) \
+    TT_PACR(CfgContext, RowPadZero, DstAccessMode, AddrMode, AddrCntContext, ZeroWrite, ReadIntfSel, OvrdThreadId, Concat, CtxtCtrl, Flush, Last)
+
+#undef TT_PACR_SETREG
+#define TT_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last) \
+    __builtin_rvtt_bh_pacrsetreg(                                                           \
+        (unsigned)(Push),                                                                   \
+        (unsigned)(ModeSel),                                                                \
+        (unsigned)(Unused),                                                                 \
+        (unsigned)(DisableStall),                                                           \
+        (unsigned)(AddrSel),                                                                \
+        (unsigned)(StreamId),                                                               \
+        (unsigned)(Flush),                                                                  \
+        (unsigned)(Last))
+#undef TTI_PACR_SETREG
+#define TTI_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last) \
+    TT_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last)
+
+#undef TT_MOP_CFG
+#define TT_MOP_CFG(zmask_hi16) __builtin_rvtt_mopcfg((unsigned)(zmask_hi16))
+#undef TTI_MOP_CFG
+#define TTI_MOP_CFG(zmask_hi16) TT_MOP_CFG(zmask_hi16)
+
+// REPLAY must be visible to pass_rvtt_replay: issued as .ttinsn it is opaque,
+// so the pass neither reserves the buffer slots this reserves nor sees that it
+// is emitting inside a recording window, and it allocates on top of whatever
+// the author recorded.  ckernel_sfpu_gcd.h captures 28 instructions this way.
+#undef TT_REPLAY
+#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode) \
+    __builtin_rvtt_ttreplay(nullptr, (unsigned)(len), 0, 0, (unsigned)(start_idx), (unsigned)(execute_while_loading), (unsigned)(load_mode))
+#undef TTI_REPLAY
+#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TT_REPLAY(start_idx, len, execute_while_loading, load_mode)
 
 // Spelled bh_sfpstochrnd, not sfp_stoch_rnd, which is why the name sweep
 // missed it.  The field order matches TT_OP_SFP_STOCH_RND exactly.
