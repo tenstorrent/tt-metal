@@ -51,7 +51,15 @@ struct ColumnSplitConfig {
     uint32_t local_grid_y = 0;
 };
 
-ColumnSplitConfig compute_column_split_config(uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid);
+// num_slices_override: user-requested P (operation_attributes_t::num_slices). Validated loudly
+// against [2, 64] and the row's chunk count, clamped only against the physical grid; setting it
+// when the column-parallel path is not selected is an error.
+ColumnSplitConfig compute_column_split_config(
+    uint32_t k,
+    uint32_t n,
+    uint32_t num_rows,
+    const CoreCoord& grid,
+    std::optional<uint32_t> num_slices_override = std::nullopt);
 
 struct TopkLargeIndicesMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_local_kernel_id{};

@@ -39,6 +39,12 @@ struct operation_attributes_t {
     // specs, so it is part of the program hash. Default off: indices-only, byte-identical
     // program to before this option existed.
     bool return_values{false};
+    // Override the column-parallel slice count P (number of local cores splitting the row).
+    // Only meaningful when the column-parallel (single-row) factory is selected: setting it on a
+    // row-parallel shape is a loud error, as are values outside [2, 64] or above the row's chunk
+    // count; it is clamped only against the physical core grid (with a warning). Changes the
+    // program structure, so it is part of the program hash. nullopt = the built-in cost model.
+    std::optional<uint32_t> num_slices{};
 };
 
 struct tensor_args_t {

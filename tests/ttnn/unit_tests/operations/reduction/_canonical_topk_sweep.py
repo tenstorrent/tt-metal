@@ -369,12 +369,20 @@ def build_grid(args):
     dtypes = args.dtypes.split(",")
     cells = []
 
+    op_num_slices = getattr(args, "op_num_slices", None)
+
     def add(op, batch, n, k, dtype, anchor="", valid_length=None, apriori=None, factory=""):
         kpart = f"k{k}" if k is not None else "knone"
+        # Column-parallel override only applies to single-row cells; stamping
+        # multi-row anchors would make the op reject them loudly by design.
+        num_slices = op_num_slices if (op == "topk_large_indices" and batch == 1) else None
         cid = f"{op}_b{batch}xN{n}_{kpart}_{dtype}" + (f"_{anchor}" if anchor else "")
+        if num_slices is not None:
+            cid += f"_p{num_slices}"
         cells.append(
             {
                 "id": cid,
+                "num_slices": num_slices,
                 "op": op,
                 "batch": batch,
                 "n": n,
@@ -612,10 +620,15 @@ def _build_cell_callable(ttnn, torch, device, cell):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        op_kwargs = {}
+        if vl is not None:
+            op_kwargs["valid_length"] = vl
+        if cell.get("num_slices") is not None:
+            # --op-num-slices passthrough (column-parallel core-count override).
+            op_kwargs["num_slices"] = cell["num_slices"]
+
         def call():
-            if vl is not None:
-                return ttnn.experimental.topk_large_indices(x, k=k, valid_length=vl)
-            return ttnn.experimental.topk_large_indices(x, k=k)
+            return ttnn.experimental.topk_large_indices(x, k=k, **op_kwargs)
 
         def correctness(out):
             # The op returns uint32 INDICES; validate them by gathering the
@@ -1548,9 +1561,19 @@ def build_competition_cells(args):
                 iters = base_iters
                 if layer in ("stocknow", "prebranch") and w * k >= COMPETITION_SLOW_WK:
                     iters = min(base_iters, COMPETITION_SLOW_ITERS)
+                # --op-num-slices passthrough: op layer only (the direct
+                # topk_large_indices child); composite/checkout layers keep
+                # their own routing untouched.
+                num_slices = (
+                    getattr(args, "op_num_slices", None)
+                    if (child_op == "topk_large_indices" and not composite)
+                    else None
+                )
+                cid = f"comp_{layer}_k{k}_w{w}" + (f"_p{num_slices}" if num_slices is not None else "")
                 cells.append(
                     {
-                        "id": f"comp_{layer}_k{k}_w{w}",
+                        "id": cid,
+                        "num_slices": num_slices,
                         "op": child_op,
                         "layer": layer,
                         "batch": 1,
@@ -1796,6 +1819,14 @@ def main():
     )
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--trials", type=int, default=3)
+    p.add_argument(
+        "--op-num-slices",
+        type=int,
+        default=None,
+        help="pass num_slices=N (column-parallel core-count override) to every op-layer "
+        "topk_large_indices cell (normal and competition modes) so a P sweep is scriptable; "
+        "the op rejects it loudly on row-parallel shapes / out-of-range values",
+    )
     p.add_argument("--timeout", type=int, default=900, help="per-cell watchdog seconds")
     p.add_argument("--out", default=os.path.join(REPO, "generated/canonical_sweep/latest"))
     p.add_argument(

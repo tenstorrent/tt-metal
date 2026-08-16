@@ -877,3 +877,97 @@ def test_topk_large_indices_return_values_program_cache(device):
         _assert_index_metadata(result2, [num_rows, k])
     finally:
         device.disable_and_clear_program_cache()
+
+
+# ---------------------------------------------------------------------------
+# num_slices: user override of the column-parallel slice count P. Only valid
+# when the column-parallel path is selected; loud errors otherwise; hashed
+# (distinct P -> distinct cached program).
+# ---------------------------------------------------------------------------
+
+
+def test_topk_large_indices_num_slices_override_correctness(device):
+    # Force P=8 at the canonical column-parallel shape (which the cost model
+    # also picks P=8 for -- the point here is the OVERRIDE plumbing produces a
+    # correct program; distinct-P correctness is covered by the cache test
+    # below). Random input => tie-safe value-multiset assertions.
+    torch.manual_seed(0)
+    n, k = 65536, 2048
+    torch_input = torch.randn(1, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, num_slices=8)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0]
+
+    assert indices.min() >= 0
+    assert indices.max() < n
+    assert indices.unique().numel() == k
+
+    actual_values = torch_input.float()[0][indices]
+    ref_values, _ = torch.topk(torch_input.float()[0], k, largest=True, sorted=True)
+    assert_equal(actual_values.sort().values, ref_values.sort().values)
+
+
+@pytest.mark.parametrize("num_slices", [4, 16])
+def test_topk_large_indices_num_slices_non_model_values(device, num_slices):
+    # P values the cost model would NOT pick (model pick is 8 here): exercises
+    # uneven chunk splits (32 chunks over 4 or 16 slices) end to end.
+    torch.manual_seed(1)
+    n, k = 65536, 2048
+    torch_input = torch.randn(1, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, num_slices=num_slices)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0]
+
+    assert indices.unique().numel() == k
+    actual_values = torch_input.float()[0][indices]
+    ref_values, _ = torch.topk(torch_input.float()[0], k, largest=True, sorted=True)
+    assert_equal(actual_values.sort().values, ref_values.sort().values)
+
+
+def test_topk_large_indices_num_slices_rejected_on_row_parallel(device, expect_error):
+    # Multi-row shapes take the row-parallel factory where num_slices has no
+    # meaning: explicit beats ignored.
+    torch_input = _make_bf16_exact_input(num_rows=2, n=4096)
+    with expect_error(RuntimeError, "num_slices"):
+        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=512, num_slices=4)
+
+
+@pytest.mark.parametrize(
+    "num_slices,match",
+    [
+        (1, "num_slices must be in"),  # below [2, 64]
+        (65, "num_slices must be in"),  # above [2, 64]
+        (48, "exceeds the row's chunk count"),  # > num_chunks (65536/2048 = 32 chunks)
+    ],
+)
+def test_topk_large_indices_num_slices_out_of_range_rejected(device, expect_error, num_slices, match):
+    torch_input = torch.randn(1, 65536, dtype=torch.bfloat16)
+    with expect_error(RuntimeError, match):
+        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=2048, num_slices=num_slices)
+
+
+def test_topk_large_indices_num_slices_program_cache_distinct_entries(device):
+    # num_slices is in the program hash: distinct P values compile distinct
+    # programs; repeating a P reuses its entry.
+    torch.manual_seed(0)
+    n, k = 65536, 2048
+    torch_input = torch.randn(1, n, dtype=torch.bfloat16)
+    tt_input = _to_device(torch_input, device)
+    ref_values, _ = torch.topk(torch_input.float()[0], k, largest=True, sorted=True)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        entries = []
+        for num_slices in (4, 8, 16, 8):  # trailing 8 must be a cache hit
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, num_slices=num_slices)
+            entries.append(device.num_program_cache_entries())
+            indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0]
+            assert indices.unique().numel() == k
+            assert_equal(torch_input.float()[0][indices].sort().values, ref_values.sort().values)
+        assert entries[0] > 0
+        assert entries[1] == entries[0] + 1
+        assert entries[2] == entries[1] + 1
+        assert entries[3] == entries[2]  # P=8 rerun: cache hit, no growth
+    finally:
+        device.disable_and_clear_program_cache()

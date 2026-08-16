@@ -22,11 +22,15 @@ namespace {
 // indices tensor (backward compatible) while opting in returns a
 // (values, indices) tuple, torch-style.
 std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> topk_large_indices_py(
-    const ttnn::Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool return_values) {
+    const ttnn::Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    bool return_values,
+    std::optional<uint32_t> num_slices) {
     if (return_values) {
-        return ttnn::experimental::topk_large_indices_with_values(input_tensor, k, valid_length);
+        return ttnn::experimental::topk_large_indices_with_values(input_tensor, k, valid_length, num_slices);
     }
-    return ttnn::experimental::topk_large_indices(input_tensor, k, valid_length);
+    return ttnn::experimental::topk_large_indices(input_tensor, k, valid_length, num_slices);
 }
 
 }  // namespace
@@ -78,13 +82,19 @@ void bind_topk_large_indices(nb::module_& mod) {
             valid_length: optional number of leading columns to search (default: full width).
             return_values: also return the top-k values; the result becomes a
                 (values, indices) tuple (default: False, indices tensor only).
+            num_slices: optional column-parallel slice-count (core count) override.
+                Only valid when the column-parallel (single-row) factory is selected;
+                must be in [2, 64] and at most the row's LLK-window chunk count
+                (loud error otherwise); clamped only against the physical core grid,
+                with a warning. Default: the built-in cost model's pick.
         )doc",
         &topk_large_indices_py,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),
         nb::arg("valid_length") = std::nullopt,
-        nb::arg("return_values") = false);
+        nb::arg("return_values") = false,
+        nb::arg("num_slices") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

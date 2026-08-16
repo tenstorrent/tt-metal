@@ -100,7 +100,7 @@ program::ColumnSplitConfig column_split_config_for(
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
     const auto grid = input.device()->compute_with_storage_grid_size();
-    return program::compute_column_split_config(attrs.k, n, num_rows, grid);
+    return program::compute_column_split_config(attrs.k, n, num_rows, grid, attrs.num_slices);
 }
 
 }  // namespace
@@ -129,6 +129,9 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         attrs.k,
         // Selects the with-values kernels, extra CBs, and the second output.
         attrs.return_values,
+        // User P override: also reflected in the derived split_config fields
+        // below, but hashed directly so intent and derivation can never skew.
+        attrs.num_slices,
         input.dtype(),
         input.layout(),
         input.memory_config().memory_layout(),
@@ -178,9 +181,14 @@ tensor_return_value_t TopkLargeIndicesDeviceOperation::create_output_tensors(
 
 std::tuple<TopkLargeIndicesDeviceOperation::operation_attributes_t, TopkLargeIndicesDeviceOperation::tensor_args_t>
 TopkLargeIndicesDeviceOperation::invoke(
-    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool return_values) {
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    bool return_values,
+    std::optional<uint32_t> num_slices) {
     return {
-        operation_attributes_t{.k = k, .valid_length = valid_length, .return_values = return_values},
+        operation_attributes_t{
+            .k = k, .valid_length = valid_length, .return_values = return_values, .num_slices = num_slices},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 
@@ -188,10 +196,11 @@ TopkLargeIndicesDeviceOperation::invoke(
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+Tensor topk_large_indices(
+    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, std::optional<uint32_t> num_slices) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
-            input_tensor, k, valid_length, /*return_values=*/false);
+            input_tensor, k, valid_length, /*return_values=*/false, num_slices);
     auto outputs =
         ttnn::device_operation::launch<operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
             operation_attributes, tensor_args);
@@ -199,10 +208,10 @@ Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<
 }
 
 std::tuple<Tensor, Tensor> topk_large_indices_with_values(
-    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, std::optional<uint32_t> num_slices) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
-            input_tensor, k, valid_length, /*return_values=*/true);
+            input_tensor, k, valid_length, /*return_values=*/true, num_slices);
     auto outputs =
         ttnn::device_operation::launch<operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
             operation_attributes, tensor_args);

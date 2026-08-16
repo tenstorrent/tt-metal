@@ -4,6 +4,7 @@
 
 #include "topk_large_indices_program_factory.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -322,12 +323,31 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
 // Column-parallel (intra-row multi-core) path
 // ---------------------------------------------------------------------------
 
-ColumnSplitConfig compute_column_split_config(uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid) {
-    // Cap chosen so the gathered CBs (2 * num_slices * tiles_per_sequence
-    // 4 KB tiles, allocated at one shared address on local + final cores) stay
-    // ~1 MB at K=2048 — comfortably inside the 1.5 MB Blackhole L1 budget next
-    // to the local-core CBs (~56 KB) and final-core output CBs (~24 KB).
-    constexpr uint32_t max_slices = 64;
+// Cap chosen so the gathered CBs (2 * num_slices * tiles_per_sequence
+// 4 KB tiles, allocated at one shared address on local + final cores) stay
+// ~1 MB at K=2048 — comfortably inside the 1.5 MB Blackhole L1 budget next
+// to the local-core CBs (~56 KB) and final-core output CBs (~24 KB).
+constexpr uint32_t max_column_slices = 64;
+
+namespace {
+
+// Fits the slice count to the local-core rectangle the gather multicast
+// needs: a single row of cores when it fits in grid.x, otherwise full rows
+// (the final merge core lives on the row below the rectangle).
+void fit_slices_to_grid(const CoreCoord& grid, uint32_t& num_slices, uint32_t& local_grid_x, uint32_t& local_grid_y) {
+    if (num_slices <= grid.x) {
+        local_grid_x = num_slices;
+        local_grid_y = 1;
+    } else {
+        local_grid_x = grid.x;
+        local_grid_y = std::min<uint32_t>(num_slices / grid.x, grid.y - 1);
+        num_slices = local_grid_x * local_grid_y;
+    }
+}
+
+// The built-in cost-model pick (no user override).
+ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid) {
+    constexpr uint32_t max_slices = max_column_slices;
 
     ColumnSplitConfig config{};
     // Intra-row parallelism only pays off when rows cannot saturate the grid;
@@ -361,14 +381,7 @@ ColumnSplitConfig compute_column_split_config(uint32_t k, uint32_t n, uint32_t n
     // Local cores must form a rectangle for the gather multicast.
     uint32_t local_grid_x = 0;
     uint32_t local_grid_y = 0;
-    if (num_slices <= grid.x) {
-        local_grid_x = num_slices;
-        local_grid_y = 1;
-    } else {
-        local_grid_x = grid.x;
-        local_grid_y = std::min<uint32_t>(num_slices / grid.x, grid.y - 1);
-        num_slices = local_grid_x * local_grid_y;
-    }
+    fit_slices_to_grid(grid, num_slices, local_grid_x, local_grid_y);
     if (num_slices < 2) {
         return config;
     }
@@ -380,6 +393,67 @@ ColumnSplitConfig compute_column_split_config(uint32_t k, uint32_t n, uint32_t n
     }
 
     config.enabled = true;
+    config.num_slices = num_slices;
+    config.local_grid_x = local_grid_x;
+    config.local_grid_y = local_grid_y;
+    return config;
+}
+
+}  // namespace
+
+ColumnSplitConfig compute_column_split_config(
+    uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid, std::optional<uint32_t> num_slices_override) {
+    ColumnSplitConfig config = compute_model_column_split_config(k, n, num_rows, grid);
+    if (!num_slices_override.has_value()) {
+        return config;
+    }
+
+    // Explicit beats ignored: the override has no meaning on the row-parallel
+    // path, so reject it loudly instead of silently dropping it.
+    TT_FATAL(
+        config.enabled,
+        "topk_large_indices num_slices={} was given, but the column-parallel path is not selected for this call "
+        "(it requires a single row and a row wide enough to split; got {} rows, last dim {}). Remove num_slices "
+        "or reshape to a single-row call.",
+        *num_slices_override,
+        num_rows,
+        n);
+
+    const uint32_t requested = *num_slices_override;
+    TT_FATAL(
+        requested >= 2 && requested <= max_column_slices,
+        "topk_large_indices num_slices must be in [2, {}], got {}",
+        max_column_slices,
+        requested);
+    const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
+    const uint32_t num_chunks = tt::div_up(n, llk_k);
+    TT_FATAL(
+        requested <= num_chunks,
+        "topk_large_indices num_slices={} exceeds the row's chunk count {} (last dim {} / LLK window {}); every "
+        "slice must own at least one chunk",
+        requested,
+        num_chunks,
+        n,
+        llk_k);
+
+    // Clamp only against the physical grid (rectangle capacity), with a warning.
+    uint32_t num_slices = requested;
+    uint32_t local_grid_x = 0;
+    uint32_t local_grid_y = 0;
+    fit_slices_to_grid(grid, num_slices, local_grid_x, local_grid_y);
+    if (num_slices != requested) {
+        log_warning(
+            tt::LogOp,
+            "topk_large_indices num_slices={} does not fit the {}x{} worker grid's local-core rectangle; "
+            "clamped to {} ({}x{} local cores + 1 merge core)",
+            requested,
+            grid.x,
+            grid.y,
+            num_slices,
+            local_grid_x,
+            local_grid_y);
+    }
+
     config.num_slices = num_slices;
     config.local_grid_x = local_grid_x;
     config.local_grid_y = local_grid_y;
@@ -519,7 +593,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
     const auto grid = input.device()->compute_with_storage_grid_size();
-    const auto config = compute_column_split_config(k, n, num_rows, grid);
+    const auto config = compute_column_split_config(k, n, num_rows, grid, operation_attributes.num_slices);
     TT_FATAL(config.enabled, "topk_large_indices multi-core factory selected for a shape it does not support");
     const uint32_t num_slices = config.num_slices;
 
