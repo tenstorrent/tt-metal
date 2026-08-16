@@ -384,9 +384,13 @@ class Sweep:
         if verdict_file.is_file() and not self.a.force:
             verdict = json.loads(verdict_file.read_text())
             # Hash-matched resume: a cached classification is only valid for
-            # the compiler that produced it.  Verdicts from another cc1plus
-            # (or from the pre-keying schema) are recompiled.
-            if verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]:
+            # the compiler AND source tree that produced it.  Verdicts from
+            # another cc1plus or tt-metal head (or the pre-keying schema)
+            # are recompiled — kernel-source changes must re-derive hashes.
+            if (
+                verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
+                and verdict.get("tt_metal_head") == self.info["tt_metal_head"]
+            ):
                 return verdict
         work.mkdir(parents=True, exist_ok=True)
         (work / "node.txt").write_text(node + "\n")
@@ -408,6 +412,7 @@ class Sweep:
                     "status": "COMPILE_FAIL",
                     "leg": leg,
                     "cc1plus_sha256": self.info["cc1plus_sha256"],
+                    "tt_metal_head": self.info["tt_metal_head"],
                 }
                 verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
                 self.reds.append(f"{row['op']}/{sel}: compile {leg} failed")
@@ -439,6 +444,7 @@ class Sweep:
                 "math": "IDENTICAL" if math_a == math_b else "CHANGED",
             }
         verdict["cc1plus_sha256"] = self.info["cc1plus_sha256"]
+        verdict["tt_metal_head"] = self.info["tt_metal_head"]
         verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
         return verdict
 
@@ -499,10 +505,12 @@ class Sweep:
         sim_sha = sha256(sim) if sim and sim.is_file() else ""
         if verdict_file.is_file() and not self.a.force:
             verdict = json.loads(verdict_file.read_text())
-            # Hash-matched resume: verdicts are keyed to cc1plus + simulator.
+            # Hash-matched resume: verdicts are keyed to cc1plus + simulator
+            # + tt-metal head (kernel-source changes re-run the pair).
             if (
                 verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
                 and verdict.get("sim_sha256") == sim_sha
+                and verdict.get("tt_metal_head") == self.info["tt_metal_head"]
                 and verdict.get("status") != "SKIP_NO_SIMULATOR"
             ):
                 return verdict
@@ -543,6 +551,7 @@ class Sweep:
             "legs": legs,
             "cc1plus_sha256": self.info["cc1plus_sha256"],
             "sim_sha256": sim_sha,
+            "tt_metal_head": self.info["tt_metal_head"],
         }
         verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
         if arch == "bh" and any(v != "PASS" for v in legs.values()):
