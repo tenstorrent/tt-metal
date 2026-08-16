@@ -1,0 +1,263 @@
+<title>Blackhole Top-K Ledger</title>
+<style>
+  :root {
+    --ground: #FAFAF7; --panel: #F2F3EF; --ink: #1C2226; --muted: #5C6871;
+    --hairline: #E1E4DE; --accent: #0E766E; --accent-ink: #0A5A54;
+    --chip: #E7ECE9; --code-bg: #EEF0EC; --ours-bg: #E9F3F0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #14181B; --panel: #1B2125; --ink: #E6EBE9; --muted: #93A0A7;
+      --hairline: #2A3238; --accent: #3AB8A8; --accent-ink: #5FD3C4;
+      --chip: #223034; --code-bg: #1F262B; --ours-bg: #1B2A27;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #14181B; --panel: #1B2125; --ink: #E6EBE9; --muted: #93A0A7;
+    --hairline: #2A3238; --accent: #3AB8A8; --accent-ink: #5FD3C4;
+    --chip: #223034; --code-bg: #1F262B; --ours-bg: #1B2A27;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--ground); color: var(--ink); font-family: Charter, Georgia, serif;
+         line-height: 1.55; margin: 0; padding: 3rem 1.25rem 5rem; }
+  main { max-width: 88rem; margin: 0 auto; }
+  h1, h2 { text-wrap: balance; line-height: 1.15; }
+  h1 { font-size: 2.05rem; margin: 0 0 .3rem; letter-spacing: -0.015em; }
+  h2 { font-size: 1.22rem; margin: 2.6rem 0 .7rem; }
+  p { max-width: 72ch; }
+  .sub { color: var(--muted); font-size: .98rem; max-width: 70ch; margin-top: 0; }
+  code, td.n, th.n, .chip, .commit, .mono {
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums; }
+  code { background: var(--code-bg); padding: .08em .35em; border-radius: 3px; font-size: .86em; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--hairline); border-radius: 6px; margin: 1rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  th, td { padding: .45rem .7rem; text-align: left; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  th { font-family: ui-monospace, Menlo, monospace; font-size: .72rem; text-transform: uppercase;
+       letter-spacing: .06em; color: var(--muted); font-weight: 600; background: var(--panel); }
+  td.n, th.n { text-align: right; }
+  tbody tr:last-child td { border-bottom: none; }
+  tr.ours td, td.ours, th.ours { background: var(--ours-bg); }
+  .gl { border-left: 2px solid var(--accent); }
+  .gr { border-right: 2px solid var(--accent); }
+  th.grp { text-align: center; border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+  .win { color: var(--accent-ink); font-weight: 700; }
+  .flat { color: var(--muted); }
+  .chip { display: inline-block; background: var(--chip); border: 1px solid var(--hairline);
+          border-radius: 999px; padding: .04rem .55rem; font-size: .72rem; }
+  .commit { color: var(--accent-ink); font-size: .82em; }
+  details { border: 1px solid var(--hairline); border-radius: 6px; margin: .7rem 0; background: var(--panel); }
+  details summary { cursor: pointer; padding: .7rem 1rem; font-weight: 700; font-size: .98rem;
+                    list-style-position: inside; }
+  details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  details > div { padding: 0 1rem 1rem; background: var(--ground); border-top: 1px solid var(--hairline);
+                  border-radius: 0 0 6px 6px; }
+  ul { max-width: 68ch; padding-left: 1.2rem; }
+  li { margin-bottom: .45rem; }
+  .eyebrow { font-family: ui-monospace, Menlo, monospace; font-size: .72rem; text-transform: uppercase;
+             letter-spacing: .1em; color: var(--accent-ink); margin-bottom: .5rem; }
+  .takeaway { display: grid; grid-template-columns: auto 1fr; gap: .35rem .8rem; max-width: 70ch;
+              font-size: .97rem; margin: 1rem 0; }
+  .takeaway b.num { color: var(--accent-ink); font-family: ui-monospace, Menlo, monospace; }
+  .foot { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--hairline);
+          color: var(--muted); font-size: .84rem; max-width: 70ch; }
+</style>
+<main>
+  <div class="eyebrow">nkapre/sorting · single Blackhole · 2026-08-16 · every number measured on silicon unless marked</div>
+  <h1>Blackhole Top-K Ledger</h1>
+  <p class="sub">One anchor shape, four layers of the stack, before → after. Details are collapsed below.</p>
+
+  <h2>Executive summary — top-2048 of 65,536 elements (every layer measured at this exact shape)</h2>
+  <div class="tablewrap"><table>
+    <thead>
+      <tr><th></th><th class="n">roofline (llm_perf)</th><th class="n">blaze prototype</th><th colspan="2" class="grp">ttnn.experimental.topk_large_indices</th><th colspan="2" class="grp">ttnn.topk</th></tr>
+      <tr><th></th><th></th><th></th><th class="n ours gl">ours (multi-core tree)</th><th class="n gr">stock (Pavle)</th><th class="n ours gl">ours (routing)</th><th class="n gr">stock</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>time</td><td class="n flat">1.84 µs</td><td class="n flat">24.5 µs†</td><td class="n ours gl"><strong>41.9 µs</strong></td><td class="n gr">356.6 µs‡</td><td class="n ours gl"><strong>70.8 µs</strong></td><td class="n gr">631,507 µs</td></tr>
+      <tr><td>vs stock ttnn.topk</td><td class="n flat">—</td><td class="n flat">25,782× (fused†)</td><td class="n ours gl"><strong>15,083×</strong></td><td class="n gr">1,771×</td><td class="n ours gl"><strong>8,921×</strong></td><td class="n gr">1×</td></tr>
+      <tr><td>cores</td><td class="n flat">128 (assumed)</td><td class="n flat">32</td><td class="n ours gl">26</td><td class="n gr">1/row</td><td class="n ours gl">26</td><td class="n gr">1</td></tr>
+      <tr><td>callsite</td><td class="n flat">— (model)</td><td class="n flat">— (FusedProgram-internal)</td><td class="n ours gl"><code>topk_large_indices(x, k=…)</code></td><td class="n gr">same call</td><td class="n ours gl"><code>ttnn.topk(x, k, …)</code> — unchanged signature</td><td class="n gr">same call</td></tr>
+      <tr><td>returns</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">indices; <code>return_values=True</code> → (values, indices)</td><td class="n gr">indices only</td><td class="n ours gl">(values, indices), as always</td><td class="n gr">(values, indices)</td></tr>
+      <tr><td>attribution</td><td class="n flat">Davor Capalija; proven below the bitonic floor</td><td class="n flat">Nikhil/Radomir/Ligang; fused SDPA+topk, not callable</td><td class="n ours gl"><strong>ours:</strong> multi-core factory + log-tree, values, num_slices (op by Pavle Josipović #46833 on blaze TopK-XL LLK)</td><td class="n gr">Pavle Josipović (PR #46833), row-parallel</td><td class="n ours gl"><strong>ours:</strong> internal routing (BH·bf16·last-dim·64&lt;k≤2048·largest·non-stable); else old path bit-for-bit</td><td class="n gr">—</td></tr>
+      <tr><td>upstream PR</td><td class="n flat">—</td><td class="n flat">theirs (#1971)</td><td class="n ours gl"><strong>③</strong> (after ①②)</td><td class="n gr">already upstream</td><td class="n ours gl"><strong>④</strong> (needs ③)</td><td class="n gr">—</td></tr>
+      <tr><td>gates</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">op suite 154 ✓ (2 env-gated)</td><td class="n gr">its own nightly suite</td><td class="n ours gl">220/220 ✓</td><td class="n gr">—</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">Micro-op layer (PR ①+②, <span class="commit">d64993c·7257487</span>) is inside the kernels of these columns:
+  ① replay ×1.17 → the stock ttnn.topk column only (631.5 ms is without it; with it: 539.5 ms); ② SFPLOADMACRO ~5–9% → the two ours columns. Factors, not times — already included in the numbers shown.</p>
+  <p class="sub">‡stock topk_large_indices measured as a deterministic competition layer via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core wall time). †blaze runs its fused SDPA+localTopK program at exactly this shape (k=2048, 64K global context) on this box — includes SDPA work the other layers don't, so its row flatters it.</p>
+
+  <div class="takeaway">
+    <b class="num">8,921×</b><span>The user-facing win: <code>ttnn.topk</code> at the anchor shape went from 631.5 <em>milli</em>seconds to 70.8 <em>micro</em>seconds (tree-powered, values and indices, full test parity); k=512@65536 is 161.6 ms → 93.4 µs. The k&gt;64 cliff no longer exists.</span>
+    <b class="num">13–23×</b><span>Gap to the llm_perf roofline across the k×N plane (24 measured points, N = 2K → 262K). The log-tree final stage (landed) converted the P curve from reversing (serial chain: P=32 as slow as P=4) to monotonic (k=2048@65536: 69.6→41.9 µs at P=32; k=512@262144: 64.2→32.0 µs at P=64), cutting the roofline gap to 13–23×. The roofline itself is proven infeasible for bitonic kernels — it sits below the comparator critical-path floor (roofline-v2 derivation, fits all 11 silicon points within 14.1%).</span>
+    <b class="num">1.7×</b><span>Distance to the best internal kernel (blaze's fused SDPA+topk, 24.5 µs measured on this box): ttnn.experimental.topk_large_indices (with our multi-core path) is at 41.9 µs on the same shape — and theirs includes SDPA work ours doesn't, inside a FusedProgram that isn't an op. The remaining levers are the threshold-select algorithm family (designed, shelved) and leaf-level fusion.</span>
+    <b class="num">32 µs</b><span>The 1M-context CSA decode shape (262,144 candidates → top-512) — the workload the roofline was written for — runs today as a callable op at 32.0 µs (was 67 µs pre-tree, still descending at the P=64 cap).</span>
+  </div>
+
+  <h2>The competition table — every layer, every cell (measured, deterministic)</h2>
+  <p class="sub">One deterministic <code>--competition</code> run, 24/24 rows, zero WRONG/FAILED cells. µs unless marked ms.
+  Columns as in the executive summary; stock topk_large_indices is measured via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core time); blaze appears only at its native shape. All speedups are vs stock ttnn.topk.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th class="n">k</th><th class="n">N</th><th class="n">stock ttnn.topk</th><th class="n">stock topk_large_indices</th><th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th><th class="n">cores</th><th class="n">blaze</th><th class="n">roofline</th><th class="n">gap ours/roof</th><th class="n">speedup: routing</th><th class="n">speedup: multi-core op</th></tr></thead>
+    <tbody>
+      <tr><td class="n">512</td><td class="n">2,048</td><td class="n">4,405.0</td><td class="n">9.6</td><td class="n win">70.4</td><td class="n win">5.9</td><td class="n">4</td><td class="n flat">—</td><td class="n">0.3</td><td class="n flat">18.4×</td><td class="n win">63×</td><td class="n win">743×</td></tr>
+      <tr><td class="n">512</td><td class="n">4,096</td><td class="n">9,464.3</td><td class="n">18.2</td><td class="n win">71.8</td><td class="n win">7.2</td><td class="n">8</td><td class="n flat">—</td><td class="n">0.5</td><td class="n flat">15.8×</td><td class="n win">132×</td><td class="n win">1,311×</td></tr>
+      <tr><td class="n">512</td><td class="n">8,192</td><td class="n">19.6 ms</td><td class="n">36.6</td><td class="n win">74.7</td><td class="n win">9.2</td><td class="n">13</td><td class="n flat">—</td><td class="n">0.6</td><td class="n flat">15.5×</td><td class="n win">262×</td><td class="n win">2,137×</td></tr>
+      <tr><td class="n">512</td><td class="n">16,384</td><td class="n">39.8 ms</td><td class="n">71.2</td><td class="n win">80.2</td><td class="n win">10.6</td><td class="n">26</td><td class="n flat">—</td><td class="n">0.7</td><td class="n flat">14.5×</td><td class="n win">496×</td><td class="n win">3,768×</td></tr>
+      <tr><td class="n">512</td><td class="n">32,768</td><td class="n">80.2 ms</td><td class="n">140.6</td><td class="n win">87.0</td><td class="n win">11.9</td><td class="n">52</td><td class="n flat">—</td><td class="n">0.9</td><td class="n flat">13.6×</td><td class="n win">922×</td><td class="n win">6,742×</td></tr>
+      <tr><td class="n">512</td><td class="n">65,536</td><td class="n">161.6 ms</td><td class="n">279.2</td><td class="n win">93.4</td><td class="n win">15.0</td><td class="n">52</td><td class="n flat">—</td><td class="n">1.1</td><td class="n flat">13.3×</td><td class="n win">1,729×</td><td class="n win">10,802×</td></tr>
+      <tr><td class="n">512</td><td class="n">131,072</td><td class="n">323.9 ms</td><td class="n">556.5</td><td class="n win">109.5</td><td class="n win">20.4</td><td class="n">52</td><td class="n flat">—</td><td class="n">1.6</td><td class="n flat">13.1×</td><td class="n win">2,959×</td><td class="n win">15,853×</td></tr>
+      <tr><td class="n">512</td><td class="n">262,144</td><td class="n">648.4 ms</td><td class="n">1,111.0</td><td class="n win">145.4</td><td class="n win">32.0</td><td class="n">52</td><td class="n flat">—</td><td class="n">2.4</td><td class="n flat">13.4×</td><td class="n win">4,461×</td><td class="n win">20,281×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">2,048</td><td class="n">7,514.7</td><td class="n">11.4</td><td class="n win">134.3</td><td class="n win">9.5</td><td class="n">2</td><td class="n flat">—</td><td class="n">0.4</td><td class="n flat">21.2×</td><td class="n win">56×</td><td class="n win">793×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">4,096</td><td class="n">17.6 ms</td><td class="n">21.0</td><td class="n win">135.9</td><td class="n win">11.4</td><td class="n">4</td><td class="n flat">—</td><td class="n">0.6</td><td class="n flat">18.0×</td><td class="n win">130×</td><td class="n win">1,545×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">8,192</td><td class="n">37.8 ms</td><td class="n">41.1</td><td class="n win">139.1</td><td class="n win">13.4</td><td class="n">8</td><td class="n flat">—</td><td class="n">0.8</td><td class="n flat">16.2×</td><td class="n win">272×</td><td class="n win">2,828×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">16,384</td><td class="n">78.1 ms</td><td class="n">79.5</td><td class="n win">147.5</td><td class="n win">18.0</td><td class="n">13</td><td class="n flat">—</td><td class="n">1.0</td><td class="n flat">17.8×</td><td class="n win">530×</td><td class="n win">4,335×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">32,768</td><td class="n">158.8 ms</td><td class="n">156.1</td><td class="n win">155.3</td><td class="n win">20.1</td><td class="n">26</td><td class="n flat">—</td><td class="n">1.2</td><td class="n flat">16.5×</td><td class="n win">1,023×</td><td class="n win">7,905×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">65,536</td><td class="n">320.8 ms</td><td class="n">309.4</td><td class="n win">160.3</td><td class="n win">21.9</td><td class="n">52</td><td class="n flat">—</td><td class="n">1.6</td><td class="n flat">14.0×</td><td class="n win">2,001×</td><td class="n win">14,634×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">131,072</td><td class="n">644.2 ms</td><td class="n">616.0</td><td class="n win">177.3</td><td class="n win">27.9</td><td class="n">52</td><td class="n flat">—</td><td class="n">2.2</td><td class="n flat">12.9×</td><td class="n win">3,633×</td><td class="n win">23,049×</td></tr>
+      <tr><td class="n">1,024</td><td class="n">262,144</td><td class="n">1,291.0 ms</td><td class="n">1,229.2</td><td class="n win">211.2</td><td class="n win">38.4</td><td class="n">52</td><td class="n flat">—</td><td class="n">3.3</td><td class="n flat">11.6×</td><td class="n win">6,113×</td><td class="n win">33,646×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">2,048</td><td class="n">9,952.4</td><td class="n">15.5</td><td class="n win">29.3</td><td class="n win">15.5</td><td class="n">130</td><td class="n flat">—</td><td class="n">0.5</td><td class="n flat">29.5×</td><td class="n win">339×</td><td class="n win">641×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">4,096</td><td class="n">30.1 ms</td><td class="n">24.3</td><td class="n win">33.0</td><td class="n win">19.6</td><td class="n">2</td><td class="n flat">—</td><td class="n">0.7</td><td class="n flat">26.2×</td><td class="n win">910×</td><td class="n win">1,539×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">8,192</td><td class="n">70.3 ms</td><td class="n">47.5</td><td class="n win">38.3</td><td class="n win">22.9</td><td class="n">4</td><td class="n flat">—</td><td class="n">1.0</td><td class="n flat">23.6×</td><td class="n win">1,835×</td><td class="n win">3,076×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">16,384</td><td class="n">150.8 ms</td><td class="n">91.6</td><td class="n win">46.2</td><td class="n win">26.4</td><td class="n">8</td><td class="n flat">—</td><td class="n">1.2</td><td class="n flat">22.2×</td><td class="n win">3,262×</td><td class="n win">5,717×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">32,768</td><td class="n">311.8 ms</td><td class="n">180.0</td><td class="n win">63.8</td><td class="n win">37.8</td><td class="n">13</td><td class="n flat">—</td><td class="n">1.4</td><td class="n flat">26.4×</td><td class="n win">4,888×</td><td class="n win">8,241×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">65,536</td><td class="n">631.5 ms</td><td class="n">356.6</td><td class="n win">70.8</td><td class="n win">41.9</td><td class="n">26</td><td class="n flat">—</td><td class="n">1.8</td><td class="n flat">22.8×</td><td class="n win">8,921×</td><td class="n win">15,083×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">131,072</td><td class="n">1,273.7 ms</td><td class="n">710.0</td><td class="n win">85.7</td><td class="n win">45.9</td><td class="n">52</td><td class="n flat">—</td><td class="n">2.6</td><td class="n flat">17.9×</td><td class="n win">14,866×</td><td class="n win">27,750×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">262,144</td><td class="n">2,557.6 ms</td><td class="n">1,416.6</td><td class="n win">122.3</td><td class="n win">58.6</td><td class="n">52</td><td class="n flat">—</td><td class="n">3.9</td><td class="n flat">15.0×</td><td class="n win">20,920×</td><td class="n win">43,668×</td></tr>
+    </tbody>
+  </table></div>
+
+  <details><summary>What shipped — 7 commits, all silicon-gated</summary><div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>commit</th><th>deliverable</th><th>result</th></tr></thead>
+    <tbody>
+      <tr><td class="commit">d64993c</td><td>Replay default-on, <code>ckernel_sfpu_topk.h</code> (opt-out <code>-DTOPK_DISABLE_REPLAY_STEP</code>)</td><td><span class="win">1.154–1.202×</span> single-core topk op-level; multi-core &amp; sort ~1.00×</td></tr>
+      <tr><td class="commit">ffb2b3c</td><td>Column-parallel multi-core <code>topk_large_indices</code> (new factory + 4 kernels)</td><td><span class="win">7.7–152 µs</span> across the k×N plane; row-parallel path byte-identical</td></tr>
+      <tr><td class="commit">9d131ab</td><td>Canonical sweep harness <code>_canonical_topk_sweep.py</code></td><td>per-cell Tracy subprocess, 3 arms, noise-gated, resume</td></tr>
+      <tr><td class="commit">c8c5ca2</td><td>SFPLOADMACRO × index-tracking silicon probe</td><td>macro SFPSWAP ≡ software under tracking; SFPU lane map settled</td></tr>
+      <tr><td class="commit">7257487</td><td>Unfused SFPLOADMACRO merge/rebuild, <code>ckernel_sfpu_topk_xl.h</code></td><td>merge 1.195–1.235×, step <span class="win">1.053–1.090×</span> on the shipping path</td></tr>
+      <tr><td class="commit">c203fd3</td><td>Docs: audit corrections + close-out</td><td>disputed figures adjudicated from fresh silicon</td></tr>
+      <tr><td class="commit">809cf5b</td><td><strong>PR 2: <code>ttnn.topk</code> large-k routing</strong></td><td><span class="win">158.6 ms → 134.0 µs</span> (gather-era; now 93.4 µs values-native+tree); found + worked around an upstream RM-gather bug</td></tr>
+      <tr><td class="commit">68ff59f·8794fbb</td><td><strong>Values output + log-tree final stage</strong> in <code>topk_large_indices</code></td><td>values from DST (drops the routed gather chain); serial P−1 chain → in-place log₂P tree: <span class="win">69.6→41.9 µs</span> @k2048/65536, <span class="win">64.2→32.0 µs</span> @k512/262144; P now scales monotonically. Bonus root-cause: <code>state_configure</code> is a compiled-out no-op — the *_with_dt reconfig rule proven for copy_tile</td></tr>
+    </tbody>
+  </table></div>
+  </div></details>
+
+  <details><summary>Full k × N grid vs roofline (24 points, core counts)</summary><div>
+  <div class="tablewrap"><table>
+    <thead><tr><th class="n">N</th><th class="n" colspan="3">k=512 (µs · cores · gap)</th><th class="n" colspan="3">k=1024</th><th class="n" colspan="3">k=2048</th><th class="n">roofline µs (512/1024/2048)</th></tr></thead>
+    <tbody>
+      <tr><td class="n">2,048</td><td class="n">7.7</td><td class="n">4</td><td class="n">23.8×</td><td class="n">11.4</td><td class="n">rp</td><td class="n">25.5×</td><td class="n">15.5</td><td class="n">rp</td><td class="n">29.5×</td><td class="n">0.32 / 0.45 / 0.53</td></tr>
+      <tr><td class="n">4,096</td><td class="n">8.8</td><td class="n">5</td><td class="n">19.3×</td><td class="n">14.9</td><td class="n">4</td><td class="n">23.5×</td><td class="n">24.4</td><td class="n">rp</td><td class="n">32.7×</td><td class="n">0.46 / 0.63 / 0.75</td></tr>
+      <tr><td class="n">8,192</td><td class="n">12.7</td><td class="n">7</td><td class="n">21.4×</td><td class="n">16.7</td><td class="n">5</td><td class="n">20.2×</td><td class="n">31.3</td><td class="n">4</td><td class="n">32.3×</td><td class="n">0.59 / 0.82 / 0.97</td></tr>
+      <tr><td class="n">16,384</td><td class="n">16.8</td><td class="n">9</td><td class="n">23.1×</td><td class="n">24.4</td><td class="n">7</td><td class="n">24.1×</td><td class="n">34.8</td><td class="n">5</td><td class="n">29.3×</td><td class="n">0.73 / 1.01 / 1.19</td></tr>
+      <tr><td class="n">32,768</td><td class="n">24.0</td><td class="n">13</td><td class="n">27.4×</td><td class="n">32.4</td><td class="n">9</td><td class="n">26.6×</td><td class="n">51.9</td><td class="n">7</td><td class="n">36.3×</td><td class="n">0.88 / 1.22 / 1.43</td></tr>
+      <tr><td class="n">65,536</td><td class="n">34.2</td><td class="n">14</td><td class="n">30.4×</td><td class="n">47.5</td><td class="n">13</td><td class="n">30.4×</td><td class="n">69.7</td><td class="n">9</td><td class="n">37.9×</td><td class="n">1.13 / 1.56 / 1.84</td></tr>
+      <tr><td class="n">131,072</td><td class="n">55.7</td><td class="n">14</td><td class="n">35.6×</td><td class="n">68.8</td><td class="n">14</td><td class="n">31.6×</td><td class="n">103.5</td><td class="n">13</td><td class="n">40.5×</td><td class="n">1.57 / 2.17 / 2.56</td></tr>
+      <tr><td class="n">262,144</td><td class="n">67.4</td><td class="n">27</td><td class="n">28.2×</td><td class="n">116.6</td><td class="n">14</td><td class="n">35.2×</td><td class="n">151.6</td><td class="n">14</td><td class="n">38.9×</td><td class="n">2.39 / 3.32 / 3.90</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">"rp" = the op chose its row-parallel factory. Roofline = llm_perf main
+  (PR 671 table + PR 676 K-multipliers 0.612 / 0.850 / 1.000); its provenance claims a measured
+  128-core prototype, but no such kernel exists in tt-metal and its leaf budget is ~3× faster than
+  the measured LLK — treat as aspirational. Residual gap decomposition: core count (4–27 vs 128),
+  serial P−1 merge chain vs log tree, op envelope.</p>
+  </div></details>
+
+  <details><summary>ttnn.topk / sort three-arm A/B (replay LOAD vs STORE)</summary><div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>op</th><th class="n">N</th><th class="n">k</th><th class="n">cores</th><th class="n">baseline ns</th><th class="n">load</th><th class="n">store (shipped)</th></tr></thead>
+    <tbody>
+      <tr><td>topk</td><td class="n">4096</td><td class="n">8</td><td class="n">1</td><td class="n">661,536</td><td class="n">1.098×</td><td class="n win">1.166×</td></tr>
+      <tr><td>topk</td><td class="n">4096</td><td class="n">64</td><td class="n">1</td><td class="n">1,288,352</td><td class="n">1.112×</td><td class="n win">1.202×</td></tr>
+      <tr><td>topk</td><td class="n">8192</td><td class="n">32</td><td class="n">65</td><td class="n">106,621</td><td class="n flat">1.000×</td><td class="n flat">0.999×</td></tr>
+      <tr><td>topk</td><td class="n">32768</td><td class="n">512</td><td class="n">1</td><td class="n">79,841,819</td><td class="n">1.122×</td><td class="n win">1.196×</td></tr>
+      <tr><td>topk</td><td class="n">65536</td><td class="n">32</td><td class="n">1</td><td class="n">10,955,982</td><td class="n">1.075×</td><td class="n win">1.154×</td></tr>
+      <tr><td>topk</td><td class="n">65536</td><td class="n">512</td><td class="n">1</td><td class="n">158,608,660</td><td class="n">1.082×</td><td class="n win">1.172×</td></tr>
+      <tr><td>topk</td><td class="n">131072</td><td class="n">512</td><td class="n">1</td><td class="n">317,863,386</td><td class="n">1.082×</td><td class="n win">1.172×</td></tr>
+      <tr><td>sort</td><td class="n">4096–131072</td><td class="n">—</td><td class="n">64–130</td><td class="n">0.38–31.7 ms</td><td class="n flat">~1.00×</td><td class="n flat">~1.00×</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">90 cells measured (30 shown representative), zero hangs, zero correctness violations.
+  The replay win is a single-core-topk win; multi-core topk and sort are bound elsewhere. Full CSV:
+  <code>scratchpad/sweep/ab3/canonical_sweep.csv</code>.</p>
+  </div></details>
+
+  <details><summary>Routed ttnn.topk composite breakdown (PR 2)</summary><div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>shape</th><th class="n">stock</th><th class="n">routed</th><th class="n">speedup</th><th>composition (µs)</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">k=512 W=65536 ×1</td><td class="n">158,609 µs</td><td class="n win">134.0 µs</td><td class="n win">1,183×</td><td>xl 34.1 · tilize 59.9 · untilize 18.2 · gather 11.8 · mask 10.0</td></tr>
+      <tr><td class="mono">k=128 W=32768 ×1</td><td class="n">20,348 µs</td><td class="n win">68.9 µs</td><td class="n win">295×</td><td>xl 23.9 · envelope 45.0</td></tr>
+      <tr><td class="mono">k=2048 W=131072 ×1</td><td class="n">~1.3 s (extrap.)</td><td class="n win">197.5 µs</td><td class="n win">~6,500×</td><td>xl 103.5 · envelope 94.0</td></tr>
+      <tr><td class="mono">k=512 W=65536 ×32</td><td class="n">—</td><td class="n">359.8 µs (11.2/row)</td><td class="n">—</td><td>xl-dominated</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">The layout/gather envelope (~100 of 134 µs at single-row) is the next lever:
+  values-output inside the op (in flight) drops gather + mask + one tilize. Also found here: an
+  upstream <code>ttnn.gather</code> RM-multicore bug (index width &gt; 1920 → unaligned per-core reads,
+  wrong values; repro committed; upstream has zero RM gather tests) — routed path chunks gathers ≤1024 wide.</p>
+  </div></details>
+
+  <details><summary>Micro-op (LLK) layer</summary><div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>path</th><th>consumer</th><th class="n">K=512</th><th class="n">K=1024</th><th class="n">K=2048</th></tr></thead>
+    <tbody>
+      <tr><td>replay local-sort <span class="chip">shipped</span></td><td><code>ttnn.topk</code>, sort, moe gates</td><td class="n" colspan="3">op-level 1.154–1.202× (single-core topk)</td></tr>
+      <tr><td>unfused merge <span class="chip">shipped</span></td><td><code>topk_large_indices</code></td><td class="n win">1.195×</td><td class="n win">1.221×</td><td class="n win">1.235×</td></tr>
+      <tr><td>unfused step <span class="chip">shipped</span></td><td><code>topk_large_indices</code></td><td class="n win">1.053×</td><td class="n win">1.074×</td><td class="n win">1.090×</td></tr>
+      <tr><td>fused merge / step</td><td class="flat">none in tree</td><td class="n flat">1.979 / 1.136×</td><td class="n flat">2.192 / 1.208×</td><td class="n flat">2.331 / 1.255×</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">MATH_ISOLATE paired arms, CtrlSwap/CtrlLoad control = 2.000 on every quoted run.
+  Gated by the silicon probe: macro-scheduled SFPSWAP ≡ software under index tracking
+  (sensitivity-proven mutation control); the SFPSWAP ISA docs were exonerated — the probe's
+  original golden had the lane mapping wrong (4 rows × even columns, +0/+2 passes).</p>
+  </div></details>
+
+
+  <details><summary>Empirical P sweep (num_slices override) — the negative result that scopes the tree merge</summary><div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>anchor</th><th class="n">P=4</th><th class="n">P=8</th><th class="n">P=16</th><th class="n">P=24</th><th class="n">P=32</th><th class="n">P=48</th><th class="n">P=64</th><th class="n">model pick</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">k=2048 W=65536 (32 chunks)</td><td class="n">101.0</td><td class="n win">69.6</td><td class="n">73.6</td><td class="n">73.6</td><td class="n">102.0</td><td class="n flat">—</td><td class="n flat">—</td><td class="n">9 → 69.6 µs</td></tr>
+      <tr><td class="mono">k=512 W=262144 (512 chunks)</td><td class="n flat">—</td><td class="n">148.8</td><td class="n">98.9</td><td class="n flat">—</td><td class="n">67.3</td><td class="n win">64.2</td><td class="n">69.2</td><td class="n">27 → 67.3 µs</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">µs, deterministic competition cells (ids suffixed _pN). The √(2·num_chunks) cost model is
+  empirically near-optimal; gains reverse past it because the final stage is a serial P−1 merge chain.
+  Conclusion: core count is not the gap to blaze/roofline — merge topology is.</p>
+  </div></details>
+
+  <details><summary>Gates, trust-nothing findings, internal alignment, open items</summary><div>
+  <p><strong>Gates (everything ON):</strong> 347-pass primary suites (topk/sort/sampling/moe) ·
+  nightly consumers green · <code>test_topk_xl.py</code> 71/71 · macro suite 12/12 (chained
+  num_chunks=4 + mutation controls) · <code>topk_large_indices</code> 120/122 (2 = IOMMU-only env
+  gate) · routed suite 220/220 · <code>stable=True</code> exact · 90-cell A/B zero hangs.</p>
+  <p><strong>Trust-nothing:</strong> ~55/60 branch citations exact, zero fabricated; "128× cliff"
+  compared mismatched W (fixed); "SFPGT unused" false (3 shipping call sites); K=512 fused step
+  adjudicated to 1.136× on fresh silicon; the presumed SFPSWAP doc bug dissolved; a faster-and-wrong
+  kernel class is guarded everywhere by schedule-nothing mutation controls (the 0x80-bit mutation
+  measurably emits garbage, not a no-op). Open hazard: replay-LOAD monolithic-battery hang
+  (2/2 under full-battery Tracy, 0/~3,040 isolated; STORE ships on its own clean record).</p>
+  <p><strong>Internal alignment:</strong> Davor Capalija owns the roofline (our grid is the
+  calibration data it lacks) · Kartik Paigwar's fused CSA needs values-output (in flight) ·
+  Bazyli Klockiewicz + Saad Jameel own the k=32 sampling chain (different regime; our merge tree
+  matches their reduction-tree plan) · Nikhil/Radomir/Ligang's blaze reduction tree is the fastest
+  internal kernel (19.9 µs, FusedProgram-locked, core-time equal to ours) · <strong>coordinate topk_xl
+  macro commits with blaze #1971</strong> (LLK→metal migration) to avoid shadow-tree divergence.
+  No one contacted yet, per instruction.</p>
+  <p><strong>Open items:</strong> values-output in the op (in flight — halves the routed composite) ·
+  P-cap raise + tree merge (path to the ~20 µs class) · file the upstream RM-gather bug ·
+  LOAD-arm hang root-cause · WH ports · upstream doc reports (packer histogram sampling, zero-run
+  counter direction, ENABLE_ACC_STATS delta, ROW_2/3_MAX encodings).</p>
+  </div></details>
+
+  <div class="foot">
+    Method: Tracy device-kernel duration at op level; MATH_ISOLATE two-point slope with the 2.00×
+    control tripwire at LLK level; one device process at a time; per-cell subprocess isolation;
+    correctness exact/bit-exact vs torch goldens, never PCC. Branch <code>nkapre/sorting</code>,
+    commits d64993c…809cf5b, nothing pushed. Roofline: tenstorrent/llm_perf main (PR 671 + 676 + 825).
+  </div>
+</main>

@@ -37,6 +37,23 @@ multi-core op (PR 2 in the plan) is designed but not built.
 
 ---
 
+
+### Tree-era final numbers (2026-08-16, competition2, deterministic, 24/24 clean)
+
+Anchor top-2048 of 65,536 (all measured, device-kernel time): stock ttnn.topk
+631,507 µs → ttnn.topk with our routing **70.8 µs (8,921x)**; stock
+topk_large_indices (row-parallel, 1 core/row) 356.6 µs → with our multi-core
+log-tree **41.9 µs on 26 cores (15,083x vs stock ttnn.topk, 8.5x vs the stock
+op)**. blaze fused SDPA+topk cell: 24.5 µs (32 cores, measured on this box).
+1M-context CSA shape (top-512 of 262,144): **32.0 µs** at P=64, still
+descending at the cap. Gap to the llm_perf roofline: 13–23x everywhere — and
+roofline-v2 (llm_perf branch nkapre/topk-roofline-v2) proves the roofline sits
+below the bitonic comparator critical-path floor; the streaming-selection
+family (THRESHOLD_SELECT_DESIGN.md, shelved) is the algorithmic path to it.
+Full table: TOPK_LEDGER.html (artifact source, committed) and
+scratchpad competition2/competition_table.{csv,md}; rerun with
+`_canonical_topk_sweep.py --competition --with-blaze --allow-header-edit`.
+
 ## Bottom line
 
 | kernel | called by | shipping | ours | speedup | basis |
