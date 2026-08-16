@@ -1952,16 +1952,21 @@ on Quasar. No open work — except deciding whether to wire up or delete the dea
 
 **Phase 0 — Measurement baseline. GATE: none. Nothing else starts until this exits.**
 
-No device measurement exists for any operation here. Rewrite
-`benchmarks/benchmark_topk_routing.py` to report **Tracy Device Kernel Duration** from
-`generated/profiler/reports/*/ops_perf_results_*.csv` via `python -m tracy -r -v`.
-Delete the wall-clock-to-cycles conversion (`:288`, host dispatch is inside that number)
-and the hardcoded `clock_freq_ghz` (`:86`) — AICLK is DVFS-managed and must be queried.
-Remove `status="MEASURED_ON_DEVICE"` from any path not reading a profiler CSV
-(`:253`, `:344`); replace the no-device zero-record with a hard failure. Protocol: 3+
-trials per arm, cache cleared, warmup discarded, report mean and stddev and the noise
-floor. A delta inside the noise floor is not a result. Record arch and grid from the
-**device**, never from `ARCH_NAME` or a constant.
+**SATISFIED** by
+`tests/ttnn/unit_tests/operations/reduction/_topk_sort_bench.py`, which replaced the
+fabricated harness this document was originally written against. That harness has since
+been deleted; it reported a wall-clock-to-cycles conversion with host dispatch inside the
+number, a hardcoded `clock_freq_ghz`, and `status="MEASURED_ON_DEVICE"` on paths that
+never read a profiler CSV. Do not resurrect it.
+
+The replacement reports **Tracy Device Kernel Duration** from
+`generated/profiler/reports/*/ops_perf_results_*.csv` via `python -m tracy -r -v`, spot-checks
+the warmup result against `torch.topk` so a baseline cannot silently return garbage, and
+records unsupported `(shape, k)` pairs **with their exact error** instead of dropping them
+or substituting a model. Protocol for any arm added to it: 3+ trials, cache cleared,
+warmup discarded, report mean and stddev and the noise floor. A delta inside the noise
+floor is not a result. Record arch and grid from the **device**, never from `ARCH_NAME` or
+a constant.
 *Effort: 1-1.5 weeks. Risk: the baseline may show these ops are host-dispatch-bound at
 real shapes, which would close several phases below.*
 
