@@ -98,6 +98,7 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
+| **F46** | the profiled decode (`decode_step`, incremental KV, O(1)/frame) and the shipped decode (`run_tts`, full re-prefill of the whole prefix every frame, O(n)/frame) are different algorithms — `decode_step` is called only from the trace harness, never from the demo | **YES — first** | medium |
 | **F45** | `E2E_REQUIRE_TRACE` is satisfied by proving each stage CAN be captured; `run_tts` — the shipped generation path — never calls `execute_trace`, so an eager pipeline (~500 ms/frame per its own README) ships while perf is quoted from trace replay | **YES — first, with F42** | medium |
 | **F44** | the optimize objective times a capture-and-verify harness (eager pass + trace capture + 2 readbacks + release + host PCC, ONE decode step) rather than inference — so capture cost is weighted 4×/iteration and the 24-frame decode that dominates deployment enters once | **YES — with F42/F43** | medium |
 | **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
@@ -4141,6 +4142,92 @@ entirely.
    already exist as the knobs).
 4. **Report the shape next to the number.** `1466.79 ms (prefill 1 + decode 1 + flow 1 + vocode 4,
    capture+verify included)` is honest; `FULL-model end-to-end` is not.
+
+---
+
+## ★★★★★ F46 — the profiled decode path and the shipped decode path are different ALGORITHMS
+
+**Status: live** · severity: twelve hours of optimisation were applied to a function the product
+never calls · reported: not yet
+
+This subsumes the shape and mode concerns of F44/F45. Those describe a measurement taken at the
+wrong size, in the wrong execution mode. This one is worse: **the code being measured is not the
+code that runs.**
+
+### Two decode implementations, only one of them reachable
+
+`tt/pipeline.py` contains an incremental, KV-resident decode:
+
+```python
+def decode_prefill(self, inputs_embeds, capacity=None):   # line 470  — seed resident KV
+def decode_step(self, emb, pos=None):                     # line 502  — ONE token against it
+```
+
+`decode_trace_setup` documents the intent exactly: *"Seed resident KV outside the trace, pin the
+step position, pre-upload the step input."* One token in, cached keys and values, constant work per
+frame.
+
+Every caller of that pair, in the whole demo directory:
+
+```
+pipeline.py:536   self.decode_prefill(...)     <- inside decode_trace_setup
+pipeline.py:545   return self.decode_step(...) <- inside decode_trace_step
+```
+
+Two call sites, both inside the trace-capture harness. **`run_tts` does not call either.** The
+shipped generation loop does this instead:
+
+```python
+for i in range(n_max):
+    codes  = self._run_flow(h)
+    emb    = self.embed_frame(codes)
+    embeds = ttnn.concat([embeds, emb], dim=1)
+    length = prompt_len + len(frames)
+    # "the whole prompt plus every frame so far, read at the last real position"
+    h = self._row(self._run_backbone(self._pin(embeds, length, cap)), length - 1)
+```
+
+Every frame re-runs **all 26 layers over the entire padded 224-token sequence** and keeps one row.
+No cache is consulted. Per-frame cost is O(sequence), so an utterance is O(n²) where the profiled
+path is O(n).
+
+### What this means for every number in the perf half
+
+- The optimizer's target list, its roofline gap, its 19 attempts and 11 wins were all computed
+  against `decode_step`.
+- The product calls `_run_backbone` on a growing prefix.
+- **They share ops but not shapes, not counts, and not complexity.** A win on the profiled path is
+  not evidence of a win on the shipped path, and can be a loss there.
+
+It also explains the magnitude of the gap against a hand-written port far better than eager-vs-traced
+alone: 26.9 ms/frame (traced, incremental) against ~500 ms/frame from this port's own README
+(eager, full re-prefill). Two of the three differences — caching and dispatch mode — are structural,
+not tuning.
+
+### The correctness result is unaffected
+
+Worth stating plainly so this is not over-read. `test_e2e_pcc` drives `run_tts` — the shipped path —
+and it measured **0.9999834 with exact code match and zero code flips**. The port is correct. What
+is not established is anything about its speed.
+
+### Why nothing caught it
+
+The trace gate (F45) asks whether each stage *can* be captured. `decode_trace_setup`/`decode_step`
+answer yes, honestly, for a decode step that exists. Nothing asks whether the generation entry point
+reaches that code. Coverage was checked by op signature, and both paths run backbone ops — so an
+op-level check sees the same signatures and reports the model covered.
+
+### Fixes
+
+1. **Profile what the entry point reaches.** Derive the profiled workload from the demo's own call
+   graph, or assert that the perf test's hot function is reachable from `run_tts`. A single static
+   reachability check would have caught this before the first measurement.
+2. **Then decide which implementation is meant to ship.** `decode_step` is almost certainly the
+   right one — it exists, it is trace-capable, and it is what the perf numbers already describe.
+   Wire it into `run_tts` and the port becomes both faster and consistent with its own report.
+3. **Until then, report the shipped path's number.** `run_tts` already returns
+   `timings: {prefill_s, decode_s, codec_s}`; the honest headline is that measurement, not a
+   trace-replay of an unreachable function.
 
 ---
 
