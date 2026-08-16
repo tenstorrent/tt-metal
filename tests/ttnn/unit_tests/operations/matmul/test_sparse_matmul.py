@@ -1018,7 +1018,7 @@ def test_sparse_matmul_rejects_optional_output_tile_mismatch(device, expect_erro
         device=device,
     )
 
-    with expect_error(RuntimeError, "must match the output tile"):
+    with expect_error(RuntimeError, "must equal to the in0 tile height"):
         ttnn.sparse_matmul(
             in0,
             in1,
