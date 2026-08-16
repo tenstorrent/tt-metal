@@ -37,6 +37,7 @@ Status: **release workflow passed; Stage 11 readiness blocked**. Exact BF16 HF c
 - Exact CI-nightly subset references: `1fb8702b`
 - tt-metal artifact checkpoint: `a08f7ac8f33`
 - tt-metal notes/review checkpoint: `ee55f892bee`
+- tt-metal exact-reference and Autofix checkpoint: `eb459b3bf9e`
 - A final notes-only commit follows this checkpoint; use the repository log as the authoritative SHA to avoid a self-referential commit field.
 
 ## Commands and key environment
