@@ -337,9 +337,33 @@ class Sweep:
         return verdict
 
     # ---------------- phase: craq ----------------
+    SOC_DESCRIPTORS = {
+        "bh": "tt_metal/soc_descriptors/blackhole_140_arch.yaml",
+        "wh": "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml",
+    }
+
+    def _staged_sim(self, arch):
+        """ttexalens needs soc_descriptor.yaml BESIDE libttsim.so; stage it.
+
+        The craq-sim build tree ships only the .so, so a bare --sim-* path
+        would fail with 'bad file: .../soc_descriptor.yaml'.  Stage the .so
+        together with tt-metal's arch descriptor under the evidence root.
+        """
+        sim = getattr(self.a, f"sim_{arch}")
+        if not sim or not sim.is_file():
+            return None
+        if (sim.parent / "soc_descriptor.yaml").is_file():
+            return sim
+        stage = self.ev / "simstage" / arch
+        stage.mkdir(parents=True, exist_ok=True)
+        if not (stage / "libttsim.so").is_file():
+            shutil.copy2(sim, stage / "libttsim.so")
+        shutil.copy2(ROOT / self.SOC_DESCRIPTORS[arch], stage / "soc_descriptor.yaml")
+        return stage / "libttsim.so"
+
     def craq(self, row, sel, arch):
         node = row["nodes"][sel]
-        sim = getattr(self.a, f"sim_{arch}")
+        sim = self._staged_sim(arch)
         work = self.ev / row["op"] / "craq" / f"{sel}-{arch}"
         verdict_file = work / "verdict.json"
         if verdict_file.is_file() and not self.a.force:
