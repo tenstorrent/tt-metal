@@ -3965,6 +3965,64 @@ An edit that makes trace *capture* cheaper scores. An edit that makes steady-sta
 barely moves the number. The optimizer is not being dishonest — it is faithfully minimising what it
 was handed.
 
+### The ops profiled are not the ops that run — they are different SHAPES
+
+A small workload would still be defensible if it exercised the same operations. It does not. The
+sequence axis is pinned to a capacity derived from the workload
+(`tt/pipeline.py:353`):
+
+```python
+cap = int(capacity or min(self.max_context, 32 * ((prompt_len + n_max + 31) // 32)))
+```
+
+Two runs on the same build, same day:
+
+```
+PERF  (ISL=32, OSL=4)     [trace] prefill: C=32    decode: C=64    flow: C=3   vocode: C=32
+REAL  (200-id, 24 frames) [trace] prefill: C=224   decode: C=224   flow: C=3   vocode: C=32
+```
+
+**Every matmul in the backbone is a different shape between the two.** The optimizer chose core
+grids, shard splits and a hand-written kernel's per-shape core count against a sequence of 32–64
+that is 224 in production — a 3.5–7× difference on the axis those choices are most sensitive to.
+
+The tool established that sensitivity itself, in a commit message:
+
+```
+c90bc44d52 hilo kernel: pick the core count per shape, because full grid is the wrong answer here
+```
+
+It learned that the right core count depends on the shape, and learned it at the wrong shape. So the
+concern is not merely that the *proportions* are off (below) — it is that a config tuned here has no
+guarantee of being the right config there, and may be a regression at the real size.
+
+**This also disposes of the obvious cheap fix.** "Keep the small job for profiling, run the real job
+for timing" is not sufficient: per-op attribution gathered at C=64 mis-ranks the ops that dominate
+at C=224, so the ladder would still aim at the wrong targets. Three further distortions compound it:
+
+- **Context depth.** Decode is timed at step 1 of 1, when the KV cache is shortest and attention is
+  cheapest. In a 24-frame run every later frame attends over more context, so attention's true share
+  is understated.
+- **Proportions.** One prefill against one decode makes prefill look ~24× more important than a real
+  run makes it; the ladder picks its `next_target` by largest `gap_ms`, so it aims accordingly.
+- **Cold execution.** A single captured-and-released execution carries first-touch effects that a
+  replayed steady state does not.
+
+**The mechanism for doing this right already exists and was not used.** The tool resolves Tracy
+signposts to capture a *window* inside a run (`agent/probes.py:1295 resolve_signposts`,
+`start_signpost`/`end_signpost`, `perf_mcp.py:_signpost_blocks`). For this model it found none and
+said so, then proceeded:
+
+```
+Step 9/10  Locating profiler signposts
+   WARN signpost: no tracy signposts in .../tests/ -- using default 'start'/'stop' (full capture)
+```
+
+Signposting a steady-state window — say frames 10–12 of the real 24-frame run — keeps the marker
+count inside the 12000 budget *and* profiles the real shapes at a realistic context depth. That is
+the correct fix, and it is F20's pattern once more: the capability exists, its absence is detected,
+and the run continues without it.
+
 ### WHY it is shaped this way — and why the reason does not apply to the timing
 
 There is a real constraint behind the small workload, and it is worth stating fairly before the
@@ -4012,10 +4070,14 @@ entirely.
 
 ### Fixes
 
-0. **Separate the profiled workload from the timed workload.** They answer different questions and
-   only one of them has a marker budget. Keep the small bounded job for Tracy attribution; run the
-   real 24-frame job for the accept/reject timing, which already runs with Tracy off. This is the
-   root fix — the other three are refinements of it.
+0. **Profile a signposted WINDOW inside the real run, not a shrunken run.** The mechanism already
+   exists (`resolve_signposts`, `start_signpost`/`end_signpost`) and reported itself missing here.
+   Marking a steady-state window — e.g. frames 10–12 of the real 24-frame workload — stays inside
+   the 12000-marker budget while profiling the real shapes (C=224, not C=64) at a realistic context
+   depth. Simply keeping the small job for profiling is NOT sufficient: attribution gathered at C=64
+   mis-ranks the ops that dominate at C=224.
+0b. **Run the accept/reject timing on the real workload.** It executes with Tracy off, so no marker
+   budget constrains it. These two are the root fixes; the rest are refinements.
 1. **Time replay, not capture.** Capture once outside the timed region; time `execute_trace` only.
    The pipeline already separates `<stage>_trace_setup` from `<stage>_trace_step`, so the split
    exists.
