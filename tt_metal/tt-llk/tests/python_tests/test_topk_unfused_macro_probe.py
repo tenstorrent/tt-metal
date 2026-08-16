@@ -2,60 +2,49 @@
 # SPDX-License-Identifier: Apache-2.0
 """Does a macro-scheduled SFPSWAP honour SFPU index tracking? (Blackhole)
 
-THE GATING QUESTION
--------------------
-The measured topk_xl merge/rebuild SFPLOADMACRO win is FUSED-only, and the one
-shipping consumer (``ttnn.experimental.topk_large_indices``) runs merge and
-rebuild UNFUSED: values in LREG0..3, indices riding along in LREG4..7 through
-SFPU index-tracking mode (``LaneConfig.ENABLE_DEST_INDEX``, the ``0x4`` that
-``_topk_xl_init_<K, false>`` writes). An unfused port is possible only if a
-SFPSWAP scheduled into an SFPLOADMACRO Simple slot still performs the
-argmin/argmax companion swap ``LReg[4+VC] <-> LReg[4+VD]`` that a software
-SFPSWAP performs (SFPSWAP.md:58-70; ttsim tensix.cpp SFPSWAP model agrees).
+THE GATING QUESTION — ANSWERED YES ON SILICON (2026-08-16)
+----------------------------------------------------------
+The topk_xl merge/rebuild SFPLOADMACRO win was fused-only; the shipping
+consumer (``ttnn.experimental.topk_large_indices``) runs merge/rebuild UNFUSED
+with indices riding LREG4..7 through SFPU index-tracking mode
+(``LaneConfig.ENABLE_DEST_INDEX``). This probe established, differentially
+(macro arm == software arm, byte-for-byte, mutation-sensitivity proven,
+per-run nonce freshness): a macro-scheduled SFPSWAP performs the companion
+swap; the fused 2-slot interleave + 2-drain rule transfers; the macroVD store
+rides at delay 2; an index-register macro load with a deferred store is clean
+(TEN-2932 does not bite the load path). The unfused port in
+``ckernel_sfpu_topk_xl.h`` is built on exactly the arm-1/2/4 pattern.
 
-DESIGN: PAIRED ARMS, ONE HARNESS — DIFFERENTIAL FIRST
-------------------------------------------------------
-All arms run the identical Dst geometry (a fragment of the unfused merge:
-value run A/B in Dst tile 0, index run A/B in Dst tile 1) on identical
-stimuli; only the MATH body differs. THE PRIMARY EVIDENCE IS DIFFERENTIAL
-(macro arm == software arm, byte-for-byte on both packed tiles): for the
-port's correctness, macro == software is sufficient — the absolute semantics
-of SFPSWAP are the shipping baseline whichever way they fall.
+THE DST LANE MAPPING, LEARNED THE HARD WAY (this file's golden, v3)
+-------------------------------------------------------------------
+An SFPU load/store at dest-unit offset ``u`` covers the 32 lanes
 
-WHAT THE FIRST SILICON RUN TAUGHT (2026-08-16), AND HOW THIS FILE ADAPTED
--------------------------------------------------------------------------
-1. All four differential macro arms PASSED — macro == software held on every
-   word, including the signed lanes.
-2. The software reference itself disagreed with the ISA-doc golden on lanes
-   that were simultaneously (a) all-negative pairs and (b) k % 4 == 3 —
-   because the original stimuli negated exactly every 4th lane, sign
-   semantics and lane position were aliased and the failure could not be
-   attributed. BOTH the BH ISA doc (SFPSWAP.md functional model) and ttsim
-   (``sign_mag32_total_order``, whose comment says it matches tested BH)
-   predict a swap on those lanes, so silicon disagreed with both models —
-   or a lane-patterned effect (e.g. stale CC lane-enable state, which
-   ``_llk_math_eltwise_unary_sfpu_init_once_`` does NOT reset) suppressed
-   those lanes.
-   THIS REVISION DE-ALIASES THE TWO: the strict-golden window (pair A0/B0)
-   is now ALL-POSITIVE with a k % 3 swap pattern (positives matched the doc
-   model on silicon), the kernel now issues an explicit ``TTI_SFPENCC(0,0,0,0)``
-   CC reset, and all signed/mixed pairs moved to a CHARACTERIZATION window
-   (pair A1/B1) that is differential-asserted and consistency-asserted but
-   positionally only REPORTED, classified against candidate semantic models.
-3. The 0x80-bit mutation produced garbage (0xBF2CC4C7 broadcast), not the
-   modeled self-compare no-op: SFPSWAP(VC == VD) is a same-register 2-cycle
-   read-modify-write with no architectural contract. The mutation is now
-   "zero the whole Sequence word" — the documented degeneration of
-   SFPLOADMACRO into a plain SFPLOAD — whose expected output is exactly the
-   identity (loads + write-back stores), which IS modelable.
+    datum = (u >> 2) * 64  +  16 * r  +  2 * c  +  ((u >> 1) & 1)
+            for r in 0..3, c in 0..7
 
-FRESHNESS. Each arm's kernel writes a per-run RUNTIME nonce (carried in the
-RELU_CONFIG runtime slot) into its diag tile; the driver asserts the echo, so
-a cached/stale result buffer cannot masquerade as a fresh execution. Results
-ARE memoized in-process across tests of one consumer session (that is why the
-session is fast) — the nonce proves the one real execution per arm was fresh.
+i.e. FOUR rows x the EVEN columns; offset +2 addresses the ODD columns of the
+same rows. This is what the shipping header's ``set_dst_write_addr_offset``
+comment ("switch between the even and odd columns ... offsets +0 and +2")
+describes, and it is why every merge/rebuild runs its loops twice, at +0 and
++2. Two earlier revisions of this golden assumed contiguous
+``[u*16, u*16+32)`` windows and mis-attributed the resulting mismatches:
+  v1: negation was aliased onto k%4==3, so the odd-position (never-loaded)
+      datums looked like a negative-pair semantics difference;
+  v2: all-positive stimuli exposed the truth — mismatches landed on exactly
+      the ODD datum positions of the golden-swap lanes (positions 3,9,15,
+      21,27 and partners, mod-8 histogram all-odd), values bit-equal to the
+      INPUT: the device had simply never touched them.
+The SFPSWAP semantics (doc SFPSWAP.md == ttsim sign_mag32_total_order) were
+never wrong. The signed-pair characterization below is expected to fit the
+doc model now that the mapping is right; if it does not, THAT is a real
+doc/silicon divergence worth reporting upstream.
 
-Arms (see sources/topk_unfused_macro_probe_test.cpp for the exact bodies):
+FRESHNESS. Each arm echoes a per-run RUNTIME nonce (RELU_CONFIG slot) into
+diag[2]; a cached result cannot echo this run's value. Results are memoized
+in-process across tests of one consumer session (hence the fast session); the
+nonce proves the one real execution per arm was fresh.
+
+Arms (see sources/topk_unfused_macro_probe_test.cpp):
   0 SW_BOTH          software reference, both pairs
   1 MACRO_SINGLE     one macro swap                      == arm0 <=> YES
   2 MACRO_DUAL_2A    two macro swaps, 2 slots apart      == arm0 <=> fused rule holds
@@ -91,19 +80,7 @@ from helpers.test_variant_parameters import (
 TILE_DATUMS = 1024
 RES_TILES = 3  # values, indices, diag
 DIAG_TILE = 2
-
-# Dst geometry — MUST match sources/topk_unfused_macro_probe_test.cpp.
-# One SFPU load at dest-unit offset u covers 32 lanes = datums [u*16, u*16+32).
-# (Confirmed by the first silicon run: golden-swapped positive lanes at datums
-# 8..15 matched, which is only possible under this contiguous mapping.)
 LANES = 32
-WIN_A0 = 0 * 16  # STRICT window: value/index run A, first vector  (offset 0)
-WIN_A1 = 4 * 16  # CHARACTERIZATION window: run A, second vector   (offset 4)
-WIN_B0 = 16 * 16  # STRICT window: run B, first vector             (offset 16)
-WIN_B1 = 20 * 16  # CHARACTERIZATION window: run B, second vector  (offset 20)
-
-STRICT_PAIR = (WIN_A0, WIN_B0)  # all-positive; positional golden asserted
-CHAR_PAIR = (WIN_A1, WIN_B1)  # signed/mixed; reported + consistency-asserted
 
 SENTINEL_START = 0xC0DEBA5E
 SENTINEL_END = 0xC0DEE0D1
@@ -111,6 +88,28 @@ SENTINEL_END = 0xC0DEE0D1
 REPORT_DIR = Path(
     os.environ.get("TOPK_PROBE_REPORT_DIR", "/tmp/topk_unfused_macro_probe")
 )
+
+
+def _lanes(u: int) -> list[int]:
+    """Datum positions covered by an SFPU load/store at dest-unit offset u.
+
+    Four rows x the even columns, plus the odd-column select from offset
+    bit 1 (unused by this probe — all offsets here are multiples of 4).
+    Lane enumeration order is (r, c) row-major; only CONSISTENCY across
+    loads matters (pairing and swaps are lanewise), not the absolute order.
+    """
+    base = (u >> 2) * 64 + ((u >> 1) & 1)
+    return [base + 16 * r + 2 * c for r in range(4) for c in range(8)]
+
+
+# Dst geometry — MUST match sources/topk_unfused_macro_probe_test.cpp.
+LANES_A0 = _lanes(0)  # STRICT window: value/index run A  (dest offset 0)
+LANES_A1 = _lanes(4)  # CHARACTERIZATION window: run A    (dest offset 4)
+LANES_B0 = _lanes(16)  # STRICT window: run B             (dest offset 16)
+LANES_B1 = _lanes(20)  # CHARACTERIZATION window: run B   (dest offset 20)
+
+STRICT_PAIR = (LANES_A0, LANES_B0)  # all-positive
+CHAR_PAIR = (LANES_A1, LANES_B1)  # signed/mixed, model-classified
 
 
 @dataclass
@@ -126,26 +125,23 @@ class PROBE_ARM(TemplateParameter):
 # ---------------------------------------------------------------------------
 # Stimuli.
 #
-# STRICT window (A0/B0): all-positive, distinct, no ties — the regime silicon
-# demonstrably matches the ISA-doc model in. Swap on k % 3 == 0 (11 of 32
-# lanes), deliberately NOT aliased to any mod-4/mod-8 lane structure so a
-# lane-patterned hardware effect shows up as a strict-window failure with a
-# recognisable histogram instead of masquerading as sign semantics.
+# STRICT window (A0/B0): all-positive, distinct, no ties. Swap on k % 3 == 0
+# (11 of 32 lanes) — not aliased to any mod-2/4/8 lane structure, so a
+# lane-patterned effect shows up with a recognisable positional histogram
+# instead of masquerading as semantics.
 #
 # CHARACTERIZATION window (A1/B1):
 #   k  0..15  both-negative pairs   (doc model: swap iff |b| > |a|)
 #   k 16..23  mixed-sign pairs      (doc model: always swap; b < 0 < a)
-#             k 16..19 with |b| < |a|, k 20..23 with |b| > |a| — separates a
-#             raw-unsigned compare from a magnitude compare.
-#   k 24..31  positive controls     (doc model: swap iff k odd) — detects
-#             lane-position effects inside this window independent of sign.
+#             k 16..19 with |b| < |a|, k 20..23 with |b| > |a|
+#   k 24..31  positive controls     (doc model: swap iff k odd)
 # ---------------------------------------------------------------------------
 
 
-def _pair_values(k: int, base: int, char: bool):
-    """(a, b) for lane k of a window. a -> run A (VD), b -> run B (VC)."""
+def _pair_values(k: int, char: bool):
+    """(a, b) for lane k of a window pair. a -> run A (VD), b -> run B (VC)."""
     if not char:
-        a = float(base + 3 * k)
+        a = float(2 + 3 * k)
         b = a - 1.0 if (k % 3 == 0) else a + 1.0
         return a, b
     if k < 16:  # both negative
@@ -164,12 +160,12 @@ def _pair_values(k: int, base: int, char: bool):
 def _value_tile() -> torch.Tensor:
     vals = [float(2000 + i) for i in range(TILE_DATUMS)]  # distinct filler
     for k in range(LANES):
-        a, b = _pair_values(k, base=2, char=False)
-        vals[WIN_A0 + k] = a
-        vals[WIN_B0 + k] = b
-        a, b = _pair_values(k, base=0, char=True)
-        vals[WIN_A1 + k] = a
-        vals[WIN_B1 + k] = b
+        a, b = _pair_values(k, char=False)
+        vals[LANES_A0[k]] = a
+        vals[LANES_B0[k]] = b
+        a, b = _pair_values(k, char=True)
+        vals[LANES_A1[k]] = a
+        vals[LANES_B1[k]] = b
     return torch.tensor(vals, dtype=torch.float32)
 
 
@@ -212,12 +208,6 @@ def _swap_noswap_bothneg(a_w, b_w):
     return _swap_doc(a_w, b_w)
 
 
-def _swap_noswap_anyneg(a_w, b_w):
-    if (a_w & 0x80000000) or (b_w & 0x80000000):
-        return False
-    return _swap_doc(a_w, b_w)
-
-
 def _swap_raw_unsigned(a_w, b_w):
     return b_w < a_w  # raw u32 compare, no sign remap
 
@@ -229,21 +219,20 @@ def _swap_magnitude(a_w, b_w):
 CANDIDATE_MODELS = {
     "doc_ttsim_sign_mag": _swap_doc,
     "noswap_when_both_negative": _swap_noswap_bothneg,
-    "noswap_when_any_negative": _swap_noswap_anyneg,
     "raw_unsigned_compare": _swap_raw_unsigned,
     "magnitude_only_compare": _swap_magnitude,
 }
 
 
-def _golden_strict(pairs):
+def _golden(pairs):
     """Expected (val_words, idx_words) after the ascending compare-exchange
-    under the doc/ttsim model, applied to the given pairs only. Positions
-    outside the given pairs' windows are the identity."""
+    under the doc/ttsim model, applied to the given (lanesA, lanesB) pairs.
+    All other positions are the identity."""
     val, idx = _input_words()
-    for a_base, b_base in pairs:
+    for lanes_a, lanes_b in pairs:
         for k in range(LANES):
-            if _swap_doc(val[a_base + k], val[b_base + k]):
-                p, q = a_base + k, b_base + k
+            p, q = lanes_a[k], lanes_b[k]
+            if _swap_doc(val[p], val[q]):
                 val[p], val[q] = val[q], val[p]
                 idx[p], idx[q] = idx[q], idx[p]
     return val, idx
@@ -251,8 +240,8 @@ def _golden_strict(pairs):
 
 def _expected_strict_swaps() -> int:
     val, _ = _input_words()
-    a_base, b_base = STRICT_PAIR
-    return sum(1 for k in range(LANES) if _swap_doc(val[a_base + k], val[b_base + k]))
+    lanes_a, lanes_b = STRICT_PAIR
+    return sum(1 for k in range(LANES) if _swap_doc(val[lanes_a[k]], val[lanes_b[k]]))
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +267,7 @@ def _config(arm: int, nonce: int) -> TestConfig:
         runtimes=[
             # Freshness nonce riding the RELU_CONFIG runtime slot (the packer
             # never consumes it in this kernel; PACK echoes it into diag[2]).
-            # Runtime args do not perturb the build variant, so the nonce can
-            # differ per run without recompiling.
+            # Runtime args do not perturb the build variant.
             RELU_CONFIG(nonce),
             NUM_FACES(num_faces=4),
         ],
@@ -364,17 +352,17 @@ def _characterize(got):
 
     Returns (report_dict, inconsistent_lanes) where inconsistent_lanes are
     lanes whose INDEX movement did not follow their VALUE movement — an
-    index-tracking desynchronisation, which is a hard failure regardless of
-    which swap-decision semantics silicon implements.
+    index-tracking desynchronisation, a hard failure regardless of which
+    swap-decision semantics silicon implements.
     """
     val_in, idx_in = _input_words()
     gv, gi = got
-    a_base, b_base = CHAR_PAIR
+    lanes_a, lanes_b = CHAR_PAIR
     lanes = []
     inconsistent = []
     model_miss: dict[str, list[int]] = {name: [] for name in CANDIDATE_MODELS}
     for k in range(LANES):
-        p, q = a_base + k, b_base + k
+        p, q = lanes_a[k], lanes_b[k]
         a_w, b_w = val_in[p], val_in[q]
         if gv[p] == a_w and gv[q] == b_w:
             v_state = "no_swap"
@@ -423,40 +411,27 @@ def _characterize(got):
 
 
 # ---------------------------------------------------------------------------
-# Tests. Each is independently runnable; results are cached across them within
-# one consumer session (freshness proven by the per-run nonce).
+# Tests. Results are cached across them within one consumer session
+# (freshness proven by the per-run nonce).
 # ---------------------------------------------------------------------------
 
 
 @blackhole_only
 def test_probe_harness_software_reference():
     """Arm 0 (software SFPSWAP under index tracking — the shipping unfused
-    primitive) must match the positional doc-model golden on the ALL-POSITIVE
-    strict window and leave every filler word untouched. The signed
-    characterization window is NOT positionally asserted (silicon's negative-
-    pair semantics are under characterization — see the JSON report); it IS
-    asserted for value/index consistency: whatever silicon decided per lane,
-    the index must have moved with the value, or shipping index tracking
-    itself is desynchronised and the unfused op is in trouble far beyond any
-    macro port. If THIS test fails, every other verdict in the file is void."""
+    primitive) must match the doc-model positional golden EVERYWHERE, both
+    pairs, under the interleaved even-column lane mapping. The signed
+    characterization pair is additionally classified against the candidate
+    semantic models (JSON report) — with the mapping fixed, the doc/ttsim
+    model is expected to fit; anything else is a genuine silicon-vs-doc
+    divergence to report upstream. If THIS test fails, every other verdict
+    in the file is void."""
     _prepare(0)
     got = _run_arm(0)
-    want = _golden_strict([STRICT_PAIR])
-    char_positions = set(range(WIN_A1, WIN_A1 + LANES)) | set(
-        range(WIN_B1, WIN_B1 + LANES)
-    )
-    strict_positions = [p for p in range(TILE_DATUMS) if p not in char_positions]
     n_swap = _expected_strict_swaps()
     assert 0 < n_swap < LANES, "stimuli must mix swapping and non-swapping lanes"
-    mism, info = _diff(got, want, "arm0", "golden_strict", positions=strict_positions)
-    assert not mism, (
-        f"software reference disagrees with the doc-model golden on the "
-        f"ALL-POSITIVE strict window / fillers ({info['num_mismatches']} words). "
-        f"Positives matched this model on the first silicon run, so suspect the "
-        f"harness (mapping, CC state) — check the lane-mod histograms in the "
-        f"report: mod4={info['mismatch_lane_mod4_histogram']}. "
-        f"First: {info['first_mismatches'][:6]}"
-    )
+    want = _golden([STRICT_PAIR, CHAR_PAIR])
+    mism, info = _diff(got, want, "arm0", "golden_both")
     report, inconsistent = _characterize(got)
     assert not inconsistent, (
         f"INDEX TRACKING DESYNC in the shipping software primitive: lanes "
@@ -464,35 +439,35 @@ def test_probe_harness_software_reference():
         f"without their indices (or vice versa). This breaks the unfused "
         f"topk_xl contract itself — escalate independently of the macro port."
     )
-    # The signed-pair semantics verdict is informational here (silicon vs
-    # candidate models); the port only needs macro == software.
-    print(
-        "\nsigned-pair characterization: models fitting all lanes = "
-        f"{report['verdict_models_fitting_all_lanes']} "
-        f"(full detail: {REPORT_DIR / 'characterization_signed_pairs.json'})"
+    assert not mism, (
+        f"software reference disagrees with the doc-model golden "
+        f"({info['num_mismatches']} words). Check the positional histograms "
+        f"(mod4={info['mismatch_lane_mod4_histogram']}, "
+        f"mod8={info['mismatch_lane_mod8_histogram']}): all-odd positions "
+        f"means the lane mapping regressed; signed-lane-only mismatches mean "
+        f"a real semantics divergence — see the characterization verdict "
+        f"{report['verdict_models_fitting_all_lanes']} in "
+        f"{REPORT_DIR / 'characterization_signed_pairs.json'}. "
+        f"First: {info['first_mismatches'][:6]}"
     )
 
 
 @blackhole_only
 def test_probe_macro_swap_honours_index_tracking():
     """THE yes/no arm. Arm 1 (one macro-scheduled SFPSWAP) must equal arm 0
-    byte-for-byte on both tiles — signed lanes included, since the comparison
-    is device-vs-device and needs no semantic model. Failure classification
-    in the message."""
+    byte-for-byte on both tiles — a device-vs-device comparison needing no
+    semantic model. Failure classification in the message."""
     _prepare(0, 1)
     got, ref = _run_arm(1), _run_arm(0)
     mism, info = _diff(got, ref, "arm1", "arm0")
     if mism:
-        # Classify: did the VALUE half track arm 0 while the INDEX half
-        # stayed at the input? That means the scheduled swap ran but the
-        # companion (index-tracking) write was suppressed under the macro.
         val_ok = all(g == r for g, r in zip(got[0], ref[0]))
         idx_in = _input_words()[1]
         idx_stale = all(g == i for g, i in zip(got[1], idx_in))
         verdict = (
             "swap executed but companion index swap SUPPRESSED under the macro "
             "-- index tracking is NOT honoured; unfused macro port must keep "
-            "swaps in software (see ceiling arithmetic in the port plan)"
+            "swaps in software"
             if (val_ok and idx_stale)
             else "macro-scheduled swap misbehaved beyond the companion write"
         )
@@ -505,10 +480,10 @@ def test_probe_macro_swap_honours_index_tracking():
 @blackhole_only
 def test_probe_macro_dual_two_slots_apart():
     """Arm 2: the fused merge's interleave rule (macros 2 issue slots apart,
-    2 drain SFPNOPs) under index tracking. A FAILURE here while
-    test_probe_macro_dual_three_slots_apart passes means tracking extends the
-    Simple-unit occupancy and the unfused port needs a 3-slot interleave —
-    a scheduling change, not a dead end."""
+    2 drain SFPNOPs) under index tracking. A FAILURE here while the 3-slot
+    arm passes means tracking extends the Simple-unit occupancy and the
+    unfused port needs a 3-slot interleave — a scheduling change, not a
+    dead end."""
     _prepare(0, 2)
     mism, info = _diff(_run_arm(2), _run_arm(0), "arm2", "arm0")
     assert not mism, (
@@ -520,10 +495,9 @@ def test_probe_macro_dual_two_slots_apart():
 
 @blackhole_only
 def test_probe_macro_dual_three_slots_apart():
-    """Arm 3: same two macro swaps with one extra slot between them. If arm 1
-    passes, this must pass — its failure with arm 1 green would mean the
-    hazard is inter-macro rather than occupancy, and the port needs per-body
-    single-macro scheduling."""
+    """Arm 3: same two macro swaps, one extra slot between them. If arm 1
+    passes, this must pass — failure with arm 1 green would mean the hazard
+    is inter-macro rather than occupancy."""
     _prepare(0, 3)
     mism, info = _diff(_run_arm(3), _run_arm(0), "arm3", "arm0")
     assert not mism, (
@@ -535,8 +509,7 @@ def test_probe_macro_dual_three_slots_apart():
 @blackhole_only
 def test_probe_macro_full_trick_value_store():
     """Arm 4: value stores ride the macros' Store slots (delay 2). Passing
-    means the merge's full trick transfers to the unfused value half — the
-    macro store reads macroVD AFTER the swap's write, tracking active."""
+    means the merge's full trick transfers to the unfused value half."""
     _prepare(0, 4)
     mism, info = _diff(_run_arm(4), _run_arm(0), "arm4", "arm0")
     assert not mism, (
@@ -551,17 +524,15 @@ def test_probe_macro_full_trick_value_store():
 def test_probe_mutation_control():
     """Arm 5 zeroes both swap macros' Sequence words: each SFPLOADMACRO
     degenerates into a plain SFPLOAD (the documented "schedule nothing"
-    failure mode that timing cannot see), no compare-exchange runs anywhere,
-    and the body's write-back stores make the expected output exactly the RAW
-    INPUT. Assert both halves: arm5 == identity (the degeneration is
-    modelable) and arm5 != arm0 (the differential is sensitive to a missing
-    swap). If arm5 matched arm 0, every green macro arm above would prove
-    nothing.
+    failure mode that timing cannot see), no compare-exchange runs, and the
+    body's write-back stores make the expected output exactly the RAW INPUT.
+    Assert both halves: arm5 == identity (the degeneration is modelable) and
+    arm5 != arm0 (the differential is sensitive to a missing swap).
 
-    (History: the first mutation cleared only the Simple byte's 0x80 bit,
-    producing SFPSWAP(VC == VD) — a same-register two-cycle read-modify-write
-    with no architectural contract. Silicon emitted a garbage broadcast
-    (0xBF2CC4C7), so that mutation could not serve as a control.)"""
+    (History: a 0x80-bit mutation produced SFPSWAP(VC == VD) — a
+    same-register two-cycle read-modify-write with no architectural
+    contract; silicon emitted a garbage broadcast (0xBF2CC4C7), so that
+    mutation could not serve as a control.)"""
     _prepare(0, 5)
     got, ref = _run_arm(5), _run_arm(0)
     val_in, idx_in = _input_words()
@@ -585,24 +556,21 @@ def test_probe_index_load_and_deferred_store_on_macro():
     """Arm 6 vs arm 7: the run-B index (LREG6) is LOADED by an SFPLOADMACRO
     (macroVD in LREG4..7 — outside TEN-2932's allowed instruction list) and
     its Dst word is written ONLY by that macro's store, deferred (delay 6)
-    past the companion swap. PASS means unfused index stores can ride macros —
-    the TEN-2932 mechanism is exactly the one the port wants. Failure modes
-    are classified in the message. (This pair operates on the all-positive
-    strict window, so the doc-model golden pin on arm 7 is valid.)"""
+    past the companion swap. PASS means index loads/stores can ride macros.
+    (The pair is the all-positive strict window, so the doc-model golden pin
+    on arm 7 is valid.)"""
     _prepare(6, 7)
     got, ref = _run_arm(6), _run_arm(7)
     mism, info = _diff(got, ref, "arm6", "arm7")
     if mism:
         val_in, idx_in = _input_words()
-        b0 = range(WIN_B0, WIN_B0 + LANES)
+        b0 = set(LANES_B0)
         only_b0_idx = all(t == "idx" and p in b0 for (t, p, *_rest) in mism)
-        pre_swap = all(got[1][p] == idx_in[p] for p in b0)
+        pre_swap = all(got[1][p] == idx_in[p] for p in LANES_B0)
         if only_b0_idx and pre_swap:
             verdict = (
-                "deferred macro store emitted the PRE-swap index: the store "
-                "latched its datum too early or the companion write landed "
-                "after delay 6 -- retry with a larger delay before declaring "
-                "the mechanism dead"
+                "deferred macro store emitted the PRE-swap index: retry with "
+                "a larger delay before declaring the mechanism dead"
             )
         elif only_b0_idx:
             verdict = (
@@ -620,9 +588,8 @@ def test_probe_index_load_and_deferred_store_on_macro():
             f"arm6 != arm7 ({info['num_mismatches']} words): {verdict}. "
             f"First: {info['first_mismatches'][:6]}"
         )
-    # Also pin arm 7 itself to the single-pair doc-model golden — valid
-    # because the (A0, B0) pair is all-positive by design.
-    want = _golden_strict([STRICT_PAIR])
+    # Also pin arm 7 itself to the single-pair doc-model golden.
+    want = _golden([STRICT_PAIR])
     mism7, info7 = _diff(ref, want, "arm7", "golden_single")
     assert not mism7, (
         f"single-pair software reference disagrees with golden "

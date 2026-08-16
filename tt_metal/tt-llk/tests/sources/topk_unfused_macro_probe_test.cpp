@@ -72,8 +72,14 @@
 //   7  SW_SINGLE      software reference for arm 6: same single pair, all
 //                     loads/stores software.
 //
-// Geometry (Dst offsets, dest units; one unit = one 16-datum Dst row, one
-// SFPU load/store covers 2 units = 32 lanes):
+// Geometry (Dst offsets, dest units; one unit = one 16-datum Dst row). An
+// SFPU load/store at offset u covers the 32 lanes
+//     datum = (u >> 2) * 64 + 16*r + 2*c + ((u >> 1) & 1),  r in 0..3, c in 0..7
+// i.e. FOUR rows x the EVEN columns; offset +2 addresses the odd columns —
+// the "even and odd columns ... offsets +0 and +2" of the shipping header's
+// `set_dst_write_addr_offset` comment. (Established empirically by this
+// probe's v2 silicon run: golden mismatches landed on exactly the odd datum
+// positions, bit-equal to the input — never loaded, never swapped.)
 //   values  (Dst tile 0): run A at {0, 4}, run B at {16, 20}     — FP32 mode
 //   indices (Dst tile 1): run A at {64, 68}, run B at {80, 84}   — INT32 mode
 // Register map (the shipping unfused ascending layout, bitonic_sort_len_k):
