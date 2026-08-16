@@ -1006,9 +1006,9 @@
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
 //
-// Redirected: 124 of 128.  These have no matching intrinsic or a
+// Redirected: 123 of 128.  These have no matching intrinsic or a
 // different operand shape, and keep their original definitions:
-//   MOP_CFG, PACR_SETREG, RAREB, REPLAY, SFPLUTFP32, SFPSETMAN, TRNSPSRCA, UNPACR_NOP
+//   RAREB, SFPLUTFP32, SFPSETMAN, TRNSPSRCA, UNPACR_NOP
 //
 // RAREB and TRNSPSRCA have intrinsics but no rvtt-cfg-reads.def entry, so
 // routing them through one would trade an asm barrier for a "not in read-set
@@ -1493,40 +1493,23 @@
 #define TTI_TRNSPSRCB __builtin_rvtt_trnspsrcb()
 
 #undef TT_PACR_SETREG
-#define TT_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last) \
-    __builtin_rvtt_wh_pacrsetreg(                                                           \
-        (unsigned)(Push),                                                                   \
-        (unsigned)(ModeSel),                                                                \
-        (unsigned)(Unused),                                                                 \
-        (unsigned)(DisableStall),                                                           \
-        (unsigned)(AddrSel),                                                                \
-        (unsigned)(StreamId),                                                               \
-        (unsigned)(Flush),                                                                  \
-        (unsigned)(Last))
+#define TT_PACR_SETREG(Push, AddrSel, WrData, PackSel, StreamId, Flush, Last) \
+    __builtin_rvtt_wh_pacrsetreg(                                             \
+        (unsigned)(Push), (unsigned)(AddrSel), (unsigned)(WrData), (unsigned)(PackSel), (unsigned)(StreamId), (unsigned)(Flush), (unsigned)(Last))
 #undef TTI_PACR_SETREG
-#define TTI_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last) \
-    TT_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last)
+#define TTI_PACR_SETREG(Push, AddrSel, WrData, PackSel, StreamId, Flush, Last) TT_PACR_SETREG(Push, AddrSel, WrData, PackSel, StreamId, Flush, Last)
 
 #undef TT_MOP_CFG
 #define TT_MOP_CFG(zmask_hi16) __builtin_rvtt_mopcfg((unsigned)(zmask_hi16))
 #undef TTI_MOP_CFG
 #define TTI_MOP_CFG(zmask_hi16) TT_MOP_CFG(zmask_hi16)
 
-#undef TT_UNPACR_NOP
-#define TT_UNPACR_NOP(Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop) \
-    __builtin_rvtt_wh_unpacr_nop(                                                                                                                         \
-        (unsigned)(Unpacker_Select),                                                                                                                      \
-        (unsigned)(Stream_Id),                                                                                                                            \
-        (unsigned)(Msg_Clr_Cnt),                                                                                                                          \
-        (unsigned)(Set_Dvalid),                                                                                                                           \
-        (unsigned)(Clr_to1_fmt_Ctrl),                                                                                                                     \
-        (unsigned)(Stall_Clr_Cntrl),                                                                                                                      \
-        (unsigned)(Bank_Clr_Ctrl),                                                                                                                        \
-        (unsigned)(Src_ClrVal_Ctrl),                                                                                                                      \
-        (unsigned)(Unpack_Pop))
-#undef TTI_UNPACR_NOP
-#define TTI_UNPACR_NOP(Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop) \
-    TT_UNPACR_NOP(Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop)
+// UNPACR_NOP is not redirected here.  __builtin_rvtt_wh_unpacr_nop names the
+// same nine fields Blackhole's does, but this header spells the instruction
+// with the two the WH assembler uses (Unpack_block_selection and a 23-bit
+// NoOp), and all 23 call sites in the WH LLK pass those two.  Routing it
+// through the builtin means decomposing every p_unpacr_nop constant into the
+// nine, which is a change to the call sites, not to this file.
 
 // REPLAY must be visible to pass_rvtt_replay: issued as .ttinsn it is opaque,
 // so the pass neither reserves the buffer slots this reserves nor sees that it
@@ -1534,7 +1517,7 @@
 // the author recorded.  ckernel_sfpu_gcd.h captures 28 instructions this way.
 #undef TT_REPLAY
 #define TT_REPLAY(start_idx, len, execute_while_loading, load_mode) \
-    __builtin_rvtt_ttreplay(nullptr, (unsigned)(len), 0, 0, (unsigned)(start_idx), (unsigned)(execute_while_loading), (unsigned)(load_mode))
+    __builtin_rvtt_ttreplay(ckernel::instrn_buffer, (unsigned)(len), 0, 0, (unsigned)(start_idx), (unsigned)(execute_while_loading), (unsigned)(load_mode))
 #undef TTI_REPLAY
 #define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TT_REPLAY(start_idx, len, execute_while_loading, load_mode)
 
