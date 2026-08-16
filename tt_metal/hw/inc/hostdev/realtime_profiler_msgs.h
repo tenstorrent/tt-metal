@@ -23,6 +23,8 @@ struct realtime_profiler_timestamp_t {
     uint32_t time_hi;
     uint32_t time_lo;
     uint32_t id;
+    // Never read: pads the block to 16 B so the A/B slot offsets and the host's page-word
+    // offsets stay power-of-2 aligned.
     uint32_t header;
 };
 

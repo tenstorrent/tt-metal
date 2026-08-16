@@ -16,7 +16,7 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 
 // Size of timestamp data to read from dispatch core (kernel_start + kernel_end)
-constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profiler_timestamp_t);  // 32 bytes
+constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profiler_timestamp_t);
 
 // Compile-time defines set by host:
 // DISPATCH_CORE_NOC_X  - NOC X coordinate of dispatch_s core
@@ -59,7 +59,6 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
 }
 
 void kernel_main() {
-    // Initialize ring buffer
     ring_buffer->write_index = 0;
     ring_buffer->read_index = 0;
     ring_buffer->terminate = 0;

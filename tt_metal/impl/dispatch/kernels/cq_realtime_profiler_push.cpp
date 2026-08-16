@@ -144,7 +144,6 @@ void kernel_main() {
     RT_PROF_NCRISC_DBG_SET(ring_buffer, fifo_addr_lo, data_addr_lo);
 
     noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
-    noc_write_init_state<write_reg_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
 
     RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
 #ifdef RT_PROFILER_NCRISC_DEBUG

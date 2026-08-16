@@ -40,10 +40,6 @@ static void WriteRealtimeRecordsToCsv(const tt::tt_metal::experimental::ProgramR
     auto out = std::back_inserter(csv_buffer);
 
     for (const auto& record : batch.records) {
-        uint64_t duration_cycles =
-            (record.end_timestamp >= record.start_timestamp) ? (record.end_timestamp - record.start_timestamp) : 0;
-        double duration_ns = record.duration().count();
-
         fmt::format_to(
             out,
             FMT_COMPILE("{},{},{},{},{},{:.6g},{:.6g},\""),
@@ -51,8 +47,8 @@ static void WriteRealtimeRecordsToCsv(const tt::tt_metal::experimental::ProgramR
             record.chip_id,
             record.start_timestamp,
             record.end_timestamp,
-            duration_cycles,
-            duration_ns,
+            record.end_timestamp - record.start_timestamp,
+            record.duration().count(),
             record.frequency);
 
         for (size_t i = 0; i < record.kernel_sources.size(); i++) {

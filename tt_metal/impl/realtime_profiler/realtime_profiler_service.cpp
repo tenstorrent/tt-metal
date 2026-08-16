@@ -70,6 +70,9 @@ RealtimeProfilerService::~RealtimeProfilerService() {
             }
             registration = consumers_.extract(consumers_.begin());
         }
+        if (!registration.mapped().retired.exchange(true, std::memory_order_acq_rel)) {
+            num_live_consumers_.fetch_sub(1, std::memory_order_relaxed);
+        }
         destroy_consumer(registration.mapped());
     }
 }
@@ -85,8 +88,9 @@ experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::reg
 
     try {
         auto& registration = it->second;
-        for (ProgramRecordProducer* producer : attached_producers_) {
-            registration.readers.emplace_back(producer, producer->make_reader(), producer->max_batch_records());
+        registration.readers.reserve(attached_producers_.size());
+        for (const AttachedProducer& producer : attached_producers_) {
+            registration.readers.emplace_back(producer.ring, producer.ring->make_reader(), producer.max_batch_records);
         }
         registration.thread =
             std::jthread([this, &registration](std::stop_token stop_token) { run_consumer(stop_token, registration); });
@@ -94,12 +98,17 @@ experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::reg
         consumers_.erase(it);
         throw;
     }
+    num_live_consumers_.fetch_add(1, std::memory_order_relaxed);
     return handle;
 }
 
 void RealtimeProfilerService::unregister_consumer(experimental::ProgramRealtimeProfilerCallbackHandle handle) {
     if (current_registration_ != nullptr && current_registration_->handle == handle) {
-        current_registration_->retired.store(true, std::memory_order_release);
+        // exchange, not store: an external unregister may race this self-retire across the whole
+        // callback invocation, and only the one thread that flips retired may decrement.
+        if (!current_registration_->retired.exchange(true, std::memory_order_acq_rel)) {
+            num_live_consumers_.fetch_sub(1, std::memory_order_relaxed);
+        }
         current_registration_->control_pending.store(true, std::memory_order_release);
         return;
     }
@@ -110,57 +119,49 @@ void RealtimeProfilerService::unregister_consumer(experimental::ProgramRealtimeP
         registration = consumers_.extract(handle);
     }
     if (registration) {
+        if (!registration.mapped().retired.exchange(true, std::memory_order_acq_rel)) {
+            num_live_consumers_.fetch_sub(1, std::memory_order_relaxed);
+        }
         destroy_consumer(registration.mapped());
     }
     reap_retired_consumers();
 }
 
-void RealtimeProfilerService::attach_producer(ProgramRecordProducer& producer) {
+void RealtimeProfilerService::attach_producer(RealtimeProfilerRecordRing& ring, size_t max_batch_records) noexcept {
     register_builtin_realtime_profiler_consumers();
     {
         std::lock_guard topology_lock(topology_mutex_);
-        attached_producers_.insert(&producer);
-
-        try {
-            for (auto& registration : consumers_ | std::views::values) {
-                std::lock_guard control_lock(registration.control_mutex);
-                if (registration.retired.load(std::memory_order_acquire)) {
-                    continue;
-                }
-                registration.readers_to_add.emplace_back(
-                    &producer, producer.make_reader(), producer.max_batch_records());
-                registration.control_pending.store(true, std::memory_order_release);
-            }
-        } catch (...) {
-            for (auto& registration : consumers_ | std::views::values) {
-                std::lock_guard control_lock(registration.control_mutex);
-                std::erase_if(
-                    registration.readers_to_add, [&](const ProducerReader& r) { return r.producer == &producer; });
-            }
-            attached_producers_.erase(&producer);
-            throw;
-        }
-    }
-    wake_consumers();
-}
-
-void RealtimeProfilerService::detach_producer(ProgramRecordProducer& producer) {
-    {
-        std::lock_guard topology_lock(topology_mutex_);
-        attached_producers_.erase(&producer);
+        attached_producers_.push_back(AttachedProducer{.ring = &ring, .max_batch_records = max_batch_records});
 
         for (auto& registration : consumers_ | std::views::values) {
             std::lock_guard control_lock(registration.control_mutex);
             if (registration.retired.load(std::memory_order_acquire)) {
                 continue;
             }
-            registration.producers_to_drain.push_back(&producer);
+            registration.readers_to_add.emplace_back(&ring, ring.make_reader(), max_batch_records);
+            registration.control_pending.store(true, std::memory_order_release);
+        }
+    }
+    wake_consumers();
+}
+
+void RealtimeProfilerService::detach_producer(RealtimeProfilerRecordRing& ring) {
+    {
+        std::lock_guard topology_lock(topology_mutex_);
+        std::erase_if(attached_producers_, [&](const AttachedProducer& p) { return p.ring == &ring; });
+
+        for (auto& registration : consumers_ | std::views::values) {
+            std::lock_guard control_lock(registration.control_mutex);
+            if (registration.retired.load(std::memory_order_acquire)) {
+                continue;
+            }
+            registration.rings_to_drain.push_back(&ring);
             registration.control_pending.store(true, std::memory_order_release);
         }
     }
 
     wake_consumers();
-    producer.wait_until_no_readers();
+    ring.wait_until_no_readers();
 }
 
 void RealtimeProfilerService::wake_consumers() noexcept {
@@ -181,7 +182,7 @@ void RealtimeProfilerService::run_consumer(
 
     std::vector<experimental::ProgramRealtimeRecord> records;
     std::vector<ProducerReader> readers_to_add;
-    std::vector<ProgramRecordProducer*> producers_to_drain;
+    std::vector<RealtimeProfilerRecordRing*> rings_to_drain;
     // Drops noticed on a reader with nothing to deliver, carried until a batch exists to report them on.
     uint64_t pending_dropped = 0;
 
@@ -211,7 +212,7 @@ void RealtimeProfilerService::run_consumer(
             {
                 std::lock_guard control_lock(registration.control_mutex);
                 readers_to_add.swap(registration.readers_to_add);
-                producers_to_drain.swap(registration.producers_to_drain);
+                rings_to_drain.swap(registration.rings_to_drain);
                 retired = registration.retired.load(std::memory_order_acquire);
                 registration.control_pending.store(false, std::memory_order_release);
             }
@@ -224,13 +225,13 @@ void RealtimeProfilerService::run_consumer(
             std::ranges::move(readers_to_add, std::back_inserter(registration.readers));
             readers_to_add.clear();
 
-            for (auto* producer : producers_to_drain) {
-                auto it = std::ranges::find(registration.readers, producer, &ProducerReader::producer);
+            for (auto* ring : rings_to_drain) {
+                auto it = std::ranges::find(registration.readers, ring, &ProducerReader::ring);
                 if (it != registration.readers.end()) {
                     it->draining = true;
                 }
             }
-            producers_to_drain.clear();
+            rings_to_drain.clear();
         }
 
         bool made_progress = false;
@@ -262,10 +263,6 @@ void RealtimeProfilerService::run_consumer(
             }
             ++it;
         }
-        if (stop_token.stop_requested()) {
-            break;
-        }
-
         if (made_progress) {
             continue;
         }
@@ -309,15 +306,10 @@ void RealtimeProfilerService::reap_retired_consumers() {
 void RealtimeProfilerService::destroy_consumer(ConsumerRegistration& registration) {
     registration.thread.request_stop();
     wake_consumers();
-    if (registration.thread.joinable()) {
-        registration.thread.join();
-    }
+    registration.thread.join();
 
     uint64_t dropped = 0;
     for (const auto& producer_reader : registration.readers) {
-        dropped += producer_reader.reader.dropped();
-    }
-    for (const auto& producer_reader : registration.readers_to_add) {
         dropped += producer_reader.reader.dropped();
     }
     if (dropped != 0) {

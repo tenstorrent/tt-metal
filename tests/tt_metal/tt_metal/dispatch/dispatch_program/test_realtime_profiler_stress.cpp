@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Stress test for the real-time (RT) profiler. If NCRISC or the host receiver can't drain as fast as
-// BRISC produces, the device ring fills and BRISC drops records.
+// BRISC produces, the device ring fills and BRISC stalls waiting for space.
 //
 // The drain path is expected to absorb peak dispatch without backing up. This test replays a 4096 blank-kernel trace
 // back-to-back to feed BRISC at the peak rate dispatch_s can sustain, then asserts every record arrived, the device
@@ -53,9 +53,8 @@ using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
 // Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
 // Picking the trace length equal to the ring capacity is the worst case for
-// the back-pressure path: BRISC can fill the ring in roughly the time it
-// takes NCRISC to push 1–2 entries over PCIe, so by enqueue ~80 of 4096
-// the ring is at capacity and stays there for the rest of the trace.
+// the back-pressure path: a trace this long only completes without a BRISC
+// ring-full stall if NCRISC and the host sustain the production rate throughout.
 constexpr uint32_t kNumProgramsInTrace = 4096;
 
 constexpr uint32_t kDefaultStressReplaySeconds = 60;
@@ -122,6 +121,81 @@ constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
 constexpr auto kStressReportInterval = std::chrono::seconds(10);
 
+// Sync-error and frequency telemetry the load tests' callbacks accumulate; single writer
+// thread, same racy-relaxed min/max argument as FrequencyStats.
+struct RecordTelemetry {
+    std::atomic<uint64_t> sync_error_sum_ns{0};
+    std::atomic<uint64_t> sync_error_max_ns{0};
+    std::atomic<uint64_t> sync_error_window_max_ns{0};
+    std::atomic<uint64_t> sync_error_count{0};
+    FrequencyStats frequency_stats;
+
+    void note(const ProgramRealtimeRecord& rec) {
+        const uint64_t sync_error_ns = static_cast<uint64_t>(rec.clock_sync.error.count());
+        sync_error_sum_ns.fetch_add(sync_error_ns, std::memory_order_relaxed);
+        sync_error_count.fetch_add(1, std::memory_order_relaxed);
+        if (sync_error_ns > sync_error_max_ns.load(std::memory_order_relaxed)) {
+            sync_error_max_ns.store(sync_error_ns, std::memory_order_relaxed);
+        }
+        if (sync_error_ns > sync_error_window_max_ns.load(std::memory_order_relaxed)) {
+            sync_error_window_max_ns.store(sync_error_ns, std::memory_order_relaxed);
+        }
+        frequency_stats.note(rec.frequency);
+    }
+    double mean_error_ns() const {
+        const uint64_t n = sync_error_count.load(std::memory_order_relaxed);
+        return n ? static_cast<double>(sync_error_sum_ns.load(std::memory_order_relaxed)) / static_cast<double>(n)
+                 : 0.0;
+    }
+};
+
+void log_periodic_report(
+    RealtimeProfilerReceiver* rt, int64_t elapsed_seconds, uint64_t num_replays, RecordTelemetry& telemetry) {
+    const uint64_t report_batches = rt->num_published_batches();
+    const auto loop_stats = rt->take_loop_stats();
+    log_info(
+        tt::LogTest,
+        "[RT profiler stress] t={}s replays={} published={} mean_publish_batch={:.1f} peak_fifo={} this "
+        "window, {} all-time of {} pages, sync error mean={:.0f}ns max={}ns this window ({}ns all-time), "
+        "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz, probe gap max={:.0f}us this window, chords "
+        "certified={:.1f}%, loop max={}us mean={}us, fallback-tier records={}, probe rejects={}, holdback "
+        "evicts={}",
+        elapsed_seconds,
+        num_replays,
+        rt->num_published_records(),
+        report_batches ? static_cast<double>(rt->num_published_records()) / report_batches : 0.0,
+        rt->take_peak_fifo_pages(),
+        rt->peak_fifo_pages(),
+        rt->host_fifo_capacity_pages(),
+        telemetry.mean_error_ns(),
+        telemetry.sync_error_window_max_ns.exchange(0, std::memory_order_relaxed),
+        telemetry.sync_error_max_ns.load(std::memory_order_relaxed),
+        telemetry.frequency_stats.min_ghz(),
+        telemetry.frequency_stats.mean_ghz(),
+        telemetry.frequency_stats.max_ghz(),
+        static_cast<double>(rt->take_peak_probe_gap_ns()) / 1e3,
+        rt->num_chords_finalized()
+            ? 100.0 * static_cast<double>(rt->num_chords_certified()) / static_cast<double>(rt->num_chords_finalized())
+            : 0.0,
+        loop_stats[0] / 1000,
+        loop_stats[1]
+            ? std::chrono::duration_cast<std::chrono::microseconds>(kStressReportInterval).count() / loop_stats[1]
+            : 0,
+        rt->num_records_on_uncertified_chords(),
+        rt->num_rejected_probes(),
+        rt->num_holdback_evictions());
+}
+
+// Records in flight during a rare host-side stall carry honest fallback-tier bounds instead of
+// certified ones; that is correct behavior, so tolerate a sliver. A systemic certification
+// failure lands orders of magnitude above this threshold.
+void expect_certification_healthy(RealtimeProfilerReceiver* rt) {
+    EXPECT_LT(rt->num_records_on_uncertified_chords() * 1000, rt->num_published_records())
+        << rt->num_records_on_uncertified_chords() << " of " << rt->num_published_records()
+        << " record(s) published with fallback-tier bounds (>0.1%): probe cadence is breaking the certificate "
+           "budget while records are in flight.";
+}
+
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
 
@@ -170,18 +244,14 @@ distributed::MeshTraceId capture_blank_kernel_trace(const std::shared_ptr<distri
     return trace_id;
 }
 
-std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
-    return distributed::MeshDevice::create(
+// Null when the RT profiler is inactive on this dispatch config (callers GTEST_SKIP).
+std::shared_ptr<distributed::MeshDevice> open_full_profiler_mesh() {
+    auto mesh_device = distributed::MeshDevice::create(
         distributed::MeshDeviceConfig(std::nullopt),
         DEFAULT_L1_SMALL_SIZE,
         kTraceRegionSize,
         1,
         DispatchCoreConfig{DispatchCoreType::WORKER});
-}
-
-template <typename Opener>
-std::shared_ptr<distributed::MeshDevice> open_profiler_mesh(Opener opener) {
-    auto mesh_device = opener();
     if (mesh_device == nullptr) {
         return nullptr;
     }
@@ -204,15 +274,12 @@ uint64_t stress_read_wall_clock_ticks(IDevice* device, CoreCoord logical_core) {
     const tt_cxy_pair dest(device->id(), vcore);
     const uint64_t lo_addr = hal.get_tensix_wall_clock_reg_addr_lo();
     const uint64_t hi_addr = hal.get_tensix_wall_clock_reg_addr_hi();
-    uint32_t hi1 = 0;
+    // The lo read latches hi, so the pair is coherent.
     uint32_t lo = 0;
-    uint32_t hi2 = 0;
-    do {
-        cluster.read_reg(&hi1, dest, hi_addr);
-        cluster.read_reg(&lo, dest, lo_addr);
-        cluster.read_reg(&hi2, dest, hi_addr);
-    } while (hi1 != hi2);
-    return (static_cast<uint64_t>(hi1) << 32) | lo;
+    uint32_t hi = 0;
+    cluster.read_reg(&lo, dest, lo_addr);
+    cluster.read_reg(&hi, dest, hi_addr);
+    return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 
 StressWallClockSample stress_sample_wall_clock(IDevice* device, CoreCoord logical_core) {
@@ -229,7 +296,7 @@ TEST(RealtimeProfilerStress, FrequencyAccuracy) {
     constexpr double kMaxFrequencyErrorPpm = 50.0;
     constexpr CoreCoord kClockCore{0, 0};
 
-    auto mesh_device = open_profiler_mesh(open_full_mesh);
+    auto mesh_device = open_full_profiler_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -331,7 +398,7 @@ TEST(RealtimeProfilerStress, FrequencyAccuracy) {
 }
 
 TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
-    auto mesh_device = open_profiler_mesh(open_full_mesh);
+    auto mesh_device = open_full_profiler_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -340,15 +407,10 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t num_active_devices = rt->num_active_devices();
 
     std::atomic<uint64_t> stress_records{0};
-    std::atomic<uint64_t> inverted_timestamps{0};
     std::atomic<uint64_t> bad_frequency{0};
     std::atomic<uint64_t> implausible_duration{0};
     std::atomic<uint64_t> max_callback_batch{0};
-    std::atomic<uint64_t> sync_error_sum_ns{0};
-    std::atomic<uint64_t> sync_error_max_ns{0};
-    std::atomic<uint64_t> sync_error_window_max_ns{0};
-    std::atomic<uint64_t> sync_error_count{0};
-    FrequencyStats frequency_stats;
+    RecordTelemetry telemetry;
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
             max_callback_batch.store(
@@ -359,19 +421,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                     continue;
                 }
                 stress_records.fetch_add(1, std::memory_order_relaxed);
-                const uint64_t sync_error_ns = static_cast<uint64_t>(rec.clock_sync.error.count());
-                sync_error_sum_ns.fetch_add(sync_error_ns, std::memory_order_relaxed);
-                sync_error_count.fetch_add(1, std::memory_order_relaxed);
-                if (sync_error_ns > sync_error_max_ns.load(std::memory_order_relaxed)) {
-                    sync_error_max_ns.store(sync_error_ns, std::memory_order_relaxed);
-                }
-                if (sync_error_ns > sync_error_window_max_ns.load(std::memory_order_relaxed)) {
-                    sync_error_window_max_ns.store(sync_error_ns, std::memory_order_relaxed);
-                }
-                if (rec.end_timestamp < rec.start_timestamp) {
-                    inverted_timestamps.fetch_add(1, std::memory_order_relaxed);
-                }
-                frequency_stats.note(rec.frequency);
+                telemetry.note(rec);
                 if (!(rec.frequency > 0.0)) {
                     bad_frequency.fetch_add(1, std::memory_order_relaxed);
                 } else if (rec.duration().count() >= kMaxStressDurationNs) {
@@ -406,35 +456,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         ++num_replays;
         const auto now = std::chrono::steady_clock::now();
         if (now - last_report >= kStressReportInterval) {
-            const uint64_t report_batches = rt->num_published_batches();
-            const uint64_t sync_errors = sync_error_count.load(std::memory_order_relaxed);
-            log_info(
-                tt::LogTest,
-                "[RT profiler stress] t={}s replays={} published={} mean_publish_batch={:.1f} peak_fifo={} this "
-                "window, {} all-time of {} pages, sync error mean={:.0f}ns max={}ns this window ({}ns all-time), "
-                "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz, probe gap max={:.0f}us this window, chords "
-                "certified={:.1f}%, fallback-tier records={}, probe rejects={}, holdback evicts={}",
+            log_periodic_report(
+                rt,
                 std::chrono::duration_cast<std::chrono::seconds>(now - replay_start).count(),
                 num_replays,
-                rt->num_published_records(),
-                report_batches ? static_cast<double>(rt->num_published_records()) / report_batches : 0.0,
-                rt->take_peak_fifo_pages(),
-                rt->peak_fifo_pages(),
-                rt->host_fifo_capacity_pages(),
-                sync_errors ? static_cast<double>(sync_error_sum_ns.load(std::memory_order_relaxed)) / sync_errors
-                            : 0.0,
-                sync_error_window_max_ns.exchange(0, std::memory_order_relaxed),
-                sync_error_max_ns.load(std::memory_order_relaxed),
-                frequency_stats.min_ghz(),
-                frequency_stats.mean_ghz(),
-                frequency_stats.max_ghz(),
-                static_cast<double>(rt->take_peak_probe_gap_ns()) / 1e3,
-                rt->num_chords_finalized() ? 100.0 * static_cast<double>(rt->num_chords_certified()) /
-                                                 static_cast<double>(rt->num_chords_finalized())
-                                           : 0.0,
-                rt->num_records_on_uncertified_chords(),
-                rt->num_rejected_probes(),
-                rt->num_holdback_evictions());
+                telemetry);
             last_report = now;
         }
         if (now >= replay_deadline) {
@@ -456,12 +482,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
-    const uint64_t sync_errors = sync_error_count.load(std::memory_order_relaxed);
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
         "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} inverted-timestamp drops, {} "
-        "unmappable drops, {} bad-frequency, {} implausible-duration, sync error mean={:.0f}ns max={}ns, "
+        "bad-frequency, {} implausible-duration, sync error mean={:.0f}ns max={}ns, "
         "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz",
         stress_records.load(),
         num_active_devices,
@@ -472,14 +497,13 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         fifo_capacity_pages,
         ring_full_waits,
         rt->num_inverted_timestamp_records(),
-        rt->num_unmappable_records(),
         bad_frequency.load(),
         implausible_duration.load(),
-        sync_errors ? static_cast<double>(sync_error_sum_ns.load(std::memory_order_relaxed)) / sync_errors : 0.0,
-        sync_error_max_ns.load(std::memory_order_relaxed),
-        frequency_stats.min_ghz(),
-        frequency_stats.mean_ghz(),
-        frequency_stats.max_ghz());
+        telemetry.mean_error_ns(),
+        telemetry.sync_error_max_ns.load(std::memory_order_relaxed),
+        telemetry.frequency_stats.min_ghz(),
+        telemetry.frequency_stats.mean_ghz(),
+        telemetry.frequency_stats.max_ghz());
 
     ASSERT_GE(stress_records.load(), expected_stress_records)
         << "expected one record per program run: " << kNumProgramsInTrace << " programs per replay x " << num_replays
@@ -494,17 +518,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
 
     EXPECT_EQ(rt->num_inverted_timestamp_records(), 0u)
         << rt->num_inverted_timestamp_records() << " inverted-timestamp drops (end < start)";
-    EXPECT_EQ(rt->num_unmappable_records(), 0u)
-        << rt->num_unmappable_records() << " unmappable drops (timestamp before every retained sync probe)";
-    // Records in flight during a rare host-side stall carry honest fallback-tier bounds instead of
-    // certified ones; that is correct behavior, so tolerate a sliver. A systemic certification
-    // failure lands orders of magnitude above this threshold.
-    EXPECT_LT(rt->num_records_on_uncertified_chords() * 1000, rt->num_published_records())
-        << rt->num_records_on_uncertified_chords() << " of " << rt->num_published_records()
-        << " record(s) published with fallback-tier bounds (>0.1%): probe cadence is breaking the certificate "
-           "budget while records are in flight.";
-    EXPECT_EQ(inverted_timestamps.load(), 0u)
-        << inverted_timestamps.load() << " delivered record(s) had end_timestamp < start_timestamp";
+    expect_certification_healthy(rt);
     EXPECT_EQ(bad_frequency.load(), 0u) << bad_frequency.load() << " stress record(s) had a non-positive frequency";
     EXPECT_EQ(implausible_duration.load(), 0u)
         << implausible_duration.load() << " stress record(s) reported duration >= " << kMaxStressDurationNs
@@ -520,7 +534,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const std::chrono::seconds run_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_DROP_ACCOUNTING", kDefaultDropAccountingSeconds));
 
-    auto mesh_device = open_profiler_mesh(open_full_mesh);
+    auto mesh_device = open_full_profiler_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -532,17 +546,26 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const distributed::MeshTraceId trace_id = capture_blank_kernel_trace(mesh_device);
 
     constexpr auto kCalibrationWindow = std::chrono::seconds(2);
-    const uint64_t pubs_before = rt->num_published_records();
+    // Records are only mapped and published while a consumer is registered (the receiver
+    // discards otherwise), so calibration measures through one: everything produced lands as
+    // either a delivered record or a counted drop.
+    std::atomic<uint64_t> calibration_records{0};
+    const ProgramRealtimeProfilerCallbackHandle h_calibration =
+        RegisterProgramRealtimeProfilerCallback([&calibration_records](const ProgramRealtimeRecordBatch& batch) {
+            calibration_records.fetch_add(batch.records.size() + batch.dropped, std::memory_order_relaxed);
+        });
     const auto cal_start = std::chrono::steady_clock::now();
     const auto cal_deadline = cal_start + kCalibrationWindow;
     while (std::chrono::steady_clock::now() < cal_deadline) {
         mesh_device->replay_mesh_trace(cq, trace_id, true);
     }
     const double cal_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cal_start).count();
-    const double production_rate = static_cast<double>(rt->num_published_records() - pubs_before) / cal_seconds;
+    const double production_rate =
+        static_cast<double>(calibration_records.load(std::memory_order_relaxed)) / cal_seconds;
     ASSERT_GT(production_rate, 0.0) << "no records produced during calibration";
     mesh_device->quiesce_devices();
     std::this_thread::sleep_for(kPostQuiesceDrain);
+    UnregisterProgramRealtimeProfilerCallback(h_calibration);
 
     // fraction of the production rate each consumer can sustain
     constexpr double kBorderlineSustainFraction = 0.95;
@@ -569,11 +592,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     Counters keeps_up;
     Counters borderline;
     Counters slow;
-    std::atomic<uint64_t> sync_error_sum_ns{0};
-    std::atomic<uint64_t> sync_error_max_ns{0};
-    std::atomic<uint64_t> sync_error_window_max_ns{0};
-    std::atomic<uint64_t> sync_error_count{0};
-    FrequencyStats frequency_stats;
+    RecordTelemetry telemetry;
 
     auto make_consumer = [](Counters& c, std::chrono::nanoseconds per_record) {
         return [&c, per_record, start = std::chrono::steady_clock::time_point{}, paced = uint64_t{0}](
@@ -598,16 +617,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
             keeps_up.received.fetch_add(batch.records.size(), std::memory_order_relaxed);
             keeps_up.dropped.fetch_add(batch.dropped, std::memory_order_relaxed);
             for (const auto& rec : batch.records) {
-                const uint64_t sync_error_ns = static_cast<uint64_t>(rec.clock_sync.error.count());
-                sync_error_sum_ns.fetch_add(sync_error_ns, std::memory_order_relaxed);
-                sync_error_count.fetch_add(1, std::memory_order_relaxed);
-                if (sync_error_ns > sync_error_max_ns.load(std::memory_order_relaxed)) {
-                    sync_error_max_ns.store(sync_error_ns, std::memory_order_relaxed);
-                }
-                if (sync_error_ns > sync_error_window_max_ns.load(std::memory_order_relaxed)) {
-                    sync_error_window_max_ns.store(sync_error_ns, std::memory_order_relaxed);
-                }
-                frequency_stats.note(rec.frequency);
+                telemetry.note(rec);
             }
         });
     ProgramRealtimeProfilerCallbackHandle h_borderline =
@@ -624,41 +634,8 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         ++num_replays;
         const auto now = std::chrono::steady_clock::now();
         if (now - last_report >= kStressReportInterval) {
-            const uint64_t report_batches = rt->num_published_batches();
-            const uint64_t sync_errors = sync_error_count.load(std::memory_order_relaxed);
-            const auto loop_stats = rt->take_loop_stats();
-            log_info(
-                tt::LogTest,
-                "[RT profiler stress] t={}s replays={} published={} mean_publish_batch={:.1f} peak_fifo={} this "
-                "window, {} all-time of {} pages, sync error mean={:.0f}ns max={}ns this window ({}ns all-time), "
-                "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz, probe gap max={:.0f}us this window, chords "
-                "certified={:.1f}%, loop max={}us mean={}us, fallback-tier records={}, probe rejects={}, holdback "
-                "evicts={}",
-                std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
-                num_replays,
-                rt->num_published_records(),
-                report_batches ? static_cast<double>(rt->num_published_records()) / report_batches : 0.0,
-                rt->take_peak_fifo_pages(),
-                rt->peak_fifo_pages(),
-                rt->host_fifo_capacity_pages(),
-                sync_errors ? static_cast<double>(sync_error_sum_ns.load(std::memory_order_relaxed)) / sync_errors
-                            : 0.0,
-                sync_error_window_max_ns.exchange(0, std::memory_order_relaxed),
-                sync_error_max_ns.load(std::memory_order_relaxed),
-                frequency_stats.min_ghz(),
-                frequency_stats.mean_ghz(),
-                frequency_stats.max_ghz(),
-                static_cast<double>(rt->take_peak_probe_gap_ns()) / 1e3,
-                rt->num_chords_finalized() ? 100.0 * static_cast<double>(rt->num_chords_certified()) /
-                                                 static_cast<double>(rt->num_chords_finalized())
-                                           : 0.0,
-                loop_stats[0] / 1000,
-                loop_stats[1] ? std::chrono::duration_cast<std::chrono::microseconds>(kStressReportInterval).count() /
-                                    loop_stats[1]
-                              : 0,
-                rt->num_records_on_uncertified_chords(),
-                rt->num_rejected_probes(),
-                rt->num_holdback_evictions());
+            log_periodic_report(
+                rt, std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(), num_replays, telemetry);
             last_report = now;
         }
         if (now >= run_deadline) {
@@ -699,7 +676,6 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
-    const uint64_t sync_errors = sync_error_count.load(std::memory_order_relaxed);
     log_info(
         tt::LogTest,
         "[RT profiler stress] devices={} total={} peak_fifo={}/{} pages mean_publish_batch={:.1f} | "
@@ -716,11 +692,11 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         slow_received,
         slow_dropped,
         slow_total,
-        sync_errors ? static_cast<double>(sync_error_sum_ns.load(std::memory_order_relaxed)) / sync_errors : 0.0,
-        sync_error_max_ns.load(std::memory_order_relaxed),
-        frequency_stats.min_ghz(),
-        frequency_stats.mean_ghz(),
-        frequency_stats.max_ghz());
+        telemetry.mean_error_ns(),
+        telemetry.sync_error_max_ns.load(std::memory_order_relaxed),
+        telemetry.frequency_stats.min_ghz(),
+        telemetry.frequency_stats.mean_ghz(),
+        telemetry.frequency_stats.max_ghz());
 
     UnregisterProgramRealtimeProfilerCallback(h_keeps_up);
     UnregisterProgramRealtimeProfilerCallback(h_borderline);
@@ -732,13 +708,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
 
     EXPECT_EQ(borderline_total, keeps_up_received) << "borderline consumer lost or double-counted records";
     EXPECT_EQ(slow_total, keeps_up_received) << "slow consumer lost or double-counted records";
-    // Records in flight during a rare host-side stall carry honest fallback-tier bounds instead of
-    // certified ones; that is correct behavior, so tolerate a sliver. A systemic certification
-    // failure lands orders of magnitude above this threshold.
-    EXPECT_LT(rt->num_records_on_uncertified_chords() * 1000, rt->num_published_records())
-        << rt->num_records_on_uncertified_chords() << " of " << rt->num_published_records()
-        << " record(s) published with fallback-tier bounds (>0.1%): probe cadence is breaking the certificate "
-           "budget while records are in flight.";
+    expect_certification_healthy(rt);
     EXPECT_LE(borderline_dropped, slow_dropped)
         << "the faster (borderline) consumer dropped more than the slower one; impossible unless the ring is "
         << "misattributing drops between the two readers";

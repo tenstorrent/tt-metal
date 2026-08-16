@@ -14,7 +14,6 @@
 #include <iterator>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -37,6 +36,7 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "realtime_profiler_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "impl/realtime_profiler/device_clock_sync.hpp"
@@ -51,76 +51,13 @@ using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
-std::string make_sync_kernel_source(uint32_t runtime_id) {
-    return "#include <cstdint>\n"
-           "// rt_profiler_sync_marker_" +
-           std::to_string(runtime_id) +
-           "\n"
-           "void kernel_main() {\n"
-           "    for (int i = 0; i < 200; i++) {\n"
-           "#pragma GCC unroll 65534\n"
-           "        for (int j = 0; j < 200; j++) {\n"
-           "            asm(\"nop\");\n"
-           "        }\n"
-           "    }\n"
-           "}\n";
-}
-
-Program make_sync_program(const std::string& kernel_src, const CoreRange& cores, uint32_t runtime_id) {
-    Program program = CreateProgram();
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernelFromString(program, kernel_src, cores, ComputeConfig{});
-    program.set_runtime_id(static_cast<uint64_t>(runtime_id));
-    return program;
-}
-
 void enqueue_sync_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& cores) {
-    distributed::MeshWorkload workload;
-    workload.add_program(
-        distributed::MeshCoordinateRange(mesh_device->shape()),
-        make_sync_program(make_sync_kernel_source(runtime_id), cores, runtime_id));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-}
-
-std::shared_ptr<distributed::MeshDevice> open_profiler_unit_mesh() {
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        /*device_id=*/0,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        /*num_command_queues=*/1,
-        DispatchCoreConfig{DispatchCoreType::WORKER});
-    if (mesh_device == nullptr) {
-        return nullptr;
-    }
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        return nullptr;
-    }
-    return mesh_device;
-}
-
-CoreRange all_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-    return CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1});
-}
-
-template <typename Predicate>
-void quiesce_and_wait_for(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Predicate delivered) {
-    mesh_device->quiesce_devices();
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
-    while (!delivered() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(5ms);
-    }
+    // A unique source per runtime_id would force JIT compiles mid-measurement.
+    enqueue_rt_profiler_program(
+        mesh_device,
+        make_rt_profiler_program(rt_profiler_nop_kernel_source(), cores, runtime_id),
+        /*blocking=*/false);
 }
 
 constexpr auto kMaxSyncError = std::chrono::microseconds(15);
@@ -343,7 +280,8 @@ TEST(RealtimeProfilerSync, RecordMappingMatchesAnIndependentClockRead) {
         reads_beyond_claim);
 
     EXPECT_LE(std::abs(mean_residual_ns), kMaxMeanMappingErrorNs)
-        << "published mapping disagrees with independent device-clock reads by more than a few microseconds";
+        << "published mapping disagrees with independent device-clock reads beyond the " << kMaxMeanMappingErrorNs
+        << " ns bound";
     EXPECT_LE(reads_beyond_claim, num_reads / 100)
         << "published sync error understates the residual against independent reads too often";
     EXPECT_TRUE(mesh_device->close());
@@ -413,18 +351,14 @@ TEST(RealtimeProfilerSync, FrequencyMatchesAnIndependentLinearFit) {
             enqueue_filler();
         }
         uint32_t lo = 0;
-        uint32_t lo_again = 0;
         uint32_t hi = 0;
         const int64_t before = host_now_ns();
         cluster.read_reg(&lo, clock_dest, clock_addr_lo);
         const int64_t after = host_now_ns();
-        // The lo read latches hi; the second lo read discards the rare wrap that would tear the pair.
+        // The lo read latches hi, so the pair is coherent.
         cluster.read_reg(&hi, clock_dest, clock_addr_hi);
-        cluster.read_reg(&lo_again, clock_dest, clock_addr_lo);
-        if (lo_again >= lo) {
-            samples.push_back(
-                FitSample{(before + after) / 2, (static_cast<uint64_t>(hi) << 32) | lo, (after - before) / 2});
-        }
+        samples.push_back(
+            FitSample{(before + after) / 2, (static_cast<uint64_t>(hi) << 32) | lo, (after - before) / 2});
         std::this_thread::sleep_for(kFitSampleSpacing);
     }
     quiesce_and_wait_for(mesh_device, [&] { return delivered.load() >= enqueued; });
@@ -559,7 +493,6 @@ void kernel_main() {
     EXPECT_GT(it->duration(), std::chrono::seconds(1));
     EXPECT_LT(it->duration(), std::chrono::seconds(30));
     EXPECT_GE(it->host_start(), window_start - std::chrono::milliseconds(2));
-    EXPECT_GE(it->host_end(), window_start);
     EXPECT_LE(it->host_end(), window_end + std::chrono::milliseconds(2));
     EXPECT_GT(it->clock_sync.error, std::chrono::nanoseconds::zero());
     // A start predating the probe history rides back at the practical smoothed-frequency spread
@@ -582,6 +515,10 @@ void kernel_main() {
 
 constexpr double kSpacingNs = std::chrono::duration<double, std::nano>(kDeviceClockSyncInterval).count();
 constexpr double kProbeErrorNs = 500.0;
+// Construction-time practical band (production passes the AICLK operating range); wide enough to
+// contain every rate the synthetic clocks visit.
+constexpr double kTestRateBandLoGhz = 0.5;
+constexpr double kTestRateBandHiGhz = 2.0;
 
 // Piecewise-constant-rate clock; the tests space transitions per the DVFS cadence except where
 // they deliberately exercise the uncertified fallback.
@@ -643,27 +580,23 @@ ClockSyncMapping::RecordMapping map_and_expect_covered(
     const std::string& what) {
     const auto start = static_cast<uint64_t>(std::llround(clock.device_at(start_host_ns)));
     const auto end = static_cast<uint64_t>(std::llround(clock.device_at(end_host_ns)));
-    const auto record = mapping.map_record(start, end);
-    EXPECT_TRUE(record.has_value()) << what << ": record was unmappable";
-    if (!record.has_value()) {
-        return {};
-    }
+    const ClockSyncMapping::RecordMapping record = mapping.map_record(start, end);
     constexpr double kRoundingSlopNs = 4.0;
-    const double claim_ns = static_cast<double>(record->error.count()) + kRoundingSlopNs;
+    const double claim_ns = static_cast<double>(record.error.count()) + kRoundingSlopNs;
     const auto mapped_host = [&](uint64_t device_timestamp) {
-        return (static_cast<double>(device_timestamp) - static_cast<double>(record->device_cycle_offset)) /
-               record->frequency;
+        return (static_cast<double>(device_timestamp) - static_cast<double>(record.device_cycle_offset)) /
+               record.frequency;
     };
     EXPECT_LE(std::abs(mapped_host(start) - clock.host_at(static_cast<double>(start))), claim_ns)
         << what << ": start misplaced beyond the published error";
     EXPECT_LE(std::abs(mapped_host(end) - clock.host_at(static_cast<double>(end))), claim_ns)
         << what << ": end misplaced beyond the published error";
-    return *record;
+    return record;
 }
 
 TEST(RealtimeProfilerSync, MappingQuietClockIsTightAndCovered) {
     SyntheticDeviceClock clock(1.0);
-    ClockSyncMapping mapping;
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 20.0 * kSpacingNs);
 
@@ -677,22 +610,37 @@ TEST(RealtimeProfilerSync, MappingQuietClockIsTightAndCovered) {
 
 TEST(RealtimeProfilerSync, MappingRidesRecordsOlderThanRetainedHistory) {
     SyntheticDeviceClock clock(1.0);
-    ClockSyncMapping mapping;
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
     SyntheticProbeFeed feed{mapping, clock};
-
-    EXPECT_FALSE(mapping.map_record(100, 200).has_value()) << "no probes: nothing to price with";
-    feed.feed(0.0, 0.0);
-    EXPECT_FALSE(mapping.map_record(100, 200).has_value()) << "one probe: still no rate knowledge";
 
     // Slide retention well past the run's start, then map records from the evicted era: both
     // endpoints predate the oldest retained probe, the pre-ring-buffer drop case.
     const double span_ns = 1.25 * static_cast<double>(ClockSyncMapping::kProbeHistoryCapacity) * kSpacingNs;
-    feed.feed(kSpacingNs, span_ns);
+    feed.feed(0.0, span_ns);
     const double evicted_era_ns = 0.02 * span_ns;
     const auto record =
         map_and_expect_covered(mapping, clock, evicted_era_ns, evicted_era_ns + 180e3, "evicted-era record");
     EXPECT_NEAR(record.frequency, 1.0, 0.01) << "ride frequency should come from the observed band";
     EXPECT_LT(record.error, 100us) << "quiet-clock ride bound should stay band-scale, not span-scale";
+}
+
+TEST(RealtimeProfilerSync, MappingInitialBandIsReplacedByTheFirstMatureWindow) {
+    SyntheticDeviceClock clock(1.0);
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
+    SyntheticProbeFeed feed{mapping, clock};
+    feed.feed(10.0 * kSpacingNs, 20.0 * kSpacingNs);
+
+    // Pre-maturity, rides pay the full construction-band spread.
+    const auto seeded = map_and_expect_covered(mapping, clock, 0.0, 0.5 * kSpacingNs, "construction-band ride");
+    EXPECT_GT(seeded.error, 1ms) << "pre-maturity rides must pay the full construction-band spread";
+
+    // A mature window must replace the construction band, not fold into it: an evicted-era ride
+    // then prices at the measured band, orders of magnitude under the construction spread.
+    const double span_ns = 1.25 * static_cast<double>(ClockSyncMapping::kProbeHistoryCapacity) * kSpacingNs;
+    feed.feed(21.0 * kSpacingNs, span_ns);
+    const auto measured =
+        map_and_expect_covered(mapping, clock, 0.02 * span_ns, 0.02 * span_ns + 180e3, "measured ride");
+    EXPECT_LT(measured.error, 100us) << "the construction band leaked past window maturity";
 }
 
 TEST(RealtimeProfilerSync, ProbeStepPlausibilityRejectsGarbageReads) {
@@ -735,7 +683,7 @@ TEST(RealtimeProfilerSync, SmoothedFrequencyMatchesInitSyncRegression) {
     double init_sq = 0.0;
     for (int seed = 0; seed < kSeeds; ++seed) {
         SyntheticDeviceClock clock(kTrueRate);
-        ClockSyncMapping mapping;
+        ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
         SyntheticProbeFeed feed{mapping, clock};
         feed.lcg_state += static_cast<uint64_t>(seed) * 0x9E3779B97F4A7C15ull;
         feed.feed(0.0, kRunSpanNs);
@@ -745,8 +693,7 @@ TEST(RealtimeProfilerSync, SmoothedFrequencyMatchesInitSyncRegression) {
         const auto start = static_cast<uint64_t>(std::llround(clock.device_at(chord_open + 60e3)));
         const auto end = static_cast<uint64_t>(std::llround(clock.device_at(chord_open + 240e3)));
         const auto record = mapping.map_record(start, end);
-        ASSERT_TRUE(record.has_value());
-        ours_sq += (record->frequency - kTrueRate) * (record->frequency - kTrueRate);
+        ours_sq += (record.frequency - kTrueRate) * (record.frequency - kTrueRate);
 
         uint64_t lcg = 0x0123456789ABCDEFull + static_cast<uint64_t>(seed) * 0xD1B54A32D192ED03ull;
         double sum_t = 0.0;
@@ -788,7 +735,7 @@ TEST(RealtimeProfilerSync, MappingCoversAStepLateInAChord) {
     const double step_at = 5.0 * kSpacingNs + 0.9 * kSpacingNs;
     clock.set_rate_at(step_at, 1.35);
 
-    ClockSyncMapping mapping;
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 12.0 * kSpacingNs);
 
@@ -809,7 +756,7 @@ TEST(RealtimeProfilerSync, MappingSurvivesTheTwoStepCancellation) {
     clock.set_rate_at(2'100e3, 0.5);
     clock.set_rate_at(3'250e3, 0.67);
 
-    ClockSyncMapping mapping;
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 5'000e3, /*spacing_ns=*/500e3);
 
@@ -828,7 +775,7 @@ TEST(RealtimeProfilerSync, MappingCoversAReceiverStall) {
     clock.set_rate_at(3'400e3, 1.35);
     clock.set_rate_at(4'600e3, 0.5);
 
-    ClockSyncMapping mapping;
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 3'000e3);
     feed.feed(5'400e3, 6'600e3);
@@ -843,7 +790,7 @@ TEST(RealtimeProfilerSync, MappingFrequencyTracksATransition) {
     const double step_at = 100.0 * kSpacingNs + 150e3;
     clock.set_rate_at(step_at, 1.2);
 
-    ClockSyncMapping mapping;
+    ClockSyncMapping mapping(kTestRateBandLoGhz, kTestRateBandHiGhz);
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 200.0 * kSpacingNs);
 

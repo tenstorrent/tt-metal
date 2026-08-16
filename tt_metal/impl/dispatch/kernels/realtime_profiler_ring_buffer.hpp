@@ -97,8 +97,6 @@ inline bool rt_ring_full(volatile RtProfilerRingBuffer* rb) {
     return (rb->write_index - rb->read_index) >= RT_PROFILER_RING_CAPACITY;
 }
 
-inline bool rt_ring_empty(volatile RtProfilerRingBuffer* rb) { return rb->write_index == rb->read_index; }
-
 // Kernel-only helper: returns the L1 address (as uint32) of the ring slot at `index`.
 // Computed via offset arithmetic so the file is also includable from 64-bit host TUs
 // without triggering pointer-narrowing warnings.

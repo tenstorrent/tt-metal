@@ -19,8 +19,10 @@ constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
 // commands so the host can filter those records out.
 constexpr uint16_t REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID = 0;
 
-// Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
+static_assert(
+    sizeof(realtime_profiler_msg_t{}.program_id_fifo) / sizeof(uint32_t) == PROGRAM_ID_FIFO_SIZE,
+    "program_id_fifo helpers and the shared message layout disagree on the FIFO depth");
 
 #ifndef ARCH_QUASAR
 // Append a program ID to the circular buffer embedded in realtime_profiler_msg_t.
@@ -32,7 +34,6 @@ bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uin
     uint32_t end = msg->program_id_fifo_end;
     uint32_t next_end = (end + 1) % PROGRAM_ID_FIFO_SIZE;
 
-    // Check if buffer is full (next write position equals read position)
     if (next_end == msg->program_id_fifo_start) {
         return false;
     }
@@ -48,7 +49,6 @@ FORCE_INLINE
 bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t* program_id) {
     uint32_t start = msg->program_id_fifo_start;
 
-    // Check if buffer is empty (read position equals write position)
     if (start == msg->program_id_fifo_end) {
         return false;
     }
@@ -74,7 +74,6 @@ void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* msg, 
     RealtimeProfilerState state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
     bool use_buffer_a = (state == REALTIME_PROFILER_STATE_PUSH_B);
 
-    // Get pointer to appropriate timestamp field
     volatile realtime_profiler_timestamp_t* ts;
     if (use_buffer_a) {
         ts = is_start ? &msg->kernel_start_a : &msg->kernel_end_a;

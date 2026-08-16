@@ -4,16 +4,13 @@
 
 #pragma once
 
-#include <chrono>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 
 #include "context/context_types.hpp"
-#include "tt_metal/common/broadcast_ring.hpp"
 #include "tt_metal/common/ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
@@ -62,6 +59,8 @@ struct RealtimeProfilerDevice {
     std::unique_ptr<Program> realtime_profiler_program;
     RealtimeProfilerCoreL1Addrs core_l1;
     std::unique_ptr<DeviceClockSync> clock_sync;
+    // The receiver's consumer-side handle onto clock_sync (declared after it: destroyed first).
+    std::unique_ptr<DeviceClockSync::View> clock_view;
     // Sized to a full FIFO of records: overflow then means holdback exceeded an entire FIFO of
     // past-watermark records — a probe outage longer than a FIFO fill — where the evicted records
     // earn fallback pricing anyway. Ends are monotone (dispatch_s stamps serially).
@@ -69,14 +68,6 @@ struct RealtimeProfilerDevice {
     // Pages consumed but not yet acked to the device (see the receiver's kAckBatchPages).
     uint32_t unacked_pages = 0;
     bool fifo_capacity_warned = false;
-
-    // Probe pipe: the sync thread writes each probe it takes, the receiver drains them into
-    // clock_sync's mapping at publish time. Sized so the writer laps the reader only after the
-    // receiver has been absent for multiple seconds; a lap costs the gap's chords their
-    // certificates, exactly as the stall itself would. Declared before the reader so the reader
-    // is destroyed first.
-    std::unique_ptr<BroadcastRing<DeviceClockSync::Anchor>> probe_ring;
-    std::optional<BroadcastRing<DeviceClockSync::Anchor>::Reader> probe_reader;
 
     RealtimeProfilerDevice();
     ~RealtimeProfilerDevice();
@@ -86,7 +77,9 @@ struct RealtimeProfilerDevice {
     RealtimeProfilerDevice& operator=(const RealtimeProfilerDevice&) = delete;
 };
 
-// Devices failing the eligibility gate or socket creation are skipped, so the result may be empty.
+// Devices failing the eligibility gate or socket creation are skipped, so the result may be
+// empty. The caller registers each device's clock sync with its ProbeScheduler; nothing here
+// retains a pointer into the result, so a mid-loop throw unwinds cleanly.
 std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
 

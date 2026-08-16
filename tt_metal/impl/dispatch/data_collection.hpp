@@ -73,7 +73,7 @@ void RecordProgramSubDevice(
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);
 
 // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
-// The returned span is valid until MetalContext teardown or reinitialization.
+// The returned span remains valid for the lifetime of the process.
 std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
 
 }  // end namespace tt

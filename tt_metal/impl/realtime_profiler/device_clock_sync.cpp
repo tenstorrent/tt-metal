@@ -5,12 +5,22 @@
 #include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <span>
+#include <thread>
+
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
+
+#include <common/TracySystem.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
@@ -19,7 +29,6 @@
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/tlb.hpp>
@@ -33,6 +42,9 @@
 namespace tt::tt_metal {
 
 constexpr auto kMaxProbeGapBeforeRereadingHi = std::chrono::seconds(1);
+
+// Best-of-N cap for one probe's bracketed reads.
+constexpr int kResyncProbes = 4;
 
 namespace {
 
@@ -88,14 +100,6 @@ constexpr double kFallbackBandNoisePad = 0.005;
 void ClockSyncMapping::set_fallback_step_bound(Chord& chord, double span_ns) const {
     // The mature smoothed band, not a lifetime fold of raw secants — that fold creeps wider with
     // every extreme noise draw and contended-era brackets poison it for good.
-    if (!(smoothed_frequency_min_ > 0.0)) {
-        // No rate knowledge yet: containment of both true and interpolated time in the chord,
-        // with no distance refinement (threshold zero).
-        chord.nonlinearity_ns = std::llround(span_ns);
-        chord.refine_slope = 0.0;
-        chord.refine_threshold_cycles = 0;
-        return;
-    }
     const double lo = smoothed_frequency_min_ * (1.0 - kFallbackBandNoisePad);
     const double hi = smoothed_frequency_max_ * (1.0 + kFallbackBandNoisePad);
     chord.nonlinearity_ns = transition_step_bound_ns(span_ns, hi / lo);
@@ -103,12 +107,33 @@ void ClockSyncMapping::set_fallback_step_bound(Chord& chord, double span_ns) con
     chord.refine_threshold_cycles = refine_threshold_for(chord.nonlinearity_ns, chord.refine_slope);
 }
 
+ClockSyncMapping::ClockSyncMapping(double rate_lo, double rate_hi, size_t probe_history_capacity) :
+    probe_capacity_(std::bit_ceil(probe_history_capacity)),
+    probe_mask_(probe_capacity_ - 1),
+    probe_history_(probe_capacity_),
+    chords_(probe_capacity_),
+    window_rate_lo_(probe_capacity_),
+    window_rate_hi_(probe_capacity_),
+    smoothed_frequency_min_(rate_lo),
+    smoothed_frequency_max_(rate_hi) {
+    TT_FATAL(rate_lo > 0.0 && rate_hi >= rate_lo, "Invalid practical rate band [{}, {}] GHz", rate_lo, rate_hi);
+    TT_FATAL(probe_history_capacity >= 4, "Probe history must retain at least four probes to certify a chord");
+}
+
 void ClockSyncMapping::add_probe(const Anchor& probe) {
-    TT_ASSERT(
-        probes_end_ == 0 || (probe.device_timestamp > probe_at(probes_end_ - 1).device_timestamp &&
-                             probe.host_timestamp > probe_at(probes_end_ - 1).host_timestamp));
+    if (probes_end_ != 0) {
+        const Anchor& newest = probe_at(probes_end_ - 1);
+        // Reachable only when a garbage read was accepted as the very first plausibility
+        // reference (nothing to validate against) and the post-reset good probes now trail it.
+        // Discarding until the true counter passes the garbage value self-heals in bounded time;
+        // a negative-delta chord never would.
+        if (probe.device_timestamp <= newest.device_timestamp || probe.host_timestamp <= newest.host_timestamp) {
+            num_discarded_probes_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
     const uint64_t close_index = probes_end_;
-    const size_t slot = close_index & (kProbeHistoryCapacity - 1);
+    const size_t slot = close_index & probe_mask_;
     probe_history_[slot] = probe;
     ++probes_end_;
 
@@ -144,7 +169,7 @@ void ClockSyncMapping::finalize_chord(uint64_t close_index) {
     const Anchor& open = probe_at(close_index - 1);
     const Anchor& close = probe_at(close_index);
     const Anchor& outer_close = probe_at(close_index + 1);
-    Chord& chord = chords_[close_index & (kProbeHistoryCapacity - 1)];
+    Chord& chord = chords_[close_index & probe_mask_];
     num_finalized_chords_.fetch_add(1, std::memory_order_relaxed);
     const double span_ns = span_ns_between(open, close) + ns_count(open.error + close.error);
 
@@ -159,7 +184,7 @@ void ClockSyncMapping::finalize_chord(uint64_t close_index) {
 
     const auto back_window = (close.host_timestamp - outer_open.host_timestamp) + outer_open.error + close.error;
     const auto forward_window = (outer_close.host_timestamp - open.host_timestamp) + open.error + outer_close.error;
-    if (back_window >= kDvfsMinTransitionSpacing || forward_window >= kDvfsMinTransitionSpacing) {
+    if (back_window >= kDvfsCertificateWindowBudget || forward_window >= kDvfsCertificateWindowBudget) {
         frequency_window_active_ = false;
         // Holdback publishes records only after finalize, so this restamp — not the creation-time
         // one — is the bound they see.
@@ -171,7 +196,6 @@ void ClockSyncMapping::finalize_chord(uint64_t close_index) {
     chord.refine_slope = 1.0 / rate_lo - 1.0 / rate_hi;
     chord.refine_threshold_cycles = refine_threshold_for(chord.nonlinearity_ns, chord.refine_slope);
     chord.rate_lo = rate_lo;
-    chord.rate_hi = rate_hi;
     num_certified_chords_.fetch_add(1, std::memory_order_relaxed);
 
     const auto push_bracket = [&] {
@@ -217,9 +241,10 @@ void ClockSyncMapping::finalize_chord(uint64_t close_index) {
     // Young windows would widen the practical spread with plain secant noise; fold only once the
     // baseline makes the smoothed value ppm-accurate.
     if (window_span_ns >= ns_count(std::chrono::duration_cast<std::chrono::nanoseconds>(kFrequencyWindowMax)) / 2) {
-        if (smoothed_frequency_max_ == 0.0) {
+        if (practical_band_provisional_) {
             smoothed_frequency_min_ = chord.smoothed_frequency;
             smoothed_frequency_max_ = chord.smoothed_frequency;
+            practical_band_provisional_ = false;
         } else {
             smoothed_frequency_min_ = std::min(smoothed_frequency_min_, chord.smoothed_frequency);
             smoothed_frequency_max_ = std::max(smoothed_frequency_max_, chord.smoothed_frequency);
@@ -228,15 +253,16 @@ void ClockSyncMapping::finalize_chord(uint64_t close_index) {
 }
 
 int64_t ClockSyncMapping::forward_overhang_error_ns(const Chord& chord, uint64_t device_timestamp) const {
-    if (device_timestamp <= chord.close_device_timestamp || !(smoothed_frequency_min_ > 0.0) ||
-        !(chord.frequency > 0.0)) {
+    if (device_timestamp <= chord.close_device_timestamp) {
         return 0;
     }
+    const RideBand band = ride_band();
     const double overhang_cycles = static_cast<double>(device_timestamp - chord.close_device_timestamp);
     // The chord's own secant may sit off-center in (or outside) the band; the max covers every
     // band rate from wherever the extrapolation slope actually is.
+    const double inv_frequency = 1.0 / chord.frequency;
     const double per_cycle = std::max(
-        1.0 / smoothed_frequency_min_ - 1.0 / chord.frequency, 1.0 / chord.frequency - 1.0 / smoothed_frequency_max_);
+        band.inv_mid + band.inv_half_spread - inv_frequency, inv_frequency - (band.inv_mid - band.inv_half_spread));
     return per_cycle > 0.0 ? static_cast<int64_t>(overhang_cycles * per_cycle) + 1 : 0;
 }
 
@@ -254,6 +280,29 @@ int64_t ClockSyncMapping::error_ns_on(const Chord& chord, uint64_t device_timest
         return chord.probe_error_ns + chord.nonlinearity_ns;
     }
     return chord.probe_error_ns + static_cast<int64_t>(chord.refine_slope * static_cast<double>(distance_cycles)) + 1;
+}
+
+ClockSyncMapping::RideBand ClockSyncMapping::ride_band() const {
+    return {
+        .inv_mid = (1.0 / smoothed_frequency_min_ + 1.0 / smoothed_frequency_max_) * 0.5,
+        .inv_half_spread = (1.0 / smoothed_frequency_min_ - 1.0 / smoothed_frequency_max_) * 0.5};
+}
+
+ClockSyncMapping::EndpointPlacement ClockSyncMapping::place_endpoint(uint64_t device_timestamp) const {
+    if (const std::optional<uint64_t> index = chord_index_around(device_timestamp); index.has_value()) {
+        const Chord& chord = chord_at(*index);
+        return EndpointPlacement{
+            .host_ns = host_ns_on(chord, device_timestamp),
+            .error_ns = error_ns_on(chord, device_timestamp) + forward_overhang_error_ns(chord, device_timestamp),
+            .chord = &chord};
+    }
+    const Anchor& ring_oldest = probe_at(oldest_probe());
+    const RideBand band = ride_band();
+    const double uncovered_cycles = static_cast<double>(ring_oldest.device_timestamp - device_timestamp);
+    return EndpointPlacement{
+        .host_ns = host_ns(ring_oldest) - uncovered_cycles * band.inv_mid,
+        .error_ns = std::llround(uncovered_cycles * band.inv_half_spread) + ring_oldest.error.count(),
+        .chord = nullptr};
 }
 
 uint64_t ClockSyncMapping::first_probe_at_or_past(uint64_t device_timestamp) const {
@@ -309,17 +358,22 @@ void ClockSyncMapping::refresh_active_chord_constants() {
     active_.certified = chord.rate_lo != 0.0;
 }
 
-std::optional<ClockSyncMapping::RecordMapping> ClockSyncMapping::map_record(
+ClockSyncMapping::RecordMapping ClockSyncMapping::map_record(
     uint64_t start_device_timestamp, uint64_t end_device_timestamp) {
     const uint64_t begin = oldest_probe();
-    const bool active_chord_valid = active_chord_index_.has_value() && *active_chord_index_ > begin &&
-                                    *active_chord_index_ < probes_end_ &&
+    // Finalization is captured at refresh time, not use time: a holdback-evicted record can
+    // latch the newest chord before finalize_chord restamps it, and once the restamp lands the
+    // cache must not keep serving the creation-time constants it captured — an unfinalized
+    // latch simply re-refreshes on every record until the chord finalizes.
+    const bool active_chord_valid = active_chord_index_.has_value() && active_finalized_ &&
+                                    *active_chord_index_ > begin &&
                                     start_device_timestamp > active_.open_device_timestamp &&
                                     start_device_timestamp <= active_.close_device_timestamp;
     if (!active_chord_valid) {
         active_chord_index_ = chord_index_around(start_device_timestamp);
         if (active_chord_index_.has_value()) {
             refresh_active_chord_constants();
+            active_finalized_ = *active_chord_index_ + 1 < probes_end_;
         }
     }
 
@@ -366,120 +420,158 @@ std::optional<ClockSyncMapping::RecordMapping> ClockSyncMapping::map_record(
             .frequency = active_.smoothed_frequency};
     }
 
-    RecordMapping mapping;
-    if (!active_chord_index_.has_value()) {
-        // Start is older than our probe history.
-        const std::optional<uint64_t> end_index = chord_index_around(end_device_timestamp);
-        if (!end_index.has_value()) {
-            // The whole record predates the retained history; with any rate knowledge at all,
-            // ride both endpoints back from the oldest retained probe rather than drop. Sound for
-            // the same reason the partial ride is — probe ingest validation keeps the retained
-            // timeline honest, so the band brackets the rates the ride crosses.
-            if (probes_end_ - begin < 2) {
-                return std::nullopt;
-            }
-            num_records_on_uncertified_chords_.fetch_add(1, std::memory_order_relaxed);
-            double ride_lo = smoothed_frequency_min_;
-            double ride_hi = smoothed_frequency_max_;
-            if (!(ride_lo > 0.0)) {
-                const Chord& oldest_chord = chord_at(begin + 1);
-                ride_lo = oldest_chord.frequency;
-                ride_hi = oldest_chord.frequency;
-            }
-            const Anchor& ring_oldest = probe_at(begin);
-            const double inv_mid = (1.0 / ride_lo + 1.0 / ride_hi) * 0.5;
-            const double inv_half_spread = (1.0 / ride_lo - 1.0 / ride_hi) * 0.5;
-            const double start_uncovered = static_cast<double>(ring_oldest.device_timestamp - start_device_timestamp);
-            const double end_uncovered = static_cast<double>(ring_oldest.device_timestamp - end_device_timestamp);
-            const double end_host_ns = host_ns(ring_oldest) - end_uncovered * inv_mid;
-            const int64_t start_error_ns = std::llround(start_uncovered * inv_half_spread) + ring_oldest.error.count();
-            const double frequency = 1.0 / inv_mid;
-            return RecordMapping{
-                .device_cycle_offset =
-                    std::llround(static_cast<double>(end_device_timestamp) - frequency * end_host_ns),
-                .error = std::chrono::nanoseconds(start_error_ns),
-                .frequency = frequency};
-        }
-        const Chord& end_chord = chord_at(*end_index);
-        const double end_host_ns = host_ns_on(end_chord, end_device_timestamp);
-        const int64_t end_error_ns =
-            error_ns_on(end_chord, end_device_timestamp) + forward_overhang_error_ns(end_chord, end_device_timestamp);
-        // Ride back from the oldest retained probe at the mature smoothed-frequency spread (a few
-        // ppm on a stable clock), so a long program claims microseconds of start error rather
-        // than a per-chord noise band's milliseconds.
+    // General path: the record spans chords, extrapolates past the newest probe, or predates the
+    // retained history. Each endpoint is placed independently and joined by the endpoints'
+    // secant, so one rule covers every combination.
+    TT_FATAL(
+        probes_end_ - begin >= 2,
+        "map_record called before two probes were retained; ingest a scheduler probe before mapping");
+    const EndpointPlacement start_placed = place_endpoint(start_device_timestamp);
+    const EndpointPlacement end_placed = place_endpoint(end_device_timestamp);
+    if (start_placed.chord == nullptr || end_placed.chord == nullptr || start_placed.chord->rate_lo == 0.0 ||
+        end_placed.chord->rate_lo == 0.0) {
         num_records_on_uncertified_chords_.fetch_add(1, std::memory_order_relaxed);
-        double ride_lo = smoothed_frequency_min_;
-        double ride_hi = smoothed_frequency_max_;
-        if (!(ride_lo > 0.0)) {
-            ride_lo = end_chord.frequency;
-            ride_hi = end_chord.frequency;
-        }
-        const Anchor& ring_oldest = probe_at(begin);
-        const double uncovered_cycles = static_cast<double>(ring_oldest.device_timestamp - start_device_timestamp);
-        const double start_host_ns = host_ns(ring_oldest) - uncovered_cycles * (1.0 / ride_lo + 1.0 / ride_hi) * 0.5;
-        const int64_t start_error_ns =
-            std::llround(uncovered_cycles * (1.0 / ride_lo - 1.0 / ride_hi) * 0.5) + ring_oldest.error.count();
-        const double frequency =
-            static_cast<double>(end_device_timestamp - start_device_timestamp) / (end_host_ns - start_host_ns);
-        mapping = RecordMapping{
-            .device_cycle_offset = std::llround(static_cast<double>(end_device_timestamp) - frequency * end_host_ns),
-            .error = std::chrono::nanoseconds(std::max(start_error_ns, end_error_ns)),
-            .frequency = frequency};
-    } else {
-        // Record spans more than one probe gap.
-        const std::optional<uint64_t> end_index = chord_index_around(end_device_timestamp);
-        TT_ASSERT(end_index.has_value());
-        const Chord& start_chord = chord_at(*active_chord_index_);
-        const Chord& end_chord = chord_at(*end_index);
-        if (start_chord.rate_lo == 0.0 || end_chord.rate_lo == 0.0) {
-            num_records_on_uncertified_chords_.fetch_add(1, std::memory_order_relaxed);
-        }
-        const double start_host_ns = host_ns_on(start_chord, start_device_timestamp);
-        const double end_host_ns = host_ns_on(end_chord, end_device_timestamp);
-        const double secant =
-            static_cast<double>(end_device_timestamp - start_device_timestamp) / (end_host_ns - start_host_ns);
-        const int64_t placement_error_ns = std::max(
-            error_ns_on(start_chord, start_device_timestamp),
-            error_ns_on(end_chord, end_device_timestamp) + forward_overhang_error_ns(end_chord, end_device_timestamp));
-        // Publish the smoothed frequency with the skew priced, like the in-chord path — unless
-        // the skew rivals the placement error, which only happens when a transition sits inside
-        // the span and the record's own secant is the exact mapping.
-        const double smoothed = end_chord.smoothed_frequency;
-        const int64_t skew_ns = smoothed > 0.0
-                                    ? static_cast<int64_t>(
-                                          static_cast<double>(end_device_timestamp - start_device_timestamp) *
-                                          std::abs(1.0 / smoothed - 1.0 / secant)) +
-                                          1
-                                    : std::numeric_limits<int64_t>::max();
-        const bool use_smoothed = skew_ns <= placement_error_ns;
-        const double frequency = use_smoothed ? smoothed : secant;
-        mapping = RecordMapping{
-            .device_cycle_offset =
-                std::llround(static_cast<double>(start_device_timestamp) - frequency * start_host_ns),
-            .error = std::chrono::nanoseconds(use_smoothed ? placement_error_ns + skew_ns : placement_error_ns),
-            .frequency = frequency};
     }
-    return mapping;
+    const double cycles = static_cast<double>(end_device_timestamp - start_device_timestamp);
+    const double span_host_ns = end_placed.host_ns - start_placed.host_ns;
+    // Zero-span records reach here only with both endpoints ridden, where the secant degenerates
+    // to the band midpoint the ride already used.
+    double frequency = span_host_ns > 0.0 ? cycles / span_host_ns : 1.0 / ride_band().inv_mid;
+    int64_t error_ns = std::max(start_placed.error_ns, end_placed.error_ns);
+    // Publish the smoothed frequency with the skew priced, like the in-chord path — unless the
+    // skew rivals the placement error, which only happens when a transition sits inside the span
+    // and the record's own secant is the exact mapping. A ridden endpoint has no smoothed window;
+    // its secant is already the band midpoint.
+    if (start_placed.chord != nullptr && end_placed.chord != nullptr) {
+        const double smoothed = end_placed.chord->smoothed_frequency;
+        const int64_t skew_ns = static_cast<int64_t>(cycles * std::abs(1.0 / smoothed - 1.0 / frequency)) + 1;
+        if (skew_ns <= error_ns) {
+            frequency = smoothed;
+            error_ns += skew_ns;
+        }
+    }
+    return RecordMapping{
+        .device_cycle_offset =
+            std::llround(static_cast<double>(start_device_timestamp) - frequency * start_placed.host_ns),
+        .error = std::chrono::nanoseconds(error_ns),
+        .frequency = frequency};
 }
 
-DeviceClockSync::DeviceClockSync(ContextId context_id, IDevice* device, CoreCoord clock_core) :
+DeviceClockSync::DeviceClockSync(
+    ContextId context_id, IDevice* device, CoreCoord clock_core, double aiclk_min_ghz, double aiclk_max_ghz) :
     context_id_(context_id),
     chip_id_(device->id()),
-    clock_core_virtual_(device->virtual_core_from_logical_core(clock_core, CoreType::WORKER)) {
+    clock_core_virtual_(device->virtual_core_from_logical_core(clock_core, CoreType::WORKER)),
+    // 4x/2x margins keep thermal floors and host-forced clock operations inside the plausibility
+    // envelope; the garbage this rejects sits orders of magnitude outside any margin (see
+    // plausible_probe_step).
+    plausible_rate_lo_(aiclk_min_ghz / 4.0),
+    plausible_rate_hi_(aiclk_max_ghz * 2.0),
+    aiclk_min_ghz_(aiclk_min_ghz),
+    aiclk_max_ghz_(aiclk_max_ghz) {
+    TT_FATAL(
+        aiclk_min_ghz > 0.0 && aiclk_max_ghz >= aiclk_min_ghz,
+        "Invalid AICLK operating range [{}, {}] GHz",
+        aiclk_min_ghz,
+        aiclk_max_ghz);
     TTZoneScopedDN(RT_PROFILER, "ClockSyncConfigure");
     const auto& hal = MetalContext::instance(context_id_).hal();
     wall_clock_addr_lo_ = hal.get_tensix_wall_clock_reg_addr_lo();
     wall_clock_addr_hi_ = hal.get_tensix_wall_clock_reg_addr_hi();
     configure_clock_read_path();
     if (mapped_clock_lo_ != nullptr) {
-        configure_plausible_rate_band();
-        // Throwaway cold read; the receiver warms the mapping up right before probing starts, so
-        // no gap opens between warm-up and the steady cadence while other devices initialize.
+        // Cold first read warms the TLB path so the next probe's bracket is tight.
         (void)probe(false);
+        // Every view seeds from this probe: history begins at construction, so device
+        // timestamps taken after it never predate any view's retention. The ProbeScheduler
+        // continues the cadence from here.
+        first_probe_ = read_probe();
     }
 }
 
 DeviceClockSync::~DeviceClockSync() = default;
+
+std::unique_ptr<DeviceClockSync> DeviceClockSync::create(
+    ContextId context_id, IDevice* device, CoreCoord clock_core, double aiclk_min_ghz, double aiclk_max_ghz) {
+    auto sync = std::unique_ptr<DeviceClockSync>(
+        new DeviceClockSync(context_id, device, clock_core, aiclk_min_ghz, aiclk_max_ghz));
+    if (sync->mapped_clock_lo_ == nullptr) {
+        return nullptr;
+    }
+    if (!sync->first_probe_.has_value()) {
+        log_warning(
+            tt::LogMetal,
+            "[DeviceClockSync] Device {}: the first clock probe failed the plausibility check",
+            sync->chip_id_);
+        return nullptr;
+    }
+    return sync;
+}
+
+void DeviceClockSync::take_and_queue_probe() {
+    if (const auto probe = read_probe()) {
+        probe_ring_.writer().publish(*probe);
+    }
+}
+
+DeviceClockSync::View::View(DeviceClockSync& sync, size_t probe_history_capacity) :
+    reader_(sync.probe_ring_.make_reader()),
+    mapping_(sync.aiclk_min_ghz_, sync.aiclk_max_ghz_, probe_history_capacity) {
+    mapping_.add_probe(*sync.first_probe_);
+}
+
+void DeviceClockSync::View::ingest_queued_probes() {
+    std::array<Anchor, 64> buf;
+    for (;;) {
+        const auto got = reader_.read_batch(std::span<Anchor>(buf));
+        for (const Anchor& probe : got) {
+            mapping_.add_probe(probe);
+        }
+        if (got.size() < buf.size()) {
+            return;
+        }
+    }
+}
+
+ProbeScheduler::ProbeScheduler(std::chrono::nanoseconds probe_interval) : probe_interval_(probe_interval) {
+    TT_FATAL(probe_interval_ > std::chrono::nanoseconds::zero(), "Probe interval must be positive");
+    thread_ = std::jthread([this](const std::stop_token& stop) { run(stop); });
+}
+
+ProbeScheduler::~ProbeScheduler() = default;
+
+void ProbeScheduler::register_device(DeviceClockSync& clock_sync) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    entries_.push_back(
+        Entry{.clock_sync = &clock_sync, .earliest_allowed = std::chrono::steady_clock::now() + probe_interval_ / 2});
+}
+
+void ProbeScheduler::run(const std::stop_token& stop) {
+    tracy::SetThreadName("RtClockSync");
+#if defined(__linux__)
+    ::prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
+#endif
+    // One sweep deadline for every device: the scheduler wakes once per interval regardless of
+    // device count — each wake is a scheduler-roll exposure, and late wakes cost certificate
+    // pairs their budget.
+    auto next_sweep = std::chrono::steady_clock::now() + probe_interval_;
+    while (!stop.stop_requested()) {
+        std::this_thread::sleep_until(next_sweep);
+        if (demand_.load(std::memory_order_relaxed) > 0) {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            const auto now = std::chrono::steady_clock::now();
+            for (Entry& entry : entries_) {
+                if (now >= entry.earliest_allowed) {
+                    entry.clock_sync->take_and_queue_probe();
+                }
+            }
+        }
+        // Absolute schedule: a late sweep is followed by a correspondingly early one, so an
+        // adjacent chord pair absorbs the lateness instead of compounding it — the certificate
+        // budget cares about pair sums, not single gaps.
+        next_sweep = std::max(next_sweep + probe_interval_, std::chrono::steady_clock::now());
+    }
+}
 
 void DeviceClockSync::configure_clock_read_path() {
     try {
@@ -512,29 +604,6 @@ void DeviceClockSync::configure_clock_read_path() {
     } catch (const std::exception& e) {
         log_warning(
             tt::LogMetal, "[DeviceClockSync] Device {}: could not map the clock register ({})", chip_id_, e.what());
-    }
-}
-
-void DeviceClockSync::configure_plausible_rate_band() {
-    try {
-        auto* tt_device =
-            MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(chip_id_)->get_tt_device();
-        const double min_ghz = static_cast<double>(tt_device->get_min_clock_freq()) * 1e-3;
-        const double max_ghz = static_cast<double>(tt_device->get_max_clock_freq()) * 1e-3;
-        // 4x/2x margins keep thermal floors and host-forced clock operations inside the band;
-        // the garbage this rejects sits orders of magnitude outside any margin (see
-        // plausible_probe_step).
-        if (min_ghz > 0.0 && max_ghz >= min_ghz) {
-            plausible_rate_lo_ = min_ghz / 4.0;
-            plausible_rate_hi_ = max_ghz * 2.0;
-        }
-    } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[DeviceClockSync] Device {}: AICLK range unavailable ({}); using the default probe "
-            "plausibility band",
-            chip_id_,
-            e.what());
     }
 }
 

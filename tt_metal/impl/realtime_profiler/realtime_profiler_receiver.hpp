@@ -15,30 +15,26 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-
 #include "context/context_types.hpp"
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_device.hpp"
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_service.hpp"
 
 namespace tt::tt_metal {
 
-class IDevice;
-class Program;
 class DataCollector;
 
 namespace distributed {
-class D2HSocket;
 class MeshDevice;
 }  // namespace distributed
 
 using experimental::ProgramRealtimeRecord;
 
-// The record producer for one MeshDevice: owns the per-device sockets, the record ring, and the receiver thread behind
-// them, and publishes what it drains to whatever consumers the service has attached.
-class RealtimeProfilerReceiver : public ProgramRecordProducer {
+// The record producer for one MeshDevice: owns the per-device sockets, the probe scheduler, the record ring, and the
+// receiver thread behind them, and publishes what it drains to whatever consumers the service has attached.
+class RealtimeProfilerReceiver {
 public:
-    // Null when no local device passed the eligibility gate; a constructed receiver always has devices to drain.
+    // Null when no local device could run the profiler (eligibility gate, clock or AICLK bring-up,
+    // or socket creation); a constructed receiver always has devices to drain.
     static std::unique_ptr<RealtimeProfilerReceiver> create(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     ~RealtimeProfilerReceiver();
@@ -51,9 +47,7 @@ public:
     // Idempotent.
     void shutdown();
 
-    size_t max_batch_records() const override;
-    RealtimeProfilerRecordRing::Reader make_reader() override;
-    void wait_until_no_readers() override;
+    size_t max_batch_records() const;
 
     // All-time peak D2H FIFO usage.
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
@@ -66,19 +60,18 @@ public:
     uint64_t num_inverted_timestamp_records() const {
         return num_inverted_timestamp_records_.load(std::memory_order_relaxed);
     }
-    // map_record failed: the record drained before two clock probes existed (bring-up window).
-    uint64_t num_unmappable_records() const { return num_unmappable_records_.load(std::memory_order_relaxed); }
     uint32_t read_ring_full_wait_count();
     size_t num_active_devices() const { return devices_.size(); }
     // Largest gap between consecutive clock probes on any device since the previous call; reading
-    // clears it. Gaps beyond kDvfsMinTransitionSpacing cost chords their certificate.
+    // clears it. Gap pairs beyond kDvfsCertificateWindowBudget cost chords their certificate.
     uint64_t take_peak_probe_gap_ns();
     uint64_t num_chords_finalized() const;
     uint64_t num_chords_certified() const;
     // Records published with a fallback-tier bound (uncertified chord or history envelope). Never
     // dropped; tests bound this to a tiny fraction of published records.
     uint64_t num_records_on_uncertified_chords() const;
-    // Clock probes rejected as implausible (garbage PCIe reads); each costs one probe cycle.
+    // Clock probes rejected as implausible (garbage PCIe reads) plus probes the view discarded
+    // as non-monotone at ingest.
     uint64_t num_rejected_probes() const;
     // Held-back records published early because the pending ring was full (probe outage deeper
     // than a FIFO fill). Published with fallback-quality bounds, never dropped.
@@ -91,7 +84,11 @@ public:
     }
 
 private:
-    RealtimeProfilerReceiver(ContextId context_id, std::vector<RealtimeProfilerDevice> devices);
+    RealtimeProfilerReceiver(
+        ContextId context_id,
+        std::vector<RealtimeProfilerDevice> devices,
+        std::unique_ptr<ProbeScheduler> probe_scheduler,
+        ProbeScheduler::Demand probe_demand);
 
     void note_fifo_depth(uint32_t available);
     // Publishes the device's held-back records, then decodes `pages`, publishing records whose chord bounds are final
@@ -108,47 +105,38 @@ private:
     // Reads, ingests queued probes, then publishes.
     // Returns number of pages read.
     uint32_t drain_device_pages(RealtimeProfilerDevice& dev_state, std::vector<uint32_t>& page_buf);
-    // Drains the device's probe ring into its mapping. Receiver thread only.
-    void ingest_probes(RealtimeProfilerDevice& dev_state);
-    // Probes every device whose next probe is due and returns the earliest upcoming deadline.
-    // Sync thread only (after the constructor's warm-up).
-    std::chrono::steady_clock::time_point probe_due_devices();
-    // Sync thread body: sole owner of the probe schedule and the probe rings' writer side. The
-    // receiver never touches a clock register, so a blocked clock read can delay probes but never
-    // draining — and receiver health never delays probes.
-    void run_sync();
 
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
 
     std::vector<RealtimeProfilerDevice> devices_;
+    // The probe cadence, running since before this receiver existed; the receiver never touches
+    // a clock register, so a blocked clock read can delay probes but never draining — and
+    // receiver health never delays probes. Stopped by shutdown() after the final drain.
+    std::unique_ptr<ProbeScheduler> probe_scheduler_;
+    // Held while records are deliverable; released by the consumer gate, re-acquired with the
+    // first consumer, and the shutdown drain scopes its own.
+    std::optional<ProbeScheduler::Demand> probe_demand_;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
-    std::thread sync_thread_;
     std::atomic<bool> stop_{false};
-    // Separate from stop_: the sync thread outlives the receiver thread through shutdown so the
-    // final drain can still finalize held-back records.
-    std::atomic<bool> sync_stop_{false};
-    // Sync thread only (initialized before the threads start).
-    std::vector<std::chrono::steady_clock::time_point> probe_next_due_;
+    // Receiver thread only: whether records are deliverable; gates probing and draining-vs-discarding.
+    bool consumers_active_ = true;
 
-    // Diagnostics
-    std::atomic<uint32_t> peak_fifo_pages_{0};               // all-time peak D2H FIFO occupancy
-    std::atomic<uint32_t> peak_fifo_pages_since_report_{0};  // peak since take_peak_fifo_pages()
-    uint32_t fifo_pages_window_max_ = 0;                     // peak since the last Tracy plot sample
+    std::atomic<uint32_t> peak_fifo_pages_{0};
+    std::atomic<uint32_t> peak_fifo_pages_since_report_{0};
+    uint32_t fifo_pages_window_max_ = 0;  // peak since the last Tracy plot sample
     // Worst clock-sync error among records published since last plot; nullopt when the window saw none.
     std::optional<std::chrono::nanoseconds> sync_error_window_max_;
-    std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
-    std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
+    std::atomic<uint64_t> num_published_records_{0};
+    std::atomic<uint64_t> num_published_batches_{0};
     std::atomic<uint64_t> peak_loop_ns_{0};
     std::atomic<uint64_t> loop_count_{0};
 
     std::atomic<uint64_t> num_inverted_timestamp_records_{0};
-    std::atomic<uint64_t> num_unmappable_records_{0};
     std::atomic<uint64_t> num_holdback_evictions_{0};
 
     std::chrono::steady_clock::time_point last_inverted_timestamp_warn_;
-    std::chrono::steady_clock::time_point last_unmappable_warn_;
     std::chrono::steady_clock::time_point last_eviction_warn_;
 
     std::vector<ProgramRealtimeRecord> publish_batch_;

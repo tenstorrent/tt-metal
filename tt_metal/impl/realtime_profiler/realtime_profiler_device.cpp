@@ -4,7 +4,6 @@
 
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_device.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -24,6 +23,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -371,18 +371,44 @@ std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
         dev_state.realtime_profiler_core = realtime_profiler_core;
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
-        dev_state.clock_sync = std::make_unique<DeviceClockSync>(context_id, device, dev_state.realtime_profiler_core);
-        constexpr size_t kProbeRingCapacity = 8192;  // ~3 s of active-cadence probes of receiver absence
-        dev_state.probe_ring = std::make_unique<BroadcastRing<DeviceClockSync::Anchor>>(kProbeRingCapacity);
-        dev_state.probe_reader.emplace(dev_state.probe_ring->make_reader());
-        if (!dev_state.clock_sync->has_direct_clock_read()) {
+        // The AICLK operating range is a bring-up requirement: it is the mapping's initial
+        // practical band and the source of the probe-plausibility margins, so a device that
+        // cannot report it cannot run the profiler.
+        double aiclk_min_ghz = 0.0;
+        double aiclk_max_ghz = 0.0;
+        try {
+            auto* tt_device =
+                MetalContext::instance(context_id).get_cluster().get_driver()->get_chip(device_id)->get_tt_device();
+            aiclk_min_ghz = static_cast<double>(tt_device->get_min_clock_freq()) * 1e-3;
+            aiclk_max_ghz = static_cast<double>(tt_device->get_max_clock_freq()) * 1e-3;
+        } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
-                "Real-time profiler disabled on device {}: the profiler core's clock register could not be mapped into "
-                "a UC TLB window.",
+                "Real-time profiler disabled on device {}: AICLK operating range unavailable ({}).",
+                device_id,
+                e.what());
+            return std::nullopt;
+        }
+        if (!(aiclk_min_ghz > 0.0 && aiclk_max_ghz >= aiclk_min_ghz)) {
+            log_warning(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: implausible AICLK operating range [{}, {}] GHz.",
+                device_id,
+                aiclk_min_ghz,
+                aiclk_max_ghz);
+            return std::nullopt;
+        }
+
+        dev_state.clock_sync =
+            DeviceClockSync::create(context_id, device, dev_state.realtime_profiler_core, aiclk_min_ghz, aiclk_max_ghz);
+        if (!dev_state.clock_sync) {
+            log_warning(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: clock sync bring-up failed (see preceding warning).",
                 device_id);
             return std::nullopt;
         }
+        dev_state.clock_view = std::make_unique<DeviceClockSync::View>(*dev_state.clock_sync);
 
         log_debug(
             tt::LogMetal,

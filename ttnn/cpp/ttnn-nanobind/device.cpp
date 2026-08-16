@@ -172,7 +172,10 @@ void py_device_module_types(nb::module_& m_device) {
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
-        .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
+        .def_ro(
+            "runtime_id",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id,
+            "Runtime ID (currently truncated to 16 bits; widening tracked in #46103)")
         .def_ro(
             "start_timestamp",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
@@ -770,7 +773,7 @@ void device_module(nb::module_& m_device) {
             Py_INCREF(raw_cb);
 
             uint64_t handle = 0;
-            {
+            try {
                 nb::gil_scoped_release release;
                 handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
                     [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
@@ -782,6 +785,9 @@ void device_module(nb::module_& m_device) {
                         nb::gil_scoped_acquire gil;
                         (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
                     });
+            } catch (...) {
+                Py_DECREF(raw_cb);
+                throw;
             }
 
             python_realtime_callback_refs[handle] = raw_cb;

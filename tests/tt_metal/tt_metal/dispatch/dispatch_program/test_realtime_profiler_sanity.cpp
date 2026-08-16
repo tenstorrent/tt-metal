@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -38,6 +37,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "hostdevcommon/common_values.hpp"
+#include "realtime_profiler_test_utils.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -82,90 +82,27 @@ constexpr const char* kSourceMarkerPrefix = "rt_profiler_marker_";
 // would still satisfy end > start for ns-scale blank kernels but would
 // surface here as a multi-second duration).
 std::string make_sanity_kernel_source(uint32_t runtime_id) {
-    return "#include <cstdint>\n"
-           "// " +
-           std::string(kSourceMarkerPrefix) + std::to_string(runtime_id) +
-           "\n"
-           "void kernel_main() {\n"
-           "    for (int i = 0; i < 200; i++) {\n"
-           "#pragma GCC unroll 65534\n"
-           "        for (int j = 0; j < 200; j++) {\n"
-           "            asm(\"nop\");\n"
-           "        }\n"
-           "    }\n"
-           "}\n";
-}
-
-Program make_sanity_program(const std::string& kernel_src, const CoreRange& cores, uint32_t runtime_id) {
-    Program program = CreateProgram();
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernelFromString(program, kernel_src, cores, ComputeConfig{});
-    program.set_runtime_id(static_cast<uint64_t>(runtime_id));
-    return program;
-}
-
-void enqueue_rt_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Program program, bool blocking) {
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, blocking);
+    return rt_profiler_nop_kernel_source(std::string(kSourceMarkerPrefix) + std::to_string(runtime_id));
 }
 
 void enqueue_sanity_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& cores) {
-    enqueue_rt_program(
-        mesh_device, make_sanity_program(make_sanity_kernel_source(runtime_id), cores, runtime_id), /*blocking=*/false);
-}
-
-std::shared_ptr<distributed::MeshDevice> open_unit_mesh(size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        /*device_id=*/0,
-        DEFAULT_L1_SMALL_SIZE,
-        trace_region_size,
-        /*num_command_queues=*/1,
-        DispatchCoreConfig{DispatchCoreType::WORKER});
-    if (mesh_device == nullptr) {
-        return nullptr;
-    }
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        return nullptr;
-    }
-    return mesh_device;
-}
-
-CoreRange all_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-    return CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1});
+    enqueue_rt_profiler_program(
+        mesh_device,
+        make_rt_profiler_program(make_sanity_kernel_source(runtime_id), cores, runtime_id),
+        /*blocking=*/false);
 }
 
 void enqueue_programs(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t count) {
-    // Runtime IDs start at 1 so every program emits a record (runtime_id == 0
-    // is reserved for infrastructure traffic and filtered host-side).
+    // Runtime IDs start at 1 so every program emits a record (runtime_id == 0 marks
+    // infrastructure traffic, which BRISC skips on-device before it reaches the ring).
     for (uint32_t i = 1; i <= count; ++i) {
         enqueue_sanity_program(mesh_device, i, all_cores(mesh_device));
     }
 }
 
-template <typename Predicate>
-void quiesce_and_wait_for(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Predicate delivered) {
-    mesh_device->quiesce_devices();
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
-    while (!delivered() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(5ms);
-    }
-}
-
 TEST(RealtimeProfilerSanity, RecordsAreWellFormedAndCarryTheirProgramsSources) {
-    auto mesh_device = open_unit_mesh();
+    auto mesh_device = open_profiler_unit_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -227,7 +164,7 @@ TEST(RealtimeProfilerSanity, RecordsAreWellFormedAndCarryTheirProgramsSources) {
 }
 
 TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
-    auto mesh_device = open_unit_mesh();
+    auto mesh_device = open_profiler_unit_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -253,12 +190,13 @@ TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
 }
 
 TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
-    auto mesh_device = open_unit_mesh();
+    auto mesh_device = open_profiler_unit_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
     uint64_t throwing_invocations = 0;
+    std::atomic<uint64_t> delivered{0};
     std::vector<ProgramRealtimeRecord> records;
     const auto throwing_handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch&) {
         ++throwing_invocations;
@@ -266,15 +204,11 @@ TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
     });
     const auto good_handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
         records.insert(records.end(), batch.records.begin(), batch.records.end());
+        delivered.fetch_add(batch.records.size(), std::memory_order_relaxed);
     });
 
     enqueue_programs(mesh_device, kNumPrograms);
-    mesh_device->quiesce_devices();
-    // Give the RT profiler receiver thread a moment to drain the last
-    // socket pages before we unregister. 500ms mirrors the programming
-    // example at test_realtime_profiler_csv.cpp and has proven sufficient
-    // for small workloads on WH/BH single-chip.
-    std::this_thread::sleep_for(500ms);
+    quiesce_and_wait_for(mesh_device, [&] { return delivered.load(std::memory_order_relaxed) >= kNumPrograms; });
 
     UnregisterProgramRealtimeProfilerCallback(throwing_handle);
     UnregisterProgramRealtimeProfilerCallback(good_handle);
@@ -292,7 +226,7 @@ TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
 }
 
 TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
-    auto mesh_device = open_unit_mesh();
+    auto mesh_device = open_profiler_unit_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -325,7 +259,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     constexpr uint32_t kTraceRuntimeId = 0x6002;
     constexpr size_t kTraceRegionSize = 8 * 1024 * 1024;
 
-    auto mesh_device = open_unit_mesh(kTraceRegionSize);
+    auto mesh_device = open_profiler_unit_mesh(kTraceRegionSize);
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -343,7 +277,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
 
     const CoreRange cores = all_cores(mesh_device);
     Program program =
-        make_sanity_program(make_sanity_kernel_source(kTraceRuntimeId), cores, /*runtime_id=*/kWarmupRuntimeId);
+        make_rt_profiler_program(make_sanity_kernel_source(kTraceRuntimeId), cores, /*runtime_id=*/kWarmupRuntimeId);
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
@@ -387,7 +321,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
 
 // Mapped host_start/host_end must land inside host brackets around each enqueue.
 TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
-    auto mesh_device = open_unit_mesh();
+    auto mesh_device = open_profiler_unit_mesh();
     if (mesh_device == nullptr) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
@@ -404,7 +338,8 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
     const std::string fixed_src = make_sanity_kernel_source(/*runtime_id=*/0);
 
     auto enqueue_blocking = [&](uint32_t runtime_id) {
-        enqueue_rt_program(mesh_device, make_sanity_program(fixed_src, cores, runtime_id), /*blocking=*/true);
+        enqueue_rt_profiler_program(
+            mesh_device, make_rt_profiler_program(fixed_src, cores, runtime_id), /*blocking=*/true);
     };
 
     enqueue_blocking(/*runtime_id=*/1);
