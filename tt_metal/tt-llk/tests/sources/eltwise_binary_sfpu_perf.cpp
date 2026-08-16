@@ -109,6 +109,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define FRESH_CPP_IMPL 0
 #endif
 
+using namespace ckernel::sfpu;
+
 inline void run_selected_binary_sfpu(
     std::uint32_t dst_in0, std::uint32_t dst_in1, std::uint32_t dst_out) {
     if constexpr (
