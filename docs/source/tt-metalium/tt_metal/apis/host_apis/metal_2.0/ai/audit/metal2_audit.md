@@ -383,7 +383,7 @@ This subject assesses **CB endpoint legality**: for each CB, on each node, is th
 
 | Census on a node | Verdict | Port-time resolution |
 |---|---|---|
-| 0 touchers | **Dead CB** — allocated, never referenced | porter drops it + documents (below) |
+| 0 touchers | **Dead CB** — allocated, never referenced | porter drops it + documents (below) — but **per config**: dead here and live elsewhere means a *conditional* DFB spec, not a drop |
 | 1 toucher | **single-ended / sync-free** | **self-loop** — bind the one kernel PRODUCER **and** CONSUMER (legal on Gen1 for compute *and* DM) |
 | 2 touchers, ≤1 locked producer **and** ≤1 locked consumer | **plain 1:1** | bind **one PRODUCER + one CONSUMER**; a role-free toucher takes whichever side is open — **no flag** |
 | ≥3 touchers, **or** ≥2 locked producers, **or** ≥2 locked consumers | **multi-binding** — genuine excess on a node | **set the DFB multi-binding advanced option** + record Quasar debt (below) |
@@ -401,6 +401,8 @@ The old "legal `(1, 1)`" case is the 2-toucher sub-row where the pair is one loc
 **Resolution — a dead CB *must* be dropped; the danger is dropping a *live* one.** A zero-endpoint CB **cannot be carried into Metal 2.0 at all**: a DFB with no producer and no consumer binding is rejected by the spec validator — it is structurally impossible to express a dead DFB. So a genuinely dead CB *must* be dropped, and doing so honors the port's **zero-functional-change** contract (a dead CB has no behavior, so removing its allocation changes L1 footprint and nothing else). The hazard is the mirror error — marking a CB dead when it is **actually live** (a reference hid behind indirection, or an unchecked config) and dropping it — which can **silently** mis-address or lose a real access → wrong numerics or a hang, the worst outcome this port can produce. And the safety net runs **one way only**: the validator structurally catches a *dead* DFB — a truly-dead CB you *fail* to flag simply resurfaces at port time as a bindingless DFB the porter can't build (loud, resolved then) — but nothing catches a wrongly-dropped *live* one. So bias hard toward caution: **report a CB dead only once you have positively confirmed its index is unreferenced by every kernel in every config; on any residual doubt, do not mark it dead — raise it as a question for the ops team.** (A real dead CB resurfaces at the validator regardless; a live one you drop does not.)
 
 For a *confirmed* dead CB, frame it to the porter as *"a dead CB has no behavior, so removing it changes none"* — **not** as a sanctioned exception to "don't modify behavior" (that framing invites a porter to generalize the permission). The condition itself is deterministic (*no kernel references the `buffer_index`*); the care goes into *establishing* it (above). So a confirmed drop is a rule the porter executes, not a judgment call: **the porter drops the allocation and any dead CTA carrying its index during the port, and records each drop with `file:line` prominently in the report.** PORT WORK when confirmed; a question to the ops team on any doubt.
+
+**Dead is per `(CB, config)` — and a CB dead in only *some* configs is not dropped.** The recognition step already confirms across all instantiations; this is what to do when the answer differs between them. Dead *everywhere* → drop, as above. Dead in some configs and live in others → the porter makes that CB's `DataflowBufferSpec` **conditional** on the config that keeps it live, so the DFB exists exactly where a binding does. Expect this to be **new structure**: the legacy factory typically allocates every CB unconditionally and gates only the *kernel-side* use behind an `#ifdef` or a branch, so there is no existing host-side conditional to translate. Report it as *dead under `<config>`, live under `<config>`* — naming **both** — because "dead CB" plus a drop instruction is precisely how a porter deletes a buffer another config still needs.
 
 *Example:* conv2d `L1_ARRAY` — a 1-page "L1 scratchpad CB" whose index is threaded to the reader as a (dead) CTA, yet no kernel ever accesses it.
 
@@ -422,7 +424,7 @@ Metal 2.0 enforces single-producer / single-consumer per node (SPSC) as a spec-v
 
 **Finding role: PORT WORK** — self-loop the one-toucher (single-ended/sync-free) CBs, assign **1P+1C** the two-toucher CBs (the dual-instance work-split above is the common case), set the multi-binding advanced option only where the census can't fit 1P+1C (≥3 distinct touchers, or ≥2 kernels locked to the same FIFO role), drop the *confirmed*-dead CBs (with `file:line`; on any doubt, raise a question rather than dropping). Surfaced to the porter (an **FYI-P** heads-up for the multi-toucher shapes to watch). Nothing here gates. **Because nothing here gates, the whole subject is porter-only — so on a whole-op RED with no portable subset, skip it** (per the **Red** outcome scoping rule in [Feasibility audit](#feasibility-audit)): a full per-`(CB, config)`-per-node census is unread detail for a port that cannot start, and re-audit would redo it against changed code. This is the acute case on mega-ops — dozens of CBs across many factories — where the census is most expensive and least likely to survive to port time.
 
-**Op-level roll-up:** `✓ legal`, else the per-CB dispositions — `self-loop`, `1P+1C` (assign roles across two touchers), `multi-binding flag` (with configs), `dead-CB drop` — with the per-`(CB, config)` inventory in the report.
+**Op-level roll-up:** `✓ legal`, else the per-CB dispositions — `self-loop`, `1P+1C` (assign roles across two touchers), `multi-binding flag` (with configs), `dead-CB drop`, `conditional DFB` (dead in some configs, live in others) — with the per-`(CB, config)` inventory in the report.
 
 ### Out-of-directory coupling
 
@@ -564,7 +566,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *Port work* — Tensor bindings (per binding) | clean / Case 1 / Case 2 |
 | *TTNN Readiness* — TensorParameter relaxation | `none` (clears) / `<value>` → **GATE** → ops team |
 | *Port work* — TensorAccessor 3rd arg | drop (Class 1/2) / **flag → GATE** (Class 3/4/Special) |
-| *Port work* — CB endpoints | legal / self-loop / 1P+1C / multi-binding flag / dead-CB drop |
+| *Port work* — CB endpoints | legal / self-loop / 1P+1C / multi-binding flag / dead-CB drop / conditional DFB |
 
 **CB endpoints** are dispositions, not gates (see [CB endpoints](#cb-endpoints)): every out-of-window CB has a port-time resolution — a **self-loop** (one toucher: single-ended / sync-free), a **1P+1C assignment** (two touchers, e.g. a dual-instance work-split), the **multi-binding advanced-option flag** (genuine ≥2 of a role on a node the census can't relabel — ≥3 touchers or FIFO-doubling), or a **dead-CB drop** (zero endpoints). Record the disposition per `(CB, config)`, and classify per instantiation — the same CB's disposition often flips with config.
 
@@ -590,7 +592,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
   | GlobalSemaphore | RED / N/A | |
   | Variable-count compile-time arguments (CTA varargs) | RED / N/A | |
 
-- **CB endpoints (GATE-free):** <every CB is either legal (1 producer, 1 consumer) or carries a port-time disposition — **self-loop** (one toucher: single-ended / sync-free, legal on Gen1 for compute *and* DM), **1P+1C assignment** (two touchers, e.g. a dual-instance work-split — bind one PRODUCER, one CONSUMER, no flag) with its `(CB, config)` list, **multi-binding advanced-option flag** (genuine ≥2 of a role the census can't relabel — ≥3 touchers or FIFO-doubling; hidden-2nd-writer or multi-reader face) with its `(CB, config)` list, or **dead-CB drop** (zero endpoints) @ `file:line`. Nothing here blocks a Gen1 port. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
+- **CB endpoints (GATE-free):** <every CB is either legal (1 producer, 1 consumer) or carries a port-time disposition — **self-loop** (one toucher: single-ended / sync-free, legal on Gen1 for compute *and* DM), **1P+1C assignment** (two touchers, e.g. a dual-instance work-split — bind one PRODUCER, one CONSUMER, no flag) with its `(CB, config)` list, **multi-binding advanced-option flag** (genuine ≥2 of a role the census can't relabel — ≥3 touchers or FIFO-doubling; hidden-2nd-writer or multi-reader face) with its `(CB, config)` list, a **dead-CB drop** (zero endpoints in *every* config) @ `file:line`, or a **conditional DFB** (zero endpoints in some configs, live in others — name both). Nothing here blocks a Gen1 port. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
 - **Offset base pointers:** <GREEN — no address RTA folds a host-side offset into its base, or every fold has already been split out by the ops team (→ clean base, handled as ordinary tensor-binding port work) — or — RED: Type 1 (raw offset arg) / Type 2 (accessor-fed offset arg → flag early, ops team + framework) @ `file:line` by kernel + role. Factory-scoped: an RM slice-family RED names the tiled factories as a clean subset. Type 3 (`address_offset`) is the Appendix A entry; Type 4 (`narrow`) ports as-is. Cross-references the offset-base-pointer triage analysis (a dated prior).>
 - **TensorAccessor 3rd argument:** <GREEN — every site Class 1/2 (redundant → drop; Class 1 also sets `dynamic_tensor_shape`) — or — RED: Class 3/4 (wrong-magnitude page size @ `file:line` → the ops team fixes it first) / Special (an override the binding model can't express @ `file:line` → the ops team ports by hand). Cross-references the 3rd-arg triage analysis (a dated prior).>
 
@@ -599,7 +601,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 - **Tensor bindings** (per binding): `<name>` Case 1 (`TensorAccessor`) / Case 2 (raw pointer → `get_bank_base_address` bridge) / clean (borrowed-DFB).
 - **TensorParameter relaxation:** `<relaxation>` on `<binding>` (confirm the custom hash matches) | none.
 - **TensorAccessor 3rd arg:** drop the redundant page-size arg @ `<sites>` (Class 1 also sets `dynamic_tensor_shape`) | none.
-- **CB endpoints:** self-loop `<CB, config>` / 1P+1C assign `<CB, config>` / multi-binding advanced-option flag `<CB, config>` / dead-CB drop `<CB @ file:line>` | all legal.
+- **CB endpoints:** self-loop `<CB, config>` / 1P+1C assign `<CB, config>` / multi-binding advanced-option flag `<CB, config>` / dead-CB drop `<CB @ file:line>` / conditional DFB `<CB — dead under X, live under Y>` | all legal.
 
 ## Heads-ups  *(mirrors the brief)*
 
@@ -663,7 +665,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 
 **TensorAccessor 3rd arg:** <drop the redundant page-size arg @ `<sites>`; Class 1 sites also set `dynamic_tensor_shape` | none>
 
-**CB endpoints:** <self-loop `<CB, config>` (one toucher: single-ended / sync-free) · assign 1P+1C on `<CB, config>` (two touchers, e.g. dual-instance work-split) · set the multi-binding advanced option on `<CB, config>` (genuine ≥3-toucher / FIFO-doubling only) · drop dead CB `<CB @ file:line>` (and any dead CTA carrying its index) | all legal>
+**CB endpoints:** <self-loop `<CB, config>` (one toucher: single-ended / sync-free) · assign 1P+1C on `<CB, config>` (two touchers, e.g. dual-instance work-split) · set the multi-binding advanced option on `<CB, config>` (genuine ≥3-toucher / FIFO-doubling only) · drop dead CB `<CB @ file:line>` (dead in *every* config; plus any dead CTA carrying its index) · make `<CB>`'s DFB spec **conditional** on `<config>` (dead under `<config>`, live under `<config>` — do **not** drop it) | all legal>
 
 ## Watch for
 
