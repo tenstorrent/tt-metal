@@ -43,6 +43,31 @@ Post-review hardening (PULL_ANALYSIS-20260817 §4):
     row's pinned flag set (default profitability gate), keeping the checked
     -in baseline pair and the compiler pin coherent.
 
+Sweep-hardening round 2 (adversarial review, 2026-08-16):
+  * the silicon phase trusts NOTHING unkeyed: the BH CRAQ gate re-validates
+    every verdict against THIS run's cc1plus+simulator+tt-metal keys, and a
+    row without classify evidence keyed to this run is withheld RED (a
+    `--phases silicon` resume on an old evidence root can no longer reuse a
+    stale-toolchain green or skip the byte-identical refusal logic);
+  * cached device jobs re-run when the classify hash reference is absent
+    (expected_texts=None never reuses) and are additionally keyed on the
+    pytest node id + flags + extra_env (jobkey.json);
+  * tt_metal_head keys carry a +dirty.<sha> suffix when tracked tt-llk files
+    are modified, so an edited kernel/TSV re-derives evidence;
+  * every perf selector requires its own correctness selector (ops-load
+    validation, loud failure) — no device perf cell without a correctness
+    gate on the same leg;
+  * report() acceptance is class- AND magnitude-aware: per-cell ABSOLUTE
+    cycle drift vs baseline (uniform slowdowns, hand legs on refusal rows),
+    INVALID_METRIC (unparsable metric on a row with baseline history = RED),
+    WIN→PARITY = RED (unless --allow-win-to-parity), loss growth beyond
+    --red-loss-growth-pct = RED; YELLOW rows show as 'YELLOW', never 'ok';
+  * the toolchain the pytest HARNESS uses (tests/sfpi, an untracked
+    repointable symlink — test_config.py hardcodes it) is the pinned
+    subject: preflight records its realpath, refuses a divergent
+    --compiler, and the harness-resolved cc1plus is re-verified against the
+    pin at every phase entry.
+
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
     --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
@@ -97,6 +122,7 @@ KNOBS = {
     "dst-autoincr": "-mtt-tensix-optimize-dst-autoincr",
     "macro-planner": "-mtt-tensix-macro-planner",
 }
+HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
 SILICON_LOCK = "/tmp/tt-llk-sfpu-silicon.lock"
 CHIP = {"bh": "blackhole", "wh": "wormhole"}
@@ -131,6 +157,23 @@ def load_config(path):
         row["extra_env"] = dict(kv.split("=", 1) for kv in env.split(";") if kv)
         if row["kind"] == "pinpair" and not row["pin_flags"]:
             sys.exit(f"config row {row['op']}: kind=pinpair requires pin_flags")
+        # Sweep-hardening 2: a perf leg without its own correctness leg
+        # produces device cycles from a kernel nothing verified — a broken
+        # hand kernel would silently keep feeding vs_hand_pct GREEN.  Loud
+        # failure at ops-load; withhold the perf node until a corr node lands.
+        if row["kind"] != "skip":
+            for perf_sel, corr_sel in (
+                ("sem-perf", "sem-corr"),
+                ("hand-perf", "hand-corr"),
+            ):
+                if row["nodes"][perf_sel] and not row["nodes"][corr_sel]:
+                    sys.exit(
+                        f"config row {row['op']}: {perf_sel} has a node but "
+                        f"{corr_sel} is empty — every device perf leg requires "
+                        "its own correctness node (perf cycles from an "
+                        "unverified kernel are not evidence); add the corr "
+                        "node or withhold the perf leg in the row note"
+                    )
     return rows
 
 
@@ -187,6 +230,54 @@ class Sweep:
         )
 
     # ---------------- preflight ----------------
+    @staticmethod
+    def _pin_value(pin, what):
+        """A pin must be a FULL 64-hex sha256.  The previous prefix
+        acceptance (startswith) meant a 1-char env leak 'pinned' essentially
+        nothing (adversarial finding sweep_2x2.conf:31)."""
+        pin = pin.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", pin):
+            sys.exit(
+                f"{what} pin '{pin}' is not a full 64-hex sha256 — refusing "
+                "to sweep (prefix pins accept almost anything; pass the "
+                "complete sha256 from sweep_2x2.conf)"
+            )
+        return pin
+
+    def _resolve_cc1plus(self):
+        """cc1plus resolved through the driver (the binary that compiles)."""
+        cc1 = subprocess.run(
+            [str(self.compiler), "-print-prog-name=cc1plus"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not cc1 or not pathlib.Path(cc1).is_file():
+            sys.exit(f"cannot resolve cc1plus via {self.compiler} (got '{cc1}')")
+        return cc1, sha256(pathlib.Path(cc1))
+
+    def verify_toolchain(self, phase):
+        """Re-verify the harness toolchain identity at a phase entry.
+
+        tests/sfpi is an UNTRACKED, repointable symlink and the pytest
+        harness hardcodes it (test_config.py setup_paths) — a mid-run
+        repoint would silently measure with an unpinned compiler while the
+        manifest swears otherwise (adversarial finding sweep_2x2.py:160).
+        """
+        real = str(HARNESS_TOOLCHAIN.resolve())
+        cc1, cc1_sha = self._resolve_cc1plus()
+        if (
+            real != self.info["harness_toolchain_realpath"]
+            or cc1_sha != self.info["cc1plus_sha256"]
+        ):
+            sys.exit(
+                f"TOOLCHAIN CHANGED MID-RUN (phase '{phase}'): tests/sfpi now "
+                f"resolves to {real} with cc1plus {cc1_sha} at {cc1}; "
+                f"preflight recorded {self.info['harness_toolchain_realpath']} "
+                f"with cc1plus {self.info['cc1plus_sha256']} — refusing to "
+                "continue (evidence already produced is keyed to the "
+                "preflight identity)"
+            )
+
     def preflight(self):
         self.ev.mkdir(parents=True, exist_ok=True)
         info = {
@@ -198,12 +289,37 @@ class Sweep:
         }
         if not self.compiler.is_file():
             sys.exit(f"missing compiler {self.compiler}")
-        # SECONDARY pin: the g++ driver.  The driver binary is byte-identical
-        # across cc1plus-only changes (structurally blind, D6) — it can catch
-        # a wrong toolchain layout but never a compiler-proper change.
+        # The pytest harness HARDCODES its toolchain to the tests/sfpi
+        # symlink (test_config.py setup_paths: TOOL_PATH = LLK_ROOT /
+        # 'tests/sfpi/compiler/bin') and the sweep passes only flags/env —
+        # never a compiler path.  --compiler therefore controls what
+        # preflight HASHES, not what BUILDS: a divergent --compiler would
+        # verify one binary and measure with another (adversarial finding
+        # sweep_2x2.py:160).  Enforce that the pinned subject IS the harness
+        # toolchain, and record the symlink's realpath as evidence.
+        harness_gxx = (HARNESS_TOOLCHAIN / "compiler/bin/riscv-tt-elf-g++").resolve()
+        info["harness_toolchain_symlink"] = str(HARNESS_TOOLCHAIN)
+        info["harness_toolchain_realpath"] = (
+            str(HARNESS_TOOLCHAIN.resolve()) if HARNESS_TOOLCHAIN.exists() else ""
+        )
+        if self.compiler != harness_gxx:
+            sys.exit(
+                f"--compiler {self.compiler} is NOT the harness toolchain "
+                f"{harness_gxx} (tests/sfpi resolves to "
+                f"{info['harness_toolchain_realpath'] or 'MISSING'}): the "
+                "pytest harness hardcodes tests/sfpi/compiler/bin "
+                "(test_config.py), so every build would use the harness "
+                "toolchain while preflight verified a different binary — "
+                "repoint tests/sfpi at the pinned build or drop --compiler"
+            )
+        # SECONDARY pin: the g++ driver.  Historically byte-identical across
+        # cc1plus-only rebuilds (structurally blind, D6) — it can catch a
+        # wrong toolchain layout but never a compiler-proper change.  Full
+        # sha equality required (no prefixes).
         info["compiler_sha256"] = sha256(self.compiler)
-        if self.a.compiler_sha and not info["compiler_sha256"].startswith(
-            self.a.compiler_sha
+        if self.a.compiler_sha and (
+            self._pin_value(self.a.compiler_sha, "driver (--compiler-sha)")
+            != info["compiler_sha256"]
         ):
             sys.exit(
                 f"DRIVER SHA MISMATCH: pinned {self.a.compiler_sha}, "
@@ -211,17 +327,12 @@ class Sweep:
             )
         # PRIMARY pin: cc1plus (the compiler proper), resolved through the
         # driver itself so the pin follows whatever binary actually compiles.
-        cc1 = subprocess.run(
-            [str(self.compiler), "-print-prog-name=cc1plus"],
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        if not cc1 or not pathlib.Path(cc1).is_file():
-            sys.exit(f"cannot resolve cc1plus via {self.compiler} (got '{cc1}')")
+        cc1, cc1_sha = self._resolve_cc1plus()
         info["cc1plus"] = cc1
-        info["cc1plus_sha256"] = sha256(pathlib.Path(cc1))
-        if self.a.cc1plus_sha and not info["cc1plus_sha256"].startswith(
-            self.a.cc1plus_sha
+        info["cc1plus_sha256"] = cc1_sha
+        if self.a.cc1plus_sha and (
+            self._pin_value(self.a.cc1plus_sha, "cc1plus (--cc1plus-sha)")
+            != info["cc1plus_sha256"]
         ):
             sys.exit(
                 "CC1PLUS SHA MISMATCH (primary toolchain pin): pinned "
@@ -277,9 +388,22 @@ class Sweep:
                 sys.exit(
                     f"{label} flag set rejected by compiler:\n{probe.stdout}{probe.stderr}"
                 )
-        info["tt_metal_head"] = subprocess.check_output(
+        head = subprocess.check_output(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
         ).strip()
+        # Sweep-hardening 2: `rev-parse HEAD` is blind to an UNCOMMITTED
+        # working tree — an edited kernel header or ops TSV would resume
+        # every classify/CRAQ verdict and device cell stale.  Key on the
+        # tracked tt-llk diff as well (untracked files are excluded: the
+        # tests/sfpi symlink and pytest __pycache__ churn would otherwise
+        # invalidate every resume).
+        dirty = subprocess.run(
+            ["git", "-C", str(ROOT), "diff", "HEAD", "--", "tt_metal/tt-llk"],
+            capture_output=True,
+        ).stdout
+        if dirty.strip():
+            head += "+dirty." + hashlib.sha256(dirty).hexdigest()[:16]
+        info["tt_metal_head"] = head
         for arch in ("bh", "wh"):
             sim = getattr(self.a, f"sim_{arch}")
             info[f"sim_{arch}"] = str(sim) if sim else ""
@@ -291,6 +415,9 @@ class Sweep:
             f"compiler driver sha256 (secondary pin): {info['compiler_sha256']}",
             f"cc1plus: {info['cc1plus']}",
             f"cc1plus sha256 (PRIMARY pin): {info['cc1plus_sha256']}",
+            f"harness toolchain symlink: {info['harness_toolchain_symlink']}",
+            "harness toolchain realpath (readlink -f, re-verified at every "
+            f"phase entry): {info['harness_toolchain_realpath']}",
             f"compiler version: {info['compiler_version']}",
             f"tt-metal: {info['tt_metal_head']}",
             f"libttsim bh sha256: {info['sim_bh_sha256']}",
@@ -559,43 +686,131 @@ class Sweep:
         return verdict
 
     # ---------------- phase: silicon ----------------
+    def _bh_craq_gate(self, row):
+        """Keyed silicon gate (adversarial finding sweep_2x2.py:1341).
+
+        The gate trusts only BH CRAQ verdicts whose cc1plus + simulator +
+        tt-metal keys match THIS run — legs==PASS alone would let a
+        `--phases silicon` resume open the gate with greens earned by an
+        older compiler/simulator/tree.  A SKIP_NO_SIMULATOR verdict (no
+        legs) never opens it.
+        """
+        craq_dir = self.ev / row["op"] / "craq"
+        if not craq_dir.is_dir():
+            return False
+        sim = self._staged_sim("bh")
+        sim_sha = sha256(sim) if sim and sim.is_file() else ""
+        verdicts = [
+            json.loads(p.read_text())
+            for p in sorted(craq_dir.glob("*-bh/verdict.json"))
+        ]
+        if not verdicts:
+            return False
+        for v in verdicts:
+            if not (v.get("legs") and all(x == "PASS" for x in v["legs"].values())):
+                return False
+            if (
+                v.get("cc1plus_sha256") != self.info["cc1plus_sha256"]
+                or v.get("sim_sha256") != sim_sha
+                or v.get("tt_metal_head") != self.info["tt_metal_head"]
+            ):
+                return False
+        return True
+
+    def _load_keyed_classification(self, row, sel):
+        """Classification evidence for (row, sel) valid for THIS run's keys,
+        or None.  Used when the classify phase was skipped: silicon must
+        never run on unkeyed/stale classify evidence (the byte-identical
+        refusal logic and the hash-matched device resume both depend on it)."""
+        vf = self.ev / row["op"] / "classify" / sel / "verdict.json"
+        if not vf.is_file():
+            return None
+        try:
+            v = json.loads(vf.read_text())
+        except ValueError:
+            return None
+        if (
+            v.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
+            and v.get("tt_metal_head") == self.info["tt_metal_head"]
+        ):
+            return v
+        return None
+
     def _device_job(
         self, row, sel, label, leg, flags, tag="silicon", expected_texts=None
     ):
         """One serialized device job under both flocks; CSVs copied in-lock."""
         node = row["nodes"][sel]
         work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
-        # Resume skips only GREEN jobs whose archived .text hash set matches
-        # what THIS run's compiler produces for the same node/flags (from the
-        # classify evidence).  A failed job, or a cell measured from a stale
-        # binary (different compiler), is re-run — never cached as done.
+        # The full identity a cached cell must match before reuse: kernel
+        # .text alone cannot see test parameters (node id: input ranges,
+        # tolerances), flags, or extra_env (adversarial finding
+        # sweep_2x2.py:572).
+        jobkey = {
+            "node": node,
+            "flags": flags,
+            "extra_env": row["extra_env"] or {},
+            "tag": tag,
+        }
+        # Resume skips only GREEN jobs whose (node, flags, extra_env) jobkey
+        # matches AND whose archived .text hash set equals what THIS run's
+        # compiler produces for the same node/flags (from the classify
+        # evidence).  ABSENT classify hashes (expected_texts=None: --phases
+        # silicon without classify, or a leg whose classify stopped before
+        # writing hashes) mean the cache cannot be validated: re-run, never
+        # reuse (finding sweep_2x2.py:575).  A failed job, or a cell measured
+        # from a stale binary, is re-run — never cached as done.
         if (work / "rc.txt").is_file() and not self.a.force:
             prior_rc = int((work / "rc.txt").read_text().strip() or 99)
             if prior_rc == 0 and self._passed(work / "log.txt"):
-                if expected_texts is None:
-                    return prior_rc
+                cached_key = None
+                if (work / "jobkey.json").is_file():
+                    try:
+                        cached_key = json.loads((work / "jobkey.json").read_text())
+                    except (ValueError, OSError):
+                        cached_key = None
                 archived = (
                     self._texts_of(work / "TEXT_HASHES.txt")
                     if (work / "TEXT_HASHES.txt").is_file()
                     else None
                 )
-                if archived == expected_texts:
-                    return prior_rc  # hash-matched reuse
-                print(
-                    f"resume: {row['op']}/{sel} {label}-{leg} .text hashes "
-                    "changed — re-measuring"
-                )
+                if expected_texts is None:
+                    print(
+                        f"resume: {row['op']}/{sel} {label}-{leg} has no "
+                        "classify hash reference for this run — cached cell "
+                        "not trusted, re-measuring"
+                    )
+                elif cached_key != jobkey:
+                    print(
+                        f"resume: {row['op']}/{sel} {label}-{leg} job key "
+                        "(node/flags/extra_env) changed or unrecorded — "
+                        "re-measuring"
+                    )
+                elif archived == expected_texts:
+                    return prior_rc  # keyed, hash-matched reuse
+                else:
+                    print(
+                        f"resume: {row['op']}/{sel} {label}-{leg} .text hashes "
+                        "changed — re-measuring"
+                    )
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         rt = work / "rt"
         rt.mkdir()
         (work / "node.txt").write_text(node + "\n")
         (work / "flags.txt").write_text(flags + "\n")
+        (work / "jobkey.json").write_text(json.dumps(jobkey, indent=2) + "\n")
         env_prefix = " ".join(f'{k}="{v}"' for k, v in (row["extra_env"] or {}).items())
         inner = work / "inner.sh"
         # Single-quoted node id survives the sh -c layers because pytest node
-        # ids never contain single quotes.
-        assert "'" not in node
+        # ids never contain single quotes.  Explicit check, not an assert:
+        # asserts are compiled out under `python3 -O` (adversarial missed
+        # item, sweep_2x2.py:598).
+        if "'" in node:
+            sys.exit(
+                f"pytest node id contains a single quote (breaks the sh -c "
+                f"quoting layers): {node}"
+            )
         inner.write_text(
             f"""#!/usr/bin/env bash
 rm -rf "{LLK}/perf_data"
@@ -1219,6 +1434,66 @@ exit $RC
                     "issue-slot lower bound (KERNEL marker required): RED"
                 )
                 rag = "RED"
+            # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
+            # history that produced NO parsable metric this run is
+            # INVALID_METRIC RED — a profiler/post-CSV or marker rename must
+            # never turn the nightly permanently GREEN while measuring
+            # nothing.  Withheld/blocked rows already carry their own RED.
+            blocked = any(
+                "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n
+                for n in r.get("notes", [])
+            )
+            if not blocked:
+                dead = sorted(
+                    cell
+                    for cell, v in c.items()
+                    if v is None
+                    and baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
+                )
+                numeric_any = any(isinstance(v, (int, float)) for v in c.values())
+                refused = any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values())
+                if dead:
+                    verdicts.append(
+                        f"INVALID_METRIC — cell(s) {', '.join(dead)} have "
+                        "baseline history but produced no parsable metric "
+                        "(marker/post-CSV drift?): RED"
+                    )
+                    rag = "RED"
+                elif expected and c and not numeric_any and not refused:
+                    verdicts.append(
+                        "INVALID_METRIC — row has baseline class history but "
+                        "every cell is unparsable/None: RED"
+                    )
+                    rag = "RED"
+            # acceptance 2a (findings sweep_2x2.py:1222/:1181): per-cell
+            # ABSOLUTE cycle drift vs the baseline's min-aggregated cycles.
+            # Ratio-only acceptance is blind to uniform slowdowns (both legs
+            # +50% keeps every ratio) and never checks the hand leg on
+            # refusal rows.  Slowdowns beyond --max-abs-drift-pct are RED;
+            # improvements beyond it are YELLOW (stale baseline — reviewed
+            # update needed), never silently blessed.
+            for cell in sorted(c):
+                val = c[cell]
+                if not isinstance(val, (int, float)):
+                    continue
+                base = baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
+                if not base or not min(base):
+                    continue
+                abs_pct = 100.0 * (val - min(base)) / min(base)
+                if abs_pct > self.a.max_abs_drift_pct:
+                    verdicts.append(
+                        f"{cell} ABS CYCLES {min(base):g}→{val:g} "
+                        f"({abs_pct:+.2f}% > {self.a.max_abs_drift_pct:g}%): RED"
+                    )
+                    rag = "RED"
+                elif abs_pct < -self.a.max_abs_drift_pct:
+                    verdicts.append(
+                        f"{cell} abs cycles improved {min(base):g}→{val:g} "
+                        f"({abs_pct:+.2f}%; baseline stale — reviewed update "
+                        "needed): YELLOW"
+                    )
+                    if rag == "GREEN":
+                        rag = "YELLOW"
             # acceptance 2: win-sign preservation vs baseline
             for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
                 if key not in r:
@@ -1256,6 +1531,31 @@ exit $RC
                         f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
                     )
                     rag = "RED"
+                elif base_pct <= -0.5 and r[key] > -0.5:
+                    # Finding sweep_2x2.py:1259 (fixture C): a real win
+                    # (class band <= -0.5%) eroding into the parity band is a
+                    # regression, not drift — RED by default; a full flip to
+                    # >= 0 is caught above.
+                    tag = "YELLOW" if self.a.allow_win_to_parity else "RED"
+                    verdicts.append(
+                        f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
+                    )
+                    if tag == "RED":
+                        rag = "RED"
+                    elif rag == "GREEN":
+                        rag = "YELLOW"
+                elif (
+                    base_pct > 0.5 and (r[key] - base_pct) > self.a.red_loss_growth_pct
+                ):
+                    # Finding sweep_2x2.py:1259 (fixture D): an existing loss
+                    # growing beyond --red-loss-growth-pct percentage points
+                    # is RED (exit 1), not an unalertable YELLOW.
+                    verdicts.append(
+                        f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
+                        f"(+{r[key] - base_pct:.2f}pp > "
+                        f"{self.a.red_loss_growth_pct:g}pp): RED"
+                    )
+                    rag = "RED"
                 elif drift > self.a.max_drift_pct:
                     verdicts.append(
                         f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW"
@@ -1273,8 +1573,15 @@ exit $RC
             if any("STOP" in n or "COMPILE_FAIL" in n for n in r.get("notes", [])):
                 verdicts.append("correctness/compile failure: RED")
                 rag = "RED"
+            # Verdict column carries YELLOW too (adversarial missed item:
+            # a YELLOW row displaying 'ok' hid the one channel YELLOW has).
+            col = (
+                "RED"
+                if any("RED" in v for v in verdicts)
+                else ("YELLOW" if any("YELLOW" in v for v in verdicts) else "ok")
+            )
             lines.append(
-                f"| {r['op']} | {'RED' if any('RED' in v for v in verdicts) else 'ok'} | "
+                f"| {r['op']} | {col} | "
                 f"{'; '.join(verdicts) or 'no silicon cells this run'} |"
             )
         for s in skips:
@@ -1309,6 +1616,7 @@ exit $RC
             )
             classifications = {}
             if "classify" in phases:
+                self.verify_toolchain("classify")
                 for sel in SELECTORS:
                     if row["nodes"][sel]:
                         classifications[sel] = (
@@ -1317,6 +1625,7 @@ exit $RC
                             else self.classify(row, sel)
                         )
             if "craq" in phases:
+                self.verify_toolchain("craq")
                 for arch in row["craq_archs"].split(","):
                     for sel in ("sem-corr", "hand-corr"):
                         if row["nodes"][sel]:
@@ -1338,22 +1647,39 @@ exit $RC
                         }
                     )
                     continue
-                bh_craq = (
-                    [
-                        json.loads(p.read_text())
-                        for p in (self.ev / row["op"] / "craq").glob(
-                            "*-bh/verdict.json"
+                self.verify_toolchain("silicon")
+                # Silicon runs only on classify evidence KEYED to this run
+                # (finding sweep_2x2.py:1341: with classify skipped,
+                # classifications={} disabled the byte-identical refusal
+                # logic and every hash-match).  A resumed evidence root
+                # supplies verdicts only if their cc1plus/tt-metal keys
+                # match; otherwise the row is withheld RED.
+                missing_cls = []
+                for sel in SELECTORS:
+                    if row["nodes"][sel] and sel not in classifications:
+                        keyed = self._load_keyed_classification(row, sel)
+                        if keyed is None:
+                            missing_cls.append(sel)
+                        else:
+                            classifications[sel] = keyed
+                if missing_cls:
+                    self.reds.append(
+                        f"{row['op']}: silicon withheld — no classify evidence "
+                        f"keyed to this toolchain/tree for "
+                        f"{','.join(missing_cls)} (run the classify phase)"
+                    )
+                    results.append(
+                        dict(
+                            self._result_skeleton(row, classifications),
+                            notes=[
+                                "silicon withheld: classify evidence missing or "
+                                "keyed to another toolchain/tree"
+                            ],
                         )
-                    ]
-                    if (self.ev / row["op"] / "craq").is_dir()
-                    else []
-                )
-                # Gate requires at least one BH verdict WITH legs, and every
-                # leg PASS; a SKIP_NO_SIMULATOR verdict never opens the gate.
-                gate = bool(bh_craq) and all(
-                    c.get("legs") and all(v == "PASS" for v in c["legs"].values())
-                    for c in bh_craq
-                )
+                    )
+                    continue
+                # Keyed BH CRAQ gate: stale-toolchain greens never open it.
+                gate = self._bh_craq_gate(row)
                 if not gate and not self.a.skip_craq_gate:
                     self.reds.append(
                         f"{row['op']}: silicon withheld — paired BH CRAQ not green"
@@ -1417,13 +1743,15 @@ def main():
     )
     ap.add_argument(
         "--compiler-sha",
-        help="required sha256 (prefix ok) of the g++ DRIVER — secondary pin "
-        "only (the driver is byte-identical across cc1plus-only changes)",
+        help="required FULL sha256 of the g++ DRIVER — secondary pin only "
+        "(historically byte-identical across cc1plus-only changes); "
+        "prefixes are rejected",
     )
     ap.add_argument(
         "--cc1plus-sha",
-        help="required sha256 (prefix ok) of cc1plus, resolved via "
-        "g++ -print-prog-name=cc1plus — the PRIMARY toolchain pin",
+        help="required FULL sha256 of cc1plus, resolved via "
+        "g++ -print-prog-name=cc1plus — the PRIMARY toolchain pin; "
+        "prefixes are rejected",
     )
     ap.add_argument(
         "--baseline",
@@ -1436,6 +1764,26 @@ def main():
         help="previous evidence root for drift comparison",
     )
     ap.add_argument("--max-drift-pct", type=float, default=5.0)
+    ap.add_argument(
+        "--max-abs-drift-pct",
+        type=float,
+        default=10.0,
+        help="per-cell ABSOLUTE cycle drift vs baseline: slowdowns beyond "
+        "this are RED (uniform slowdowns preserve every ratio); "
+        "improvements beyond it are YELLOW (stale baseline)",
+    )
+    ap.add_argument(
+        "--red-loss-growth-pct",
+        type=float,
+        default=5.0,
+        help="a baseline loss growing by more than this many percentage "
+        "points is RED (exit 1), not YELLOW",
+    )
+    ap.add_argument(
+        "--allow-win-to-parity",
+        action="store_true",
+        help="downgrade WIN→PARITY erosion from RED (default) to YELLOW",
+    )
     ap.add_argument(
         "--allow-hardware",
         action="store_true",

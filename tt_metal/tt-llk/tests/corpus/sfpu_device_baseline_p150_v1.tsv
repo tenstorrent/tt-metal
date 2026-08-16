@@ -3,21 +3,36 @@
 # craq-sim f80a8d64 generic path); see ~/sfpi-uplift/sweep-2x2/evidence-20260816/SCOREBOARD.md.
 # sfpu_device_baseline_v1.tsv is the immutable p100a-era migration source and is deliberately untouched.
 #
-# COMPILER PROVENANCE (D6): the g++ DRIVER sha256 4633999c170e1a89… is byte-identical across
-# cc1plus-only rebuilds and therefore AMBIGUOUS as a per-row compiler identity. The compiler_sha
-# column records the compiler proper (cc1plus binary sha256) where known: the Lane D/E rows were
-# archived with driver-only provenance (compiler_sha=unrecorded; driver 4633999c…); the two
+# COMPILER PROVENANCE (D6): a g++ DRIVER sha256 alone is AMBIGUOUS as a per-row compiler
+# identity — across cc1plus-only rebuilds the driver is byte-identical (the 4633999c170e1a89…
+# era proved it; note the converse fails too: a full sfpi rebuild changes the driver, as the
+# current pin's rebuild did, 4633999c… → 4f7ff8bf…). The compiler_sha column records the
+# compiler proper (cc1plus binary sha256) where known: the Lane D/E rows were archived with
+# driver-only provenance (compiler_sha=unrecorded; driver 4633999c…); the two
 # legacy__ckernel_sfpu_reduce_custom rows were measured with the sfpi-gcc bb56f1d7797 gate-fix
 # cc1plus 97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6 (-B hybrid build,
 # gatefix-evidence-20260816/SHA256SUMS). The scheduled sweeps pin cc1plus directly via the
-# reduce-sdpa pinpair row; that gate CAUGHT the first candidate pin: cc1plus 33221397ebb2… shares
-# the ambiguous driver sha but was built from gcc cd0af49be5c BEFORE the submodule advanced to
-# bb56f1d7797 (stamp no-op make), reproducing the pre-recalibration 855.5-vs-839 regression pair.
-# The verified pin is now sweep_2x2.conf PINNED_CC1PLUS_SHA256 = e302718c2532700b… (stage2 rebuild
-# from the bb56f1d7797 submodule; generated Reduce-SDPA pack .text byte-identical to the gate-fix
-# hybrid build). The Lane J/K rows below (unarymaxmin-*/addint/subint) and Lane M's TopK
-# correctness evidence were measured with the STALE cd0af49-era cc1plus 33221397ebb2…: recorded
-# honestly per cell and re-measured under the true pin on the next sweep.
+# reduce-sdpa pinpair row.
+#
+# PIN LINEAGE (authoritative narrative + values live in sweep_2x2.conf; this header must agree):
+#   1. 33221397ebb2… — STALE first candidate (same driver sha 4633999c… but built from gcc
+#      cd0af49be5c BEFORE the submodule advanced to bb56f1d7797, stamp no-op make); the pinpair
+#      gate CAUGHT it on device, reproducing the pre-recalibration 855.5-vs-839 regression pair
+#      (nightly-20260816/REPORT-staletoolchain-RED-catch.md).
+#   2. e302718c2532700b… — verified stage2 rebuild from the bb56f1d7797 submodule; generated
+#      Reduce-SDPA pack .text byte-identical to the gate-fix hybrid build
+#      (PROVENANCE-NOTE-laneI2.txt).
+#   3. afe05a8668c4… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — sfpi-gcc a2c3cad2631 =
+#      bb56f1d7797 + P0 all-lanes-enable (6294a1ba3ae) + smag testsuite, built at sfpi d82fb3b
+#      (which also carries the 1-slot BH smag_to_int SFPCAST lowering, Lane N).
+# The Lane J/K rows below (unarymaxmin-*/addint/subint) and Lane M's TopK correctness evidence
+# were measured with the STALE cd0af49-era cc1plus 33221397ebb2…: recorded honestly per cell.
+# Their promised re-measure happened under pin 3 (afe05a86…), NOT the once-promised e302718c…
+# (superseded before the sweep ran): nightly-20260816b re-measured addint/subint to -34.82/-34.83%
+# vs hand (WIN — Lane N's smag lowering; convert-smag-evidence-20260816) and flagged
+# unarymaxmin-max/min causal WIN→LOSS FLIP RED (-1.52% → +0.51%, sem_on 23.84 → 24.33/tile) —
+# owner triage pending (pin investigation vs reviewed baseline update); the cells below remain
+# the reviewed record until that decision.
 #
 # CROSS-CHIP COMPARABILITY (D5): p150 cells are internally-valid same-source 2x2 pairs, but they
 # are NOT same-source with the p100a records: 65d2c873/4ff5c848 changed the measured Min/Max
@@ -63,7 +78,7 @@ legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	323	m
 legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	325	measured	win	unrecorded	Lane D §19.1 re-confirmation; sample 3/3; median 323
 legacy__ckernel_sfpu_binary_bcast	bh	p150	device_cycles	BINARY_BCAST_BODY	handwritten	608	measured	parity	unrecorded	Lane D §19.1 re-confirmation; 608/608/608; PARITY on p150 (exact)
 legacy__ckernel_sfpu_binary_bcast	bh	p150	device_cycles	BINARY_BCAST_BODY	generated	608	measured	parity	unrecorded	Lane D §19.1 re-confirmation; 608/608/608; shape counts match archive
-legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	840	measured	win	97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6	Gate-fix promotion pair (sfpi-gcc bb56f1d7797 via -B hybrid cc1plus, 2026-08-16): 840.00 x3; prior Lane D pair was 839 vs 855.5 (same-run pairing rule: both cells from one paired A/B); the sweep's reduce-sdpa pinpair row re-verifies this pair against the pinned sfpi-built cc1plus 33221397ebb2…
+legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	840	measured	win	97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6	Gate-fix promotion pair (sfpi-gcc bb56f1d7797 via -B hybrid cc1plus, 2026-08-16): 840.00 x3; prior Lane D pair was 839 vs 855.5 (same-run pairing rule: both cells from one paired A/B); the sweep's reduce-sdpa pinpair row re-verifies this pair every sweep against the CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256 (see PIN LINEAGE in this header — the once-named candidate 33221397ebb2… was the STALE build this very gate caught and rejected, never a sanctioned pin)
 legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	generated	834	measured	win	97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6	REGRESSION FIXED (sfpi-gcc bb56f1d7797): replay-hoist profitability model recalibrated from silicon; D1 hoist fires at default gate (dump 121>=60), pack 9ca4a98c; 834.00 x3 = -0.714% win vs hand 840 — ratio-level reproduction of the archived p100a D1 record pair (cross-chip)
 metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:sem_off	28.4755859375	measured	win	unrecorded	Lane E 2026-08-16 nightly-20260816 (first p150 Min/Max perf after harness fix); deterministic x3
 metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:sem_on	19.728515625	measured	win	unrecorded	Lane E 2026-08-16; planner fires (derived SFPLOADMACRO); causal -30.72% — ratio-level reproduction of the p100a -30.73% ONLY (NOT same-source: 65d2c873/4ff5c848 changed the measured kernel's .text for both impls, and the chip changed); deterministic x3

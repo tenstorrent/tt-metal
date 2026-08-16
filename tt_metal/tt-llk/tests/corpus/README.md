@@ -248,6 +248,38 @@ Post-review hardening (PULL_ANALYSIS-20260817 §4, D2–D6):
 * **Scoreboard schema 2** — per-cell `compiler_sha` (cc1plus) and
   `craq_sim_sha` columns.
 
+Sweep-hardening round 2 (adversarial review, 2026-08-16):
+
+* **Keyed silicon phase** — the BH CRAQ gate accepts only verdicts keyed to
+  THIS run's cc1plus+simulator+tt-metal head, and `--phases silicon` on an
+  evidence root without classify evidence keyed to this run withholds the
+  row RED (stale-toolchain greens can no longer authorize device jobs).
+* **Cache identity** — cached device cells additionally key on the pytest
+  node id + flags + extra_env (`jobkey.json`); an absent classify hash
+  reference (`expected_texts=None`) re-runs, never reuses; `tt_metal_head`
+  keys carry a `+dirty.<sha>` suffix for uncommitted tracked tt-llk edits.
+* **Perf requires correctness** — every perf selector must have its
+  correctness selector (ops-load validation, loud failure).
+* **Magnitude-aware report** — per-cell ABSOLUTE cycle drift vs baseline
+  (`--max-abs-drift-pct`, RED on slowdowns: uniform slowdowns preserve every
+  ratio and hand legs on refusal rows fed no comparison), INVALID_METRIC
+  (unparsable metric on a row with baseline history = RED), WIN→PARITY = RED
+  by default (`--allow-win-to-parity` downgrades), loss growth beyond
+  `--red-loss-growth-pct` = RED; YELLOW rows show `YELLOW`, never `ok`.
+* **Toolchain identity** — pins are FULL 64-hex sha256 values (prefixes
+  rejected); the reviewed `PINNED_*` values in `sweep_2x2.conf` cannot be
+  silently overridden from the environment (wrappers take
+  `--allow-pin-override` for a deliberate, logged one-off); the tests/sfpi
+  symlink realpath is recorded in the manifest, a `--compiler` diverging
+  from the harness toolchain aborts, and the harness-resolved cc1plus is
+  re-verified at every phase entry.
+* **DejaGnu gate round 2** — any non-PASS outcome class (UNRESOLVED, XPASS,
+  UNTESTED, UNSUPPORTED, ERROR; XFAIL excepted) gates RED; `g++.sum` is
+  deleted before each suite (a leftover is never counted); resume re-derives
+  the verdict from the stored summary (a resumed RED stays RED, a partial
+  summary is RED); suite patterns are never glob-expanded in the caller's
+  cwd (`set -f`).
+
 ### Scheduled sweeps
 
 `nightly_bh_sweep.sh` (02:00) runs validate → classify → CRAQ → BH silicon →
@@ -257,7 +289,9 @@ flag toggled individually; per-knob silicon legs for the `HEADLINE_ROWS`
 only), the WH CRAQ matrix for macro rows, and the DejaGnu byte-parity suites
 (`loadmacro*`, `macro-planner*`) against the pinned toolchain build tree
 (SKIP if absent).  All knobs/rows/paths live in `sweep_2x2.conf`
-(env-overridable), not in script bodies.  Install the cron entries with
+(env-overridable EXCEPT the reviewed `PINNED_*` toolchain pins, which reject
+environment overrides unless the wrapper is passed `--allow-pin-override`),
+not in script bodies.  Install the cron entries with
 `install_sweep_cron.sh` (prints by default; `--install` writes the crontab —
 an orchestrator/owner step, both entries flock-guarded and logging to
 `~/sfpi-uplift/sweep-logs/`).

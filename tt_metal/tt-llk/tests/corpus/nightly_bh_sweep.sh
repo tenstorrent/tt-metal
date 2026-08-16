@@ -16,8 +16,23 @@
 # Exit nonzero on any RED so a cron wrapper can alert.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+
+# --allow-pin-override: the ONLY sanctioned way to run with a PINNED_* value
+# from the environment (sweep_2x2.conf rejects silent env overrides).  The
+# flag is consumed here, never forwarded to sweep_2x2.py.
+ARGS=()
+for _a in "$@"; do
+  if [ "$_a" = "--allow-pin-override" ]; then
+    export ALLOW_PIN_OVERRIDE=1
+    echo "nightly: --allow-pin-override — environment pin values will be honored AND LOGGED"
+  else
+    ARGS+=("$_a")
+  fi
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
 # shellcheck source=sweep_2x2.conf
-source "$HERE/sweep_2x2.conf"
+source "$HERE/sweep_2x2.conf" || { echo "FATAL: sweep_2x2.conf refused (pin override without --allow-pin-override?)"; exit 2; }
 
 DATE=${SWEEP_DATE:-$(date +%Y%m%d)}
 EV="$EVIDENCE_ROOT/nightly-$DATE"
@@ -65,6 +80,8 @@ python3 "$HERE/sweep_2x2.py" \
   --allow-hardware \
   --baseline "$BASELINE" \
   --max-drift-pct "$MAX_DRIFT_PCT" \
+  --max-abs-drift-pct "$MAX_ABS_DRIFT_PCT" \
+  --red-loss-growth-pct "$RED_LOSS_GROWTH_PCT" \
   ${PREV:+--prev-run "$PREV"} \
   "$@"
 RC=$?
