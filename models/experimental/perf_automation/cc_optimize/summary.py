@@ -1333,7 +1333,10 @@ def _roofline_tables(
     # pipeline", so a 1 here would be a guess dressed as a fact, and it is exactly the guess that made
     # an 8-user step get priced as a 1-user step.
     _bs = _prefill_batch()
-    _bs_declared = any(
+    # A RESOLVED batch counts as reported, however it was resolved: the run recording 8 is a stronger
+    # statement than the operator exporting it, and reading only the environment is what let a real
+    # eight-user run print "not reported".
+    _bs_declared = _bs > 1 or any(
         str(os.environ.get(v) or "").strip().isdigit() and int(os.environ.get(v)) > 0
         for v in ("TT_PERF_BATCH", "PERF_MCP_BATCH", "TT_PERF_BATCH_SIZE")
     )

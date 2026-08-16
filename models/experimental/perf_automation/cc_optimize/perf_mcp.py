@@ -2382,7 +2382,11 @@ def _persist_device_weight_bytes(nbytes: int, complete: bool, bytes_per_param: f
 
 
 def _persist_stage_ms(
-    stage_ms: dict, stage_paths: dict | None = None, stage_isl: dict | None = None, stage_ops: dict | None = None
+    stage_ms: dict,
+    stage_paths: dict | None = None,
+    stage_isl: dict | None = None,
+    stage_ops: dict | None = None,
+    stage_batch: int = 0,
 ) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
@@ -2413,6 +2417,12 @@ def _persist_stage_ms(
                     "stages": stage_ms,
                     "paths": stage_paths or {},
                     "isl": stage_isl or {},
+                    # THE BATCH THE RUN ACTUALLY SERVED. Parsed off TRACE_REPLAY_PATH for the
+                    # scorecard and then dropped, so the report had to fall back to TT_PERF_BATCH --
+                    # which carries 0, the "ask the pipeline" sentinel, and reads as 1. Every ceiling
+                    # was then priced for one user against a measurement of eight. Recorded here
+                    # because it belongs to the same measurement as the stage timings beside it.
+                    "batch": int(stage_batch or 0),
                     # The op-dispatch count each path label was DERIVED from -- the evidence, kept
                     # beside the conclusion, so "prefill is traced" can be checked rather than
                     # believed.
@@ -2445,6 +2455,18 @@ def read_stage_isl(state_dir_path=None, model="", task="") -> int:
     the length the environment asked for."""
     try:
         return int((_read_stage_doc(state_dir_path, model, task).get("isl") or {}).get("prefill") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def read_stage_batch(state_dir_path=None, model="", task="") -> int:
+    """The batch the profiled run actually served, or 0 when it was not recorded.
+
+    Read back from the same file as the stage timings because it was measured in the same run: a
+    ceiling priced for one user against an eight-user measurement is not a comparison.
+    """
+    try:
+        return int(_read_stage_doc(state_dir_path, model, task).get("batch") or 0)
     except Exception:  # noqa: BLE001
         return 0
 
@@ -2741,7 +2763,7 @@ def _run_full_pipeline_ms():
     if per_tokens:
         if headline_units:
             os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
-        _persist_stage_ms(stage_ms, stage_paths, stage_isl, stage_ops)
+        _persist_stage_ms(stage_ms, stage_paths, stage_isl, stage_ops, batch)
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None
