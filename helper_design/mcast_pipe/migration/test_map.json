@@ -504,8 +504,8 @@
     },
     {
       "candidate": "deepseek sampling_kernel.cpp",
-      "confidence": "device-verified historical route",
-      "route": "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_argmax_single_device_101_cores"
+      "confidence": "device-verified 2026-08-16",
+      "route": "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::{test_sampling_argmax_single_device_101_cores,test_sampling_topk_single_device}; top-k test_1 must be compared with the unchanged raw Blackhole failure signature while issue skip remains"
     },
     {
       "candidate": "deepseek kv_cache_update.hpp and flash_mla.hpp",

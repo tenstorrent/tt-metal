@@ -1,25 +1,48 @@
-# sampling_kernel.cpp (deepseek_v3_b1 micro_ops/sampling) — DEFERRED (v7)
+# sampling_kernel.cpp (deepseek_v3_b1 micro_ops/sampling) — MIGRATED (API v11)
 
-- Group: ccl / deepseek / examples (SENDER, flag-only loop barrier), tag clean
-- Status: DEFERRED — coverage-gap (single-chip cannot run the validating test: needs 101 worker cores)
-- Validation attempted: test_sampling_topk_single_device[test_1] (num_internal_iterations=100, k=32 ->
-  the k>1 path that exercises this kernel's single-device loop-barrier mcast).
-  Result: SKIPPED — "Test requires at least 101 worker cores but got 64 (8x8)". The only tests that hit
-  the migrated path are all `@pytest.mark.requires_grid_size(101)`; this WH n150 has 64 worker cores.
+- Unit: Tier 1.6, `deepseek-b1-sampling-loop-barrier`
+- Production commit: `2840fc2836177691fdc72d0d0f7ad93a72451694`
+- Status: migrated at API v11 on 2026-08-16
 
-## What the migration would be (prepared, then reverted)
-The loop-barrier block (NCRISC, num_internal_iterations>1, !mesh_mode, final core) was carrying a STALE
-pre-v7 `Pipe<>` spelling (single class, 5-field `McastRect{x,y,x,y,num_dests}`, two Semaphore ctor args,
-`send_signal(1)`). v7 form (mirrors reader_final_topk):
-  SenderPipe<noc_index, loop_ready_sem_id, num_dests, /*PRE_HANDSHAKE=*/false>
-      loop_pipe(pipe_noc, McastRect<>{mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y});
-  loop_pipe.send_signal();   // was send_signal(1)
-EXCLUDE_SRC (final core not in the non-final receiver rect) -> NUM_ACTIVE_RECEIVER_CORES == num_dests.
-The trailing local-cell reset to 0 kept (now redundant — send_signal re-asserts VALID). Compiles cleanly
-(JIT cache 16/16 hits on the smoke attempt). NOT device-verifiable here.
+## Implementation
 
-## Disposition
-- Kernel reverted to its stale pre-v7 `Pipe<>` spelling (tree unchanged at this path) — NOT a regression
-  this round, since that spelling predates this tier.
-- Ledger: status=deferred, flags add `coverage-gap`. Reason: single-chip (64 cores) cannot run the
-  101-core test that drives the loop-barrier mcast path. Hand to a >=101-core machine or a mesh harness.
+The single-device NCRISC loop barrier now uses one helper-owned, signal-only `Mcast2D` Flag pipe with a
+fixed final-core sender and no handshake. The host constructs the dense bounding rectangle of the sparse
+101-core shard grid, so the Blackhole 11x10 route retains the raw 109-destination `EXCLUDE_SOURCE`
+multicast. The helper semaphore is initialized on all 110 landed cells; kernel descriptors and per-core
+runtime arguments remain restricted to the 101 active cores. Mesh mode and the operation-owned global
+sampling semaphores are unchanged.
+
+The migration removes the hand-written NoC coordinate swap, physical-coordinate conversion, destination
+count, raw semaphore multicast/wait/reset sequence, and five named compile-time arguments. Per-file
+production shrink gate: kernel 36 deletions / 9 additions; host 22 deletions / 10 additions.
+
+## Correctness and cache evidence
+
+- `./build_metal.sh`: passed.
+- Cold `run_safe_pytest.sh --dev --no-precompile` 101-core argmax: passed, 0/523 JIT hits.
+- Complete mapped normal selection: 4 argmax passed; 3 top-k retained their pre-existing Blackhole
+  selection-mismatch skips; warm precompile/run reported 533/533 JIT hits.
+- Temporarily unskipped `test_sampling_topk_single_device[test_1]` completed all 100 internal iterations,
+  selected expected index 85, and failed only at the known metadata `p_scores` assertion.
+- The raw implementation, rebuilt from an empty cache under the same unskipped node, produced identical
+  `p_indices`, identical `p_scores`, selected the same index, and failed at the same assertion.
+- The temporary test edit was restored; the test file has no diff.
+- `test_mcast_pipe_source_audit.py`: 17 passed.
+
+## Matched performance
+
+Tracy `DEVICE KERNEL DURATION [ns]` on the same Blackhole:
+
+| Node | Raw | API v11 | Delta |
+|---|---:|---:|---:|
+| argmax 101-core `[2005-100]` | 18,789 | 18,836 | +0.25% |
+| top-k `test_1`, 100 iterations | 1,558,235 | 1,557,464 | -0.05% |
+
+## Claude review
+
+Claude approved the fixed-sender/no-handshake Flag formulation, dense 11x10 topology, NCRISC runtime
+offsets, and sender-local Flag behavior with `API_EXPANSION NO`. Claude's KEEP verdict for the skipped
+top-k route required an exact raw failure-signature match; that condition was satisfied. Later broad and
+compact final-verdict retries returned no output and were terminated, so no approval was inferred from
+those timeouts.

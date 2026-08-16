@@ -17,9 +17,9 @@ its plan-mandated historical matched performance baseline requires a separately 
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v11 | 18 | 18 |
+| migrated at ledger API v11 | 19 | 19 |
 | pending | 2 | 5 |
-| deferred | 84 | 0 |
+| deferred | 83 | 0 |
 | quarantined | 0 | 0 |
 
 All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
@@ -46,6 +46,12 @@ report; `host_bindings` retains its convention of migrated or source-integrated 
 These units are stamped at API v11. Tier 0.2 `matmul-in0-mcast-block-sharded` is also migrated at v11:
 its exact zero-hit-cache probe, complete mapped inventory, and inherited matched performance evidence
 passed on 2026-08-16.
+
+Tier 1.6 `deepseek-b1-sampling-loop-barrier` is migrated at v11 in `2840fc28361`. Four 101-core
+argmax nodes passed, including cold and warm JIT paths. The Blackhole top-k test remains skipped for
+its pre-existing selection mismatch; when temporarily unskipped, its 100-iteration barrier completed
+and reproduced the raw implementation's exact `p_scores` failure signature. Matched device-kernel
+durations were +0.25% for argmax and -0.05% for top-k.
 
 ## Closed `needs_recheck`
 

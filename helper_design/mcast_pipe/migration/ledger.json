@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v10 status carries 17 migrated kernels and 14 host bindings on the self-describing six-word CT wire. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v11 status carries 19 migrated kernels and 19 host bindings on the self-describing six-word CT wire. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
   "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
   "inventory_group_notes": {
@@ -603,6 +603,29 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
       "flags": ["fully-end-to-end"]
+    },
+    {
+      "id": "deepseek-b1-sampling:single-device-loop-barrier",
+      "factory": "models/demos/deepseek_v3_b1/micro_ops/sampling/op.py",
+      "dispatch": "single-device _op_single_device_topk path, including k=1 argmax and k=32 top-k",
+      "kernels": [
+        "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp"
+      ],
+      "migration_unit": "deepseek-b1-sampling-loop-barrier",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "2840fc2836177691fdc72d0d0f7ad93a72451694",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "cold --dev 101-core argmax: passed with 0/523 JIT hits",
+        "mapped single-device suite: 4 argmax passed; 3 top-k retained their pre-existing Blackhole selection-mismatch skips; warm JIT 533/533 hits",
+        "temporarily unskipped top-k test_1 completed 100 internal iterations and selected index 85 before the known p_scores mismatch; raw baseline reproduced the exact p_indices, p_scores, and assertion signature",
+        "matched Tracy device-kernel durations: argmax raw 18789 ns vs migrated 18836 ns (+0.25%); top-k raw 1558235 ns vs migrated 1557464 ns (-0.05%)",
+        "test_mcast_pipe_source_audit.py: 17 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:1", "fully-end-to-end", "known-blackhole-selection-mismatch"]
     }
   ],
   "entries": [
@@ -1651,18 +1674,24 @@
       "op_family": "ccl / deepseek / examples",
       "role": "sender",
       "tag": "clean",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "2840fc2836177691fdc72d0d0f7ad93a72451694",
       "validation_set": [
-        "models/demos/deepseek_v3_b1/.../test_sampling.py::test_sampling_argmax_single_device_101_cores"
+        "build_metal.sh: passed",
+        "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_argmax_single_device_101_cores: 4 passed on 11x10 Blackhole; cold --dev and warm program-cache/JIT paths passed",
+        "test_sampling_topk_single_device[test_1]: 100 internal iterations completed under migrated and raw implementations with identical pre-existing Blackhole p_scores failure signature",
+        "matched Tracy device-kernel durations: argmax +0.25%; top-k -0.05%",
+        "test_mcast_pipe_source_audit.py: 17 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-06-20",
-      "inventory_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API v11 fixed-sender, no-handshake Flag control pipe over the dense 11x10 bounding rectangle; helper-owned semaphore is initialized on all 110 landed cells while kernels remain restricted to the sparse 101 active cores. The operation-owned global semaphore remains separate. Mesh mode is unchanged. The former 64-core coverage gap is closed on Blackhole.",
       "flags": [
-        "coverage-gap"
-      ]
+        "tier:1",
+        "known-blackhole-selection-mismatch"
+      ],
+      "migration_unit": "deepseek-b1-sampling-loop-barrier"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",

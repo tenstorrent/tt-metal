@@ -74,14 +74,34 @@ the same required model returned PASS:
 Claude requested that the 302/188 Matmul result explicitly state that the mapped
 `MM-IN0-INTERLEAVED` and `MM-BLOCK-SHARDED-HYBRID` nodes were included; the tracker and ledger now do so.
 
+### C4 — Tier 1.6 DeepSeek sampling barrier
+
+Claude returned PASS/KEEP with no API expansion for each material decision:
+
+- a fixed-sender, fully-inside `Mcast2D` with `handshake=false` preserves the legacy signal-only
+  `EXCLUDE_SOURCE` fan-out;
+- using the dense 11x10 bounding rectangle preserves the raw 109-destination multicast while
+  initializing the helper semaphore on all landed cells; kernels and per-core runtime arguments remain
+  restricted to the sparse 101 active cores;
+- common and per-core NCRISC runtime argument spaces are separate, so `McastArgs<0, 0>` is correct;
+- leaving the helper-owned sender-local Flag at VALID is safe dead state because the fixed sender never
+  receives or reads it, and every signal rewrites it;
+- an unskipped 100-iteration top-k run can clear the barrier gate only if its selection failure exactly
+  matches the raw baseline. That condition was met byte-for-byte for the decoded `p_indices` and
+  `p_scores` vectors and assertion signature.
+
+Two broader final write-back prompts and two compact retries were terminated after returning no output.
+No approval was inferred from those timeouts; write-back follows the earlier explicit KEEP verdict after
+its raw-baseline condition was satisfied. API expansion: NO.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries: 17 migrated, 3 pending, 84 deferred; no removal/rename/clobber |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 19 migrated, 2 pending, 83 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
-| Tier 1.6 DeepSeek sampling | pending | Required behavior and test collection not started |
+| Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
 | Tier 2.7 DRAM-sharded Matmul | pending | Required behavior and test collection not started |
 | Tier 2.8 group-attention Matmul | pending | Required behavior and post-flag-barrier proof not started |
 | Tier 2.9 Conv3D weight sharing | pending | Required behavior and test collection not started |
@@ -118,3 +138,15 @@ Claude requested that the 302/188 Matmul result explicitly state that the mapped
 10. After Claude C3, advanced `ledger.json.current_api_version` from 10 to 11, stamped all 17 existing
     migrated kernel rows and 14 existing migrated host bindings at v11, cleared the 12 `needs_recheck`
     flags, and migrated Tier 0.2's one kernel plus four bindings. Tier 0.1 remains unchanged and pending.
+11. Migrated Tier 1.6 in `2840fc28361`: replaced the raw single-device loop barrier with a helper-owned
+    fixed-sender Flag pipe; removed manual physical-coordinate conversion and five named compile-time
+    arguments; kept the mesh path and the operation-owned global semaphore protocol unchanged. Production
+    files shrank independently (kernel 36 deletions / 9 additions; host 22 deletions / 10 additions).
+12. Tier 1.6 validation: Release build passed; cold `--dev` argmax passed with 0/523 JIT hits; the mapped
+    normal suite reported 4 argmax passed and the repository's 3 existing Blackhole top-k skips, with
+    533/533 warm JIT hits. The temporarily unskipped 100-iteration top-k node completed without a hang,
+    selected the expected index 85, and then reproduced the raw baseline's exact pre-existing `p_scores`
+    mismatch. Final source audit: 17 passed.
+13. Tier 1.6 matched Tracy device-kernel durations: argmax raw 18,789 ns vs migrated 18,836 ns (+0.25%);
+    top-k raw 1,558,235 ns vs migrated 1,557,464 ns (-0.05%). The original test skip was restored and
+    the test file is unchanged.
