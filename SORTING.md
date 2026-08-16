@@ -116,6 +116,177 @@ Two fabrication modes are worth naming, because they recur:
 
 ---
 
+## 0b. Architectural Discoveries
+
+Everything in this section was established on Blackhole silicon during this work and is
+either **absent from `tt-isa-documentation`**, **contradicted by it**, or **present in the
+tree but unused**. Each entry says how it was established and what it costs to get wrong.
+This is the section to read if you are writing SFPU or packer code, whether or not you
+care about sorting.
+
+### A. Wrong or missing in the documentation
+
+**A1. The packer's zero-run counter counts PRECEDING zeroes on Blackhole, not following.**
+`Packers/Compression.md:3` says *"how many zeroes appear **after** that datum"*. On BH it
+is the count **before**. Established by construction: raw group 0 of a stride-16 pattern
+was datums `[v0,v1,v2,v3,0]` with nibbles `[0,15,15,15,14]`, and only the "before" reading
+reconstructs the source. A decoder written to the documented semantics is **bit-perfect on
+symmetric patterns (all-zero, dense, front-loaded) and garbage on asymmetric ones** — the
+worst possible failure mode. The doc itself declines to specify the compressing side
+(`:31`). Not verified on Wormhole; this is a BH claim only.
+
+**A2. The packer's `MIN_THRESHOLD_RELU` compares in the sign-magnitude total order, not
+IEEE.** Found by a *failing* test. Written first against the IEEE reading of `ReLU.md`
+(C floats => NaN comparisons are false => NaN survives), the specials case mismatched on
+exactly the 64 datums whose fused word is a **negative NaN**, and on nothing else. `+NaN`
+survives, `-NaN` is zeroed. So the packer orders `-NaN < -Inf < ... < -0 < +0 < ... <
++Inf < +NaN` — **the same order `SFPGT` uses, and the order Top-K wants.**
+
+**A3. The packer exponent histogram samples 1 datum in 8, in the fixed pattern
+`p mod 64 < 8`.** `Packers/ExponentHistogram.md` describes it as incremented per datum.
+Measured: every tile yields exactly **128** increments, never 1024, and format-independent
+(fp32 also gives 128, so the rate is per *datum*, not per 16-byte beat). The pattern was
+proved by construction — marking `(p%64)//8 == 0` gives `{31:128}`, blocks 1-7 give
+`{31:0}`, and a mod-8 phase sweep is flat, ruling out stride-8.
+
+**A4. `WhichPackers` is ignored on histogram read modes 6/7.** All four reads return the
+identical array while mode 0 shows packers 1-3 packed nothing. **No four-way partial sum
+is needed — and summing the four reads 4x-counts**, which is the trap.
+
+**A5. Max exponent (mode 9) is subsampled too.** WH documents it as updating
+unconditionally for every datum. On BH a single outlier at exp 132 among 1023 at exp 127
+is **missed**.
+
+**A6. `CLREXPHIST` issued from the PACK thread does not fence in-flight PACRs.**
+Reproducible ~39-count leak (168 instead of 128). Issuing it from the math thread, ordered
+by the dest semaphore, gives exactly 128.
+
+**A7. Blackhole has no `REPLAY.md`.** `BlackholeA0/.../BackendConfiguration.md:57` links to
+a page that exists only in the Wormhole tree. The 32-entry replay buffer figure is
+cross-checked against `assembly.yaml` and craq-sim, which agree, but it is **not directly
+documented for Blackhole**.
+
+### B. Architecture facts with no documented home
+
+**B1. The SFPU has ONE shared issue port at the frontend mux, global across all three
+Tensix threads.** `Diagrams/Src/TensixFrontend.lua:126-136` annotates `uops = 3` on exactly
+the per-thread-replicated units (Sync, Configuration, Miscellaneous) and leaves Vector Unit
+(SFPU), Matrix Unit, Packers, Unpackers, Scalar Unit and Mover at the default **1**.
+`WaitGate.md:5` names the stall. `SFPLOADMACRO.md:13` says `SFPLOADMACRO` is *"the only
+mechanism for attaining more than one instruction per cycle"* — unqualified. **Consequence:
+a two-thread split cannot widen SFPU issue**; the second thread takes a slot 1:1 rather
+than adding one.
+
+**B2. The SFPU does NOT overlap `unpack_to_dest`; the packer DOES.** Measured in one
+kernel: `stream+pack` = 4.078 = `max(3.938, 1.25)` (concurrent), but `+MaskStore` = 5.438
+~= `3.938 + 1.5` and `+topk_xl merge` = 6.930 ~= `3.938 + 2.844` (serialised). Math and
+unpack both drive the Dest register file. **This invalidates any design costed from
+`MATH_ISOLATE` numbers alone** — those measure with the operand already resident in Dest.
+
+**B3. 32-bit `unpack_to_dest` runs at 3.938 cyc per 32-element vector (32.5 B/cyc).** A
+hard floor for any 32-bit-fused Top-K.
+
+**B4. `SFPLOADMACRO` can express a MAP at 1.000 cyc/vector but never a REDUCTION.**
+Macro-scheduled destinations are restricted to `macroVD` (clobbered by the next load) or
+`LReg[16]`, which is readable **only by a macro-scheduled `SFPSTORE`** (`LReg.md:16`) and
+is not an ALU input. So no macro-resident accumulator can accumulate onto itself, and any
+SFPU-only count costs **>= 2 instructions/vector**. Measured: map 1.000-1.003, count 1.997.
+
+**B5. The full five-instruction corner is reachable.** Load + Simple + MAD + Round + Store
+in one macro measured **1.000 cyc/vector**. The (†) rule (*"if a Simple and a Round execute
+on the same cycle, one needs `VD == 16`"*) constrains *counting* but not *mapping*, because
+a Round instruction may legally target `LReg[16]` and exit through the Store slot.
+
+**B6. `SFPSWAP` auto-stalls in hardware; software need not insert `SFPNOP`.**
+`SFPSWAP.md:110`. And the bubble is **not fillable** — an independent ALU op from the same
+thread still eats it. The un-padded back-to-back swap runs in the shipping MoE gate are
+correct as written.
+
+**B7. Blackhole disables 4-way `.ttinsn` gathering by default; the tt-llk harness does
+not.** `firmware_common.h:275-276,323` (workaround for tt-metal#16439) versus
+`tests/helpers/include/boot.h`, which never writes CSR `0x7c0`. **Numbers from the LLK
+harness are not directly transferable to a production metal kernel.**
+
+### C. Present in the tree but unused, or wrong in the tree
+
+**C1. `ENABLE_ACC_STATS_Enable_ADDR32` is 45 on Blackhole and 46 on Wormhole.**
+`blackhole/cfg_defines.h:1154` vs `wormhole_b0_defines/cfg_defines.h:1455`. A third value,
+`62`, sits in `blackhole/tensix.h:459` inside a comment block marked out of date. **Using
+the WH index on BH pokes the wrong register silently.**
+
+**C2. `p_sfpswap::ROW_2_MAX` and `ROW_3_MAX` are wrong on both WH and BH.** They are `5`
+and `6` — silently duplicating `ROW_0_MAX`/`ROW_1_MAX` — where `SFPSWAP.md:27-30` gives
+`7` and `8`. Quasar has it right. **Latent: nothing uses them today.**
+
+**C3. `SFPSWAP Mod1 = 9` has no LLK enum, and it is the key to the merge win.**
+`SFPSWAP.md:31` documents it as *"In all lanes, VD = max and VC = min; no enum currently
+defined for this mode"*. The LLK exposes only `ALL_ROWS_MAX = 1` (VD = min). Since a macro
+always overrides `Insn.VD`, and `macroVD` is the only register the Store slot can reach,
+Mod1=9 is what makes a macro-scheduled compare-exchange usable.
+
+**C4. `SFPGT`/`SFPLE` are new in Blackhole and used by nothing.** Census across the
+shipping sort/topk headers: **230 `SFPSWAP` sites, 0 `SFPGT`/`SFPLE`**. And that is
+defensible for *sorting* — a compare-exchange from `SFPGT` + blend costs 4-5 instructions
+against `SFPSWAP`'s 1 (which yields min *and* max), and loses categorically inside a macro
+since every blend needs >= 2 Simple instructions and a macro schedules one. `SFPGT` wins
+only where the mask **is** the answer.
+
+**C5. Packer zero-compression is never enabled.** `set_packer_config` forces
+`config.f.uncompress = 1` unconditionally. Enabling it is one config bit plus a reserved
+`Row_start_section_size`.
+
+**C6. The packer exponent histogram is referenced by no file in the tree.**
+
+**C7. `TOPK_UINT16_FP32_DEST` is defined nowhere**, so every
+`topk_uint16_prepare_value_tile_for_pack` call site compiles to a no-op. The mode-9 packer
+path is dead code on both WH and BH (it is a no-op only on **Quasar**, contrary to what
+this document's earlier revisions claimed).
+
+**C8. `Downsample_mask` is a config escape that survives ELF reload.**
+`set_packer_config` deliberately skips `THCON_SEC0_REG1` word 3 ("removed word 3 to avoid
+potential race condition"), which is where the mask lives. A mask left behind by an earlier
+kernel **silently decimates every subsequent pack** — observed live during this work.
+
+**C9. `TT_PACR` (runtime-issued) hung the packer where `TTI_PACR` with byte-identical
+fields did not.** `TT_PACR` is used nowhere in tt-llk. Observed, not root-caused.
+
+**C10. `_topk_xl_rebuild_` cannot run under `MATH_ISOLATE`** without an unpack-side
+`_llk_unpack_set_srcb_dummy_valid_()` per call — its `transpose_N_faces` stalls MATH on
+SrcB valid. This hung the device once and is why `perf_topk_micro_op.py` has no rebuild arm.
+
+### D. Measurement methodology that this work depended on
+
+**D1. `--collect-only` opens the device.** `conftest.py:432,460` initialise ttexalens for
+any build mode that is not `PRODUCE`. Add `--compile-producer` for a device-free collect.
+
+**D2. A serial `--compile-producer` run races on artefact directories** (`ld: cannot open
+output file .../elf/unpack.elf`), intermittently and on different variants each time.
+`-n 8` fixes it.
+
+**D3. `ckernel_unpack_template::run(count)` takes a `uint8_t` but feeds a 7-bit field.**
+`count <= 128`; passing 256 truncates to **0** and the loop runs zero times, which reads
+out as a spectacular fake result.
+
+**D4. Timing cannot distinguish "free" from "silently not executed".**
+`SFPLOADMACRO.md:88-94` rewrites an illegal instruction template to `SFPNOP`, and a
+misconfigured `Sequence` degenerates the macro into a plain `SFPLOAD` — both measure the
+*same* 1.000. **Every macro result in this document is backed by a correctness test with an
+exact all-above case**, because that is the only thing that catches it.
+
+**D5. `PROFILER_SYNC()` is mandatory at the end of every timed zone.** `ZONE_SCOPED`
+timestamps on the RISC-V at scope exit, and the RISC-V runs ~28 Tensix instructions ahead.
+Without it every arm measures the *push* rate, ~1.0, including the `SFPSWAP` control whose
+job is to catch exactly that.
+
+**D6. `scripts/run_safe_pytest.sh` is wrong for tt-llk tests.** It `cd`s to the tt-metal
+root (changing pytest's rootdir away from `tests/python_tests` and its `pytest.ini`,
+`conftest.py` and markers) and activates tt-metal's `python_env` rather than the LLK venv.
+Use a bare `flock /tmp/tt-device.lock` instead, which still interoperates with other users
+of that lock.
+
+**D7. This build has no profiler instrumentation**, so Tracy captures nothing and no
+end-to-end `ttnn` Device Kernel Duration is available without a rebuild.
+
 ## 1. Audit of TT-Metal Sorting & Top-K Implementations
 
 ```
