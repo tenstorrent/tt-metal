@@ -74,6 +74,12 @@ default (override with --ks / --ns, where --ns is W). Layers, in the FIXED
 run order (header-editing layer last):
 
   op        ttnn.experimental.topk_large_indices alone, single row
+  opstock   topk_large_indices AS SHIPPED (pre-branch): measured via the
+            rows=2 row-parallel proxy -- rows=1 now auto-selects our
+            column-parallel factory, but two independent rows select the
+            row-parallel factory whose kernels are byte-identical to
+            pre-branch and run concurrently on 2 cores, so op device time
+            equals the single-row single-core as-shipped time
   routed    ttnn.topk largest=True  (routes to topk_large_indices; composite)
   stocknow  ttnn.topk largest=False (stock single-core path, header
             as-committed: replay ON by default since the branch landed it)
@@ -262,13 +268,33 @@ COMPETITION_SLOW_ITERS = 3
 
 # Fixed layer run order. The header-editing layer runs LAST so an abort mid-
 # sweep leaves the maximum number of layers measured on the committed header.
-# (layer, child op, composite parse, arm to check out or None)
+#
+# seed_index is PINNED per layer (not list position): the 2026-08-16 silicon
+# run derived seeds from enumerate() order op=0/routed=1/stocknow=2/
+# prebranch=3, and inserting a layer must never silently reseed the others --
+# a rerun has to reproduce the recorded cells bit-for-bit.
+#
+# opstock = ttnn.experimental.topk_large_indices AS SHIPPED (pre-branch).
+# rows=1 now auto-selects our column-parallel factory, so the honest proxy is
+# num_rows=2 (same W, same k, two independent rows): that selects the
+# row-parallel factory whose kernels are byte-identical to pre-branch, both
+# rows process concurrently on 2 cores, so the op's device time equals the
+# single-row single-core (as-shipped) time. Child reuses the plain
+# topk_large_indices harness with batch=2; correctness gathers per row.
+#
+# (layer, child op, composite parse, arm to check out or None, seed_index)
 COMPETITION_LAYERS = [
-    ("op", "topk_large_indices", False, None),
-    ("routed", "topk_routed", True, None),
-    ("stocknow", "topk_stock", True, None),
-    ("prebranch", "topk_stock", True, "disable_replay"),
+    ("op", "topk_large_indices", False, None, 0),
+    ("opstock", "topk_large_indices", False, None, 4),
+    ("routed", "topk_routed", True, None, 1),
+    ("stocknow", "topk_stock", True, None, 2),
+    ("prebranch", "topk_stock", True, "disable_replay", 3),
 ]
+# Verbatim caveat carried by the .md preamble whenever opstock appears:
+OPSTOCK_CAVEAT = (
+    "opstock measured via the rows=2 row-parallel proxy: byte-identical "
+    "pre-branch kernels, per-row single-core wall time"
+)
 
 # Optional fifth layer (--with-blaze): the tt-blaze GLM indexer bench, run as
 # an EXTERNAL pytest under our Tracy. Single cell only -- their bench is
@@ -1551,7 +1577,7 @@ def build_competition_cells(args):
                 "arm": None,
             }
         )
-    for layer_index, (layer, child_op, composite, arm) in enumerate(COMPETITION_LAYERS):
+    for layer, child_op, composite, arm, seed_index in COMPETITION_LAYERS:
         if layer not in wanted_layers:
             continue
         for k in ks:
@@ -1561,14 +1587,12 @@ def build_competition_cells(args):
                 iters = base_iters
                 if layer in ("stocknow", "prebranch") and w * k >= COMPETITION_SLOW_WK:
                     iters = min(base_iters, COMPETITION_SLOW_ITERS)
-                # --op-num-slices passthrough: op layer only (the direct
-                # topk_large_indices child); composite/checkout layers keep
-                # their own routing untouched.
-                num_slices = (
-                    getattr(args, "op_num_slices", None)
-                    if (child_op == "topk_large_indices" and not composite)
-                    else None
-                )
+                # --op-num-slices passthrough: the 'op' LAYER only. opstock
+                # shares the topk_large_indices child but is the as-shipped
+                # proxy -- a slicing override there would measure something
+                # that never shipped. Composite/checkout layers keep their
+                # own routing untouched.
+                num_slices = getattr(args, "op_num_slices", None) if layer == "op" else None
                 cid = f"comp_{layer}_k{k}_w{w}" + (f"_p{num_slices}" if num_slices is not None else "")
                 cells.append(
                     {
@@ -1576,7 +1600,13 @@ def build_competition_cells(args):
                         "num_slices": num_slices,
                         "op": child_op,
                         "layer": layer,
-                        "batch": 1,
+                        # opstock: 2 independent rows -> the row-parallel
+                        # factory whose kernels are byte-identical to
+                        # pre-branch; both rows run concurrently on 2 cores,
+                        # so op device time == single-row single-core
+                        # (as-shipped) time. rows=1 would auto-select our
+                        # column-parallel factory and measure the wrong thing.
+                        "batch": 2 if layer == "opstock" else 1,
                         "n": w,
                         "k": k,
                         "dtype": "bf16",
@@ -1587,7 +1617,7 @@ def build_competition_cells(args):
                         "expected_factory": "",
                         "composite": composite,
                         "strict": True,
-                        "seed": competition_seed(k, w, layer_index),
+                        "seed": competition_seed(k, w, seed_index),
                         "iters": iters,
                         "arm": arm,
                     }
@@ -1628,9 +1658,10 @@ def run_competition(args):
     # involvement), then prebranch last (the only one that edits the header).
     run_order = list(COMPETITION_LAYERS)
     if any(c["layer"] == "blaze" for c in cells):
-        run_order.insert(3, ("blaze", "blaze_external", False, None))
+        # After stocknow, before the header-editing prebranch.
+        run_order.insert(4, ("blaze", "blaze_external", False, None, None))
     try:
-        for layer, _child_op, _composite, arm in run_order:
+        for layer, _child_op, _composite, arm, _seed_index in run_order:
             layer_cells = sorted((c for c in cells if c["layer"] == layer), key=lambda c: (c["k"], c["n"]))
             if not layer_cells:
                 continue
@@ -1681,7 +1712,7 @@ def build_competition_table(cells, outdir):
 
     provenance_seen = set()
     grid_keys = sorted({(c["k"], c["n"]) for c in cells})
-    layer_names = [name for name, _, _, _ in COMPETITION_LAYERS]
+    layer_names = [t[0] for t in COMPETITION_LAYERS]
     if any(c["layer"] == "blaze" for c in cells):
         layer_names.append("blaze")
     # A layer only participates in a row if it HAS a cell there (blaze is a
@@ -1705,7 +1736,10 @@ def build_competition_table(cells, outdir):
             if r["status"] == "MEASURED" and r["ns_median"]:
                 us[layer] = r["ns_median"] / 1000.0
                 row[f"{layer}_us"] = round(us[layer], 2)
-                row[f"{layer}_cores"] = r.get("cores") or ""
+                # opstock is the rows=2 row-parallel proxy: the CSV shows 2
+                # cores (one per row), but the number being reported is the
+                # PER-ROW single-core time -- display accordingly.
+                row[f"{layer}_cores"] = "1/row" if layer == "opstock" else (r.get("cores") or "")
                 statuses.append(f"{layer}=MEASURED")
             else:
                 row[f"{layer}_us"], row[f"{layer}_cores"] = "", ""
@@ -1720,6 +1754,8 @@ def build_competition_table(cells, outdir):
         row["speedup_prebranch_over_op"] = (
             f"{us['prebranch'] / us['op']:.2f}x" if "prebranch" in us and "op" in us else ""
         )
+        # as-shipped op / our op: what the branch bought at the op level.
+        row["speedup_opstock_over_op"] = f"{us['opstock'] / us['op']:.2f}x" if "opstock" in us and "op" in us else ""
         row["status"] = " ".join(statuses)
         rows.append(row)
 
@@ -1742,7 +1778,7 @@ def write_competition_reports(table, outdir):
         return
     # Without --with-blaze, layer_names is exactly the four classic layers, so
     # the CSV/md schema of existing runs is byte-identical.
-    layer_names = table.get("layer_names") or [name for name, _, _, _ in COMPETITION_LAYERS]
+    layer_names = table.get("layer_names") or [t[0] for t in COMPETITION_LAYERS]
     columns = ["k", "W"]
     for layer in layer_names:
         columns += [f"{layer}_us", f"{layer}_cores"]
@@ -1752,6 +1788,7 @@ def write_competition_reports(table, outdir):
         "gap_routed_vs_roofline",
         "speedup_prebranch_over_routed",
         "speedup_prebranch_over_op",
+        "speedup_opstock_over_op",
         "status",
     ]
     csv_path = os.path.join(outdir, "competition_table.csv")
@@ -1765,13 +1802,16 @@ def write_competition_reports(table, outdir):
     with open(md_path, "w") as f:
         f.write("# Competition table: top-k layers vs the llm_perf roofline\n\n")
         f.write(
-            "Layers: op = topk_large_indices alone; routed = ttnn.topk largest=True "
+            "Layers: op = topk_large_indices alone; opstock = topk_large_indices as "
+            "shipped (pre-branch, rows=2 proxy); routed = ttnn.topk largest=True "
             "(composite, sums ALL ops per iteration); stocknow = ttnn.topk largest=False "
             "on the committed header (replay ON); prebranch = same with "
             "TOPK_DISABLE_REPLAY_STEP armed. roofline = llm_perf model "
             "(tenstorrent/llm_perf PR 671+676) -- ASPIRATIONAL, no such kernel exists; "
             "gap columns = measured/roofline.\n\n"
         )
+        if "opstock" in layer_names:
+            f.write(f"> {OPSTOCK_CAVEAT}\n\n")
         if "blaze" in layer_names:
             f.write(f"> blaze: {BLAZE_CAVEAT}\n\n")
         if note:
@@ -1787,7 +1827,7 @@ def write_competition_reports(table, outdir):
                         bits.append(f"{layer}={r[f'{layer}_us']}us/{r.get(f'{layer}_cores', '')}c")
                 if r.get("roofline_us") != "":
                     bits.append(f"roofline={r['roofline_us']}us")
-                for col in ("gap_op_vs_roofline", "speedup_prebranch_over_op"):
+                for col in ("gap_op_vs_roofline", "speedup_prebranch_over_op", "speedup_opstock_over_op"):
                     if r.get(col) != "":
                         bits.append(f"{col}={r[col]}")
                 f.write("- " + "  ".join(str(b) for b in bits) + "\n")
@@ -1844,7 +1884,7 @@ def main():
     )
     p.add_argument(
         "--layers-competition",
-        default="op,routed,stocknow,prebranch",
+        default="op,opstock,routed,stocknow,prebranch",
         help="competition layers to (re)run; order of execution is always the fixed one",
     )
     p.add_argument(
