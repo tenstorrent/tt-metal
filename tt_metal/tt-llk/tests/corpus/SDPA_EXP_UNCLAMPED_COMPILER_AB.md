@@ -51,6 +51,36 @@ The overall broad replacement classification is therefore **loss**, not win or
 tie; replay hoisting closes part of the gap but does not reach the handwritten
 kernel.
 
+## Residual gap diagnosis
+
+The 24-slot semantic payload contains eight SFPLOADI halves per row; the
+17-slot handwritten payload contains one, plus four invariant halves loaded
+once per face. Across the 32-row tile that is 256 versus 48 immediate-load
+issues, a delta of 208. Semantic also retains 32 TTINCRWC commands and 68 inner
+counter setup/decrement/branch instructions that handwritten avoids through
+ADDR_MOD_6 store advance and seven statically expanded playback launches. Those
+three deltas total 308 instructions, closely tracking the measured 313-cycle
+residual. The non-constant mathematical mix has no net issue-count delta: one
+extra semantic EXP/MAN-family instruction per row is offset by one fewer
+clamp/mask instruction.
+
+Enabling the existing invariant-load pass alongside replay on the exact source
+is not yet a phase-two win. Blackhole profiler/functional compilation and CRAQ
+pass, but both `.text` images remain byte-identical to replay-only ON and the
+payload remains 24 slots. Its detailed dump reports `function has opaque LREG
+state`: the current function-global gate rejects any GIMPLE asm or
+unrepresented call, including LLK setup/synchronization outside the row loop.
+A sound follow-up must use typed effects or explicit LREG ownership, not a raw
+`.ttinsn` opcode whitelist, while retaining the eight-LREG pressure proof.
+
+After invariant placement, two further generic targets are canonical Dst-walk
+folding into an auto-incrementing store addrmod and constant-small-trip replay
+playback expansion. All three are dataflow/trip-count transforms; none requires
+recognizing Exp or its coefficients. Direct substitution with the production
+helper is not generally legal: this source removes the upper clamp under a
+non-positive-input contract, while production retains full-domain behavior and
+only promises comparable accuracy.
+
 ## Evidence
 
 The complete archive is
@@ -59,6 +89,6 @@ CRAQ JUnit results, final linked ELFs and disassemblies, production controls,
 two physical-device captures, compiler/simulator provenance, and SHA256
 manifests. `silicon-final` is the primary device set with per-process raw/post
 CSVs. The aggregate `SHA256SUMS` file hashes to
-`a7e6320fc3f5afc038d24ea610a28368206d75500454876d38a6851a4ee20bdd`;
+`a4f65ec3124401243f839504f4b209c18649daf1a883f36a73dd6eb3bc28dd05`;
 the independently verified `silicon-final/SHA256SUMS` hashes to
 `73db341a90d53f92970526586af86bff830b87d4789703162001d664e2ceb162`.
