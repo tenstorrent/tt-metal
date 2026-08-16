@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v10 status carries 17 migrated kernels and 14 host bindings on the self-describing six-word CT wire. Sharded LayerNorm pre-allgather was migrated and verified on 2026-08-06 in production migration commit 4acd98259b6 after separate builder-split prerequisite 4ef7e9a57a6; its build, exact fresh-cache node, complete mapped inventories, and helper suites passed. TopK final readiness remains anchored by production migration commit b5c99d43fd5. The earlier fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Historical v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v10 status carries 17 migrated kernels and 14 host bindings on the self-describing six-word CT wire. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
   "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
   "inventory_group_notes": {
@@ -22,7 +22,7 @@
       "migration_unit": "conv2d-weights-single-sender-rect",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
+      "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
       "validation_set": [
         "build_metal.sh: passed",
         "exact CONV-HEIGHT compile-focused --dev node: passed; sender JIT 7585446677319138702, receiver JIT 15099792235267128693",
@@ -50,7 +50,7 @@
       "migration_unit": "conv2d-weights-fixed-line",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
+      "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
       "validation_set": [
         "build_metal.sh: passed",
         "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
@@ -78,7 +78,7 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
         "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
@@ -112,7 +112,7 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
@@ -146,7 +146,7 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
         "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
@@ -180,7 +180,7 @@
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
@@ -214,7 +214,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
         "exact legacy 8x4 --dev node: passed; sender JIT 665208170585676730, receiver JIT 4997071892188578060",
@@ -243,7 +243,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
         "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
@@ -275,7 +275,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
         "exact Welford 8x4 --dev node: passed; sender JIT 12485185751240554029, receiver JIT 14565098489008052769",
@@ -304,7 +304,7 @@
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
         "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
@@ -337,7 +337,7 @@
       "migration_unit": "sort-single-row-control",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "7337302b5649b7cd169764cd95c0b0343e88950d",
+      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
       "validation_set": [
         "build_metal.sh: passed",
         "exact test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False] under --dev from a fresh isolated JIT cache: passed; coordinator, reader, and writer artifacts confirmed",
@@ -366,7 +366,7 @@
       "migration_unit": "conv2d-activation-width-sharded",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "fe866a1d0c4c32b78aae8a76e875c0da109f51c8",
+      "commit": "c3f5e53a19a8179cda08436d8964860a32005fbe",
       "validation_set": [
         "build_metal.sh: passed",
         "exact BF16/BF16 filter-3 tile-output test_conv_features node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
@@ -396,7 +396,7 @@
       "migration_unit": "topk-multicore-final-readiness",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "b5c99d43fd5",
+      "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
       "validation_set": [
         "build_metal.sh: passed",
         "exact W=8192,k=50 BFLOAT16_B node under --dev from fresh isolated cache: passed; reader_final_topk and writer_local_topk JIT artifacts confirmed",
@@ -420,7 +420,7 @@
       "migration_unit": "layernorm-sharded-pre-allgather",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "4acd98259b6",
+      "commit": "e58c66ef53167a05703190700f884107da0bddc4",
       "validation_set": [
         "separate builder-split prerequisite 4ef7e9a57a6: build passed; LN-PRE-ALLGATHER 126 passed; LN-POST-ALLGATHER 136 passed; LN-SHARDED 208 passed",
         "build_metal.sh: passed",
@@ -434,7 +434,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:3", "atomic-unit:layernorm-sharded-pre-allgather", "fully-end-to-end", "builder-split-prerequisite:4ef7e9a57a6", "handshaked-flag-signal-only"]
+      "flags": ["tier:3", "atomic-unit:layernorm-sharded-pre-allgather", "fully-end-to-end", "builder-split-prerequisite:d0c459f8358", "handshaked-flag-signal-only"]
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:legacy",
@@ -635,7 +635,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
@@ -667,7 +667,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
         "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
@@ -838,7 +838,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
+      "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
       "validation_set": [
         "build_metal.sh: passed",
         "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 7585446677319138702",
@@ -864,7 +864,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
+      "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
       "validation_set": [
         "build_metal.sh: passed",
         "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 15099792235267128693",
@@ -890,7 +890,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
+      "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
       "validation_set": [
         "build_metal.sh: passed",
         "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
@@ -916,7 +916,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
+      "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
       "validation_set": [
         "build_metal.sh: passed",
         "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
@@ -942,7 +942,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "fe866a1d0c4c32b78aae8a76e875c0da109f51c8",
+      "commit": "c3f5e53a19a8179cda08436d8964860a32005fbe",
       "validation_set": [
         "build_metal.sh: passed",
         "exact BF16/BF16 filter-3 tile-output node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
@@ -1052,7 +1052,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "59e75d6fc3a9264ba96bb43416e103811ba194e4",
+      "commit": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
       "validation_set": [
         "GN legacy inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
@@ -1064,7 +1064,8 @@
       "last_verified": "2026-08-05",
       "inventory_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
       "flags": [
-        "tier:2a"
+        "tier:2a",
+        "needs_recheck"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1075,7 +1076,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
+      "commit": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
       "validation_set": [
         "GN legacy inventory: 124 passed, 8 expected skips",
         "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
@@ -1084,7 +1085,9 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
       "inventory_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
-      "flags": [],
+      "flags": [
+        "needs_recheck"
+      ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
@@ -1094,7 +1097,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "4acd98259b6",
+      "commit": "e58c66ef53167a05703190700f884107da0bddc4",
       "validation_set": [
         "build_metal.sh: passed",
         "exact fresh-cache 8x4 BFLOAT8_B RMSNorm node under --dev: passed; sender JIT artifact confirmed",
@@ -1107,7 +1110,8 @@
       "flags": [
         "acked-signal-only",
         "fully-end-to-end",
-        "atomic-unit:layernorm-sharded-pre-allgather"
+        "atomic-unit:layernorm-sharded-pre-allgather",
+        "needs_recheck"
       ]
     },
     {
@@ -1117,7 +1121,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "4acd98259b6",
+      "commit": "e58c66ef53167a05703190700f884107da0bddc4",
       "validation_set": [
         "build_metal.sh: passed",
         "exact fresh-cache 8x4 BFLOAT8_B RMSNorm node under --dev: passed; receiver JIT artifacts confirmed",
@@ -1130,7 +1134,8 @@
       "flags": [
         "acked-signal-only",
         "fully-end-to-end",
-        "atomic-unit:layernorm-sharded-pre-allgather"
+        "atomic-unit:layernorm-sharded-pre-allgather",
+        "needs_recheck"
       ]
     },
     {
@@ -1158,7 +1163,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "59e75d6fc3a9264ba96bb43416e103811ba194e4",
+      "commit": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
       "validation_set": [
         "GN Welford inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
@@ -1170,7 +1175,8 @@
       "last_verified": "2026-08-05",
       "inventory_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
       "flags": [
-        "tier:2a"
+        "tier:2a",
+        "needs_recheck"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1199,7 +1205,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
+      "commit": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
       "validation_set": [
         "GN Welford inventory: 116 passed, 8 expected skips",
         "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
@@ -1208,7 +1214,9 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
       "inventory_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
-      "flags": [],
+      "flags": [
+        "needs_recheck"
+      ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
@@ -1382,7 +1390,7 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "b5c99d43fd5",
+      "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
       "migration_unit": "topk-multicore-final-readiness",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1397,7 +1405,8 @@
       "flags": [
         "race-free-no-handshake-init",
         "fully-end-to-end",
-        "atomic-unit:topk-multicore-final-readiness"
+        "atomic-unit:topk-multicore-final-readiness",
+        "needs_recheck"
       ]
     },
     {
@@ -1407,7 +1416,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "b5c99d43fd5",
+      "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
       "migration_unit": "topk-multicore-final-readiness",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1422,7 +1431,8 @@
       "flags": [
         "race-free-no-handshake-init",
         "fully-end-to-end",
-        "atomic-unit:topk-multicore-final-readiness"
+        "atomic-unit:topk-multicore-final-readiness",
+        "needs_recheck"
       ]
     },
     {
@@ -1451,7 +1461,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "7337302b5649b7cd169764cd95c0b0343e88950d",
+      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
       "validation_set": [
         "build_metal.sh: passed",
         "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
@@ -1466,7 +1476,8 @@
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
-        "fully-end-to-end"
+        "fully-end-to-end",
+        "needs_recheck"
       ]
     },
     {
@@ -1476,7 +1487,7 @@
       "tag": "refactor",
       "status": "migrated",
       "migrated_api_version": 10,
-      "commit": "7337302b5649b7cd169764cd95c0b0343e88950d",
+      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
       "validation_set": [
         "build_metal.sh: passed",
         "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
@@ -1491,7 +1502,8 @@
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
-        "fully-end-to-end"
+        "fully-end-to-end",
+        "needs_recheck"
       ]
     },
     {
@@ -2339,7 +2351,7 @@
   ],
   "reconciled": "2026-08-14",
   "current_api_version": 10,
-  "baseline_ref": "origin/llk_helper_library @ 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
+  "baseline_ref": "origin/llk_helper_library @ dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
   "reconcile_history": [
     {
       "date": "2026-08-03",
@@ -2480,6 +2492,55 @@
       ],
       "source_equivalence": "The five affected source files are byte-identical to f3361f57596^.",
       "validation": "./build_metal.sh passed; exact block-sharded Conv --dev node passed; CONV-BLOCK and CONV-WIDTH feature inventories each passed 48 with 16 expected skips; test_mcast_pipe.py passed 80/80 under --dev; McastHostFixture passed 32/32."
+    },
+    {
+      "date": "2026-08-14",
+      "report": "archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md",
+      "base_from": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 (prior llk_helper_library baseline)",
+      "base_to": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e (fetched llk_helper_library baseline)",
+      "prerebase_branch": "backup/mcast-migration-prerebase-20260814-40692d1",
+      "prerebase_head": "40692d1e9ee4beb2a2db4196e1718407bf254bc4",
+      "rebased_head": "91bf395736241f7b62941c19383028e4f53da2ad",
+      "api_version": "ledger 10; helper header 11 (unchanged)",
+      "buckets": {
+        "unchanged": 79,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 12
+      },
+      "needs_recheck": [
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp"
+      ],
+      "recall_sweep": "The exact primitive-contract recognition-family path delta from pre-rebase HEAD 40692d1e9ee to rebased HEAD 91bf3957362 contained nine new raw-hit paths. Source inspection classified all nine as generic unicast/fabric synchronization, a flush-only shared helper, or a generated example barrier rather than intra-chip multicast-pipe blocks; therefore zero candidates were added. Seven raw-hit paths disappeared, none inventoried. All 91 ledger paths exist.",
+      "commit_hash_references_remapped": 31,
+      "commit_hash_map": {
+        "acd84d7f3fc30f9744101883b3ada5a5dc8da652": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
+        "59e75d6fc3a9264ba96bb43416e103811ba194e4": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
+        "991b5b6b6386a90726d15007002fe1f5a77d8487": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
+        "51dfb1f1ed61045ed10dc679269960b6d2ccac9e": "a5009c349b4cebe03f9249f380c9f3a682795858",
+        "aeeb28ff007807c71b1f60842cca85e5c41efa7f": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+        "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
+        "7337302b5649b7cd169764cd95c0b0343e88950d": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+        "fe866a1d0c4c32b78aae8a76e875c0da109f51c8": "c3f5e53a19a8179cda08436d8964860a32005fbe",
+        "b5c99d43fd5cd33bd3a9f20c2da90b9c8bb42516": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
+        "4acd98259b6d069bee043383eb457164d9205626": "e58c66ef53167a05703190700f884107da0bddc4"
+      },
+      "approval": "The user explicitly requested a fully automated rebase and authorized autonomous conflict and reconciliation decisions, replacing the normal human mutation gates; decisions are archived in rebase_decisions_2026-08-14-dc9282.md.",
+      "validation": "Reconciliation itself was static. The enclosing rebase workflow completed ./build_metal.sh, Sort focused/expanded tests, mcast_pipe helper and source-audit suites, McastHostFixture, and focused Matmul, TopK, GroupNorm Welford, and LayerNorm pre-allgather probes successfully.",
+      "follow_up": "Run apply-dm-helper verify-only against the 12 needs_recheck kernels with their complete mapped inventories; retain the three existing pending and 71 deferred rows unchanged."
     }
   ]
 }

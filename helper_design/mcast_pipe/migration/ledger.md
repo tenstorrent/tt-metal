@@ -1,11 +1,12 @@
-# `mcast_pipe` migration ledger — reconciled after experimental rollback 2026-08-14
+# `mcast_pipe` migration ledger — reconciled after rebase 2026-08-14
 
 Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
-`log/`. The last pre-rollback static audit is archived at
-`../archive/reconciliation/reconcile_2026-08-14.md`; Round 29 of `../changelog.md` records the rollback.
+`log/`. The current static audit is archived at
+`../archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md`; autonomous conflict choices are in
+`../archive/reconciliation/rebase_decisions_2026-08-14-dc9282.md`.
 
-- Branch: `sjovic/mcast-migration` at `9d870bf2da9` after rollback.
-- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`.
+- Branch: `sjovic/mcast-migration` at `91bf3957362` after replaying 58 commits.
+- Baseline: `origin/llk_helper_library` at `dc9282be7d5`.
 - Ledger API: v10.
 - Materialized helper API: v11.
 
@@ -22,9 +23,11 @@ owned by `apply-dm-helper`.
 | deferred | 71 | 0 |
 | quarantined | 0 | 0 |
 
-All 91 inventoried kernel paths exist. Before the separate text inventory was removed, its path set
-matched these entries exactly. No migrated kernel was removed, renamed, or clobbered. Two migrated
-kernels were edited after the last ledger write-back and carry `needs_recheck`.
+All 91 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. Twelve
+migrated kernels changed across the baseline move or conflict-composed rebase and carry
+`needs_recheck`. The recognition-family delta produced nine new raw-hit paths, but source inspection
+showed that they are generic unicast/fabric synchronization, a shared flush helper, or a generated
+example barrier rather than new intra-chip multicast-pipe candidates.
 
 ## Migrated units awaiting API-v11 re-entry
 
@@ -43,13 +46,17 @@ These rows remain stamped v10 until the API-v11 apply gate is green.
 
 ## Open `needs_recheck`
 
-| Kernel | Reason |
-|---|---|
-| `reader_bmm_tile_layout_in1_sender_writer_padding.cpp` | Matmul remediation and multicast naming cleanup changed the migrated source |
-| `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | Multicast naming cleanup changed the migrated source |
+| Unit | Kernels | Reason |
+|---|---|---|
+| Matmul in1 | `reader_bmm_tile_layout_in1_sender_writer_padding.cpp`, `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | baseline DFB/global-CB churn plus conflict-composed geometry and naming changes |
+| GroupNorm v2 | legacy sender/receiver and Welford sender/receiver | baseline DFB/fp32 changes plus helper/control-ABI conflict composition |
+| LayerNorm pre-allgather | sender and receiver | baseline runtime-argument vector changes composed with the helper prefix |
+| TopK | `reader_final_topk.cpp`, `writer_local_topk.cpp` | baseline DFB changes composed with helper-owned readiness |
+| Sort | `coordinator_single_row_multi_core.cpp`, `reader_single_row_multi_core.cpp` | baseline UInt16 and partial-grid hang fixes composed with the split helper channels |
 
-`apply-dm-helper` must run their mapped verify-only coverage and clear the flags when green. API-v11
-Tier-0 coverage may satisfy both obligations when it exercises the same complete inventories.
+`apply-dm-helper` must run their complete mapped verify-only coverage and clear the flags when green.
+The enclosing rebase workflow already passed focused post-rebase probes, but reconciliation keeps the
+flags until the complete mapped inventories are recorded by the apply workflow.
 
 ## Source-integrated pending work
 
@@ -81,7 +88,7 @@ factory, ABI, channel split, or data flow.
 Run `apply-dm-helper` from the reconciled state:
 
 1. validate and stamp the v10 fleet at API v11;
-2. clear the two `needs_recheck` flags through mapped verify-only coverage;
+2. clear the 12 `needs_recheck` flags through complete mapped verify-only coverage;
 3. validate and write back the two interleaved Matmul kernels and five bindings;
 4. validate and write back the block-sharded Matmul kernel and four bindings;
 5. update logs and the live report after each atomic unit completes.
