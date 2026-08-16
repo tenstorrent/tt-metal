@@ -40,7 +40,7 @@ the measurement simply is not of the product. That is F46, and it is the first t
 
 | # | one line |
 |---|---|
-| **F46** | the optimizer spent 12 h improving `decode_step`, which the demo never calls; the shipped loop recomputes the whole prefix every frame |
+| **F46** | the optimizer measures `decode_step`, which the demo never calls, while the shipped loop recomputes the whole prefix every frame — it reported −17.2%, the product got −13.2% |
 | **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` — no range check on a value that cannot exceed 1.0 |
 | **F36 + F37** | the graduation gate feeds `torch.randn` to components whose real captured inputs sit unread on disk, and its defaults can silently corrupt the golden |
 | **F34** | the overlay store restores a model deleted from HEAD, so a from-scratch run is unreachable and two runs from one commit differ invisibly |
@@ -234,8 +234,9 @@ pipeline would notice; it simply did not happen this time.
 - **Not that the optimisation work is wasted.** It reached the product, as measured above. Wiring
   `decode_step` into `run_tts` would additionally recover the structural gap (F46).
 
-The honest summary is narrow and specific: **the tool ports correctly and measures its own
-performance against something the user never runs.**
+The honest summary is narrow and specific: **the tool ports correctly, and measures its own
+performance on a code path the user never runs — so its headline (−17.2%) overstates what the
+product received (−13.2%).**
 
 ---
 
@@ -297,7 +298,7 @@ defect.
 | **F41** | the depth-knob sanity check compares op sequences truncated at 50000 and reads the shared limit as "cap never reached the builder"; the knob is also only backbone-deep while its comment claims every stack | **YES** | small |
 
 **If only one thing is taken: F46.** The optimize stage spent twelve hours improving a decode
-function the product never calls, while the shipped generation loop recomputes the entire prompt
+function the product never calls (its gains reach the product only via shared code), while the shipped generation loop recomputes the entire prompt
 plus every prior frame, for every frame. No perf number in this report describes the delivered
 model. F42 is the next one, and is a one-line fix.
 
@@ -4427,7 +4428,7 @@ entirely.
 ## ★★★★★ F46 — the profiled decode path and the shipped decode path are different ALGORITHMS
 
 **Status: live** · severity: twelve hours of optimisation were applied to a function the product
-never calls · reported: not yet
+never calls; its gains reach the product only as a side effect via shared helpers · reported: not yet
 
 This subsumes the shape and mode concerns of F44/F45. Those describe a measurement taken at the
 wrong size, in the wrong execution mode. This one is worse: **the code being measured is not the
