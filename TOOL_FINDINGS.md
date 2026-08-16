@@ -3940,6 +3940,32 @@ if pcc is not None and not (-1.0 - 1e-3 <= pcc <= 1.0 + 1e-3):
 
 `33.612` and `47.779` are four orders of magnitude outside that band; `1.000017` sits inside it.
 
+### This verdict is the sole correctness input to "may I bank this win?"
+
+The false green is not confined to a report. `git_commit` refuses to bank a win unless
+`gates_allow_banking()` says so, and that function reads exactly one correctness field
+(`perf_mcp.py:3055-3067`):
+
+```python
+def gates_allow_banking() -> tuple:
+    """...Absent verdicts are refused, not assumed: an unrun gate is not a passed gate."""
+    v = gate_verdicts()
+    pcc, fp = v.get("pcc") or {}, v.get("full_pipeline") or {}
+    if not pcc:                              return False, "check_pcc has not run since the last commit"
+    if str(pcc.get("status")) != "ok":       return False, "check_pcc status=%s" % pcc.get("status")
+```
+
+`pcc.status` is precisely the field F42 sets to `"ok"` on 33.612, 47.779 and 1.525. So the gate that
+exists to stop an incorrect edit being committed consults a verdict that can be wrong in the unsafe
+direction, and has no other correctness signal to fall back on.
+
+**The enforcement design is right and worth crediting** — the docstring's *"an unrun gate is not a
+passed gate"* is exactly the correct default, and the comment above `git_commit` records that it was
+added *after* two wins (`d54438bb4b`, `7fac4ae685`) were banked while the end-to-end best had not
+moved, because "nothing here asked the gates". The mechanism learned from a real failure. It is
+simply only as trustworthy as the one number feeding it, which is why F42's one-line range check
+matters more than its severity as a reporting bug would suggest.
+
 ### No harm done on this run — the severity is potential, not realised
 
 Stated plainly, because it matters for how urgently this is read: **nothing was banked during the
@@ -4870,6 +4896,21 @@ HiFi2 is safe exactly because `stage_weight_split` already carries the precision
 the mantissa bits the FPU would have gathered on later passes are in `lo`, not in the operand. So
 the closed axis is *lossier weights*, not *fewer FPU passes*, and the two live on the same ladder
 rung group. A blanket "no precision changes on a codec model" would have left that win on the table.
+
+**O10 — `git_commit` sweeps whatever sits in the model dir, including untracked scratch.** Observed
+on the 2026-08-16 run: commit `a7cdd41139` ("attention: split the fused QKV into heads with
+nlp_create_qkv_heads") carried a stray `hifi3_verified_uncommitted.patch` alongside its two source
+files, and the agent noticed and removed it in the next commit (`2ecac422b7`, "drop a stray scratch
+patch that was swept into the previous commit").
+
+No harm here — a `.patch` file is inert, so the measurement attributed to that commit came from the
+two `.py` files as described. But `git_commit` stages the whole model-dir pathspec, so a scratch
+`.py` dropped in the demo directory would be committed *and* would change behaviour, while the
+commit message described something else. Worth a `git add` of only the files the attempt touched, or
+at minimum a warning when the staged set exceeds them.
+
+Credit alongside it: the agent spotted its own contamination unprompted and cleaned it up in a
+separate, honestly-titled commit.
 
 **O1 — whole-model dtype only.** `plan` recommends "N150 with bfp8_b weights", one dtype for the
 whole model. The hand-port's §6.16 measured per-weight precision as the deciding factor: BFP8 on
