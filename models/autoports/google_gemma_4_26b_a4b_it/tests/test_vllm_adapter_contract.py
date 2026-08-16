@@ -38,9 +38,14 @@ def test_adapter_has_no_sampling_implementation():
     assert "sampling" not in methods
 
 
+def test_vllm_initialization_preserves_precision_policy_environment_override():
+    source = inspect.getsource(Gemma4ForCausalLM.initialize_vllm_model)
+    assert 'os.getenv("GEMMA4_PRECISION_CONFIG") or PRECISION_CONFIG' in source
+
+
 def test_selected_precision_and_external_cache_are_explicit():
     source = inspect.getsource(Gemma4ForCausalLM.initialize_vllm_model)
-    assert "precision_config_path=PRECISION_CONFIG" in source
+    assert "precision_config_path=" in source and "PRECISION_CONFIG" in source
     assert "create_kv_cache=False" in source
     allocation = inspect.getsource(Gemma4ForCausalLM.allocate_kv_cache_per_layer)
     assert "gen.model.kv_cache_dtype" in allocation
@@ -128,7 +133,7 @@ def test_slot_remap_is_validated_and_recaptures_without_a_second_rng_path():
 def test_padded_decode_uses_only_the_contiguous_logical_batch():
     source = inspect.getsource(Gemma4ForCausalLM.decode_forward)
     assert "logical_batch = int((flat_positions >= 0).sum().item())" in source
-    assert "execution_batch = 1 if logical_batch == 1 else self.max_batch_size" in source
+    assert "execution_batch = logical_batch" in source
     assert "pack active requests before inactive slots" in source
     assert "tokens.reshape(-1)[:execution_batch].reshape(execution_batch, 1)" in source
 

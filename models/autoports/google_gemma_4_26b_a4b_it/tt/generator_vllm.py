@@ -10,6 +10,7 @@ traced decode, and split on-device sampling remain owned by ``Gemma4Generator``.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -143,7 +144,9 @@ class Gemma4ForCausalLM(nn.Module):
             max_batch_size=int(max_batch_size),
             num_layers=n_layers,
             sampling_mode="device",
-            precision_config_path=PRECISION_CONFIG,
+            # Preserve the selected autoport policy by default while honoring
+            # the same documented override as non-vLLM generator construction.
+            precision_config_path=os.getenv("GEMMA4_PRECISION_CONFIG") or PRECISION_CONFIG,
             create_kv_cache=False,
         )
         return cls(generator=generator)
@@ -407,11 +410,11 @@ class Gemma4ForCausalLM(nn.Module):
             or bool((flat_positions[logical_batch:] >= 0).any())
         ):
             raise ValueError("vLLM decode rows must pack active requests before inactive slots")
-        # Sampling1D's reproducible multi-user streams are defined on the
-        # canonical 32 device lanes. Preserve that lane space whenever more
-        # than one request is active; batch one remains genuinely batch one
-        # for the headline serving path.
-        execution_batch = 1 if logical_batch == 1 else self.max_batch_size
+        # Model compute must use only scheduler-active rows. Sampling1D pads
+        # logits and parameters to its canonical 32 lanes internally; padding
+        # the model itself made greedy trajectories depend on concurrency and
+        # let inactive rows participate in decode collectives.
+        execution_batch = logical_batch
         active = flat_positions[:execution_batch] >= 0
         mode = "host" if sampling_params is None else "device"
         output = gen.decode_forward(
