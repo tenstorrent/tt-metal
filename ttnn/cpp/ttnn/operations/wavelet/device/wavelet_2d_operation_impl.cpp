@@ -1047,13 +1047,6 @@ void validate_inverse_inputs_2d(const Ilwt2DParams& operation_attributes, const 
         operation_attributes.output_height,
         operation_attributes.output_width);
 
-    dispatch_scheme(operation_attributes.scheme_id, [&]<typename Scheme>() {
-        static_cast<void>(make_inverse_plan_2d<Scheme>(
-            *tensor_args.ll.device(),
-            operation_attributes.output_height,
-            operation_attributes.output_width,
-            operation_attributes.boundary_mode));
-    });
     if (tensor_args.preallocated_output.has_value()) {
         validate_preallocated_output_2d(
             *tensor_args.preallocated_output,

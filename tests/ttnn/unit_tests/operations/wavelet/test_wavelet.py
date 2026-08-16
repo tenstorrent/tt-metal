@@ -623,6 +623,63 @@ def test_wavelet_preallocated_outputs_and_program_cache(
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("batch", [None, 2])
+def test_python_allocated_1d_preallocated_outputs(device: ttnn.MeshDevice, batch: int | None) -> None:
+    length = 65
+    shape = (length,) if batch is None else (batch, 1, 1, length)
+    element_count = length if batch is None else batch * length
+    signal = torch.sin(torch.arange(element_count, dtype=torch.float32).reshape(shape) * 0.071)
+    input_tensor = to_device_1d(device, signal)
+    expected_approximation, expected_detail = ttnn.dwt(input_tensor, "db4", boundary_mode="symmetric")
+    coefficient_length = ttnn.dwt_coeff_len(length, "db4")
+
+    coefficient_spec = ttnn.TensorSpec(expected_approximation.shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+    approximation = ttnn.allocate_tensor_on_device(coefficient_spec, device)
+    detail = ttnn.allocate_tensor_on_device(coefficient_spec, device)
+    actual_approximation, actual_detail = ttnn.dwt(
+        input_tensor,
+        "db4",
+        boundary_mode="symmetric",
+        output_tensors=(approximation, detail),
+    )
+    assert actual_approximation.buffer_address() == approximation.buffer_address()
+    assert actual_detail.buffer_address() == detail.buffer_address()
+    assert_fp32_identical_1d(
+        ttnn.to_torch(actual_approximation),
+        ttnn.to_torch(expected_approximation),
+        coefficient_length,
+    )
+    assert_fp32_identical_1d(
+        ttnn.to_torch(actual_detail),
+        ttnn.to_torch(expected_detail),
+        coefficient_length,
+    )
+
+    expected_reconstructed = ttnn.idwt(
+        expected_approximation,
+        expected_detail,
+        "db4",
+        length,
+        boundary_mode="symmetric",
+    )
+    output_spec = ttnn.TensorSpec(expected_reconstructed.shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+    output = ttnn.allocate_tensor_on_device(output_spec, device)
+    actual_reconstructed = ttnn.idwt(
+        actual_approximation,
+        actual_detail,
+        "db4",
+        length,
+        boundary_mode="symmetric",
+        output_tensor=output,
+    )
+    assert actual_reconstructed.buffer_address() == output.buffer_address()
+    assert_fp32_identical_1d(
+        ttnn.to_torch(actual_reconstructed),
+        ttnn.to_torch(expected_reconstructed),
+        length,
+    )
+
+
 def test_wavelet_2d_preallocated_outputs_and_program_cache(
     device: ttnn.MeshDevice,
 ) -> None:
@@ -874,8 +931,10 @@ def test_wavelet_1d_validation_errors(device: ttnn.MeshDevice, expect_error) -> 
             ttnn.from_torch(signal, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
             "bior1.3",
         )
-    with expect_error(RuntimeError, "rank-2 shape requires W == 32"):
-        ttnn.dwt(to_device_1d(device, signal.reshape(2, 10)), "bior1.3")
+    with expect_error(RuntimeError, "got rank 2"):
+        ttnn.dwt(to_device_1d(device, torch.zeros((2, 32), dtype=torch.float32)), "bior1.3")
+    with expect_error(RuntimeError, "requires H == 1"):
+        ttnn.dwt(to_device_1d(device, torch.zeros((2, 1, 2, 32), dtype=torch.float32)), "bior1.3")
     with expect_error(RuntimeError, "DRAM-interleaved outputs"):
         ttnn.dwt(input_tensor, "bior1.3", memory_config=ttnn.L1_MEMORY_CONFIG)
     with expect_error(RuntimeError, "greater than one"):
@@ -894,6 +953,11 @@ def test_wavelet_1d_validation_errors(device: ttnn.MeshDevice, expect_error) -> 
     with expect_error(RuntimeError, "must not alias"):
         ttnn.dwt(input_tensor, "bior1.3", output_tensors=(approximation, approximation))
 
+    alias_input = to_device_1d(device, torch.arange(32, dtype=torch.float32).reshape(1, 1, 1, 32))
+    _, alias_detail = ttnn.dwt(alias_input, "db1")
+    with expect_error(RuntimeError, "must not alias the input"):
+        ttnn.dwt(alias_input, "db1", output_tensors=(alias_input, alias_detail))
+
 
 def test_wavelet_1d_rejects_sharded_input(device: ttnn.MeshDevice, expect_error) -> None:
     sharded_memory_config = ttnn.create_sharded_memory_config(
@@ -903,7 +967,7 @@ def test_wavelet_1d_rejects_sharded_input(device: ttnn.MeshDevice, expect_error)
     )
     sharded_input = to_device_1d(
         device,
-        torch.arange(64, dtype=torch.float32).reshape(2, 32),
+        torch.arange(64, dtype=torch.float32).reshape(2, 1, 1, 32),
         sharded_memory_config,
     )
 

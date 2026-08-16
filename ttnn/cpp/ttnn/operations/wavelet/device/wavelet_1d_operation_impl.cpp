@@ -158,6 +158,26 @@ struct Logical1DShape {
     };
 }
 
+[[nodiscard]] Logical1DShape logical_1d_signal_shape(const Tensor& tensor, const char* tensor_name) {
+    const auto& shape = tensor.logical_shape();
+    if (shape.rank() == 1) {
+        return Logical1DShape{
+            .batch_count = 1,
+            .length = checked_u32(shape[0], tensor_name),
+            .rank_four = false,
+        };
+    }
+    TT_FATAL(shape.rank() == 4, "{} must have shape [W] or [B,1,1,W], got rank {}", tensor_name, shape.rank());
+    TT_FATAL(shape[0] > 0, "{} batch dimension must be positive", tensor_name);
+    TT_FATAL(shape[1] == 1, "{} requires C == 1, got {}", tensor_name, shape[1]);
+    TT_FATAL(shape[2] == 1, "{} requires H == 1, got {}", tensor_name, shape[2]);
+    return Logical1DShape{
+        .batch_count = checked_u32(shape[0], "1D wavelet batch count"),
+        .length = checked_u32(shape[3], tensor_name),
+        .rank_four = true,
+    };
+}
+
 [[nodiscard]] uint32_t pages_per_batch_item(const Tensor& tensor, const uint32_t batch_count, const char* tensor_name) {
     TT_FATAL(batch_count > 0, "{} batch count must be positive", tensor_name);
     const uint64_t physical_bytes = static_cast<uint64_t>(tensor.physical_volume()) * sizeof(float);
@@ -1006,9 +1026,21 @@ void validate_preallocated_output(
     validate_output_memory_config(output.memory_config(), output_name);
     TT_FATAL(output.device() == expected_device, "{} must be on the same device as the inputs", output_name);
     TT_FATAL(
-        output.tensor_spec() == expected_spec,
-        "{} tensor spec does not match the wavelet output specification",
+        output.logical_shape() == expected_spec.logical_shape(),
+        "{} logical shape does not match the wavelet output specification",
         output_name);
+    TT_FATAL(
+        output.tensor_spec().compute_page_size_bytes() == expected_spec.compute_page_size_bytes(),
+        "{} page size {} does not match the required {} bytes",
+        output_name,
+        output.tensor_spec().compute_page_size_bytes(),
+        expected_spec.compute_page_size_bytes());
+    TT_FATAL(
+        output.buffer()->size() >= expected_spec.compute_packed_buffer_size_bytes(),
+        "{} buffer has {} bytes but requires at least {} bytes",
+        output_name,
+        output.buffer()->size(),
+        expected_spec.compute_packed_buffer_size_bytes());
 }
 
 [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> upload_metadata(
@@ -1150,7 +1182,7 @@ template <typename Scheme>
     const MeshCoordinateRangeSet& tensor_coords) {
     auto& mesh_device = *tensor_args.input.device();
     const auto& input_buffer = *tensor_args.input.buffer();
-    const Logical1DShape input_shape = logical_1d_shape(tensor_args.input, "DWT input");
+    const Logical1DShape input_shape = logical_1d_signal_shape(tensor_args.input, "DWT input");
     LwtExecutionPlan plan =
         make_forward_execution_plan<Scheme>(mesh_device, input_shape.length, operation_attributes.boundary_mode);
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
@@ -1347,7 +1379,7 @@ template <typename Scheme>
 
 void validate_forward_inputs(const Lwt1DParams& operation_attributes, const Lwt1DInputs& tensor_args) {
     validate_1d_tensor(tensor_args.input, "DWT input");
-    const Logical1DShape input_shape = logical_1d_shape(tensor_args.input, "DWT input");
+    const Logical1DShape input_shape = logical_1d_signal_shape(tensor_args.input, "DWT input");
     validate_output_memory_config(operation_attributes.output_memory_config, "DWT");
     TT_FATAL(operation_attributes.scheme_id != SchemeId::kUnknown, "DWT received an invalid wavelet scheme identifier");
     TT_FATAL(
@@ -1373,6 +1405,10 @@ void validate_forward_inputs(const Lwt1DParams& operation_attributes, const Lwt1
             std::get<0>(*tensor_args.preallocated_outputs).buffer() !=
                 std::get<1>(*tensor_args.preallocated_outputs).buffer(),
             "DWT approximation and detail outputs must not alias");
+        TT_FATAL(
+            std::get<0>(*tensor_args.preallocated_outputs).buffer() != tensor_args.input.buffer() &&
+                std::get<1>(*tensor_args.preallocated_outputs).buffer() != tensor_args.input.buffer(),
+            "DWT outputs must not alias the input");
     }
 }
 
@@ -1401,10 +1437,18 @@ void validate_inverse_inputs(const Ilwt1DParams& operation_attributes, const Ilw
             operation_attributes.original_length > 1,
         "IDWT reflect and antireflect modes require original_length greater than one");
 
-    dispatch_scheme(operation_attributes.scheme_id, [&]<typename Scheme>() {
-        static_cast<void>(make_inverse_lifting_plan<Scheme>(
-            operation_attributes.original_length, coefficient_shape.length, operation_attributes.boundary_mode));
-    });
+    const uint32_t expected_coefficient_length =
+        dwt_coefficient_length(operation_attributes.original_length, operation_attributes.scheme_id);
+    const bool coefficient_length_valid =
+        coefficient_shape.length == expected_coefficient_length ||
+        (coefficient_shape.length >= expected_coefficient_length && coefficient_shape.length % kStickWidth == 0 &&
+         coefficient_shape.length - expected_coefficient_length < kStickWidth);
+    TT_FATAL(
+        coefficient_length_valid,
+        "IDWT coefficient length {} does not match expected length {} for original length {}",
+        coefficient_shape.length,
+        expected_coefficient_length,
+        operation_attributes.original_length);
 
     if (tensor_args.preallocated_output.has_value()) {
         validate_preallocated_output(
@@ -1438,7 +1482,7 @@ void validate_lwt_1d(const Lwt1DParams& operation_attributes, const Lwt1DInputs&
 }
 
 Lwt1DOutputSpecs compute_lwt_1d_output_specs(const Lwt1DParams& operation_attributes, const Lwt1DInputs& tensor_args) {
-    const Logical1DShape input_shape = logical_1d_shape(tensor_args.input, "DWT input");
+    const Logical1DShape input_shape = logical_1d_signal_shape(tensor_args.input, "DWT input");
     const uint32_t coefficient_length = dwt_coefficient_length(input_shape.length, operation_attributes.scheme_id);
     auto spec = output_spec_1d(input_shape, coefficient_length, operation_attributes.output_memory_config);
     return {spec, spec};
