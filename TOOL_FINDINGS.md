@@ -178,6 +178,17 @@ Worth saying, so the feedback is not one-sided:
 - **It kept honest accounting**: the e2e report says "1/5 (20%) actually graduated (native stub)"
   and labels the other four `REUSE-wired`, rather than claiming credit for all five.
 - **The port is correct.** 5/5 components at PCC 0.9998-0.99999, verified independently.
+- **It climbed the whole ladder, including the hand-kernel rung, and the reasoning carried across
+  rungs.** On the 2026-08-16 run the ladder went grid → fidelity → dtype → shard → structural →
+  **cpp**, and the last rung landed a measured win: `projections: fuse the hi/lo pair into one
+  Metalium kernel, weight streamed once`, −9.2 ms, PCC 0.9999804 intact. Its stated hypothesis cites
+  the *failed* dtype experiment as the source:
+
+  > *"straight from this op's own dtype rung (bytes are the lever but the weight must not get
+  > lossier): `tt_linear_hp` runs `x_hi@W` and `x_lo@W` as two matmuls against the SAME W…"*
+
+  A rejected attempt on one rung became the premise for a successful attempt on a later one. That is
+  the behaviour the ladder exists to produce, and it is worth saying plainly alongside the defects.
 
 ---
 
