@@ -644,13 +644,7 @@ def compare_exact(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int
 
 
 def compare_pcc(threshold: float = 0.99, label: str = "pcc") -> ComposedComparator:
-    """Return a PCC comparator with the given threshold.
-
-    Every cell's PCC is logged, pass or fail. The gate's device-mode scores bars are set from
-    measured per-chip spreads across boxes (see #52569), and a passing run would otherwise report
-    only that it cleared its bar. ``label`` names the metric, since one test composes several
-    comparators; pass the same string as the ``validate_composed`` ``name``.
-    """
+    """Return a PCC comparator with the given threshold."""
 
     def _compare(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
         _, pcc = comp_pcc(actual.float(), expected.float())

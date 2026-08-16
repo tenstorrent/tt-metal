@@ -30,11 +30,6 @@
   test_group: module
   skus:
     bh_sc1:
-      # Raised 8 -> 14 when the kimi_k3 cases joined this selector. K3's host_all path builds its
-      # reference gate over 896 experts x 25600 tokens on CPU and measures 158s warm (device_fp32 is
-      # 9s) -- ~2.8 min added to a stage that previously fit 16 tests in 8. Cold-JIT runs are
-      # substantially slower: a config change made the same pair take 475s and tripped pytest.ini's
-      # 300s per-test timeout on host_all. The headroom is for that case, not the warm one.
       timeout: 14
   owner_id: U08RL15T4N8
   team: models
