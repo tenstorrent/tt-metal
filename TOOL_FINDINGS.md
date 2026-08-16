@@ -4550,8 +4550,8 @@ def prefill_then_step(self, inputs_embeds, step_embeds):
 So `decode_step` is the **faithful** mirror of the reference, and `run_tts` is the divergence — it
 reaches the same numbers by recomputation instead of caching.
 
-**The demo path cannot cache, structurally.** Gates 1 and 2 require it to route through the
-graduated stubs, and those stubs have no cache implementation:
+**The demo path cannot cache — but not because anything forbids it.** Gates 1 and 2 require it to
+route through the graduated stubs, and those stubs simply have no cache implementation:
 
 ```python
 _stubs/attention.py:44
@@ -4563,7 +4563,34 @@ tt_backbone.py:103
 ```
 
 A path obliged to call those stubs has exactly one way to get the right answer: hand them the whole
-prefix again, every frame. Which is what `run_tts` does — and what the plan then **codified as the
+prefix again, every frame.
+
+**And the stubs lack that implementation because nothing ever asked for it.** No constraint blocks
+caching; the specification simply never exercises it. The generated PCC test builds arguments by
+name and drops anything optional it does not recognise (`tests/pcc/test_attention.py:461-463`):
+
+```python
+is_well_known = name in _WELL_KNOWN_INPUTS
+if not is_required and not is_well_known:
+    continue                      # `cache=None` is optional and unrecognised -> skipped
+```
+
+`cache` is not in `_WELL_KNOWN_INPUTS`, and the same file explicitly forces HF's standard cache
+names to `None` as well:
+
+```python
+if arg_name in ("past_key_values", "cache_position", "use_cache", ...):
+    return None
+```
+
+So the only specification the stub is written against **never passes a cache, ever**. A
+cache-ignoring implementation and a cache-using one score identically — both PCC 0.9999 — so the
+simpler one was written, passed, and graduated. Nothing downstream asks for more.
+
+This makes the defect far more tractable than "the stubs are incapable" would suggest. Nothing needs
+inventing: the reference already defines the cache contract (`layer(x, cis, bias, cache)`), the
+capture already recorded real 208-deep cache contents, and the stub signature already carries the
+parameter. What is missing is a test that passes it. Which is what `run_tts` does — and what the plan then **codified as the
 specification**:
 
 ```json
