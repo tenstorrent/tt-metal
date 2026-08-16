@@ -297,20 +297,11 @@ class SamplingOp:
 
         sender_cores = ttnn.corerange_to_cores(all_cores, row_wise=True)
         loop_mcast_bbox = all_cores.bounding_box()
-        loop_mcast_start_worker = scores_tensor.device().worker_core_from_logical_core(loop_mcast_bbox.start)
-        loop_mcast_end_worker = scores_tensor.device().worker_core_from_logical_core(loop_mcast_bbox.end)
-        loop_mcast_start_x = int(loop_mcast_start_worker.x)
-        loop_mcast_start_y = int(loop_mcast_start_worker.y)
-        loop_mcast_end_x = int(loop_mcast_end_worker.x)
-        loop_mcast_end_y = int(loop_mcast_end_worker.y)
-        loop_mcast_logical_width = int(loop_mcast_bbox.end.x) - int(loop_mcast_bbox.start.x) + 1
-        loop_mcast_logical_height = int(loop_mcast_bbox.end.y) - int(loop_mcast_bbox.start.y) + 1
-        loop_mcast_num_dests = loop_mcast_logical_width * loop_mcast_logical_height - 1
-        logger.info(
-            f"Loop mcast bbox logical start={loop_mcast_bbox.start}, end={loop_mcast_bbox.end}, "
-            f"worker start=({loop_mcast_start_x}, {loop_mcast_start_y}), "
-            f"worker end=({loop_mcast_end_x}, {loop_mcast_end_y}), "
-            f"logical_size={loop_mcast_logical_width}x{loop_mcast_logical_height}, num_dests={loop_mcast_num_dests}"
+        loop_mcast = ttnn.Mcast2D(
+            scores_tensor.device(),
+            ttnn.CoreRangeSet([ttnn.CoreRange(loop_mcast_bbox.start, loop_mcast_bbox.end)]),
+            final_core_coord,
+            ttnn.McastConfig(base_sem_id=0, handshake=False, data_ready=ttnn.McastDataReady.Flag),
         )
 
         assert any(
@@ -409,15 +400,8 @@ class SamplingOp:
             ("sampling_indices_scratch_stage2_offset", 0),
             ("sampling_scores_scratch_addr", 0),
             ("sampling_indices_scratch_addr", 0),
-            ("sampling_loop_mcast_start_x", loop_mcast_start_x),
-            ("sampling_loop_mcast_start_y", loop_mcast_start_y),
-            ("sampling_loop_mcast_end_x", loop_mcast_end_x),
-            ("sampling_loop_mcast_end_y", loop_mcast_end_y),
-            ("sampling_loop_num_dests", loop_mcast_num_dests),
             ("sampling_num_internal_iterations", num_internal_iterations),
         ]
-
-        logger.info(f"num_dests {loop_mcast_num_dests}")
 
         sampling_enable_metadata_value = 1 if metadata_output_tensor is not None else 0
         sampling_metadata_address_value = (
@@ -488,6 +472,7 @@ class SamplingOp:
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
             core_ranges=all_cores,
+            ncrisc_compile_time_args=list(loop_mcast.compile_time_args()),
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             brisc_named_compile_time_args=brisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
@@ -515,6 +500,9 @@ class SamplingOp:
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).x),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
             ],
+            per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                ncrisc_args=[(core, list(loop_mcast.runtime_args(core))) for core in sender_cores],
+            ),
             unified_compile_time_core_descriptors=[
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="sampling_is_active_core",
@@ -693,7 +681,7 @@ class SamplingOp:
                 mask_cb_descriptor,
             ]
             + topk_cbs,
-            semaphores=[],
+            semaphores=list(loop_mcast.owned_semaphores()),
         )
 
         tensors = [scores_tensor, indices_tensor, output_index_tensor]
