@@ -46,19 +46,46 @@ __attribute__((noinline)) void calculate_signbit_fresh_cpp() {
 }
 
 template <bool IS_MAX, int ITERATIONS>
-inline void calculate_binary_max_min_fresh_cpp(
-    const std::uint32_t dst_index_in0,
-    const std::uint32_t dst_index_in1,
-    const std::uint32_t dst_index_out) {
+__attribute__((noinline)) void calculate_binary_max_min_fresh_cpp() {
     constexpr std::uint32_t tile_rows = 32;
 
+#pragma GCC unroll 4
+    for (int face = 0; face < 4; ++face) {
 #pragma GCC unroll 8
-    for (int row = 0; row < ITERATIONS; ++row) {
-        const sfpi::vFloat lhs = sfpi::dst_reg[dst_index_in0 * tile_rows];
-        const sfpi::vFloat rhs = sfpi::dst_reg[dst_index_in1 * tile_rows];
-        sfpi::dst_reg[dst_index_out * tile_rows] = IS_MAX ? sfpi::max(lhs, rhs) : sfpi::min(lhs, rhs);
-        sfpi::dst_reg++;
+        for (int row = 0; row < ITERATIONS; ++row) {
+            // Keep the all-lane predicate boundary typed and local.  Compiler
+            // macro formation may hoist the identical enables with its owned
+            // descriptor configuration after proving that this body has no
+            // CC effects.
+            __builtin_rvtt_sfppushc(0);
+            __builtin_rvtt_sfppopc(0);
+            const sfpi::vFloat lhs = sfpi::dst_reg[0];
+            const sfpi::vFloat rhs = sfpi::dst_reg[tile_rows];
+            sfpi::dst_reg[0] = IS_MAX ? sfpi::max(lhs, rhs) : sfpi::min(lhs, rhs);
+            sfpi::dst_reg++;
+        }
+        ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
+}
+
+template <DstSync DST_SYNC, bool DST_ACCUM, bool IS_MAX, int ITERATIONS>
+inline void call_binary_max_min_fresh_cpp(
+    const std::uint32_t dst_index_in0,
+    const std::uint32_t dst_index_in1,
+    const std::uint32_t dst_index_out,
+    const VectorMode vector_mode) {
+    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(
+        dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh max/min expects adjacent inputs");
+    LLK_ASSERT(dst_index_out == dst_index_in0, "fresh max/min expects in-place output");
+    LLK_ASSERT(vector_mode == VectorMode::RC, "fresh max/min expects full-tile vector mode");
+
+    // Anchor the dynamic tile once in the wrapper.  The isolated semantic
+    // body then contains only constant relative Dst addresses, which are
+    // representable in a compiler-owned macro descriptor.
+    ::_llk_math_eltwise_sfpu_start_(dst_index_in0);
+    calculate_binary_max_min_fresh_cpp<IS_MAX, ITERATIONS>();
+    ::_llk_math_eltwise_sfpu_done_();
 }
 
 template <bool DST_ACCUM_MODE, DataFormat FORMAT, int ITERATIONS>

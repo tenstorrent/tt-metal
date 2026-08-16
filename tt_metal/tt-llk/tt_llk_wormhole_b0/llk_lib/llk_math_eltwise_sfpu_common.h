@@ -31,8 +31,11 @@ inline void _llk_math_eltwise_sfpu_done_()
 
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
-    math::inc_dst_addr<8>();
-    math::inc_dst_addr<8>();
+    // Typed architectural Dst face advance (two CR-mode Dst += 8 counter
+    // steps).  The typed builtin assembles byte-identically to the raw
+    // SETRWC words it replaces, but stays compiler-visible as a pure
+    // Dst/RWC run separator instead of an opaque instruction word.
+    sfpi::dst_face_advance();
 }
 
 inline void _llk_math_eltwise_sfpu_uninit_()

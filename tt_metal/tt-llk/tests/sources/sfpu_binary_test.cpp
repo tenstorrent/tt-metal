@@ -83,15 +83,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 (SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX || SFPU_BINARY_OPERATION == ckernel::BinaryOp::MIN))
             {
                 constexpr bool is_max = SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX;
-                SFPU_BINARY_CALL(
-                    DstSync::SyncHalf,
-                    is_fp32_dest_acc_en,
-                    calculate_binary_max_min_fresh_cpp,
-                    (is_max, 8),
-                    tile,
-                    tile + 1,
-                    tile,
-                    VectorMode::RC);
+                call_binary_max_min_fresh_cpp<
+                    DstSync::SyncHalf, is_fp32_dest_acc_en, is_max, 8>(
+                    tile, tile + 1, tile, VectorMode::RC);
             }
             else
             {

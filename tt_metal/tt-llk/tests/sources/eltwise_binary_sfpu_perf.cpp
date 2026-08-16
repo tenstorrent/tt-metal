@@ -115,15 +115,9 @@ inline void run_selected_binary_sfpu(
         FRESH_CPP_IMPL == 1 &&
         (SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX || SFPU_BINARY_OPERATION == ckernel::BinaryOp::MIN)) {
         constexpr bool is_max = SFPU_BINARY_OPERATION == ckernel::BinaryOp::MAX;
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_binary_max_min_fresh_cpp,
-            (is_max, 8),
-            dst_in0,
-            dst_in1,
-            dst_out,
-            VectorMode::RC);
+        call_binary_max_min_fresh_cpp<
+            DST_SYNC_MODE, is_fp32_dest_acc_en, is_max, 8>(
+            dst_in0, dst_in1, dst_out, VectorMode::RC);
     } else {
         test_utils::call_binary_sfpu_operation<
             DST_SYNC_MODE,
