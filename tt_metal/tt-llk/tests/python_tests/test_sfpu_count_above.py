@@ -59,11 +59,15 @@ from helpers.logger import logger
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    COUNT_ABOVE_MODE,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
     SFPU_UNARY_SCALAR,
 )
+
+MODE_GT = 0
+MODE_EXP_GT = 1
 
 # --- fp32 bit patterns, named -------------------------------------------------
 # Everything is expressed as raw uint32 so that -0.0, the infinities and the
@@ -193,7 +197,11 @@ STIMULI = [
 
 
 def _run_count_above(
-    values_bits: list[int], threshold_bits: int, tile_count: int, repeat: int
+    values_bits: list[int],
+    threshold_bits: int,
+    tile_count: int,
+    repeat: int,
+    mode: int = MODE_GT,
 ) -> int:
     """Run the kernel and return the sum of the whole packed output tile."""
     formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
@@ -214,7 +222,7 @@ def _run_count_above(
         # SFPU_UNARY_SCALAR emits (`constexpr std::uint32_t SFPU_UNARY_SCALAR`).
         # It has to be a compile-time constant because the kernel loads it into
         # L_THR before recording the replay body.
-        templates=[SFPU_UNARY_SCALAR(threshold_bits)],
+        templates=[SFPU_UNARY_SCALAR(threshold_bits), COUNT_ABOVE_MODE(mode)],
         runtimes=[
             NUM_BLOCKS(1),
             NUM_TILES_IN_BLOCK(tile_count),
@@ -289,6 +297,105 @@ def test_sfpu_count_above(threshold_bits, values_bits, tile_count, repeat, expec
     assert device == golden, (
         f"count mismatch for threshold=0x{threshold_bits:08X}, "
         f"{tile_count} tile(s), repeat={repeat}: device={device} golden={golden}"
+    )
+
+
+# --- exponent-mode stimuli ----------------------------------------------------
+#
+# MODE_EXP_GT swaps the macro's scheduled SFPGT for a scheduled SFPEXEXP and
+# moves the compare into software, so what gets counted is
+# ``((bits >> 23) & 0xFF) > E`` rather than ``bits > threshold``.
+#
+# WHY THIS TEST EXISTS. ``perf_sfpu_count_above.py``'s ``MacroExp`` arm measures
+# a macro-scheduled SFPEXEXP at 0.999 cyc/vector, which is the whole basis for
+# claiming that value -> bucket-index mapping is free. But ``SFPLOADMACRO.md``
+# :88-94 silently rewrites any template instruction its sub-unit cannot execute
+# into an SFPNOP, and an SFPNOP costs exactly the same 1.0 cyc/vector. Timing
+# cannot tell the two apart. Only a count can, and only if the stimulus is
+# chosen so the two outcomes DIFFER -- which is what "discriminator" means in
+# the ids below: for each of these, a dropped SFPEXEXP compares the raw fp32 bit
+# pattern (a huge number) against a small integer threshold and returns 1024.
+EXP_HALF = 126  # exponent field of 0.5f
+EXP_ONE = 127  # exponent field of 1.0f
+EXP_TWO = 128  # exponent field of 2.0f
+
+
+def _exp_chunk_ramp() -> list[int]:
+    """Chunk c of 32 elements gets exactly c elements with exponent 128."""
+    values: list[int] = []
+    for chunk in range(TILE_DIM):
+        values.extend(_repeat(TWO, chunk))
+        values.extend(_repeat(HALF, TILE_DIM - chunk))
+    return values
+
+
+EXP_STIMULI = [
+    # exp(0.5f) = 126, so nothing exceeds 126 and the answer is 0. A dropped
+    # SFPEXEXP compares 0x3F000000 against 126 and returns 1024.
+    ("exp_all_below_discriminator", EXP_HALF, _repeat(HALF, ELEMENTS_PER_TILE), 0),
+    # Exact count == N, the same silent-discard catcher the MODE_GT suite uses
+    # for the software SFPIADD -- one dropped accumulate shows up as 1024 - 32k.
+    ("exp_all_above", EXP_ONE, _repeat(TWO, ELEMENTS_PER_TILE), 1024),
+    # 32 distinct per-chunk counts summing to 496: pins the Dst walk in exponent
+    # mode, where the recorded body is six instructions rather than four and so
+    # advances Dst on a different schedule.
+    ("exp_positional_ramp_discriminator", EXP_ONE, _exp_chunk_ramp(), 496),
+    # Range endpoints: exp(+Inf) = 255 is the top of the field. Half the tile at
+    # 0.5f keeps this discriminating -- a dropped SFPEXEXP returns 1024.
+    (
+        "exp_inf_endpoint_discriminator",
+        254,
+        _repeat(HALF, ELEMENTS_PER_TILE // 2)
+        + _repeat(POS_INF, ELEMENTS_PER_TILE // 2),
+        512,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "exp_threshold, values_bits, expected",
+    [pytest.param(*case[1:], id=case[0]) for case in EXP_STIMULI],
+)
+def test_sfpu_count_above_exponent(exp_threshold, values_bits, expected):
+    """MODE_EXP_GT: prove the macro-scheduled SFPEXEXP actually executes."""
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            reason="SFPLOADMACRO, and therefore a macro-scheduled SFPEXEXP, is "
+            "Blackhole-only in this harness."
+        )
+
+    device = _run_count_above(
+        values_bits, exp_threshold, tile_count=1, repeat=1, mode=MODE_EXP_GT
+    )
+
+    # The golden is the ordinary count-above golden applied to the exponent
+    # fields. That is exact rather than approximate: an fp32 exponent field is a
+    # non-negative integer below 256, and on non-negative bit patterns SFPGT's
+    # sign-magnitude total order coincides with plain integer order, so no
+    # separate generator is needed.
+    exponents = [(bits >> 23) & 0xFF for bits in values_bits]
+    golden = get_golden_generator(CountAboveGolden)(exponents, exp_threshold, 1)
+
+    assert golden == expected, (
+        f"golden disagrees with the hand-derived expectation: "
+        f"golden={golden} expected={expected}"
+    )
+
+    if device != golden:
+        logger.info(
+            "\nexp_threshold={}: device={} golden={} (delta {}). A device value of "
+            "{} would mean the scheduled SFPEXEXP was rewritten to SFPNOP and the "
+            "compare saw raw fp32 bit patterns.",
+            exp_threshold,
+            device,
+            golden,
+            device - golden,
+            ELEMENTS_PER_TILE,
+        )
+
+    assert device == golden, (
+        f"exponent count mismatch for E={exp_threshold}: "
+        f"device={device} golden={golden}"
     )
 
 

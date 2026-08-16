@@ -132,7 +132,7 @@ def _end_phases(topk_arm):
     take the `default:` branch of the phase switch -- a different, load/store
     heavier code path than phases 0-3 -- so the pair also prices that branch.
     """
-    return [4, 5] if topk_arm is TopKPerfArm.LocalSort else [5]
+    return [0, 1, 2, 3, 4, 5] if topk_arm is TopKPerfArm.LocalSort else [5]
 
 
 def _m_iters(topk_arm):

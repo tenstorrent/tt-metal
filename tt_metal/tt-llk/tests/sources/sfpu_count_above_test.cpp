@@ -152,6 +152,29 @@ constexpr std::uint32_t L_THR = ckernel::p_sfpu::LREG3;
 // threshold is loaded into L_THR before the replay body is recorded.
 constexpr std::uint32_t THRESHOLD_BITS = SFPU_UNARY_SCALAR;
 
+// Which quantity the macro produces for the software accumulate to count.
+//
+// MODE_GT is the original kernel: the macro schedules an SFPGT and the software
+// SFPIADD folds the resulting mask in.
+//
+// MODE_EXP_GT exists to prove a *semantic* claim that the perf sweep cannot
+// prove on its own. `sfpu_count_above_perf.cpp`'s ARM_MACRO_EXP measures a
+// macro-scheduled SFPEXEXP at 0.999 cyc/vector -- but SFPLOADMACRO.md:88-94
+// silently rewrites any template instruction its sub-unit cannot execute into
+// an SFPNOP, and an SFPNOP would ALSO measure 1.0. Timing cannot distinguish
+// "the exponent map is free" from "the exponent map never happened", and the
+// whole exponent-bucketing family of strategies rests on the difference.
+//
+// So in this mode the macro schedules SFPEXEXP (NODEBIAS, raw 0..255 field) and
+// the software counts how many exponents exceed the threshold. If the SFPEXEXP
+// were dropped, the compare would see raw fp32 bit patterns instead of small
+// exponents and the count would be wildly different -- e.g. for a tile of 1.0f
+// (0x3F800000) against a threshold of 126, dropping the SFPEXEXP gives 1024 and
+// executing it gives 1024 too, which is why the stimulus set deliberately picks
+// thresholds where the two answers diverge.
+constexpr std::uint32_t MODE_GT     = 0;
+constexpr std::uint32_t MODE_EXP_GT = 1;
+
 // Instruction modifier bits, named from the ISA docs rather than spelled as
 // bare integers at the call sites.
 constexpr std::uint32_t SFPGT_MOD1_SET_VD              = 8; // SFPGT.md:53
@@ -165,8 +188,12 @@ constexpr std::uint32_t SFPCFG_IMM16_IS_VALUE          = 1; // SFPCONFIG.md:108
 constexpr std::uint32_t DST_ADDR_PER_SFPLOAD = 2;                     // 4 rows, even or odd columns
 constexpr std::uint32_t SFPLOADS_PER_TILE    = 32;                    // 32 datums each -> 1024 = one tile
 constexpr std::uint32_t PASSES_PER_TILE      = SFPLOADS_PER_TILE / 2; // recorded body covers two loads
-constexpr std::uint32_t REPLAY_BODY_LEN      = 4;                     // instructions in the recorded body
 constexpr std::uint32_t ADDR_MOD_WALK        = ckernel::ADDR_MOD_6;
+
+// MODE_GT records (macro, SFPIADD) x2; MODE_EXP_GT inserts a software SFPGT
+// between each macro and its accumulate, because the macro's one Simple slot is
+// spent on the SFPEXEXP.
+constexpr std::uint32_t REPLAY_BODY_LEN = (COUNT_ABOVE_MODE == MODE_EXP_GT) ? 6 : 4;
 
 // Macro 0: Load + Simple(SFPGT). No MAD, no Round, no Store.
 //
@@ -199,6 +226,29 @@ constexpr std::uint32_t MISC_WORD = 0x100;
 // VD is constrained to 0..7 (bit 3 is hard-zeroed), so the split is exact.
 // Mirrors the ckernel_sfpu_mul_int.h idiom.
 #define LOADMACRO(vd, addr_mod, off) TTI_SFPLOADMACRO((0u << 2) | ((vd) & 3u), ckernel::InstrModLoadStore::INT32, (addr_mod), (off) | ((vd) >> 2))
+
+// ---------------------------------------------------------------------------
+// Macro 3 -- Load + Simple(SFPEXEXP), used only by MODE_EXP_GT.
+//
+// Operand plumbing (SFPLOADMACRO.md:96-115). SFPEXEXP is
+// `LReg[VD] = exp(LReg[VC]) - Bias`: it has a VC and no VB. Bit 0x80 must be
+// CLEAR so the macro does `Insn.VC = macroVD` -- the loaded datum becomes the
+// input. With the bit SET it would instead assign a VB that SFPEXEXP does not
+// have and leave VC pointing at whatever the template encoded, silently taking
+// the exponent of a stale register. Bit 0x40 is CLEAR so the exponent lands in
+// macroVD, where the software SFPGT can read it; LReg[16] is writable from a
+// macro but readable only by a macro-scheduled SFPSTORE (SFPLOADMACRO.md:120).
+//
+// Delay 2, under WaitForElapsedInstructions. The body is six instructions per
+// two vectors and slots 1,2,4,5 are all software Simple instructions, so the
+// only cycles free of software Simple traffic are the two macro slots (0 and
+// 3). Delay 2 counts down over slots 1 and 2 and fires on slot 3's cycle. Any
+// other delay lands the scheduled SFPEXEXP on top of a software instruction and
+// SFPLOADMACRO.md:149 discards the software one -- silently.
+constexpr std::uint32_t SEQUENCE_3  = (2u << 3) | 4u; // template[0], delay 2, VD=VC=macroVD
+constexpr std::uint32_t MISC_WORD_3 = 0x100;          // Simple = WaitForElapsedInstructions
+
+#define LOADMACRO3(vd, addr_mod, off) TTI_SFPLOADMACRO((3u << 2) | ((vd) & 3u), ckernel::InstrModLoadStore::INT32, (addr_mod), (off) | ((vd) >> 2))
 
 } // namespace
 
@@ -252,6 +302,18 @@ static inline void configure_macro0()
     TTI_SFPNOP;
 }
 
+// Same backdoor discipline, but the template is an SFPEXEXP. See the SEQUENCE_3
+// comment for why the delay is 2 and why bit 0x80 must stay clear.
+static inline void configure_macro3()
+{
+    TTI_SFPEXEXP(0, L_A, 12, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+
+    TTI_SFPCONFIG(SEQUENCE_3, 4 + 3, SFPCFG_IMM16_IS_VALUE); // Sequence[3]
+    TTI_SFPCONFIG(MISC_WORD_3, 8, SFPCFG_IMM16_IS_VALUE);    // Misc
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
 // Count one whole Dest tile into L_ACC. Assumes the caller has already pointed
 // DEST_TARGET_REG_CFG_MATH_Offset at the tile and zeroed the Dst RWC.
 static inline void count_one_tile()
@@ -269,6 +331,12 @@ static inline void count_one_tile()
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
+    if constexpr (COUNT_ABOVE_MODE == MODE_EXP_GT)
+    {
+        // In this mode the macro produced an exponent, not a mask, so the
+        // compare the loop body would have done still has to happen.
+        TTI_SFPGT(0, L_THR, L_B, SFPGT_MOD1_SET_VD);
+    }
     TTI_SFPIADD(0, L_B, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
 }
 
@@ -307,19 +375,50 @@ void run_kernel(RUNTIME_PARAMETERS params)
     ckernel::sfpu::_sfpu_load_imm32_(L_THR, THRESHOLD_BITS);
     ckernel::sfpu::_sfpu_load_imm32_(L_ACC, 0x00000000);
 
-    configure_macro0();
+    if constexpr (COUNT_ABOVE_MODE == MODE_EXP_GT)
+    {
+        configure_macro3();
+    }
+    else
+    {
+        configure_macro0();
+    }
 
     // The body the perf arm measures, recorded once.
-    load_replay_buf<NoExec>(
-        0,
-        REPLAY_BODY_LEN,
-        []
-        {
-            LOADMACRO(L_A, ADDR_MOD_WALK, 0);
-            TTI_SFPIADD(0, L_B, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
-            LOADMACRO(L_B, ADDR_MOD_WALK, 0);
-            TTI_SFPIADD(0, L_A, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
-        });
+    if constexpr (COUNT_ABOVE_MODE == MODE_EXP_GT)
+    {
+        // Macro produces exp(x) in the loaded register; software compares it
+        // against L_THR (a small non-negative integer, so SFPGT's
+        // sign-magnitude total order coincides with integer order there) and
+        // accumulates the mask. Same 1-deep software pipeline as MODE_GT: the
+        // SFPGT/SFPIADD pair at slots 1-2 consumes the exponent the OTHER
+        // half's macro produced.
+        load_replay_buf<NoExec>(
+            0,
+            REPLAY_BODY_LEN,
+            []
+            {
+                LOADMACRO3(L_A, ADDR_MOD_WALK, 0);
+                TTI_SFPGT(0, L_THR, L_B, SFPGT_MOD1_SET_VD);
+                TTI_SFPIADD(0, L_B, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
+                LOADMACRO3(L_B, ADDR_MOD_WALK, 0);
+                TTI_SFPGT(0, L_THR, L_A, SFPGT_MOD1_SET_VD);
+                TTI_SFPIADD(0, L_A, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
+            });
+    }
+    else
+    {
+        load_replay_buf<NoExec>(
+            0,
+            REPLAY_BODY_LEN,
+            []
+            {
+                LOADMACRO(L_A, ADDR_MOD_WALK, 0);
+                TTI_SFPIADD(0, L_B, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
+                LOADMACRO(L_B, ADDR_MOD_WALK, 0);
+                TTI_SFPIADD(0, L_A, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
+            });
+    }
     ckernel_unpack_template::lA(lltt::replay_insn(0, REPLAY_BODY_LEN), TT_OP_NOP).program();
 
     const std::uint32_t num_tiles = params.NUM_TILES_IN_BLOCK;

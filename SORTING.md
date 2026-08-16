@@ -487,6 +487,127 @@ Two consequences, both cheap and both independent of the filter:
    Needs correctness validation (the insertion-sort formulation may require the
    full sort), but it is a one-line experiment.
 
+#### MEASURED: packer zero-compression works on Blackhole — filter AND compaction with zero SFPU instructions
+
+Verified on silicon, 35/35 tests, bit-exact round-trip through a software decoder.
+`tests/sources/pack_zero_compress_test.cpp`, `python_tests/test_pack_zero_compress.py`.
+
+**Enablement is one config bit.** `THCON_SEC0_REG1_Disable_zero_compress = 0` plus a
+reserved `Row_start_section_size`. The LLK's `set_packer_config` currently forces it
+*off* unconditionally (`config.f.uncompress = 1`). Nothing in the tree has ever used it.
+
+| pattern (1024 bf16 datums) | survivors | packed bytes | decodes exactly |
+| :--- | ---: | ---: | :--- |
+| compression off | — | 2048 | yes |
+| 32 scattered survivors | 32 | **384** (256 with `Concat`) | yes |
+| all-zero | 0 | 304 (256) | yes |
+| dense | 1024 | 2624 (+28%) | yes |
+
+**And it composes with the packer's own threshold.** `MIN_THRESHOLD_RELU` zeroes
+sub-threshold datums, compression then elides them — so **filter + compaction happen in
+a single `PACR` sequence with no SFPU instructions at all**. Measured: 31 survivors →
+384 B, 63 → 384 B, 127 → 544 B, each matching a golden. The SFPU is left entirely free,
+and this runs on the packer concurrently with whatever the SFPU is doing next.
+
+**The hard limit: ~16:1 per pass.** The maximum stride between emitted datums is 16, so
+`N_aug >= K + ceil((N-K)/16)` regardless of sparsity. For bf16 that floors the rate at
+~0.156 B per source element — **12.8x**, not the 32x a perfect compaction of 32/1024
+would give. Full compaction therefore needs a **cascade of ~log16(N/K) passes**
+(measured rule projects 1024 -> 88 -> ~36 -> ~33 ~= K). The cascade itself is analysis,
+not yet measured.
+
+**Format confirmed, with one divergence from the docs.** The layout matches
+`WormholeB0/.../Packers/Compression.md` exactly — `uint16` row-start-index array, then
+groups of 32 augmented datums followed by 32 four-bit counters. But **on Blackhole the
+counter is the number of zeroes PRECEDING its datum, not following it.** A decoder
+written to the documented "after" semantics is bit-perfect on symmetric patterns
+(all-zero, dense, front-loaded) and garbage on asymmetric ones — a trap worth knowing.
+The doc itself declines to specify the compressing side (`Compression.md:31`).
+
+**`Downsample_mask` is a real vector-compress on BH but is NOT usable here.** Verified:
+mask `0x5555` emits every even index, `0x0001` every 16th. But the mask is a static
+backend config field with period 16 — it cannot depend on the data, and `PACR_SETREG`
+cannot reach the backend CONFIG file. Making it data-dependent would cost an `RMWCIB`
+plus a config stall per 16 datums, far worse than the 1.003 cyc/vector SFPU filter.
+
+**Two hazards found, both worth fixing upstream:**
+
+1. **`Downsample_mask` is a config escape that survives ELF reload.**
+   `set_packer_config` writes `THCON_SEC0_REG1` words 0 and 2 but deliberately skips
+   word 3 ("removed word 3 to avoid potential race condition") — and word 3 holds
+   `Downsample_mask`. A mask left behind by an earlier kernel silently decimates every
+   subsequent pack. This was observed live: downsample probes poisoned the packer and
+   later baseline runs quietly packed half a tile.
+2. **`TT_PACR` (runtime-issued) hung the packer where `TTI_PACR` with byte-identical
+   field values did not.** `TT_PACR` is used nowhere in tt-llk. Observed, not root-caused.
+
+Also unresolved: `Packers[0].AllZeroFlags` (`0xFFB1_1020`) read `0x00000000` in every
+configuration including an all-zero tile, via two independent read paths. So per-row
+emptiness is **not** available for free as hoped.
+
+#### MEASURED: 2.0 cyc/vector is an ARCHITECTURAL FLOOR for SFPU counting
+
+Four more arms, measured on silicon, every control on its predicted value across a
+device reset:
+
+| arm | cyc/vector | what it settles |
+| :--- | ---: | :--- |
+| `ReplayLoad` (control) | 1.000 | frontend floor |
+| **`MacroExp`** | **1.000** | a macro-scheduled `SFPEXEXP` is **free** |
+| `MaskStore` | 1.002 | filter / map = 1.0 |
+| `CountD1` | 1.997 | count = 2.0 |
+| `ReplaySwap` (control) | 1.999 | tripwire, matches `SFPSWAP.md:110` |
+| **`MultiPass`** | 2.097 | blind pass restart = **6.4 cyc** |
+| **`PassSync`** | 2.389 | data-dependent restart >= **25.1 cyc** |
+| **`HistNibble`** | 5.000 | 8-bucket exponent histogram |
+
+**Why 2.0 cannot be beaten by an SFPU-only count.** A macro schedules **at most one
+Simple instruction** (`SFPLOADMACRO.md:5`), so compare and accumulate cannot share one;
+and a macro-scheduled result lands in `macroVD` (clobbered by the next load) or
+`LReg[16]`, readable only by a macro-scheduled `SFPSTORE` — never an ALU input
+(`:112,:120`). **No macro-resident accumulator can accumulate onto itself.** So any
+SFPU-only count is >= 2 instructions/vector, and `CountD1` at 1.997 is already optimal.
+What the macro *can* do at 1.0 is an arbitrary 4-deep **map**; reduction is the one
+thing it cannot express.
+
+**A validation subtlety worth copying.** `SFPLOADMACRO.md:88-94` silently rewrites an
+illegal instruction template to `SFPNOP` — which also measures 1.000. So the free
+`SFPEXEXP` had to be proven by *correctness*, not timing: four cases where a dropped
+`SFPEXEXP` returns 1024 instead of the golden. Timing alone cannot distinguish "free"
+from "silently not executed".
+
+**Both reduce-offloads LOSE, and one of my earlier claims was wrong.**
+- Packer L1-accumulate: 128 cyc/tile non-atomic, 320 atomic, against the SFPU pass's
+  32 cyc/tile — a 4-10x bottleneck, and elementwise-only.
+- FPU reduce: `GAPOOL`/`MVMUL` read SrcA/SrcB and never `Dst`, so it needs 16x
+  `MOVD2A/B` plus fences per tile (~50-90 cyc), and `Dst` int32 is sign-magnitude so
+  `SFPGT`'s `0xFFFFFFFF` decodes as -(2^31-1).
+- **"The FPU is idle, so use it" was wrong as stated.** FPU and SFPU are separate
+  backend units that do run in parallel, but they **share one in-order frontend per
+  thread**. Issuing ~30 FPU instructions per tile from MATH roughly doubles MATH issue
+  against the SFPU's 32. It only helps from a *second* Tensix thread — possible via
+  `semaphore::FPU_SFPU`, unmeasured.
+
+**Threshold-search cost, N=32768 K=32** (mandatory filter pass = 1024 cyc):
+
+| strategy | cycles |
+| :--- | ---: |
+| per-token prior, count fused into the filter pass | ~25 |
+| prior + explicit verify (1 pass) | 2,073 |
+| subsample 1/32 + confirm | 2,628 |
+| full-width 8-bucket histogram, 12 bits | 20,580 |
+| full-width binary search, 12 bits | 24,876 |
+
+**The search must be held to ~1 full-width pass or it dominates everything.** The nibble
+histogram was measured and loses: 1.67 cyc/bit vs binary search's 2.00 is only 1.2x, and
+that is *unclamped* — `SFPSHFT` wraps mod 32 rather than saturating (`SFPSHFT.md:44-50`)
+so a safe clamp costs +2-4 instructions and makes it worse than binary search outright.
+`SFPIADD` also wraps on overflow, so nibble counters need draining every 15 vectors.
+
+**At N=256, do not threshold — sort.** The 25-cycle data-dependent rendezvous alone
+exceeds the entire 16-cycle data pass. The existing bitonic top-8 micro-op does it with
+no threshold and no L1 round trip. Estimated crossover **N ~ 4000-8000** (not measured).
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working

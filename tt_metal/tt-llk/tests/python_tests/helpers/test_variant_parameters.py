@@ -284,6 +284,30 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
         return f"constexpr std::uint32_t SFPU_UNARY_SCALAR = {self.value_bits}u;"
 
 
+@dataclass
+class COUNT_ABOVE_MODE(TemplateParameter):
+    """Which quantity ``sources/sfpu_count_above_test.cpp``'s macro produces.
+
+    ``0`` (MODE_GT) is the original kernel: the macro schedules an SFPGT and the
+    software SFPIADD folds the mask in.
+
+    ``1`` (MODE_EXP_GT) schedules an SFPEXEXP instead, and the software compares
+    the extracted exponent. It exists to prove a semantic claim the perf sweep
+    cannot: ``SFPLOADMACRO.md:88-94`` silently rewrites a template instruction
+    the sub-unit cannot execute into an SFPNOP, and an SFPNOP measures the same
+    1.0 cyc/vector as a real SFPEXEXP. Only a count that differs between the two
+    outcomes settles it.
+
+    Emitted as ``constexpr`` (not ``#define``) because this kernel has no
+    ``#ifndef`` fallback for it -- same wiring as ``SFPU_UNARY_SCALAR``.
+    """
+
+    mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t COUNT_ABOVE_MODE = {self.mode}u;"
+
+
 # --- sources/sfpu_count_above_perf.cpp (Blackhole issue-rate benchmark) -------
 #
 # All three parameters below MUST be emitted as `#define`, never `constexpr`.

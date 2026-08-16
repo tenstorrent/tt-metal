@@ -742,6 +742,27 @@ class CountArm(Enum):
                 non-fillable bubble).
     CountD1:    the real threshold-count inner loop -- macro-scheduled SFPGT
                 plus a software SFPIADD accumulate.
+    MacroTriple: 3-sub-unit ceiling probe, Load + Simple(SFPGT) + MAD(SFPMAD).
+    MaskStore:  the filter/map form, Load + Simple(SFPGT) + Store(SFPSTORE).
+
+    The three below cost the *threshold search* rather than the inner loop.
+
+    MacroExp:   control -- Load + macro-scheduled SFPEXEXP, nothing else.
+                Expected ~1.0 cyc/vector. Establishes whether the value ->
+                bucket-index map that every non-binary-search strategy needs is
+                free, which in turn says whether a histogram's cost is entirely
+                in its packing and accumulate.
+    HistNibble: one-pass packed exponent histogram -- eight cumulative buckets
+                in a single 32-bit lane accumulator. Ten instructions per two
+                vectors, so a correct run MUST measure 5.000 cyc/vector; a
+                materially lower number means an instruction was silently
+                discarded (SFPLOADMACRO.md:149). Beats binary search only if it
+                lands below 6.0 (three bits at CountD1's 2.0 cyc/vector/bit).
+    MultiPass:  ARM_COUNT_D1 chopped into 64-vector segments with a realistic
+                restart between them (pipeline drain, threshold reload, Dst
+                rewind, MOP re-issue). The excess over CountD1's slope, times
+                64, is the fixed cost of a pass -- which is noise at N=32768 and
+                the entire budget at N=256.
     """
 
     ReplayLoad = 0
@@ -749,6 +770,10 @@ class CountArm(Enum):
     CountD1 = 2
     MacroTriple = 3
     MaskStore = 4
+    MacroExp = 5
+    HistNibble = 6
+    MultiPass = 7
+    PassSync = 8
 
 
 class TopKPerfArm(Enum):
