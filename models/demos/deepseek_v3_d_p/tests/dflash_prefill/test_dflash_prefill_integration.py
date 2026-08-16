@@ -39,6 +39,7 @@ from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
+from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -305,8 +306,13 @@ def test_dflash_prefill_integration(
     dk, dv = _read(k_cache), _read(v_cache)
 
     fails = []
+    # HF reference ropes K half-split; the meta-rope drafter persists K interleaved (= half-split K with its
+    # head_dim src-permuted), so reindex the reference K by src to compare like with like. V never roped.
+    src = torch.argsort(interleaved_to_halfsplit_perm(dcfg.head_dim)) if dcfg.rope_convention == "interleaved" else None
     for i in range(dcfg.num_hidden_layers):
         rk, rv = real[i]
+        if src is not None:
+            rk = rk[..., src]
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"draft layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
