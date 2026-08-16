@@ -1,0 +1,73 @@
+{
+  "_what": "Is the on-device presence penalty *wrong*, or merely bf16-rounded?",
+  "prompt": "Write a very repetitive story.",
+  "presence_penalty": 1.2,
+  "max_tokens": 256,
+  "top_logprobs": 20,
+  "reference_model_check": {
+    "_what": "argmax(raw_logprob - penalty*[token already generated]) vs the token vLLM's host sampler emitted",
+    "steps": 256,
+    "steps_reproduced": 256,
+    "mismatches": [],
+    "num_mismatches": 0
+  },
+  "divergence": {
+    "step": 159,
+    "host_token_id": 180574,
+    "host_token": "Probably",
+    "device_token_id": 89665,
+    "device_token": "Perhaps",
+    "host_penalized_score": -2.5881880044937136,
+    "device_penalized_score": -2.638187885284424,
+    "host_raw_logprob": -1.3881880044937134,
+    "device_raw_logprob": -2.638187885284424,
+    "host_token_previously_generated": true,
+    "device_token_previously_generated": false,
+    "penalized_score_gap": 0.04999988079071027,
+    "device_token_in_host_top_k": true,
+    "top_candidates": [
+      {
+        "id": 180574,
+        "tokstr": "Probably",
+        "raw": -1.3881880044937134,
+        "score": -2.5881880044937136
+      },
+      {
+        "id": 89665,
+        "tokstr": "Perhaps",
+        "raw": -2.638187885284424,
+        "score": -2.638187885284424
+      },
+      {
+        "id": 31837,
+        "tokstr": "Could",
+        "raw": -1.5131880044937134,
+        "score": -2.7131880044937136
+      },
+      {
+        "id": 42098,
+        "tokstr": "Maybe",
+        "raw": -1.7631880044937134,
+        "score": -2.9631880044937136
+      },
+      {
+        "id": 2991,
+        "tokstr": "We",
+        "raw": -2.263187885284424,
+        "score": -3.463187885284424
+      }
+    ],
+    "bf16_ulp_at_that_logit": 0.015625,
+    "gap_in_bf16_ulps": 3.1999923706054574,
+    "penalty_magnitude": 1.2
+  },
+  "host_len": 256,
+  "device_len": 256,
+  "gap_top1_top2_quantiles": {
+    "min": 0.0,
+    "p10": 0.20000000000000018,
+    "median": 1.6875000447034836
+  },
+  "host_text": " to=selfWrite a very repetitive story.\n\nWe need to write a very repetitive story. Probably comedic. Repetitive. Could be about something repeating. Use repetition.\n\nProbably keep it simple. Maybe use same sentence over and over with slight variation.\n\nThe user wants a very repetitive story. Should comply.\n\nNo constraints. Just produce repetitive story.\n\nMaybe make it about a man going to store, buying milk etc. Repetitive.\n\nCould do \"The cat sat on the mat. The cat sat on the mat.\" etc.\n\nMake it very repetitive.\n\nPossibly use anaphora.\n\nEnsure it's a story, not just nonsense.\n\nMaybe use loop: He woke up. He went to kitchen. He drank coffee. He went to work. He came home. Repeat.\n\nMake it intentionally repetitive.\n\nProbably okay.\n\nWe can add meta commentary.\n\nUser likely wants humor.\n\nLet's produce a story where each sentence repeats previous with minor change, or same phrase repeated.\n\nMaybe use \"and then\" repeatedly.\n\nCould do:\n\nOnce upon a time there was a... etc.\n\nBetter: Write a story about a red door. The red door is red. The red door is red...\n\nMake it very repetitive.\n\nPerhaps use the word \"again\" many times.\n\nWe should ensure it's readable.\n\nPotential",
+  "device_text": " to=selfWrite a very repetitive story.\n\nWe need to write a very repetitive story. Probably comedic. Repetitive. Could be about something repeating. Use repetition.\n\nProbably keep it simple. Maybe use same sentence over and over with slight variation.\n\nThe user wants a very repetitive story. Should comply.\n\nNo constraints. Just produce repetitive story.\n\nMaybe make it about a man going to store, buying milk etc. Repetitive.\n\nCould do \"The cat sat on the mat. The cat sat on the mat.\" etc.\n\nMake it very repetitive.\n\nPossibly use anaphora.\n\nEnsure it's a story, not just nonsense.\n\nMaybe use loop: He woke up. He went to kitchen. He drank coffee. He went to work. He came home. Repeat.\n\nMake it intentionally repetitive.\n\nPerhaps use the word \"again\" many times.\n\nCould be meta: This is a repetitive story.\n\nProbably okay.\n\nWe should avoid excessive formatting? It's fine.\n\nMaybe make it like:\n\nOnce upon a time there was a... etc.\n\nBetter to make it extremely repetitive: same phrase repeated with tiny change.\n\nUser likely wants humor.\n\nLet's produce a story where each sentence repeats previous.\n\nMaybe use \"and then\" repeatedly.\n\nCould do:\n\nI went to the store. I bought milk."
+}

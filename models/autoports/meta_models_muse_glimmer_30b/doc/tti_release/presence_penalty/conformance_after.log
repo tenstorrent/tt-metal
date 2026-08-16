@@ -1,0 +1,291 @@
+/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/lib/python3.10/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+.............F........                                                   [100%]
+=================================== FAILURES ===================================
+__________ test_penalties[presence_penalty-1.2-repeat_trap-messages0] __________
+
+report_test = None
+api_client = <function api_client.<locals>._make_request at 0x7f50ca605240>
+prompt_name = 'repeat_trap'
+messages = [{'content': 'Write a very repetitive story.', 'role': 'user'}]
+penalty_param = 'presence_penalty', penalty_val = 1.2
+request = <FixtureRequest for <Function test_penalties[presence_penalty-1.2-repeat_trap-messages0]>>
+
+    @pytest.mark.parametrize("prompt_name, messages", PENALTY_PROMPTS.items())
+    @pytest.mark.parametrize(
+        "penalty_param, penalty_val",
+        [
+            ("presence_penalty", 1.2),
+            ("frequency_penalty", 1.2),
+            ("repetition_penalty", 1.5),  # vLLM implements this, OpenAI uses the other two
+        ],
+    )
+    def test_penalties(
+        report_test, api_client, prompt_name, messages, penalty_param, penalty_val, request
+    ):
+        """Tests repetition, presence, and frequency penalties."""
+
+        # Baseline run (no penalty)
+        payload_base = {
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "seed": 1234,
+        }
+        response_base = api_client(payload_base, timeout=None)
+
+        # Test run (with penalty)
+        payload_test = payload_base.copy()
+        payload_test[penalty_param] = penalty_val
+        response_test = api_client(payload_test, timeout=None)
+
+        # Compute baseline and test statistics
+        text_base = response_base["choices"][0]["message"]["content"]
+        text_test = response_test["choices"][0]["message"]["content"]
+
+        base_stats = repetition_stats(text_base)
+        test_stats = repetition_stats(text_test)
+
+        try:
+            # 1. Diversity should not decrease (penalties push diversity up)
+>           assert test_stats["unique_ratio"] >= base_stats["unique_ratio"] * 0.90, (
+                "Penalty unexpectedly reduced diversity."
+            )
+E           AssertionError: Penalty unexpectedly reduced diversity.
+E           assert 0.12376237623762376 >= (0.15079365079365079 * 0.9)
+
+llm_module/test_vllm_chat_completions.py:307: AssertionError
+
+During handling of the above exception, another exception occurred:
+
+report_test = None
+api_client = <function api_client.<locals>._make_request at 0x7f50ca605240>
+prompt_name = 'repeat_trap'
+messages = [{'content': 'Write a very repetitive story.', 'role': 'user'}]
+penalty_param = 'presence_penalty', penalty_val = 1.2
+request = <FixtureRequest for <Function test_penalties[presence_penalty-1.2-repeat_trap-messages0]>>
+
+    @pytest.mark.parametrize("prompt_name, messages", PENALTY_PROMPTS.items())
+    @pytest.mark.parametrize(
+        "penalty_param, penalty_val",
+        [
+            ("presence_penalty", 1.2),
+            ("frequency_penalty", 1.2),
+            ("repetition_penalty", 1.5),  # vLLM implements this, OpenAI uses the other two
+        ],
+    )
+    def test_penalties(
+        report_test, api_client, prompt_name, messages, penalty_param, penalty_val, request
+    ):
+        """Tests repetition, presence, and frequency penalties."""
+
+        # Baseline run (no penalty)
+        payload_base = {
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "seed": 1234,
+        }
+        response_base = api_client(payload_base, timeout=None)
+
+        # Test run (with penalty)
+        payload_test = payload_base.copy()
+        payload_test[penalty_param] = penalty_val
+        response_test = api_client(payload_test, timeout=None)
+
+        # Compute baseline and test statistics
+        text_base = response_base["choices"][0]["message"]["content"]
+        text_test = response_test["choices"][0]["message"]["content"]
+
+        base_stats = repetition_stats(text_base)
+        test_stats = repetition_stats(text_test)
+
+        try:
+            # 1. Diversity should not decrease (penalties push diversity up)
+            assert test_stats["unique_ratio"] >= base_stats["unique_ratio"] * 0.90, (
+                "Penalty unexpectedly reduced diversity."
+            )
+
+            # 2. Heavy repetition should decrease
+            #    For repetition-heavy prompts, penalties reduce top-token dominance
+            if prompt_name == "repeat_trap" and penalty_param != "presence_penalty":
+                most_common_penalty = test_stats["most_common"][0][1]
+                most_common_baseline = base_stats["most_common"][0][1]
+                assert most_common_penalty <= most_common_baseline, (
+                    "Penalty didn't reduce repetition on repetition-trap prompt."
+                )
+
+            # 3. Length differences accepted but should not be identical
+            assert test_stats["len"] != base_stats["len"], (
+                "Penalty had no measurable effect on output length."
+            )
+
+            # For vLLM-specific repetition_penalty, check more aggressive behavior
+            if penalty_param == "repetition_penalty":
+                assert test_stats["unique_ratio"] > base_stats["unique_ratio"], (
+                    "vLLM repetition_penalty did not increase diversity enough."
+                )
+        except AssertionError as e:
+            msg = f"Test failed: {str(e)}. Base: {text_base}, Test: {text_test}"
+>           raise AssertionError(msg)
+E           AssertionError: Test failed: Penalty unexpectedly reduced diversity.
+E           assert 0.12376237623762376 >= (0.15079365079365079 * 0.9). Base: The man woke up.
+E           The man woke up.
+E           The man woke up.
+E
+E           He got out of bed.
+E           He got out of bed.
+E           He got out of bed.
+E
+E           He put on his shoes.
+E           He put on his shoes.
+E           He put on his shoes.
+E
+E           He walked to the store.
+E           He walked to the store.
+E           He walked to the store.
+E
+E           The store door was open.
+E           The store door was open.
+E           The store door was open.
+E
+E           He said hello to the clerk.
+E           He said hello to the clerk.
+E           He said hello to the clerk.
+E
+E           He bought a bottle of milk.
+E           He bought a bottle of milk.
+E           He bought a bottle of milk.
+E
+E           He paid for the milk.
+E           He paid for the milk.
+E           He paid for the milk.
+E
+E           He walked home.
+E           He walked home.
+E           He walked home.
+E
+E           He put the milk in the fridge.
+E           He put the milk in the fridge.
+E           He put the milk in the fridge.
+E
+E           He sat at the table.
+E           He sat at the table.
+E           He sat at the table.
+E
+E           He drank the milk.
+E           He drank the milk.
+E           He drank the milk.
+E
+E           The man went to bed.
+E           The man went to bed.
+E           The man went to bed.
+E
+E           The man woke up.
+E           The man woke up.
+E           The man woke up.
+E
+E           He got out of bed.
+E           He got out of bed.
+E           He got out of bed.
+E
+E           He put on his shoes.
+E           He put on his shoes.
+E           He put on his shoes.
+E
+E           He walked to the store.
+E           He walked to the store.
+E           He walked to the store., Test: The man woke up.
+E
+E           The man made coffee.
+E
+E           The man put on his shoes.
+E
+E           The man went to the store.
+E
+E           The man wanted milk.
+E
+E           The man reached for the milk.
+E
+E           The man had no money.
+E
+E           The man went home.
+E
+E           The man woke up.
+E
+E           The man made coffee.
+E
+E           The man put on his shoes.
+E
+E           The man went to the store.
+E
+E           The man wanted milk.
+E
+E           The man reached for the milk.
+E
+E           The man had no money.
+E
+E           The man went home.
+E
+E           The man woke up.
+E
+E           The man made coffee.
+E
+E           The man put on his shoes.
+E
+E           The man went to the store.
+E
+E           The man wanted milk.
+E
+E           The man reached for the milk.
+E
+E           The man had no money.
+E
+E           The man went home.
+E
+E           The man woke up.
+E
+E           The man made coffee.
+E
+E           The man put on his shoes.
+E
+E           The man went to the store.
+E
+E           The man wanted milk.
+E
+E           The man reached for the milk.
+E
+E           The man had no money.
+E
+E           The man went home.
+E
+E           The man woke up.
+E
+E           The man made coffee.
+E
+E           The man put on his shoes.
+E
+E           The man went to the store.
+E
+E           The man wanted milk.
+E
+E           The man reached for the milk.
+E
+E           The man had no money.
+E
+E           The man went home.
+E
+E           And then the man woke up again.
+
+llm_module/test_vllm_chat_completions.py:332: AssertionError
+---------------------------- Captured stderr setup -----------------------------
+2026-08-16 01:54:14,175 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.
+2026-08-16 01:54:14,175 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.
+------------------------------ Captured log setup ------------------------------
+WARNING  utils.prompt_client:prompt_client.py:127 Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.
+WARNING  utils.prompt_client:prompt_client.py:127 Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.
+=========================== short test summary info ============================
+FAILED llm_module/test_vllm_chat_completions.py::test_penalties[presence_penalty-1.2-repeat_trap-messages0] - AssertionError: Test failed: Penalty unexpectedly reduced diversity.
+1 failed, 21 passed in 367.67s (0:06:07)

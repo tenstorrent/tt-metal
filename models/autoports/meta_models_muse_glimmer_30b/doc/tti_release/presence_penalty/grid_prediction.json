@@ -1,0 +1,91 @@
+{
+  "_what": "A falsifiable prediction that separates \"wrong formula\" from \"bf16 rounding\".",
+  "prompt": "Write a very repetitive story.",
+  "temperature": 0,
+  "max_tokens": 1024,
+  "cases": [
+    {
+      "presence_penalty": 0.5,
+      "penalty_as_bf16": 0.5,
+      "penalty_is_exact_in_bf16": true,
+      "penalty_is_multiple_of_0.125": true,
+      "grid_aligned": true,
+      "prediction": "device == host, exactly (subtraction is exact in bf16)",
+      "host_tokens": 1024,
+      "device_tokens": 1024,
+      "first_divergent_step": -1,
+      "identical": true,
+      "falsifies_prediction": false
+    },
+    {
+      "presence_penalty": 1.25,
+      "penalty_as_bf16": 1.25,
+      "penalty_is_exact_in_bf16": true,
+      "penalty_is_multiple_of_0.125": true,
+      "grid_aligned": true,
+      "prediction": "device == host, exactly (subtraction is exact in bf16)",
+      "host_tokens": 1024,
+      "device_tokens": 1024,
+      "first_divergent_step": -1,
+      "identical": true,
+      "falsifies_prediction": false
+    },
+    {
+      "presence_penalty": 2.0,
+      "penalty_as_bf16": 2.0,
+      "penalty_is_exact_in_bf16": true,
+      "penalty_is_multiple_of_0.125": true,
+      "grid_aligned": true,
+      "prediction": "device == host, exactly (subtraction is exact in bf16)",
+      "host_tokens": 1024,
+      "device_tokens": 1024,
+      "first_divergent_step": -1,
+      "identical": true,
+      "falsifies_prediction": false
+    },
+    {
+      "presence_penalty": 0.7,
+      "penalty_as_bf16": 0.69921875,
+      "penalty_is_exact_in_bf16": false,
+      "penalty_is_multiple_of_0.125": false,
+      "grid_aligned": false,
+      "prediction": "device MAY diverge (subtraction rounds; flips only at a near-tie)",
+      "host_tokens": 1024,
+      "device_tokens": 1024,
+      "first_divergent_step": -1,
+      "identical": true,
+      "falsifies_prediction": false
+    },
+    {
+      "presence_penalty": 1.1,
+      "penalty_as_bf16": 1.1015625,
+      "penalty_is_exact_in_bf16": false,
+      "penalty_is_multiple_of_0.125": false,
+      "grid_aligned": false,
+      "prediction": "device MAY diverge (subtraction rounds; flips only at a near-tie)",
+      "host_tokens": 730,
+      "device_tokens": 825,
+      "first_divergent_step": 323,
+      "identical": false,
+      "falsifies_prediction": false
+    },
+    {
+      "presence_penalty": 1.2,
+      "penalty_as_bf16": 1.203125,
+      "penalty_is_exact_in_bf16": false,
+      "penalty_is_multiple_of_0.125": false,
+      "grid_aligned": false,
+      "prediction": "device MAY diverge (subtraction rounds; flips only at a near-tie)",
+      "host_tokens": 905,
+      "device_tokens": 1024,
+      "first_divergent_step": 159,
+      "identical": false,
+      "falsifies_prediction": false
+    }
+  ],
+  "grid_aligned_penalties_identical": 3,
+  "grid_aligned_penalties": 3,
+  "unaligned_penalties_diverged": 2,
+  "unaligned_penalties": 3,
+  "falsifications": 0
+}

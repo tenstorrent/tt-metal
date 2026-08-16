@@ -1,0 +1,450 @@
+{
+  "_what": "Does vLLM's OWN presence-penalty implementation pass the failing conformance row?",
+  "prompt": "Write a very repetitive story.",
+  "presence_penalty": 1.2,
+  "max_tokens": 1024,
+  "assertion": "unique_ratio(penalty) >= unique_ratio(base) * 0.90",
+  "host_sampler_note": "logprobs:true routes to vLLM's host sampler on this 4-die mesh; the penalty is then vllm/model_executor/layers/utils.py::apply_penalties in float32, no TT sampling code involved",
+  "summary": {
+    "device_sampler": {
+      "trials": 4,
+      "passes": 2,
+      "fails": 2,
+      "ratios": [
+        0.9725,
+        0.8207,
+        2.7619,
+        0.5364
+      ]
+    },
+    "host_sampler_vllm_reference": {
+      "trials": 4,
+      "passes": 1,
+      "fails": 3,
+      "ratios": [
+        0.3585,
+        2.6006,
+        0.2822,
+        0.7231
+      ]
+    }
+  },
+  "trials": [
+    {
+      "arm": "device_sampler",
+      "trial": "greedy_temp0",
+      "seed": null,
+      "temperature": 0.0,
+      "base": {
+        "len": 186,
+        "unique": 30,
+        "unique_ratio": 0.16129032258064516,
+        "most_common": [
+          [
+            "the",
+            45
+          ],
+          [
+            "man",
+            36
+          ],
+          [
+            "woke",
+            6
+          ]
+        ],
+        "entropy": 4.0893,
+        "finish_reason": "stop"
+      },
+      "penalty": {
+        "len": 255,
+        "unique": 40,
+        "unique_ratio": 0.1568627450980392,
+        "most_common": [
+          [
+            "the",
+            75
+          ],
+          [
+            "man",
+            47
+          ],
+          [
+            "bus.",
+            16
+          ]
+        ],
+        "entropy": 3.9733,
+        "finish_reason": "length"
+      },
+      "assertion_ratio": 0.9725490196078431,
+      "assertion_passes": true,
+      "base_text_head": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nThe man got out of bed.\nThe man got out of bed.\nThe man got out of bed.\n\nThe man put on his shoes.\nThe man put on his shoes.\nThe man put on his shoes.\n\nThe man went to the store.\nThe man went to the store.\nThe man went to the store.\n\nThe man opened",
+      "penalty_text_head": "The man woke up.\nThe man got out of bed.\nThe man made coffee.\nThe man drank coffee.\nThe man put on his shoes.\nThe man left the house.\nThe man walked to the bus stop.\nThe man waited for the bus.\nThe bus came.\nThe man got on the bus.\nThe man rode the bus.\nThe man got off the bus.\nThe man walked to wor"
+    },
+    {
+      "arm": "device_sampler",
+      "trial": "seed1234_temp0.1",
+      "seed": 1234,
+      "temperature": 0.1,
+      "base": {
+        "len": 252,
+        "unique": 38,
+        "unique_ratio": 0.15079365079365079,
+        "most_common": [
+          [
+            "he",
+            39
+          ],
+          [
+            "the",
+            36
+          ],
+          [
+            "to",
+            12
+          ]
+        ],
+        "entropy": 4.6821,
+        "finish_reason": "stop"
+      },
+      "penalty": {
+        "len": 202,
+        "unique": 25,
+        "unique_ratio": 0.12376237623762376,
+        "most_common": [
+          [
+            "the",
+            51
+          ],
+          [
+            "man",
+            41
+          ],
+          [
+            "went",
+            10
+          ]
+        ],
+        "entropy": 3.8134,
+        "finish_reason": "stop"
+      },
+      "assertion_ratio": 0.8207399687337155,
+      "assertion_passes": false,
+      "base_text_head": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.\n\nThe store door was open.\nThe store door was open.\nThe",
+      "penalty_text_head": "The man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted"
+    },
+    {
+      "arm": "device_sampler",
+      "trial": "seed1_temp0.1",
+      "seed": 1,
+      "temperature": 0.1,
+      "base": {
+        "len": 162,
+        "unique": 9,
+        "unique_ratio": 0.05555555555555555,
+        "most_common": [
+          [
+            "the",
+            30
+          ],
+          [
+            "walked",
+            27
+          ],
+          [
+            "he",
+            24
+          ]
+        ],
+        "entropy": 3.0775,
+        "finish_reason": "stop"
+      },
+      "penalty": {
+        "len": 189,
+        "unique": 29,
+        "unique_ratio": 0.15343915343915343,
+        "most_common": [
+          [
+            "the",
+            42
+          ],
+          [
+            "he",
+            30
+          ],
+          [
+            "went",
+            9
+          ]
+        ],
+        "entropy": 4.175,
+        "finish_reason": "stop"
+      },
+      "assertion_ratio": 2.761904761904762,
+      "assertion_passes": true,
+      "base_text_head": "The man walked to the store.\n\nThe man walked to the store.\n\nThe man walked to the store.\n\nHe bought milk.\n\nHe bought milk.\n\nHe bought milk.\n\nHe walked home.\n\nHe walked home.\n\nHe walked home.\n\nThe man walked to the store.\n\nThe man walked to the store.\n\nThe man walked to the store.\n\nHe bought milk.\n\nH",
+      "penalty_text_head": "The man went to the store.\n\nThe man went to the store.\n\nThe man went to the store.\n\nHe pushed the cart down aisle three.\n\nHe pushed the cart down aisle three.\n\nHe pushed the cart down aisle three.\n\nHe looked at the milk.\n\nHe looked at the milk.\n\nHe looked at the milk.\n\nHe picked up the milk.\n\nHe pic"
+    },
+    {
+      "arm": "device_sampler",
+      "trial": "seed42_temp0.1",
+      "seed": 42,
+      "temperature": 0.1,
+      "base": {
+        "len": 826,
+        "unique": 220,
+        "unique_ratio": 0.26634382566585957,
+        "most_common": [
+          [
+            "the",
+            67
+          ],
+          [
+            "a",
+            35
+          ],
+          [
+            "he",
+            35
+          ]
+        ],
+        "entropy": 6.8615,
+        "finish_reason": "length"
+      },
+      "penalty": {
+        "len": 175,
+        "unique": 25,
+        "unique_ratio": 0.14285714285714285,
+        "most_common": [
+          [
+            "he",
+            40
+          ],
+          [
+            "went",
+            10
+          ],
+          [
+            "to",
+            10
+          ]
+        ],
+        "entropy": 4.2721,
+        "finish_reason": "stop"
+      },
+      "assertion_ratio": 0.5363636363636364,
+      "assertion_passes": false,
+      "base_text_head": " to=selfWrite a very repetitive story.\n\nWrite a very repetitive story.\n\nWe need to write a very repetitive story. Probably repetitive phrases. Could be about something. Probably comedic. Use repetition.\n\nWe should comply. No constraints. Just write repetitive story.\n\nMaybe use same sentence repeated",
+      "penalty_text_head": "It was a morning.\n\nHe woke up.\nHe got out of bed.\nHe put on his shoes.\nHe went to the store.\nHe bought bread.\nHe came home.\nHe ate bread.\nHe went to sleep.\n\nIt was a morning.\n\nHe woke up.\nHe got out of bed.\nHe put on his shoes.\nHe went to the store.\nHe bought bread.\nHe came home.\nHe ate bread.\nHe we"
+    },
+    {
+      "arm": "host_sampler_vllm_reference",
+      "trial": "greedy_temp0",
+      "seed": null,
+      "temperature": 0.0,
+      "base": {
+        "len": 186,
+        "unique": 30,
+        "unique_ratio": 0.16129032258064516,
+        "most_common": [
+          [
+            "the",
+            45
+          ],
+          [
+            "man",
+            36
+          ],
+          [
+            "woke",
+            6
+          ]
+        ],
+        "entropy": 4.0893,
+        "finish_reason": "stop"
+      },
+      "penalty": {
+        "len": 294,
+        "unique": 17,
+        "unique_ratio": 0.05782312925170068,
+        "most_common": [
+          [
+            "the",
+            70
+          ],
+          [
+            "man",
+            63
+          ],
+          [
+            "went",
+            21
+          ]
+        ],
+        "entropy": 3.5052,
+        "finish_reason": "stop"
+      },
+      "assertion_ratio": 0.35850340136054426,
+      "assertion_passes": false,
+      "base_text_head": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nThe man got out of bed.\nThe man got out of bed.\nThe man got out of bed.\n\nThe man put on his shoes.\nThe man put on his shoes.\nThe man put on his shoes.\n\nThe man went to the store.\nThe man went to the store.\nThe man went to the store.\n\nThe man opened",
+      "penalty_text_head": "The man woke up.\nThe man got out of bed.\nThe man went to the kitchen.\nThe man made coffee.\nThe man drank coffee.\nThe man went to work.\nThe man came home.\nThe man went to bed.\nThe man woke up.\n\nThe man woke up.\nThe man got out of bed.\nThe man went to the kitchen.\nThe man made coffee.\nThe man drank co"
+    },
+    {
+      "arm": "host_sampler_vllm_reference",
+      "trial": "seed1234_temp0.1",
+      "seed": 1234,
+      "temperature": 0.1,
+      "base": {
+        "len": 240,
+        "unique": 38,
+        "unique_ratio": 0.15833333333333333,
+        "most_common": [
+          [
+            "the",
+            54
+          ],
+          [
+            "he",
+            27
+          ],
+          [
+            "was",
+            18
+          ]
+        ],
+        "entropy": 4.5143,
+        "finish_reason": "stop"
+      },
+      "penalty": {
+        "len": 17,
+        "unique": 7,
+        "unique_ratio": 0.4117647058823529,
+        "most_common": [
+          [
+            "the",
+            4
+          ],
+          [
+            "man",
+            4
+          ],
+          [
+            "woke",
+            3
+          ]
+        ],
+        "entropy": 2.5869,
+        "finish_reason": "length"
+      },
+      "assertion_ratio": 2.6006191950464395,
+      "assertion_passes": true,
+      "base_text_head": "The man went to the store.\n\nThe man went to the store.\n\nThe man went to the store.\n\nHe walked down the street.\n\nHe walked down the street.\n\nHe walked down the street.\n\nThe street was wet.\n\nThe street was wet.\n\nThe street was wet.\n\nHe opened the door.\n\nHe opened the door.\n\nHe opened the door.\n\nThe do",
+      "penalty_text_head": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nThe man got out of"
+    },
+    {
+      "arm": "host_sampler_vllm_reference",
+      "trial": "seed1_temp0.1",
+      "seed": 1,
+      "temperature": 0.1,
+      "base": {
+        "len": 809,
+        "unique": 223,
+        "unique_ratio": 0.27564894932014833,
+        "most_common": [
+          [
+            "he",
+            55
+          ],
+          [
+            "the",
+            50
+          ],
+          [
+            "a",
+            36
+          ]
+        ],
+        "entropy": 6.8424,
+        "finish_reason": "length"
+      },
+      "penalty": {
+        "len": 270,
+        "unique": 21,
+        "unique_ratio": 0.07777777777777778,
+        "most_common": [
+          [
+            "the",
+            54
+          ],
+          [
+            "man",
+            54
+          ],
+          [
+            "went",
+            18
+          ]
+        ],
+        "entropy": 3.7704,
+        "finish_reason": "stop"
+      },
+      "assertion_ratio": 0.28216243148978576,
+      "assertion_passes": false,
+      "base_text_head": " to=selfWrite a very repetitive story.\n\nWrite a very repetitive story.\n\nWe need to write a very repetitive story. Probably repetitive. Could be meta. Should be repetitive. Possibly use same sentence repeated with slight variation. The user wants a very repetitive story. Probably comply.\n\nWe can do a",
+      "penalty_text_head": "The man woke up.\nThe man made coffee.\nThe man drank coffee.\nThe man went to work.\nThe man came home.\nThe man went to sleep.\n\nThe man woke up.\nThe man made coffee.\nThe man drank coffee.\nThe man went to work.\nThe man came home.\nThe man went to sleep.\n\nThe man woke up.\nThe man made coffee.\nThe man dran"
+    },
+    {
+      "arm": "host_sampler_vllm_reference",
+      "trial": "seed42_temp0.1",
+      "seed": 42,
+      "temperature": 0.1,
+      "base": {
+        "len": 258,
+        "unique": 40,
+        "unique_ratio": 0.15503875968992248,
+        "most_common": [
+          [
+            "he",
+            51
+          ],
+          [
+            "the",
+            45
+          ],
+          [
+            "opened",
+            9
+          ]
+        ],
+        "entropy": 4.5296,
+        "finish_reason": "stop"
+      },
+      "penalty": {
+        "len": 446,
+        "unique": 50,
+        "unique_ratio": 0.11210762331838565,
+        "most_common": [
+          [
+            "the",
+            87
+          ],
+          [
+            "and",
+            43
+          ],
+          [
+            "he",
+            40
+          ]
+        ],
+        "entropy": 4.3203,
+        "finish_reason": "stop"
+      },
+      "assertion_ratio": 0.7230941704035875,
+      "assertion_passes": false,
+      "base_text_head": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe opened his eyes.\nHe opened his eyes.\nHe opened his eyes.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the door.\nHe walked to the door.\nHe walked to the do",
+      "penalty_text_head": "The man woke up in the morning.\n\nThe man woke up in the morning.\n\nThe man woke up in the morning and he got out of bed.\n\nThe man woke up in the morning and he got out of bed.\n\nThe man woke up in the morning and he got out of bed and he put on his shoes.\n\nThe man woke up in the morning and he put on "
+    }
+  ]
+}

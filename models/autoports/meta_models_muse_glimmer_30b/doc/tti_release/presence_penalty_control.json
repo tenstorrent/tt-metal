@@ -1,0 +1,59 @@
+{
+  "_what": "control for the failing presence-penalty conformance row: a different model, on CPU, through plain transformers, with no Tenstorrent device involved",
+  "control_model": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+  "runtime": "transformers greedy decoding, float32, CPU",
+  "prompt": "Write a very repetitive story.",
+  "presence_penalty": 1.2,
+  "max_new_tokens": 400,
+  "assertion_under_test": "unique_ratio(penalty) >= unique_ratio(base) * 0.90",
+  "base_no_penalty": {
+    "len": 336,
+    "unique": 178,
+    "unique_ratio": 0.5297619047619048,
+    "most_common": [
+      [
+        "she",
+        20
+      ],
+      [
+        "a",
+        18
+      ],
+      [
+        "the",
+        18
+      ]
+    ],
+    "entropy": 6.738
+  },
+  "test_presence_penalty": {
+    "len": 327,
+    "unique": 184,
+    "unique_ratio": 0.5626911314984709,
+    "most_common": [
+      [
+        "she",
+        30
+      ],
+      [
+        "the",
+        18
+      ],
+      [
+        "to",
+        17
+      ]
+    ],
+    "entropy": 6.7245
+  },
+  "observed_ratio": 1.0621585403566642,
+  "assertion_would_pass": true,
+  "base_text": "Once upon a time, in a land far, far away, there lived a little girl named Lily. She was a curious and adventurous soul, always eager to explore the world around her. One day, she decided to go on a journey to discover new places and meet new people.\n\nLily packed her bag with all the essentials: a map, a compass, a water bottle, and a few snacks. She said goodbye to her family and set off on her adventure. She walked for hours, and before she knew it, the sun was setting. She found a cozy little cottage to rest for the night.\n\nThe next day, Lily continued her journey. She walked through forests, crossed rivers, and climbed mountains. She met many interesting people along the way. There was a wise old man who taught her about the ancient history of the land. A friendly dog who showed her the best spots to find berries. And a group of children who invited her to play a game of tag.\n\nAs the days went by, Lily's journey became more and more exciting. She discovered hidden waterfalls, climbed towering trees, and even found a secret garden. She met many new friends and learned new things about the world.\n\nOne day, Lily decided to visit a bustling city. She walked through the crowded streets, marveling at the towering buildings and the people rushing to and fro. She visited a museum, where she learned about the history of art and science. She even met a famous artist who showed her his latest masterpiece.\n\nAs the sun began to set, Lily returned to her cozy little cottage. She was tired but happy. She had seen so many new places, met so many new people, and learned so many new things. She knew that she would always treasure her adventure and the memories she had made along the way.\n\nAnd so, Lily went to bed, feeling grateful for her journey and ready to start another day. She knew that tomorrow would",
+  "test_text": "Once upon a time, in a land far, far away, there lived a little girl named Lily. She was a curious and adventurous soul, always eager to explore the world around her. One day, she decided that she wanted to learn how to bake a cake. So, she went to the kitchen and began to gather all the ingredients she needed: flour, sugar, eggs, butter, and milk.\n\nAs she mixed the ingredients together, she realized that she needed to follow a recipe. She looked at the recipe book and saw that it had instructions for making a chocolate cake. But, as she read through the recipe, she noticed that it said \"preheat the oven to 350 degrees Fahrenheit.\" She didn't know what that meant, so she asked her mother for help.\n\nHer mother explained that preheating the oven means heating it up before you put anything inside. She showed Lily how to turn on the oven and set the temperature to 350 degrees Fahrenheit. Then, she helped Lily mix the batter and put it into a baking pan.\n\nWhile the cake was baking, Lily decided to make some frosting. She mixed powdered sugar, butter, and milk together until it was smooth and creamy. As she spread the frosting on top of the cake, she realized that she needed to wait for it to cool down before she could eat it.\n\nBut, as she waited, she started to wonder if she should add any extra ingredients to the cake. She thought about adding nuts or chocolate chips, but then she remembered that the recipe book said not to do that. She decided to leave the cake as it was, and when it was finally done, she took a big bite.\n\nThe taste was delicious! It was sweet and rich, with a nice texture. Lily couldn't believe how good it tasted. She knew that she had learned something new today, and she was excited to try baking again soon.\n\n",
+  "interpretation": {
+    "verdict": "INCONCLUSIVE \u2014 the control did not enter the regime it was meant to control for.",
+    "why": "The failing row's mechanism needs a baseline that is actually repetitive: the autoport's baseline scores unique_ratio 0.1449 (30 unique words in 207), i.e. it obeyed 'write a very repetitive story'. SmolLM2-1.7B-Instruct ignored the instruction and wrote an ordinary story at unique_ratio 0.5298, so its type-token ratio was nowhere near the floor where a length increase can drag it below the 0.90 gate. Its PASS therefore says nothing about whether the gate is length-confounded.",
+    "what_settles_it_instead": "presence_penalty_row.json -> length_confound_test: truncating the autoport's own penalized response to the baseline's word count makes the two ratios exactly equal (1.0000), so the whole 0.8888 shortfall is the extra 88 words and none of it is reduced diversity.",
+    "kept_because": "it was run and it is a negative result; deleting it would leave the length-confound argument looking better supported than it is."
+  }
+}

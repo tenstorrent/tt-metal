@@ -1,0 +1,9 @@
+=== tti-release server: max_model_len=131072 max_num_seqs=32 port=8000 prefill_trace=0 reasoning_parser=muse_glimmer ===
+INFO 08-16 02:35:23 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 08-16 02:35:23 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 08-16 02:35:23 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-08-16 02:35:24.014 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 08-16 02:35:24 [__init__.py:237] Platform plugin tt is activated
+INFO 08-16 02:35:24 [importing.py:46] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-16 02:35:24 [importing.py:81] Triton not installed or not compatible; certain GPU-related functions will not be available.

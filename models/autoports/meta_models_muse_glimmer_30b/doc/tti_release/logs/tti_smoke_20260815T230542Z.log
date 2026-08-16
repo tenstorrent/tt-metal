@@ -1,0 +1,336 @@
+No validation is done, loading runtime model spec from JSON: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/specs/muse_glimmer_30b_autoport_smoke.json
+2026-08-15 19:05:44,506 - run.py:1022 - INFO: TT-Inference version: 0.20.0
+2026-08-15 19:05:44,506 - run.py:1023 - INFO: TT-Inference SHA: 82777a2382e2
+2026-08-15 19:05:44,506 - run.py:1024 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      Muse-Glimmer-30B
+  device:                     p300x2
+  impl:                       None
+  engine:                     None
+  workflow:                   benchmarks
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              /home/ttuser/dev/muse-glimmer/tt-metal
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      True
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         smoke-test
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-15 19:05:44,506 - run.py:1030 - INFO: Runtime model spec saved to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-15_19-05-44_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_UoFFmtZ-.json
+2026-08-15 19:05:44,506 - validate_setup.py:313 - INFO: Starting local setup validation
+2026-08-15 19:05:44,506 - validate_setup.py:349 - INFO: ✅ validating local setup completed
+2026-08-15 19:05:44,506 - run.py:1144 - INFO: Model Muse-Glimmer-30B (model_type=LLM) routes through the workflow engine.
+2026-08-15 19:05:44,506 - runner.py:31 - INFO: → command=benchmarks
+2026-08-15 19:05:44,506 - utils.py:272 - INFO: Running command: /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python3 /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/launchers/run_llm_bench.py --model Muse-Glimmer-30B --workflow benchmarks --device p300x2 --service-port 8000 --runtime-model-spec-json /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-15_19-05-44_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_UoFFmtZ-.json --output-dir /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks --tools vllm
+2026-08-15 19:05:44,530 [INFO] run_log: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv venv --managed-python --python=3.11 /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_llm_vllm --allow-existing
+2026-08-15 19:05:44,576 [INFO] run_log: Using CPython [36m3.11.15[39m[36m[39m
+2026-08-15 19:05:44,576 [INFO] run_log: Creating virtual environment at: [36m.workflow_venvs/.venv_llm_vllm[39m
+2026-08-15 19:05:44,576 [INFO] run_log: Activate with: [32msource .workflow_venvs/.venv_llm_vllm/bin/activate[39m
+2026-08-15 19:05:44,577 [INFO] run_log: creating sub-dir for llm_vllm: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_llm_vllm/artifacts
+2026-08-15 19:05:44,577 [INFO] run_log: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python --index-strategy unsafe-best-match --override /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/requirements/llm-vllm-overrides.txt -r /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/requirements/llm-vllm.txt
+2026-08-15 19:05:44,598 [INFO] run_log: [2mUsing Python 3.11.15 environment at: .workflow_venvs/.venv_llm_vllm[0m
+2026-08-15 19:05:45,295 [INFO] run_log: [2mResolved [1m170 packages[0m [2min 695ms[0m[0m
+2026-08-15 19:05:45,368 [INFO] run_log: [36m[1mDownloading[0m[39m nvidia-cudnn-frontend [2m(4.5MiB)[0m
+2026-08-15 19:05:45,368 [INFO] run_log: [36m[1mDownloading[0m[39m mistral-common [2m(6.2MiB)[0m
+2026-08-15 19:05:45,368 [INFO] run_log: [36m[1mDownloading[0m[39m hf-xet [2m(4.3MiB)[0m
+2026-08-15 19:05:45,368 [INFO] run_log: [36m[1mDownloading[0m[39m sentencepiece [2m(1.3MiB)[0m
+2026-08-15 19:05:45,368 [INFO] run_log: [36m[1mDownloading[0m[39m aiohttp [2m(1.7MiB)[0m
+2026-08-15 19:05:45,369 [INFO] run_log: [36m[1mDownloading[0m[39m pandas [2m(10.8MiB)[0m
+2026-08-15 19:05:45,369 [INFO] run_log: [36m[1mDownloading[0m[39m ray [2m(74.2MiB)[0m
+2026-08-15 19:05:45,369 [INFO] run_log: [36m[1mDownloading[0m[39m apache-tvm-ffi [2m(2.9MiB)[0m
+2026-08-15 19:05:45,369 [INFO] run_log: [36m[1mDownloading[0m[39m transformers [2m(11.2MiB)[0m
+2026-08-15 19:05:45,369 [INFO] run_log: [36m[1mDownloading[0m[39m openai [2m(1.6MiB)[0m
+2026-08-15 19:05:45,376 [INFO] run_log: [36m[1mDownloading[0m[39m nvidia-cutlass-dsl-libs-base [2m(71.1MiB)[0m
+2026-08-15 19:05:45,585 [INFO] run_log: [36m[1mDownloaded[0m[39m sentencepiece
+2026-08-15 19:05:45,606 [INFO] run_log: [36m[1mDownloaded[0m[39m openai
+2026-08-15 19:05:45,614 [INFO] run_log: [36m[1mDownloaded[0m[39m aiohttp
+2026-08-15 19:05:45,695 [INFO] run_log: [36m[1mDownloaded[0m[39m apache-tvm-ffi
+2026-08-15 19:05:45,792 [INFO] run_log: [36m[1mDownloaded[0m[39m hf-xet
+2026-08-15 19:05:45,819 [INFO] run_log: [36m[1mDownloaded[0m[39m nvidia-cudnn-frontend
+2026-08-15 19:05:45,911 [INFO] run_log: [36m[1mDownloaded[0m[39m mistral-common
+2026-08-15 19:05:46,052 [INFO] run_log: [36m[1mDownloaded[0m[39m pandas
+2026-08-15 19:05:46,150 [INFO] run_log: [36m[1mDownloaded[0m[39m transformers
+2026-08-15 19:05:46,937 [INFO] run_log: [36m[1mDownloaded[0m[39m ray
+2026-08-15 19:05:47,495 [INFO] run_log: [36m[1mDownloaded[0m[39m nvidia-cutlass-dsl-libs-base
+2026-08-15 19:05:47,495 [INFO] run_log: [2mPrepared [1m48 packages[0m [2min 2.15s[0m[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [2mInstalled [1m170 packages[0m [2min 178ms[0m[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1maiohappyeyeballs[0m[2m==2.7.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1maiohttp[0m[2m==3.14.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1maiosignal[0m[2m==1.4.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mannotated-doc[0m[2m==0.0.5[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mannotated-types[0m[2m==0.8.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1manthropic[0m[2m==0.71.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1manyio[0m[2m==4.14.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mapache-tvm-ffi[0m[2m==0.1.13.post3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mastor[0m[2m==0.8.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mattrs[0m[2m==26.1.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mblake3[0m[2m==1.0.9[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcachetools[0m[2m==7.1.7[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcbor2[0m[2m==6.1.4[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcertifi[0m[2m==2026.7.22[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcharset-normalizer[0m[2m==3.5.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mclick[0m[2m==8.4.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcloudpickle[0m[2m==3.1.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcompressed-tensors[0m[2m==0.12.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcuda-bindings[0m[2m==13.3.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcuda-core[0m[2m==1.0.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcuda-pathfinder[0m[2m==1.6.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcuda-python[0m[2m==13.3.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mcupy-cuda12x[0m[2m==14.1.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdatasets[0m[2m==5.0.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdepyf[0m[2m==0.20.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdetect-installer[0m[2m==0.1.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdill[0m[2m==0.4.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdiskcache[0m[2m==5.6.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdistro[0m[2m==1.9.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdnspython[0m[2m==2.8.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mdocstring-parser[0m[2m==0.18.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1meinops[0m[2m==0.8.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1memail-validator[0m[2m==2.3.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfastapi[0m[2m==0.141.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfastapi-cli[0m[2m==0.0.32[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfastapi-cloud-cli[0m[2m==0.23.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfastar[0m[2m==0.11.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfilelock[0m[2m==3.32.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mflashinfer-python[0m[2m==0.5.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfrozenlist[0m[2m==1.8.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mfsspec[0m[2m==2026.4.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mgguf[0m[2m==0.19.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mh11[0m[2m==0.16.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhf-xet[0m[2m==1.6.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhttpcore[0m[2m==1.0.9[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhttpcore2[0m[2m==2.10.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhttptools[0m[2m==0.8.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhttpx[0m[2m==0.28.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhttpx-sse[0m[2m==0.4.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhttpx2[0m[2m==2.10.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mhuggingface-hub[0m[2m==1.27.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1midna[0m[2m==3.18[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mijson[0m[2m==3.5.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1minteregular[0m[2m==0.3.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mjinja2[0m[2m==3.1.6[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mjiter[0m[2m==0.16.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mjmespath[0m[2m==1.1.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mjsonschema[0m[2m==4.26.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mjsonschema-specifications[0m[2m==2025.9.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mlark[0m[2m==1.2.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mllguidance[0m[2m==1.3.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mllvmlite[0m[2m==0.44.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mlm-format-enforcer[0m[2m==0.11.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mloguru[0m[2m==0.7.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmarkdown-it-py[0m[2m==4.2.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmarkupsafe[0m[2m==3.0.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmcp[0m[2m==1.19.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmdurl[0m[2m==0.1.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmistral-common[0m[2m==1.11.7[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmodel-hosting-container-standards[0m[2m==0.1.16[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmpmath[0m[2m==1.3.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmsgpack[0m[2m==1.2.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmsgspec[0m[2m==0.21.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmultidict[0m[2m==6.7.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mmultiprocess[0m[2m==0.70.19[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnetworkx[0m[2m==3.6.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mninja[0m[2m==1.13.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnumba[0m[2m==0.61.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnumpy[0m[2m==2.2.6[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cublas-cu12[0m[2m==12.8.4.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cuda-cupti-cu12[0m[2m==12.8.90[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cuda-nvrtc-cu12[0m[2m==12.8.93[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cuda-runtime-cu12[0m[2m==12.8.90[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cudnn-cu12[0m[2m==9.10.2.21[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cudnn-frontend[0m[2m==1.27.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cufft-cu12[0m[2m==11.3.3.83[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cufile-cu12[0m[2m==1.13.1.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-curand-cu12[0m[2m==10.3.9.90[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cusolver-cu12[0m[2m==11.7.3.90[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cusparse-cu12[0m[2m==12.5.8.93[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cusparselt-cu12[0m[2m==0.7.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cutlass-dsl[0m[2m==4.5.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-cutlass-dsl-libs-base[0m[2m==4.5.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-ml-py[0m[2m==13.610.43[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-nccl-cu12[0m[2m==2.27.5[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-nvjitlink-cu12[0m[2m==12.8.93[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-nvshmem-cu12[0m[2m==3.3.20[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mnvidia-nvtx-cu12[0m[2m==12.8.90[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mopenai[0m[2m==3.1.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mopenai-harmony[0m[2m==0.0.8[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mopencv-python-headless[0m[2m==5.0.0.93[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1moutlines-core[0m[2m==0.2.11[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpackaging[0m[2m==26.3[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpandas[0m[2m==3.0.5[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpartial-json-parser[0m[2m==0.2.1.1.post7[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpillow[0m[2m==11.1.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mprometheus-client[0m[2m==0.26.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mprometheus-fastapi-instrumentator[0m[2m==8.1.0[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpropcache[0m[2m==0.5.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mprotobuf[0m[2m==7.35.1[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpsutil[0m[2m==7.2.2[0m
+2026-08-15 19:05:47,674 [INFO] run_log: [32m+[39m [1mpy-cpuinfo[0m[2m==9.0.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpyarrow[0m[2m==24.0.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpybase64[0m[2m==1.5.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpycountry[0m[2m==26.2.16[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpydantic[0m[2m==2.13.4[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpydantic-core[0m[2m==2.46.4[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpydantic-extra-types[0m[2m==2.11.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpydantic-settings[0m[2m==2.15.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpygments[0m[2m==2.20.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpyjwt[0m[2m==2.7.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpython-dateutil[0m[2m==2.9.0.post0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpython-dotenv[0m[2m==1.2.2[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpython-json-logger[0m[2m==4.2.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpython-multipart[0m[2m==0.0.32[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpyyaml[0m[2m==6.0.3[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mpyzmq[0m[2m==27.1.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mray[0m[2m==2.57.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mreferencing[0m[2m==0.37.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mregex[0m[2m==2026.7.19[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mrequests[0m[2m==2.34.2[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mrich[0m[2m==15.0.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mrich-toolkit[0m[2m==0.20.3[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mrignore[0m[2m==0.8.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mrpds-py[0m[2m==2026.6.3[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msafetensors[0m[2m==0.8.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mscipy[0m[2m==1.17.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msentencepiece[0m[2m==0.2.2[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msentry-sdk[0m[2m==2.68.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msetproctitle[0m[2m==1.3.7[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msetuptools[0m[2m==84.0.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mshellingham[0m[2m==1.5.4[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msix[0m[2m==1.17.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msniffio[0m[2m==1.3.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msse-starlette[0m[2m==3.4.8[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mstarlette[0m[2m==1.6.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msupervisor[0m[2m==4.3.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1msympy[0m[2m==1.14.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtabulate[0m[2m==0.10.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtiktoken[0m[2m==0.13.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtokenizers[0m[2m==0.22.2[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtorch[0m[2m==2.9.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtorchaudio[0m[2m==2.9.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtorchvision[0m[2m==0.24.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtqdm[0m[2m==4.70.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtransformers[0m[2m==5.15.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtriton[0m[2m==3.5.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtruststore[0m[2m==0.10.4[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtyper[0m[2m==0.27.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtyping-extensions[0m[2m==4.16.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mtyping-inspection[0m[2m==0.4.4[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1murllib3[0m[2m==2.7.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1muvicorn[0m[2m==0.52.3[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1muvloop[0m[2m==0.22.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mvllm[0m[2m==0.13.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mwatchfiles[0m[2m==1.2.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mwebsockets[0m[2m==17.0.1[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mxgrammar[0m[2m==0.1.27[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1mxxhash[0m[2m==4.0.0[0m
+2026-08-15 19:05:47,675 [INFO] run_log: [32m+[39m [1myarl[0m[2m==1.24.5[0m
+2026-08-15 19:05:47,681 [INFO] tt_llm_bench_launcher: Launching run_workflows.py for --tools vllm inside venv: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python
+2026-08-15 19:05:48,026 [INFO] workflow_module.runner: → command=workflow
+2026-08-15 19:05:48,026 [INFO] workflow.benchmarks: === Workflow start: benchmarks | model=Muse-Glimmer-30B device=P300X2 port=8000 output=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/Muse-Glimmer-30B_p300x2_benchmarks ===
+2026-08-15 19:05:48,060 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-08-15 19:05:48,063 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 1 sweep point(s)
+2026-08-15 19:05:48,064 [INFO] llm_module.server_control: Waiting for inference server at http://127.0.0.1:8000/health (timeout 1200s)
+2026-08-15 19:05:48,065 [INFO] llm_module.server_control: ✅ Inference server is healthy at http://127.0.0.1:8000/health
+2026-08-15 19:05:48,066 [INFO] llm_module.runner: Running vllm sweep point 1/1  isl=128 osl=128 max_conc=1 n=8
+2026-08-15 19:05:48,066 [INFO] llm_module.drivers._subprocess: Executing: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model meta-models/Muse-Glimmer-30B --dataset-name random --max-concurrency 1 --num-prompts 8 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/Muse-Glimmer-30B_p300x2_benchmarks/llm/benchmark_meta-models__Muse-Glimmer-30B_2026-08-15_19-05-48_isl-128_osl-128_maxcon-1_n-8.json --host 127.0.0.1 --port 8000 --extra-body {"truncate_prompt_tokens": "128"} --header Accept-Encoding=identity
+INFO 08-15 19:05:54 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-15 19:05:54 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-15 19:05:54 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-15 19:05:57 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7df45f7f3d80>, seed=0, num_prompts=8, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url=None, host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='meta-models/Muse-Glimmer-30B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/Muse-Glimmer-30B_p300x2_benchmarks/llm/benchmark_meta-models__Muse-Glimmer-30B_2026-08-15_19-05-48_isl-128_osl-128_maxcon-1_n-8.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-872c065e-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=600, extra_body={'truncate_prompt_tokens': '128'})
+INFO 08-15 19:05:59 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [128, 128]
+Starting initial single prompt test run...
+Waiting for endpoint to become up in 600 seconds
+
+|          | 00:00 elapsed, ? remaining
+|          | 00:00 elapsed, 00:07 remaining
+|          | 00:03 elapsed, 936:51:39 remaining
+Initial test run completed.
+
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/8 [00:00<?, ?it/s]
+12%|█▎        | 1/8 [00:02<00:20,  3.00s/it]
+25%|██▌       | 2/8 [00:05<00:17,  3.00s/it]
+38%|███▊      | 3/8 [00:09<00:15,  3.00s/it]
+50%|█████     | 4/8 [00:12<00:12,  3.00s/it]
+62%|██████▎   | 5/8 [00:15<00:09,  3.00s/it]
+75%|███████▌  | 6/8 [00:18<00:06,  3.00s/it]
+88%|████████▊ | 7/8 [00:21<00:03,  3.00s/it]
+100%|██████████| 8/8 [00:24<00:00,  3.00s/it]
+100%|██████████| 8/8 [00:24<00:00,  3.00s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     8
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  24.03
+Total input tokens:                      1016
+Total generated tokens:                  1024
+Request throughput (req/s):              0.33
+Output token throughput (tok/s):         42.62
+Peak output token throughput (tok/s):    44.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          84.91
+---------------Time to First Token----------------
+Mean TTFT (ms):                          79.29
+Median TTFT (ms):                        77.91
+P99 TTFT (ms):                           87.74
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          23.02
+Median TPOT (ms):                        23.03
+P99 TPOT (ms):                           23.04
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           22.84
+Median ITL (ms):                         23.01
+P99 ITL (ms):                            23.39
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          3003.00
+Median E2EL (ms):                        3002.32
+P99 E2EL (ms):                           3008.49
+==================================================
+2026-08-15 19:06:27,573 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 1 Block(s) over 1 sweep point(s)
+2026-08-15 19:06:27,573 [INFO] workflow_module.blocks_sink: BlockAccumulator: +1 block(s), total=1
+2026-08-15 19:06:27,573 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=meta-models__Muse-Glimmer-30B_P300X2 targets={'tool': 'vllm', 'model': 'meta-models/Muse-Glimmer-30B', 'device': 'P300X2', 'timestamp': '2026-08-15 19:06:26'}
+2026-08-15 19:06:27,573 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=1 kind=benchmarks (39.5s)
+2026-08-15 19:06:27,573 [INFO] workflow.benchmarks: Acceptance: PASS (0 blocker(s))
+2026-08-15 19:06:27,573 [INFO] report_module.report_file_saver: Saved markdown to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/report_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.md
+2026-08-15 19:06:27,574 [INFO] report_module.report_file_saver: Saved JSON to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.json
+2026-08-15 19:06:27,574 [INFO] report_module.report_file_saver: Saved JSON to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.json
+2026-08-15 19:06:27,574 [INFO] report_module.generator: Generated report: md=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/report_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.md, json=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.json
+2026-08-15 19:06:27,574 [INFO] workflow.benchmarks: Wrote markdown: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/report_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.md
+2026-08-15 19:06:27,574 [INFO] workflow.benchmarks: Wrote json:     /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/benchmarks/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T230627+0000.json
+2026-08-15 19:06:27,574 [INFO] workflow.benchmarks: === Workflow done: benchmarks (rc=0) ===
+2026-08-15 19:06:27,574 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-15 19:06:27,599 - runner.py:42 - INFO: ✅ command=benchmarks rc=0
+2026-08-15 19:06:27,599 - run.py:1163 - INFO: Completed run.py.
+2026-08-15 19:06:27,599 - run.py:1169 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-08-15 19:06:27,599 - run.py:1173 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-08-15 19:06:27,599 - run.py:1177 - INFO: This log file is saved on local machine at: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/run_logs/run_2026-08-15_19-05-44_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_benchmarks_5z_06Uy8.log

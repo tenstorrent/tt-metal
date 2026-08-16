@@ -1,0 +1,223 @@
+{
+ "_what": "per-document health of one lm-eval run: response length, score, and whether the turn reached the model's visible channel. No model text. This is the artifact that makes an under-budgeted generation limit visible without copying samples_*.jsonl.",
+ "task": "aime25",
+ "source": "samples_aime25_2026-08-16T03-35-07.523663.jsonl",
+ "n": 30,
+ "empty_responses": 0,
+ "truncated_inside_analysis_channel": 0,
+ "truncated_docs": [],
+ "max_chars": 1287,
+ "score_key": "exact_match",
+ "rows": [
+  {
+   "doc_id": 0,
+   "key": null,
+   "chars": 431,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 1,
+   "key": null,
+   "chars": 629,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 2,
+   "key": null,
+   "chars": 313,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 3,
+   "key": null,
+   "chars": 319,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 4,
+   "key": null,
+   "chars": 833,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 5,
+   "key": null,
+   "chars": 586,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 6,
+   "key": null,
+   "chars": 527,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 7,
+   "key": null,
+   "chars": 521,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 8,
+   "key": null,
+   "chars": 725,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 9,
+   "key": null,
+   "chars": 1287,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 10,
+   "key": null,
+   "chars": 786,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 11,
+   "key": null,
+   "chars": 513,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 12,
+   "key": null,
+   "chars": 934,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 13,
+   "key": null,
+   "chars": 881,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 14,
+   "key": null,
+   "chars": 755,
+   "score": 0,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 15,
+   "key": null,
+   "chars": 672,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 16,
+   "key": null,
+   "chars": 331,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 17,
+   "key": null,
+   "chars": 819,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 18,
+   "key": null,
+   "chars": 550,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 19,
+   "key": null,
+   "chars": 1148,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 20,
+   "key": null,
+   "chars": 801,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 21,
+   "key": null,
+   "chars": 403,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 22,
+   "key": null,
+   "chars": 959,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 23,
+   "key": null,
+   "chars": 811,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 24,
+   "key": null,
+   "chars": 350,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 25,
+   "key": null,
+   "chars": 697,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 26,
+   "key": null,
+   "chars": 898,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 27,
+   "key": null,
+   "chars": 645,
+   "score": 0,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 28,
+   "key": null,
+   "chars": 1159,
+   "score": 1,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 29,
+   "key": null,
+   "chars": 555,
+   "score": 0,
+   "reached_visible_channel": true
+  }
+ ]
+}

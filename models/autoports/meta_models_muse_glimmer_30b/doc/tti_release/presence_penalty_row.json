@@ -1,0 +1,81 @@
+{
+  "_what": "row-specific evidence for the one failing API-conformance parametrization, test_penalties[presence_penalty-1.2-repeat_trap]. Both texts are the release server's own responses, recovered verbatim from the release run's pytest output.",
+  "prompt": "Write a very repetitive story.",
+  "payload": {
+    "temperature": 0.1,
+    "max_tokens": 1024,
+    "seed": 1234
+  },
+  "assertion": "test unique_ratio >= base unique_ratio * 0.90",
+  "base_no_penalty": {
+    "len": 207,
+    "unique": 30,
+    "unique_ratio": 0.14492753623188406,
+    "most_common": [
+      [
+        "the",
+        44
+      ],
+      [
+        "he",
+        33
+      ],
+      [
+        "milk",
+        12
+      ]
+    ],
+    "entropy": 4.2223,
+    "distinct_sentences": 14
+  },
+  "test_presence_penalty_1_2": {
+    "len": 295,
+    "unique": 38,
+    "unique_ratio": 0.1288135593220339,
+    "most_common": [
+      [
+        "the",
+        69
+      ],
+      [
+        "he",
+        37
+      ],
+      [
+        "store.",
+        24
+      ]
+    ],
+    "entropy": 4.3153,
+    "distinct_sentences": 13
+  },
+  "observed_ratio": 0.8888135593220339,
+  "base_text": "The man went to the store.\n\nThe man went to the store.\n\nThe man went to the store.\n\nHe opened the door.\n\nHe opened the door.\n\nHe opened the door.\n\nHe looked at the shelf.\n\nHe looked at the shelf.\n\nHe looked at the shelf.\n\nThe milk was there.\n\nThe milk was there.\n\nThe milk was there.\n\nHe picked up the milk.\n\nHe picked up the milk.\n\nHe picked up the milk.\n\nHe put the milk in his cart.\n\nHe put the milk in his cart.\n\nHe put the milk in his cart.\n\nHe paid for the milk.\n\nHe paid for the milk.\n\nHe paid for the milk.\n\nHe left the store.\n\nHe left the store.\n\nHe left the store.\n\nHe walked home.\n\nHe walked home.\n\nHe walked home.\n\nHe opened his fridge.\n\nHe opened his fridge.\n\nHe opened his fridge.\n\nHe put the milk in the fridge.\n\nHe put the milk in the fridge.\n\nHe put the milk in the fridge.\n\nThe milk was in the fridge.\n\nThe milk was in the fridge.\n\nThe milk was in the fridge.\n\nHe closed the fridge.\n\nHe closed the fridge.\n\nHe closed the fridge.\n\nHe sat down.\n\nHe sat down.\n\nHe sat down.\n\nThe man went to the store.",
+  "test_text": "The man went to the store.\n\nThe man went to the store.\n\nThe man went to the store.\n\nHe walked down the street to the store.\n\nHe walked down the street to the store.\n\nHe walked down the street to the store.\n\nHe pushed open the door of the store.\n\nHe pushed open the door of the store.\n\nHe pushed open the door of the store.\n\nHe looked at the milk.\n\nHe looked at the milk.\n\nHe looked at the milk.\n\nHe picked up the milk.\n\nHe picked up the milk.\n\nHe picked up the milk.\n\nHe put the milk in his basket.\n\nHe put the milk in his basket.\n\nHe put the milk in his basket.\n\nHe paid for the milk.\n\nHe paid for the milk.\n\nHe paid for the milk.\n\nHe walked out of the store.\n\nHe walked out of the store.\n\nHe walked out of the store.\n\nHe walked down the street from the store.\n\nHe walked down the street from the store.\n\nHe walked down the street from the store.\n\nHe went home with the milk.\n\nHe went home with the milk.\n\nHe went home with the milk.\n\nHe put the milk in the fridge.\n\nHe put the milk in the fridge.\n\nHe put the milk in the fridge.\n\nThe next day the man went to the store.\n\nThe next day the man went to the store.\n\nThe next day the man went to the store.\n\nHe walked down the street to the store.\n\nHe walked down the street to the store.\n\nHe walked down the street to the store.\n\nHe pushed open the door of the store.\n\nHe pushed open the door of the store.\n\nHe pushed open the door of the store.\n\nAnd then he did it all again.",
+  "length_confound_test": {
+    "_what": "the assertion's unique_ratio is a type-token ratio, which falls with length. Truncating the penalized response to the baseline's own word count removes the length difference and leaves only the diversity difference.",
+    "rows": {
+      "base_full": {
+        "len": 207,
+        "unique": 30,
+        "unique_ratio": 0.14492753623188406,
+        "entropy": 4.2223
+      },
+      "penalty_full": {
+        "len": 295,
+        "unique": 38,
+        "unique_ratio": 0.1288135593220339,
+        "entropy": 4.3153
+      },
+      "penalty_truncated_to_base_length": {
+        "len": 207,
+        "unique": 30,
+        "unique_ratio": 0.14492753623188406,
+        "entropy": 4.2061
+      }
+    },
+    "assertion_ratio_full": 0.8888135593220339,
+    "assertion_ratio_length_matched": 1.0,
+    "assertion_passes_when_length_matched": true
+  }
+}

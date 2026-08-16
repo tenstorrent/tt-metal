@@ -1,0 +1,61 @@
+{
+ "date": "20260816-035430",
+ "endpoint_type": "openai-chat",
+ "backend": "openai-chat",
+ "label": null,
+ "model_id": "meta-models/Muse-Glimmer-30B",
+ "tokenizer_id": "meta-models/Muse-Glimmer-30B",
+ "num_prompts": 1,
+ "request_rate": "inf",
+ "burstiness": 1.0,
+ "max_concurrency": 1,
+ "duration": 14.837952969013713,
+ "completed": 1,
+ "failed": 0,
+ "total_input_tokens": 65535,
+ "total_output_tokens": 128,
+ "request_throughput": 0.06739474118082951,
+ "request_goodput": null,
+ "output_throughput": 8.626526871146178,
+ "total_token_throughput": 4425.340890156808,
+ "input_lens": [
+  65535
+ ],
+ "output_lens": [
+  128
+ ],
+ "ttfts": [
+  10.835969366016798
+ ],
+ "errors": [
+  ""
+ ],
+ "max_output_tokens_per_s": 32.0,
+ "max_concurrent_requests": 1,
+ "mean_ttft_ms": 10835.969366016798,
+ "median_ttft_ms": 10835.969366016798,
+ "std_ttft_ms": 0.0,
+ "p99_ttft_ms": 10835.969366016798,
+ "mean_tpot_ms": 31.50874906307541,
+ "median_tpot_ms": 31.50874906307541,
+ "std_tpot_ms": 0.0,
+ "p99_tpot_ms": 31.50874906307541,
+ "mean_itl_ms": 31.262514867194113,
+ "median_itl_ms": 31.741366488859057,
+ "std_itl_ms": 4.427007127460597,
+ "p99_itl_ms": 32.78601486235857,
+ "mean_e2el_ms": 14837.580497027375,
+ "median_e2el_ms": 14837.580497027375,
+ "std_e2el_ms": 0.0,
+ "p99_e2el_ms": 14837.580497027375,
+ "_trimmed_for_evidence": {
+  "itls": {
+   "n": 1,
+   "note": "dropped by copy_back.sh: raw per-token/per-request payload; this file's summary statistics are computed from it"
+  },
+  "generated_texts": {
+   "n": 1,
+   "note": "dropped by copy_back.sh: raw per-token/per-request payload; this file's summary statistics are computed from it"
+  }
+ }
+}

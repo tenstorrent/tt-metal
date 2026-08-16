@@ -1,0 +1,53 @@
+{
+  "bug": "tt-inference-server test_non_uniform_seeding: the 16 seed=0 requests of a 32-way concurrent batch are not byte-identical",
+  "root_cause": "models/common/sampling/tt_sampling.py called ttnn.manual_seed BEFORE _adjust_values_for_tiebreak, so compute kernels ran on the sampling cores between the seed being installed and ttnn.sampling consuming it. ttnn.manual_seed sets a per-CORE PRNG register; an intervening kernel on that core destroys it, and the users mapped to those cores draw a different random number from the identical seed.",
+  "fix": "move the ttnn.manual_seed call to immediately before ttnn.sampling (shared code, models/common/sampling/tt_sampling.py)",
+  "localization": {
+    "device_vs_host_sampling": {
+      "script": "doc/tti_release/seeding/seed_probe_host.py",
+      "device_sampling_distinct_seed0_outputs": 2,
+      "host_sampling_distinct_seed0_outputs": [1, 1],
+      "reading": "vLLM's host sampler, fed the same device logits, is uniform -> the per-row logits agree and the defect is in the device sampling path, not in numerics"
+    },
+    "serving_seed_trace": {
+      "artifact": "seedtrace_trial1.jsonl / seedtrace_trial4.jsonl (env-gated instrumentation, since removed)",
+      "finding": "every active row is handed the same absolute position and the same seed counter every step, so all 16 seed=0 rows are pushed ONE distinct device seed (e.g. 776604 at pos 73, 399475 at pos 75) at the divergence step, and one row still sampled a different token",
+      "bad_slots_measured": [0, 11, 22],
+      "trials": [
+        {"trial": 1, "zero_seed_slots_containing_bad": [22], "diverged": [22]},
+        {"trial": 2, "zero_seed_slots_containing_bad": [0, 22], "diverged": [0, 22]},
+        {"trial": 3, "zero_seed_slots_containing_bad": [0, 22], "diverged": [0, 22]},
+        {"trial": 4, "zero_seed_slots_containing_bad": [], "diverged": []}
+      ],
+      "reading": "the divergent set is exactly {0,11,22} intersected with the slots that happened to hold a seed=0 request -- a fixed set of cores, not a race"
+    },
+    "op_level_probe": {
+      "scripts": ["doc/tti_release/seeding/rand_probe.py", "doc/tti_release/seeding/rand_probe2.py", "doc/tti_release/seeding/rand_probe3.py", "doc/tti_release/seeding/rand_probe4.py", "doc/tti_release/seeding/rand_probe5.py"],
+      "setup": "one device, 32 users, identical near-uniform top-32 distribution, the SAME seed pushed to all 32 users; the sampled index reveals the drawn uniform",
+      "manual_seed_then_sampling": {"seeds_tried": 40, "seeds_with_disagreement": 0},
+      "manual_seed_then_tiebreak_chain_then_sampling": {"seeds_tried": 20, "seeds_with_disagreement": 19, "disagreeing_users": [0, 11]},
+      "chain_prefix_bisect": {"first_breaking_op_index": 13, "op": "ttnn.typecast(int32 -> bfloat16)"},
+      "single_op_between": {
+        "typecast_i32_to_bf16": "breaks (users 0,11)",
+        "typecast_u32_to_bf16": "breaks (users 0,11)",
+        "exp_bf16": "breaks (users 0,1)",
+        "typecast_bf16_to_i32": "clean",
+        "typecast_i32_to_u32": "clean",
+        "abs": "clean",
+        "add": "clean",
+        "max": "clean",
+        "eq": "clean",
+        "untilize": "clean"
+      },
+      "ordering_fix_verified": {"filler_before_manual_seed": ["i32_to_bf16", "u32_to_bf16", "bf16_exp"], "seeds_with_disagreement": 0}
+    }
+  },
+  "proof_after_fix": {
+    "tt_inference_server_test_non_uniform_seeding": {"trials": 3, "result": "1 passed each"},
+    "full_parameter_conformance_file": {"result": "22 passed in 373.54s", "before": "2 failed, 20 passed"},
+    "seed_repro_32way": {"distinct_seed0_outputs_by_batch": {"2": 1, "4": 1, "8": 1, "32": 1}, "distinct_nonzero_seed_outputs_at_32": 16},
+    "seed_repro2_3_trials": [1, 1, 1],
+    "plugin_sampling_suite": {"files": ["test_seeding_and_variety.py", "test_request_isolation.py"], "result": "29 passed", "before": "6-7 failed (the documented 'seeded reproducibility at batch > 1' limitation)"},
+    "qualitative_regression": {"degenerate_check": "No degenerate output detected (exit 0)", "first_divergence": [2, 2, 2, 2, 2, 2]}
+  }
+}

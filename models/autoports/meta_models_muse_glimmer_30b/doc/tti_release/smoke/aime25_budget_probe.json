@@ -1,0 +1,54 @@
+{
+  "_what": "the four aime25 problems that returned no visible channel at max_gen_toks=32768, replayed with a 98304-token budget. Answers the question the release report needs: under-budgeted harness setting, or a model that never terminates?",
+  "budget": 98304,
+  "results": {
+    "9": {
+      "target": "81",
+      "max_tokens_requested": 98304,
+      "finish_reason": "stop",
+      "completion_tokens": 23589,
+      "reasoning_chars": 71942,
+      "content_chars": 1093,
+      "reached_visible_channel": true,
+      "boxed_last": "81",
+      "correct": true,
+      "content_tail": "N_{\\sigma}(3!)^{3}=56\\,(3!)^{6}.\n\\]\n\nThe first row can be any of $9!$ permutations, so the total number of\n$3\\times 9$ arrays is\n\n\\[\n9!\\,56\\,(3!)^{6}=2^{16}\\,3^{10}\\,5\\,7^{2}.\n\\]\n\nWriting $N=2^{16}3^{10}5^{1}7^{2}$ we have\n\n\\[\n\\sum p\\,e_{p}=2\\cdot16+3\\cdot10+5\\cdot1+7\\cdot2=81 .\n\\]\n\n\\[\n\\boxed{81}\n\\]"
+    },
+    "13": {
+      "target": "60",
+      "max_tokens_requested": 98304,
+      "finish_reason": "stop",
+      "completion_tokens": 59817,
+      "reasoning_chars": 181419,
+      "content_chars": 725,
+      "reached_visible_channel": true,
+      "boxed_last": "63",
+      "correct": false,
+      "content_tail": " D_{1}X ,\n\\]\n\nand hence\n\n\\[\nf(X)\\ge A_{1}X+ D_{1}X+CX\\ge A_{1}C+D_{1}X .\n\\]\n\nThe extremal configuration is attained for the point $X\\equiv A$, for which\n\n\\[\nf(A)=AB+AC+AD+AE\n     =14+7\\sqrt3+13\\sqrt3+26\n     =40+20\\sqrt3 .\n\\]\n\nHence $m=40,\\;n=20,\\;p=3$ and\n\n\\[\nm+n+p=40+20+3=63 .\n\\]\n\n\\[\n\\boxed{63}\n\\]"
+    },
+    "14": {
+      "target": "735",
+      "max_tokens_requested": 98304,
+      "finish_reason": "stop",
+      "completion_tokens": 49750,
+      "reasoning_chars": 140602,
+      "content_chars": 759,
+      "reached_visible_channel": true,
+      "boxed_last": "441",
+      "correct": false,
+      "content_tail": "of the cubes is uniform.  Hence for $k\\ge2$ the number of\ntriples $(x,y,z)\\in(\\mathbf Z/3^{k}\\mathbf Z)^{3}$ with\n$x^{3}+y^{3}+z^{3}\\equiv0\\pmod{3^{k+1}}$ is $3^{2k}$.\n\nHere $k=6$, so\n\\[\nN = 3^{2\\cdot 6}=3^{12}=531\\,441 .\n\\]\n\nModulo $1000$,\n\\[\n3^{12}=531441\\equiv441\\pmod{1000}.\n\\]\n\n\\[\n\\boxed{441}\n\\]"
+    },
+    "29": {
+      "target": "240",
+      "max_tokens_requested": 98304,
+      "finish_reason": "stop",
+      "completion_tokens": 42258,
+      "reasoning_chars": 111565,
+      "content_chars": 535,
+      "reached_visible_channel": true,
+      "boxed_last": "188",
+      "correct": false,
+      "content_tail": "hand side\nhas a horizontal tangent, i.e. when  \n\n\\[\n\\frac{d}{dx}\\frac{3x^{4}-376x^{3}+10116x^{2}}{2x^{3}-188x^{2}+127008}=0 .\n\\]\n\nThe three positive values of \\(k\\) for which the two local minima can be\ncoincident are obtained for \\(k=18,\\;72,\\;98\\).  Hence\n\n\\[\n18+72+98 = 188 .\n\\]\n\n\\[\n\\boxed{188}\n\\]"
+    }
+  }
+}

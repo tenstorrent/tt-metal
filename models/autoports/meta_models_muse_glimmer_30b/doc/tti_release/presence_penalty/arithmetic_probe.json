@@ -1,0 +1,148 @@
+{
+  "_what": "Which arithmetic does the on-device presence penalty actually implement?",
+  "prompt": "Write a very repetitive story.",
+  "presence_penalty": 1.2,
+  "max_tokens": 256,
+  "steps_scored": 160,
+  "first_divergence_step": 159,
+  "logit_grid": {
+    "_what": "spacing of within-step logprob differences == spacing of the logits themselves (logprob = logit - logsumexp, so the shift cancels)",
+    "top1_minus_topN_is_a_multiple_of": {
+      "rank2": {
+        "steps": 256,
+        "of_0.125": 172,
+        "of_0.0625": 235,
+        "of_0.03125": 249
+      },
+      "rank3": {
+        "steps": 256,
+        "of_0.125": 162,
+        "of_0.0625": 226,
+        "of_0.03125": 241
+      },
+      "rank4": {
+        "steps": 256,
+        "of_0.125": 134,
+        "of_0.0625": 220,
+        "of_0.03125": 237
+      },
+      "rank5": {
+        "steps": 256,
+        "of_0.125": 126,
+        "of_0.0625": 213,
+        "of_0.03125": 230
+      }
+    },
+    "implied_logit_ulp_at_the_top_of_the_distribution": 0.125,
+    "implied_logit_magnitude": "|logit| in [16, 32) -- the only bf16 binade whose ULP is 0.125",
+    "note": "lower-ranked candidates sit in lower binades with finer bf16 spacing, so their differences are multiples of a finer grid; they never decide a greedy step."
+  },
+  "rule_vs_device_tokens": {
+    "presence_fp32": {
+      "steps_matching_device": 159,
+      "of": 160,
+      "steps_matching_host": 160,
+      "first_mismatch_vs_device": {
+        "step": 159,
+        "rule_picked_id": 180574,
+        "rule_picked": "Probably",
+        "device_picked_id": 89665,
+        "device_picked": "Perhaps"
+      }
+    },
+    "count_fp32": {
+      "steps_matching_device": 137,
+      "of": 160,
+      "steps_matching_host": 138,
+      "first_mismatch_vs_device": {
+        "step": 30,
+        "rule_picked_id": 1574,
+        "rule_picked": ".\n\n",
+        "device_picked_id": 26,
+        "device_picked": "."
+      }
+    },
+    "prompt_plus_output_fp32": {
+      "steps_matching_device": 158,
+      "of": 160,
+      "steps_matching_host": 159,
+      "first_mismatch_vs_device": {
+        "step": 88,
+        "rule_picked_id": 1933,
+        "rule_picked": " like",
+        "device_picked_id": 392,
+        "device_picked": " \""
+      }
+    },
+    "no_penalty": {
+      "steps_matching_device": 145,
+      "of": 160,
+      "steps_matching_host": 146,
+      "first_mismatch_vs_device": {
+        "step": 9,
+        "rule_picked_id": 10064,
+        "rule_picked": "Write",
+        "device_picked_id": 2991,
+        "device_picked": "We"
+      }
+    },
+    "presence_bf16_device": {
+      "steps_matching_device": 160,
+      "of": 160,
+      "steps_matching_host": 159,
+      "first_mismatch_vs_device": null
+    }
+  },
+  "at_the_divergent_step": {
+    "presence_fp32": {
+      "id": 180574,
+      "token": "Probably",
+      "score": -2.5881880044937136
+    },
+    "count_fp32": {
+      "id": 180574,
+      "token": "Probably",
+      "score": -2.5881880044937136
+    },
+    "prompt_plus_output_fp32": {
+      "id": 180574,
+      "token": "Probably",
+      "score": -2.5881880044937136
+    },
+    "no_penalty": {
+      "id": 180574,
+      "token": "Probably",
+      "score": -1.3881880044937134
+    },
+    "presence_bf16_device": {
+      "id": 89665,
+      "token": "Perhaps",
+      "score": -1.25
+    },
+    "_bf16_trace": {
+      "host_token": "Probably",
+      "device_token": "Perhaps",
+      "host_token_id": 180574,
+      "device_token_id": 89665,
+      "host_token_generated_count_so_far": 1,
+      "device_token_generated_count_so_far": 0,
+      "logit_offsets_from_top (exact, on 0.125 grid)": {
+        "host": 0.0,
+        "device": -1.25
+      },
+      "fp32_reference": {
+        "host_score": -1.2,
+        "device_score": -1.25,
+        "winner": "host_token"
+      },
+      "bf16_device": {
+        "penalty_as_bf16": 1.203125,
+        "host_score": -1.25,
+        "device_score": -1.25,
+        "exact_tie_after_bf16_rounding": true,
+        "tiebreak_rule": "lowest global token id wins (TTSampling._adjust_values_for_tiebreak, k==1)",
+        "tiebreak_winner": "device_token"
+      }
+    }
+  }
+}

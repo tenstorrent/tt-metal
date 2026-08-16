@@ -1,0 +1,116 @@
+{
+  "_what": "valid prompt lengths that divide none of the autoport's internal sizes (tile 32, page block 64, prefill chunk 8192), sent through the same /v1/chat/completions endpoint the release workflow uses",
+  "server_url": "http://127.0.0.1:8000",
+  "passed": 9,
+  "total": 9,
+  "results": [
+    {
+      "target_prefill_len": 1,
+      "rendered_prefill_len": 56,
+      "server_prompt_tokens": 56,
+      "completion_tokens": 4,
+      "finish_reason": "stop",
+      "mod_32": 24,
+      "mod_64": 56,
+      "mod_8192": 56,
+      "ok": true,
+      "seconds": 0.15
+    },
+    {
+      "target_prefill_len": 37,
+      "rendered_prefill_len": 56,
+      "server_prompt_tokens": 56,
+      "completion_tokens": 4,
+      "finish_reason": "stop",
+      "mod_32": 24,
+      "mod_64": 56,
+      "mod_8192": 56,
+      "ok": true,
+      "seconds": 0.17
+    },
+    {
+      "target_prefill_len": 127,
+      "rendered_prefill_len": 127,
+      "server_prompt_tokens": 127,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 31,
+      "mod_64": 63,
+      "mod_8192": 127,
+      "ok": true,
+      "seconds": 0.26
+    },
+    {
+      "target_prefill_len": 129,
+      "rendered_prefill_len": 129,
+      "server_prompt_tokens": 129,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 1,
+      "mod_64": 1,
+      "mod_8192": 129,
+      "ok": true,
+      "seconds": 0.24
+    },
+    {
+      "target_prefill_len": 1023,
+      "rendered_prefill_len": 1023,
+      "server_prompt_tokens": 1023,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 31,
+      "mod_64": 63,
+      "mod_8192": 1023,
+      "ok": true,
+      "seconds": 0.32
+    },
+    {
+      "target_prefill_len": 2049,
+      "rendered_prefill_len": 2049,
+      "server_prompt_tokens": 2049,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 1,
+      "mod_64": 1,
+      "mod_8192": 2049,
+      "ok": true,
+      "seconds": 0.48
+    },
+    {
+      "target_prefill_len": 4097,
+      "rendered_prefill_len": 4097,
+      "server_prompt_tokens": 4097,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 1,
+      "mod_64": 1,
+      "mod_8192": 4097,
+      "ok": true,
+      "seconds": 0.69
+    },
+    {
+      "target_prefill_len": 8193,
+      "rendered_prefill_len": 8193,
+      "server_prompt_tokens": 8193,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 1,
+      "mod_64": 1,
+      "mod_8192": 1,
+      "ok": true,
+      "seconds": 1.26
+    },
+    {
+      "target_prefill_len": 12345,
+      "rendered_prefill_len": 12345,
+      "server_prompt_tokens": 12345,
+      "completion_tokens": 8,
+      "finish_reason": "length",
+      "mod_32": 25,
+      "mod_64": 57,
+      "mod_8192": 4153,
+      "ok": true,
+      "seconds": 1.76
+    }
+  ]
+}

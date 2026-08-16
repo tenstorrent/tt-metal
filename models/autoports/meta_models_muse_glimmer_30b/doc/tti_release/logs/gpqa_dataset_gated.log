@@ -1,0 +1,21 @@
+# Why the release runs aime25 rather than gpqa_diamond_cot_zeroshot.
+#
+# Command (run against the live autoport server, HF_TOKEN exported from
+# ~/.cache/huggingface/token, account tt-hous):
+#
+#   .workflow_venvs/.venv_evals_common/bin/lm_eval --tasks gpqa_diamond_cot_zeroshot \
+#     --model local-chat-completions \
+#     --model_args model=meta-models/Muse-Glimmer-30B,base_url=http://127.0.0.1:8000/v1/chat/completions,... \
+#     --limit 2 --apply_chat_template ...
+#
+# It fails during dataset download, before any request reaches the model:
+#
+datasets.exceptions.DatasetNotFoundError: Dataset 'Idavidrein/gpqa' is a gated dataset on the Hub. Visit the dataset page at https://huggingface.co/datasets/Idavidrein/gpqa to ask for access.
+#
+# Hub metadata for the same dataset, with the same token:
+#   GET https://huggingface.co/api/datasets/Idavidrein/gpqa  -> 200, "gated": "auto"
+# i.e. access is granted on accepting the dataset's terms, which is an action on
+# the user's Hugging Face account and not one this stage takes by itself.
+#
+# The same probe with an ungated dataset succeeds end to end:
+#   --tasks aime25 (math-ai/aime25, 30 problems) --limit 4  -> exact_match 1.0

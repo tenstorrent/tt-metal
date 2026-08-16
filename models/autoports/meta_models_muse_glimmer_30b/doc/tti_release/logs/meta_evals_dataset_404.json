@@ -1,0 +1,19 @@
+{
+  "_what": "why meta_ifeval / meta_gpqa_cot cannot run for this checkpoint. workflows/workflow_venvs.py::setup_evals_meta builds their datasets as f'{hf_model_repo}-evals' and runs llama-cookbook's prepare_meta_eval.py over it, so a checkpoint without that companion dataset has no meta_* tasks at all.",
+  "hf_account": "tt-hous (token read from ~/.cache/huggingface/token; never printed)",
+  "probes": {
+    "meta-models/Muse-Glimmer-30B-evals": {
+      "status": 404,
+      "error": "HTTPError: HTTP Error 404: Not Found"
+    },
+    "meta-llama/Llama-3.1-8B-Instruct-evals (control)": {
+      "status": 200,
+      "id": "meta-llama/Llama-3.1-8B-Instruct-evals"
+    },
+    "meta-models/Muse-Glimmer-30B (the model itself, control)": {
+      "status": 200,
+      "id": "meta-models/Muse-Glimmer-30B"
+    }
+  },
+  "reading": "the token is valid -- it resolves both controls -- and the companion evals dataset returns 404. The substitution is a missing dataset, not an auth problem."
+}

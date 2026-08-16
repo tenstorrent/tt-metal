@@ -1,0 +1,51 @@
+{
+  "_what": "the failing conformance row's own two requests, repeated on the device sampler and again on vLLM's host sampler (forced by logprobs on a 4-die mesh). If both arms move the same way, the row is not about the TT on-device sampler.",
+  "payload": {
+    "temperature": 0.1,
+    "max_tokens": 1024,
+    "seed": 1234,
+    "presence_penalty": 1.2
+  },
+  "arms": {
+    "device_sampling": {
+      "base": {
+        "len": 252,
+        "unique": 38,
+        "unique_ratio": 0.15079365079365079,
+        "entropy": 4.6821
+      },
+      "penalty": {
+        "len": 202,
+        "unique": 25,
+        "unique_ratio": 0.12376237623762376,
+        "entropy": 3.8134
+      },
+      "assertion_ratio": 0.8207399687337155,
+      "assertion_passes": false,
+      "assertion_ratio_length_matched": 0.8207399687337155,
+      "passes_when_length_matched": false,
+      "base_text": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.\n\nThe store door was open.\nThe store door was open.\nThe store door was open.\n\nHe said hello to the clerk.\nHe said hello to the clerk.\nHe said hello to the clerk.\n\nHe bought a bottle of milk.\nHe bought a bottle of milk.\nHe bought a bottle of milk.\n\nHe paid for the milk.\nHe paid for the milk.\nHe paid for the milk.\n\nHe walked home.\nHe walked home.\nHe walked home.\n\nHe put the milk in the fridge.\nHe put the milk in the fridge.\nHe put the milk in the fridge.\n\nHe sat at the table.\nHe sat at the table.\nHe sat at the table.\n\nHe drank the milk.\nHe drank the milk.\nHe drank the milk.\n\nThe man went to bed.\nThe man went to bed.\nThe man went to bed.\n\nThe man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.",
+      "penalty_text": "The man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nAnd then the man woke up again."
+    },
+    "host_sampling": {
+      "base": {
+        "len": 240,
+        "unique": 38,
+        "unique_ratio": 0.15833333333333333,
+        "entropy": 4.5143
+      },
+      "penalty": {
+        "len": 17,
+        "unique": 7,
+        "unique_ratio": 0.4117647058823529,
+        "entropy": 2.5869
+      },
+      "assertion_ratio": 2.6006191950464395,
+      "assertion_passes": true,
+      "assertion_ratio_length_matched": 2.6006191950464395,
+      "passes_when_length_matched": true,
+      "base_text": "The man went to the store.\n\nThe man went to the store.\n\nThe man went to the store.\n\nHe walked down the street.\n\nHe walked down the street.\n\nHe walked down the street.\n\nThe street was wet.\n\nThe street was wet.\n\nThe street was wet.\n\nHe opened the door.\n\nHe opened the door.\n\nHe opened the door.\n\nThe door was red.\n\nThe door was red.\n\nThe door was red.\n\nHe bought milk.\n\nHe bought milk.\n\nHe bought milk.\n\nHe paid with coins.\n\nHe paid with coins.\n\nHe paid with coins.\n\nThe coins were cold.\n\nThe coins were cold.\n\nThe coins were cold.\n\nHe left the store.\n\nHe left the store.\n\nHe left the store.\n\nHe walked down the street.\n\nHe walked down the street.\n\nHe walked down the street.\n\nThe street was wet.\n\nThe street was wet.\n\nThe street was wet.\n\nThe sun was out.\n\nThe sun was out.\n\nThe sun was out.\n\nHe went home.\n\nHe went home.\n\nHe went home.\n\nHe put the milk in the fridge.\n\nHe put the milk in the fridge.\n\nHe put the milk in the fridge.\n\nThe fridge was humming.\n\nThe fridge was humming.\n\nThe fridge was humming.\n\nHe sat in the chair.\n\nHe sat in the chair.\n\nHe sat in the chair.\n\nThe chair was blue.\n\nThe chair was blue.\n\nThe chair was blue.\n\nThe man went to the store.\n\nThe man went to the store.\n\nThe man went to the store.",
+      "penalty_text": "The man woke up.\nThe man woke up.\nThe man woke up.\n\nThe man got out of"
+    }
+  }
+}

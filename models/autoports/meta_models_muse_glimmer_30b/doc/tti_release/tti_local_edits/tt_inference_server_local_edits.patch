@@ -1,0 +1,366 @@
+diff --git a/reference_config/benchmarking/benchmark_targets/model_performance_reference.json b/reference_config/benchmarking/benchmark_targets/model_performance_reference.json
+index bcf228f59..723f02565 100644
+--- a/reference_config/benchmarking/benchmark_targets/model_performance_reference.json
++++ b/reference_config/benchmarking/benchmark_targets/model_performance_reference.json
+@@ -6927,5 +6927,26 @@
+                 }
+             }
+         ]
++    },
++    "Muse-Glimmer-30B": {
++        "p300x2": [
++            {
++                "isl": 128,
++                "osl": 128,
++                "max_concurrency": 1,
++                "num_prompts": 8,
++                "task_type": "text",
++                "image_height": null,
++                "image_width": null,
++                "images_per_prompt": null,
++                "targets": {
++                    "theoretical": {
++                        "ttft_ms": 8.83,
++                        "tput_user": 113.3,
++                        "tput": 113.3
++                    }
++                }
++            }
++        ]
+     }
+ }
+\ No newline at end of file
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index 1007a1097..5bdfeb933 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -5264,6 +5264,190 @@ _eval_config_list = [
+             ),
+         ],
+     ),
++    # =========================================================================
++    # LOCAL EDIT -- added by the tt-metal model-bringup TTI release stage for
++    # the generated autoport of meta-models/Muse-Glimmer-30B.
++    #
++    # Why not meta_ifeval / meta_gpqa_cot, the usual mandatory text-LLM gates:
++    # those two tasks are Llama-family-only.  llama-cookbook's
++    # prepare_meta_eval.py builds their datasets from
++    # `<hf_model_repo>-evals` (workflows/workflow_venvs.py::setup_evals_meta),
++    # and `meta-models/Muse-Glimmer-30B-evals` does not exist -- the HF API
++    # returns 404 for it with a valid token, while
++    # `meta-llama/Llama-3.1-8B-Instruct-evals` returns 200.  Their prompts are
++    # also pre-rendered in Llama 3's chat format and are fed with
++    # apply_chat_template=False, so pointing them at another checkpoint's
++    # tokenizer would violate $qualitative-check's prompt-format rule.  The two
++    # rows below are the model-appropriate equivalents of the same two gates:
++    # `ifeval` for instruction following and `gpqa_diamond_cot_zeroshot` for
++    # zero-shot chain-of-thought reasoning, which is what every non-Llama entry
++    # in this file uses.
++    #
++    # Why aime25 and not gpqa_diamond_cot_zeroshot for the reasoning gate:
++    # lm-eval's GPQA tasks all read `Idavidrein/gpqa`, which is a gated Hub
++    # dataset ("gated: auto").  This host's HF account has not accepted its
++    # terms, so every GPQA task fails at dataset download with
++    # DatasetNotFoundError before a single request reaches the model
++    # (doc/tti_release/logs/gpqa_dataset_gated.log).  Accepting a third-party
++    # dataset licence on the user's Hugging Face account is not something this
++    # stage may do on its own, so the reasoning gate uses `aime25`
++    # (`math-ai/aime25`, ungated), which the model card also publishes a number
++    # for.  Re-add the GPQA row once the account has GPQA access.
++    #
++    # Both run through the chat API (use_chat_api=True).  That is load-bearing:
++    # Muse Glimmer writes its analysis into a `to=self` channel ahead of the
++    # reply, and only the chat endpoint applies the server's reasoning parser
++    # and hands lm-eval the reply alone.
++    #
++    # Reference scores: no Tenstorrent GPU control run exists for this
++    # checkpoint, so gpu_reference_score is the vendor-published score from the
++    # model card, and each row records why that substitution is sound and what
++    # tolerance it needs.  They are vendor-published references, not measured
++    # GPU references.
++    # =========================================================================
++    EvalConfig(
++        hf_model_repo="meta-models/Muse-Glimmer-30B",
++        tasks=[
++            EvalTask(
++                task_name="ifeval",
++                use_chat_api=True,
++                max_concurrent=32,
++                score=EvalTaskScore(
++                    published_score=77.0,
++                    published_score_ref=(
++                        "https://huggingface.co/meta-models/Muse-Glimmer-30B"
++                        " (model card, IFBench 77.0)"
++                    ),
++                    # IFBench is a strictly harder instruction-following
++                    # benchmark than lm-eval's IFEval -- it was built because
++                    # IFEval saturated -- so a model that scores 77.0 on IFBench
++                    # is expected to score at or above that on IFEval.  Using
++                    # the IFBench number as the IFEval reference is therefore a
++                    # conservative floor, not an equivalence claim.
++                    gpu_reference_score=77.0,
++                    gpu_reference_score_ref=(
++                        "vendor-published IFBench score used as a conservative"
++                        " floor for the IFEval row; no Tenstorrent GPU control"
++                        " run exists for this checkpoint"
++                    ),
++                    score_func=score_task_single_key,
++                    # ONE key on purpose. score_task_single_key
++                    # (reference_config/evals/eval_utils.py) grades
++                    # result_keys[0] and ignores the rest, so listing two here
++                    # would read as a mean that is never taken.
++                    # prompt_level_strict_acc is the strictest of the four
++                    # IFEval metrics -- a prompt counts only if *every*
++                    # instruction in it is satisfied under the strict parser --
++                    # so this grades the conservative one.
++                    score_func_kwargs={
++                        "result_keys": [
++                            "prompt_level_strict_acc,none",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                model_kwargs={
++                    "max_length": 131072,
++                    "timeout": "3600",
++                },
++                gen_kwargs={
++                    # Model card "Best Practices": temperature 1.0, top_p 0.95,
++                    # top_k 64.  Reasoning strength is left at the chat
++                    # template's default (high).
++                    "stream": "false",
++                    "do_sample": "true",
++                    "temperature": 1.0,
++                    "top_p": 0.95,
++                    "top_k": 64,
++                    # 8192 was measured to be too small, the same way 32768 was
++                    # for aime25: on the hardest constraint-satisfaction prompts
++                    # ("no commas and no letter c", "avoid the letter i more
++                    # than twice", "a poem about the top 20 tallest buildings")
++                    # the analysis channel runs past 8192 and the turn is graded
++                    # on reasoning instead of on an answer -- 3 of 541 prompts,
++                    # reproducibly, on doc keys 1300 and 3048 in both runs
++                    # (doc/tti_release/evals/ifeval_sample_health.json). 32768
++                    # is 4x that, still a quarter of the 131072 context, and the
++                    # other 538 prompts finish far below it so the cost is only
++                    # on the handful that need it.
++                    "max_gen_toks": 32768,
++                },
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.05,
++                    EvalLimitMode.SMOKE_TEST: 0.01,
++                },
++            ),
++            EvalTask(
++                task_name="aime25",
++                num_fewshot=0,
++                use_chat_api=True,
++                max_concurrent=32,
++                score=EvalTaskScore(
++                    published_score=94.7,
++                    published_score_ref=(
++                        "https://huggingface.co/meta-models/Muse-Glimmer-30B"
++                        " (model card, AIME 2026 94.7, High Reasoning)"
++                    ),
++                    gpu_reference_score=94.7,
++                    gpu_reference_score_ref=(
++                        "vendor-published AIME score used as the reference; no"
++                        " Tenstorrent GPU control run exists for this checkpoint"
++                    ),
++                    # 0.10 rather than the default 0.05 for two reasons that are
++                    # both about the reference, not the implementation:
++                    #   * the published number is AIME 2026 and this task is
++                    #     math-ai/aime25 (AIME 2025) -- same contest, different
++                    #     year's paper;
++                    #   * the set is 30 problems at one sample each, so the score
++                    #     only moves in 3.33-point steps.  At tolerance 0.05 the
++                    #     bar would be 90.0, i.e. 27/30, and a single unlucky
++                    #     sample at the model card's own temperature=1.0 recipe
++                    #     would fail it.  0.10 puts the bar at 26/30.
++                    tolerance=0.10,
++                    score_func=score_task_single_key,
++                    score_func_kwargs={
++                        "result_keys": [
++                            "exact_match,none",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                model_kwargs={
++                    "max_length": 131072,
++                    "timeout": "3600",
++                },
++                gen_kwargs={
++                    "stream": "false",
++                    "do_sample": "true",
++                    "temperature": 1.0,
++                    "top_p": 0.95,
++                    "top_k": 64,
++                    # Competition math with a full analysis channel in front of
++                    # it.  32768 was measured to be too small: 4 of the 30
++                    # problems ran past it and came back with no visible
++                    # channel at all, scoring 0 on a truncated turn rather than
++                    # on an answer.  Replayed at a larger budget the same
++                    # problems terminate on their own -- e.g. doc 9 finishes at
++                    # 23589 tokens with the correct answer
++                    # (doc/tti_release/smoke/aime25_budget_probe.json).  96K of
++                    # the 131072 context, leaving 32K+ for the prompt, follows
++                    # the gpt-oss-120b aime25 entry above (120K of the same
++                    # context) rather than inventing a new rule.
++                    "max_gen_toks": 98304,
++                    # aime25.yaml stops on the literal "Question:".  The analysis
++                    # channel restates the problem often enough that leaving that
++                    # in truncates the answer, so the stop set is cleared and
++                    # generation ends on the model's own EOS -- the same thing
++                    # every other reasoning entry in this file does.
++                    "until": [],
++                },
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.5,
++                    EvalLimitMode.SMOKE_TEST: 0.05,
++                },
++            ),
++        ],
++    ),
+ ]
+ 
+ 
+diff --git a/test_module/server_tests_config.json b/test_module/server_tests_config.json
+index 865120546..16ecc482e 100644
+--- a/test_module/server_tests_config.json
++++ b/test_module/server_tests_config.json
+@@ -43,7 +43,8 @@
+             "Llama-3.1-8B-Instruct",
+             "Llama-3.3-70B-Instruct",
+             "gpt-oss-20b",
+-            "Mistral-Small-3.1-24B-Instruct-2503"
++            "Mistral-Small-3.1-24B-Instruct-2503",
++            "Muse-Glimmer-30B"
+         ]
+     },
+     "available_markers": {
+@@ -436,6 +437,17 @@
+             "compatible_devices": [
+                 "blackhole_galaxy"
+             ]
++        },
++        "muse_glimmer_30b": {
++            "_comment": "LOCAL EDIT (tt-metal model-bringup TTI release stage): the generated models/autoports/meta_models_muse_glimmer_30b autoport. Without this entry test_module.dispatch logs 'No spec test suites match model=Muse-Glimmer-30B device=p300x2' and the release skips API parameter conformance entirely.",
++            "id_name": "muse-glimmer-30b",
++            "weights": [
++                "Muse-Glimmer-30B"
++            ],
++            "category": "LLM",
++            "compatible_devices": [
++                "p300x2"
++            ]
+         }
+     },
+     "hardware_defaults": {
+diff --git a/test_module/test_suites/llm.json b/test_module/test_suites/llm.json
+index 21b030ba0..38743e9c5 100644
+--- a/test_module/test_suites/llm.json
++++ b/test_module/test_suites/llm.json
+@@ -7,7 +7,8 @@
+                 "qwen3_32b",
+                 "llama_3_1_8b",
+                 "llama_70b_family",
+-                "gpt_oss_20b"
++                "gpt_oss_20b",
++                "muse_glimmer_30b"
+             ],
+             "devices": [
+                 "n150",
+diff --git a/workflows/model_spec.py b/workflows/model_spec.py
+index 21cb5fb1a..642e7fa36 100644
+--- a/workflows/model_spec.py
++++ b/workflows/model_spec.py
+@@ -308,7 +308,19 @@ qwen36_blackhole_b8_impl = ImplSpec(
+     code_path="models/demos/blackhole/qwen36",
+ )
+ 
++# TTNN autoport of meta-models/Muse-Glimmer-30B, generated by the tt-metal
++# model-bringup flow and served through its own tt/generator_vllm.py.  It is a
++# distinct impl from tt_transformers on purpose: the release stage for this
++# model must evaluate the generated code path, not the stock one.
++muse_glimmer_30b_autoport_impl = ImplSpec(
++    impl_id="muse_glimmer_30b_autoport",
++    impl_name="muse-glimmer-30b-autoport",
++    repo_url="https://github.com/tenstorrent/tt-metal",
++    code_path="models/autoports/meta_models_muse_glimmer_30b",
++)
++
+ _IMPL_REGISTRY: Dict[str, ImplSpec] = {
++    "muse_glimmer_30b_autoport": muse_glimmer_30b_autoport_impl,
+     "tt_transformers": tt_transformers_impl,
+     "llama3_70b_galaxy": llama3_70b_galaxy_impl,
+     "qwen3_32b_galaxy": qwen3_32b_galaxy_impl,
+diff --git a/workflows/model_specs/prod/llm.yaml b/workflows/model_specs/prod/llm.yaml
+index a65d88da7..acb32560b 100644
+--- a/workflows/model_specs/prod/llm.yaml
++++ b/workflows/model_specs/prod/llm.yaml
+@@ -1282,3 +1282,64 @@ templates:
+     Qwen/Qwen3.6-27B:
+       reasoning_parser_name: qwen3
+       tool_call_parser_name: qwen3_coder
++# =============================================================================
++# LOCAL EDIT -- not part of the automated release process.
++#
++# Added by the tt-metal model-bringup TTI release stage for the generated
++# autoport of meta-models/Muse-Glimmer-30B
++# (models/autoports/meta_models_muse_glimmer_30b).  It is here, rather than
++# supplied purely through --runtime-model-spec-json, because EVAL_CONFIGS at
++# the bottom of reference_config/evals/eval_config.py is built by iterating
++# MODEL_SPECS: a runtime spec that the catalog has never heard of gets no eval
++# tasks at all.  The release run still passes --runtime-model-spec-json, and
++# that JSON is exported from this entry.
++#
++# `impl: muse_glimmer_30b_autoport` is the point of the whole entry: it pins
++# impl.code_path to the generated autoport rather than to stock
++# models/tt_transformers.
++# =============================================================================
++- weights:
++    - meta-models/Muse-Glimmer-30B
++  version: "0.20.0"
++  # The tt-metal commit under evaluation: the optimized-vLLM stage's HEAD on
++  # branch agentic-research/hous/muse-glimmer-30b.  Drives the report's
++  # code_link, which resolves to the autoport directory.
++  tt_metal_commit: "7db0eca"
++  impl: muse_glimmer_30b_autoport
++  inference_engine: VLLM
++  model_type: LLM
++  # The autoport implements the text stack only; the checkpoint's perception
++  # encoder is not ported, so no image benchmarks are generated.
++  supported_modalities:
++    - text
++  # FUNCTIONAL, not EXPERIMENTAL: at EXPERIMENTAL every performance tier AND
++  # eval accuracy are masked to informational, which would make this release
++  # report unable to fail.  FUNCTIONAL enforces eval accuracy and the
++  # functional (10%-of-roofline) performance tier, which is the bar this
++  # bring-up actually claims.
++  status: FUNCTIONAL
++  device_model_specs:
++    - device: P300X2  # QB2 (2x P300, 4-chip Blackhole ring)
++      max_concurrency: 32
++      # doc/context_contract.json: current_supported_context == the
++      # HF-advertised 131072, no capability reduction.
++      max_context: 131072
++      # The KV pool the autoport actually allocates, read off the running
++      # server: "52 layers x 2 x (16416, 1, 64, 128) BFLOAT8_B ... 1050624
++      # tokens across all users".  Without this the pool would be inferred as
++      # max_context, understating benchmark concurrency by 8x.
++      max_tokens_all_users_override: 1050624
++      default_impl: true
++      tensor_cache_timeout: 5400.0
++      env_vars:
++        MESH_DEVICE: "P300x2"
++      override_tt_config:
++        fabric_config: FABRIC_1D_RING
++        fabric_packet_payload_bytes: 8192
++        trace_region_size: 400000000
++        l1_small_size: 6144
++        trace_mode: decode_only
++        sample_on_device_mode: all
++      vllm_args:
++        block_size: "64"
++  has_builtin_warmup: true

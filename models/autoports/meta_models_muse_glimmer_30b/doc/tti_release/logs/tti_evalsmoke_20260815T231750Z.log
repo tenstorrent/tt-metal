@@ -1,0 +1,356 @@
+No validation is done, loading runtime model spec from JSON: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/specs/muse_glimmer_30b_autoport_evalsmoke.json
+2026-08-15 19:17:50,806 - run.py:1022 - INFO: TT-Inference version: 0.20.0
+2026-08-15 19:17:50,806 - run.py:1023 - INFO: TT-Inference SHA: 82777a2382e2
+2026-08-15 19:17:50,806 - run.py:1024 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      Muse-Glimmer-30B
+  device:                     p300x2
+  impl:                       None
+  engine:                     None
+  workflow:                   evals
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              /home/ttuser/dev/muse-glimmer/tt-metal
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      False
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         smoke-test
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-15 19:17:50,806 - run.py:1030 - INFO: Runtime model spec saved to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-15_19-17-50_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_Ti03T1k-.json
+2026-08-15 19:17:50,806 - validate_setup.py:313 - INFO: Starting local setup validation
+2026-08-15 19:17:50,806 - validate_setup.py:349 - INFO: ✅ validating local setup completed
+2026-08-15 19:17:50,806 - run.py:1144 - INFO: Model Muse-Glimmer-30B (model_type=LLM) routes through the workflow engine.
+2026-08-15 19:17:50,806 - runner.py:31 - INFO: → command=evals
+2026-08-15 19:17:50,806 - utils.py:272 - INFO: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv venv --managed-python --python=3.10 /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_workflow_run_script --allow-existing
+Using CPython [36m3.10.20[39m[36m[39m
+Creating virtual environment at: [36m.workflow_venvs/.venv_workflow_run_script[39m
+Activate with: [32msource .workflow_venvs/.venv_workflow_run_script/bin/activate[39m
+2026-08-15 19:17:50,870 - utils.py:272 - INFO: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python --index-strategy unsafe-best-match -r /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/requirements/workflow-run-script.txt
+[2mUsing Python 3.10.20 environment at: .workflow_venvs/.venv_workflow_run_script[0m
+[2mResolved [1m81 packages[0m [2min 2.21s[0m[0m
+[36m[1mDownloading[0m[39m scikit-learn [2m(9.2MiB)[0m
+[36m[1mDownloading[0m[39m aiohttp [2m(1.6MiB)[0m
+[36m[1mDownloading[0m[39m timm [2m(2.5MiB)[0m
+[36m[1mDownloading[0m[39m numba [2m(3.6MiB)[0m
+[36m[1mDownloading[0m[39m soundfile [2m(1.3MiB)[0m
+[36m[1mDownloading[0m[39m llvmlite [2m(57.1MiB)[0m
+[36m[1mDownloading[0m[39m transformers [2m(11.4MiB)[0m
+[36m[1mDownloading[0m[39m imageio-ffmpeg [2m(28.1MiB)[0m
+[36m[1mDownloading[0m[39m torchvision [2m(1.9MiB)[0m
+[36m[1mDownloading[0m[39m torch [2m(167.8MiB)[0m
+[36m[1mDownloaded[0m[39m torchvision
+[36m[1mDownloaded[0m[39m soundfile
+[36m[1mDownloaded[0m[39m aiohttp
+[36m[1mDownloaded[0m[39m timm
+[36m[1mDownloaded[0m[39m torch
+[36m[1mDownloaded[0m[39m numba
+[36m[1mDownloaded[0m[39m scikit-learn
+[36m[1mDownloaded[0m[39m transformers
+[36m[1mDownloaded[0m[39m imageio-ffmpeg
+[36m[1mDownloaded[0m[39m llvmlite
+[2mPrepared [1m37 packages[0m [2min 5.85s[0m[0m
+[2mInstalled [1m81 packages[0m [2min 70ms[0m[0m
+[32m+[39m [1maiohappyeyeballs[0m[2m==2.7.1[0m
+[32m+[39m [1maiohttp[0m[2m==3.14.3[0m
+[32m+[39m [1maiosignal[0m[2m==1.4.0[0m
+[32m+[39m [1manyio[0m[2m==4.14.2[0m
+[32m+[39m [1masync-timeout[0m[2m==5.0.1[0m
+[32m+[39m [1mattrs[0m[2m==26.1.0[0m
+[32m+[39m [1maudioread[0m[2m==3.1.0[0m
+[32m+[39m [1mbackports-asyncio-runner[0m[2m==1.2.0[0m
+[32m+[39m [1mcertifi[0m[2m==2026.7.22[0m
+[32m+[39m [1mcffi[0m[2m==2.1.1[0m
+[32m+[39m [1mcharset-normalizer[0m[2m==3.5.1[0m
+[32m+[39m [1mdatasets[0m[2m==5.0.0[0m
+[32m+[39m [1mdecorator[0m[2m==5.3.1[0m
+[32m+[39m [1mdill[0m[2m==0.4.1[0m
+[32m+[39m [1mexceptiongroup[0m[2m==1.3.1[0m
+[32m+[39m [1mfilelock[0m[2m==3.32.3[0m
+[32m+[39m [1mfrozenlist[0m[2m==1.8.0[0m
+[32m+[39m [1mfsspec[0m[2m==2026.4.0[0m
+[32m+[39m [1mftfy[0m[2m==6.3.1[0m
+[32m+[39m [1mh11[0m[2m==0.16.0[0m
+[32m+[39m [1mhf-xet[0m[2m==1.6.0[0m
+[32m+[39m [1mhttpcore[0m[2m==1.0.9[0m
+[32m+[39m [1mhttpx[0m[2m==0.28.1[0m
+[32m+[39m [1mhuggingface-hub[0m[2m==0.36.2[0m
+[32m+[39m [1midna[0m[2m==3.18[0m
+[32m+[39m [1mimageio[0m[2m==2.37.4[0m
+[32m+[39m [1mimageio-ffmpeg[0m[2m==0.6.0[0m
+[32m+[39m [1miniconfig[0m[2m==2.3.0[0m
+[32m+[39m [1mjinja2[0m[2m==3.1.6[0m
+[32m+[39m [1mjoblib[0m[2m==1.5.3[0m
+[32m+[39m [1mlazy-loader[0m[2m==0.5[0m
+[32m+[39m [1mlibrosa[0m[2m==0.11.0[0m
+[32m+[39m [1mllvmlite[0m[2m==0.49.0[0m
+[32m+[39m [1mmarkupsafe[0m[2m==3.0.3[0m
+[32m+[39m [1mmpmath[0m[2m==1.3.0[0m
+[32m+[39m [1mmsgpack[0m[2m==1.2.1[0m
+[32m+[39m [1mmultidict[0m[2m==6.7.1[0m
+[32m+[39m [1mmultiprocess[0m[2m==0.70.19[0m
+[32m+[39m [1mnetworkx[0m[2m==3.4.2[0m
+[32m+[39m [1mnumba[0m[2m==0.67.0[0m
+[32m+[39m [1mnumpy[0m[2m==2.2.6[0m
+[32m+[39m [1mopen-clip-torch[0m[2m==2.26.1[0m
+[32m+[39m [1mpackaging[0m[2m==26.3[0m
+[32m+[39m [1mpandas[0m[2m==2.3.3[0m
+[32m+[39m [1mpillow[0m[2m==11.1.0[0m
+[32m+[39m [1mplatformdirs[0m[2m==4.11.3[0m
+[32m+[39m [1mpluggy[0m[2m==1.6.0[0m
+[32m+[39m [1mpooch[0m[2m==1.9.0[0m
+[32m+[39m [1mpropcache[0m[2m==0.5.2[0m
+[32m+[39m [1mpyarrow[0m[2m==24.0.0[0m
+[32m+[39m [1mpycocotools[0m[2m==2.0.11[0m
+[32m+[39m [1mpycparser[0m[2m==3.0[0m
+[32m+[39m [1mpyjwt[0m[2m==2.7.0[0m
+[32m+[39m [1mpytest[0m[2m==8.3.5[0m
+[32m+[39m [1mpytest-asyncio[0m[2m==1.3.0[0m
+[32m+[39m [1mpython-dateutil[0m[2m==2.9.0.post0[0m
+[32m+[39m [1mpytz[0m[2m==2026.3.post1[0m
+[32m+[39m [1mpyyaml[0m[2m==6.0.3[0m
+[32m+[39m [1mregex[0m[2m==2026.7.19[0m
+[32m+[39m [1mrequests[0m[2m==2.34.2[0m
+[32m+[39m [1msafetensors[0m[2m==0.8.0[0m
+[32m+[39m [1mscikit-learn[0m[2m==1.7.2[0m
+[32m+[39m [1mscipy[0m[2m==1.15.3[0m
+[32m+[39m [1msix[0m[2m==1.17.0[0m
+[32m+[39m [1msoundfile[0m[2m==0.14.0[0m
+[32m+[39m [1msoxr[0m[2m==1.1.0[0m
+[32m+[39m [1msympy[0m[2m==1.14.0[0m
+[32m+[39m [1mthreadpoolctl[0m[2m==3.6.0[0m
+[32m+[39m [1mtimm[0m[2m==1.0.28[0m
+[32m+[39m [1mtokenizers[0m[2m==0.22.2[0m
+[32m+[39m [1mtomli[0m[2m==2.4.1[0m
+[32m+[39m [1mtorch[0m[2m==2.7.1+cpu[0m
+[32m+[39m [1mtorchvision[0m[2m==0.22.1+cpu[0m
+[32m+[39m [1mtqdm[0m[2m==4.70.0[0m
+[32m+[39m [1mtransformers[0m[2m==4.57.1[0m
+[32m+[39m [1mtyping-extensions[0m[2m==4.16.0[0m
+[32m+[39m [1mtzdata[0m[2m==2026.3[0m
+[32m+[39m [1murllib3[0m[2m==2.7.0[0m
+[32m+[39m [1mwcwidth[0m[2m==0.8.2[0m
+[32m+[39m [1mxxhash[0m[2m==4.0.0[0m
+[32m+[39m [1myarl[0m[2m==1.24.5[0m
+2026-08-15 19:17:59,052 - utils.py:272 - INFO: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv venv --managed-python --python=3.10 /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_evals_common --allow-existing
+Using CPython [36m3.10.20[39m[36m[39m
+Creating virtual environment at: [36m.workflow_venvs/.venv_evals_common[39m
+Activate with: [32msource .workflow_venvs/.venv_evals_common/bin/activate[39m
+2026-08-15 19:17:59,057 - utils.py:272 - INFO: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/python --index-strategy unsafe-best-match -r /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/requirements/evals-common.txt
+[2mUsing Python 3.10.20 environment at: .workflow_venvs/.venv_evals_common[0m
+[2mResolved [1m103 packages[0m [2min 3.15s[0m[0m
+[36m[1mBuilding[0m[39m jieba[2m==0.42.1[0m
+[36m[1mBuilding[0m[39m sqlitedict[2m==2.1.0[0m
+[36m[1mBuilding[0m[39m rouge-score[2m==0.1.2[0m
+[36m[1mBuilding[0m[39m word2number[2m==1.1[0m
+[36m[1mUpdating[0m[39m https://github.com/tstescoTT/lm-evaluation-harness.git ([2mevals-common[0m)
+[36m[1mDownloading[0m[39m torch [2m(182.9MiB)[0m
+[36m[1mDownloading[0m[39m nltk [2m(1.7MiB)[0m
+[36m[1mDownloading[0m[39m lxml [2m(5.0MiB)[0m
+[36m[1mDownloading[0m[39m pyarrow [2m(47.7MiB)[0m
+[36m[1mDownloading[0m[39m zstandard [2m(5.3MiB)[0m
+[36m[1mDownloading[0m[39m sentencepiece [2m(1.3MiB)[0m
+[36m[1mDownloading[0m[39m tiktoken [2m(1.1MiB)[0m
+[32m[1mBuilt[0m[39m sqlitedict[2m==2.1.0[0m
+[32m[1mBuilt[0m[39m rouge-score[2m==0.1.2[0m
+[32m[1mBuilt[0m[39m word2number[2m==1.1[0m
+[36m[1mBuilding[0m[39m langdetect[2m==1.0.9[0m
+[36m[1mDownloaded[0m[39m sentencepiece
+[36m[1mDownloaded[0m[39m tiktoken
+[32m[1mBuilt[0m[39m langdetect[2m==1.0.9[0m
+[36m[1mDownloaded[0m[39m nltk
+[32m[1mBuilt[0m[39m jieba[2m==0.42.1[0m
+[36m[1mDownloaded[0m[39m torch
+[36m[1mDownloaded[0m[39m lxml
+[36m[1mDownloaded[0m[39m zstandard
+[36m[1mDownloaded[0m[39m pyarrow
+[32m[1mUpdated[0m[39m https://github.com/tstescoTT/lm-evaluation-harness.git ([2m5416b8a97e8460cb74ae8cd96a457016fc0dc2e8[0m)
+[36m[1mBuilding[0m[39m lm-eval[2m @ git+https://github.com/tstescoTT/lm-evaluation-harness.git@5416b8a97e8460cb74ae8cd96a457016fc0dc2e8[0m
+[32m[1mBuilt[0m[39m lm-eval[2m @ git+https://github.com/tstescoTT/lm-evaluation-harness.git@5416b8a97e8460cb74ae8cd96a457016fc0dc2e8[0m
+[2mPrepared [1m43 packages[0m [2min 8.69s[0m[0m
+[2mInstalled [1m103 packages[0m [2min 74ms[0m[0m
+[32m+[39m [1mabsl-py[0m[2m==2.5.0[0m
+[32m+[39m [1maccelerate[0m[2m==1.14.0[0m
+[32m+[39m [1maiohappyeyeballs[0m[2m==2.7.1[0m
+[32m+[39m [1maiohttp[0m[2m==3.14.3[0m
+[32m+[39m [1maiosignal[0m[2m==1.4.0[0m
+[32m+[39m [1mannotated-doc[0m[2m==0.0.5[0m
+[32m+[39m [1mantlr4-python3-runtime[0m[2m==4.11.0[0m
+[32m+[39m [1manyio[0m[2m==4.14.2[0m
+[32m+[39m [1masync-timeout[0m[2m==5.0.1[0m
+[32m+[39m [1mattrs[0m[2m==26.1.0[0m
+[32m+[39m [1mcertifi[0m[2m==2026.7.22[0m
+[32m+[39m [1mchardet[0m[2m==6.0.0.post1[0m
+[32m+[39m [1mcharset-normalizer[0m[2m==3.5.1[0m
+[32m+[39m [1mclick[0m[2m==8.4.2[0m
+[32m+[39m [1mcolorama[0m[2m==0.4.6[0m
+[32m+[39m [1mdataproperty[0m[2m==1.1.1[0m
+[32m+[39m [1mdatasets[0m[2m==3.1.0[0m
+[32m+[39m [1mdefusedxml[0m[2m==0.7.1[0m
+[32m+[39m [1mdill[0m[2m==0.3.8[0m
+[32m+[39m [1mevaluate[0m[2m==0.4.6[0m
+[32m+[39m [1mexceptiongroup[0m[2m==1.3.1[0m
+[32m+[39m [1mfilelock[0m[2m==3.32.3[0m
+[32m+[39m [1mfrozenlist[0m[2m==1.8.0[0m
+[32m+[39m [1mfsspec[0m[2m==2024.9.0[0m
+[32m+[39m [1mfuzzywuzzy[0m[2m==0.18.0[0m
+[32m+[39m [1mh11[0m[2m==0.16.0[0m
+[32m+[39m [1mhf-xet[0m[2m==1.6.0[0m
+[32m+[39m [1mhttpcore[0m[2m==1.0.9[0m
+[32m+[39m [1mhttpx[0m[2m==0.28.1[0m
+[32m+[39m [1mhuggingface-hub[0m[2m==1.27.0[0m
+[32m+[39m [1midna[0m[2m==3.18[0m
+[32m+[39m [1mimmutabledict[0m[2m==4.3.1[0m
+[32m+[39m [1mjieba[0m[2m==0.42.1[0m
+[32m+[39m [1mjinja2[0m[2m==3.1.6[0m
+[32m+[39m [1mjoblib[0m[2m==1.5.3[0m
+[32m+[39m [1mjsonlines[0m[2m==4.0.0[0m
+[32m+[39m [1mlangdetect[0m[2m==1.0.9[0m
+[32m+[39m [1mlatex2sympy2-extended[0m[2m==1.11.0[0m
+[32m+[39m [1mlm-eval[0m[2m==0.4.10.dev0 (from git+https://github.com/tstescoTT/lm-evaluation-harness.git@5416b8a97e8460cb74ae8cd96a457016fc0dc2e8)[0m
+[32m+[39m [1mlxml[0m[2m==6.1.1[0m
+[32m+[39m [1mmarkdown-it-py[0m[2m==4.2.0[0m
+[32m+[39m [1mmarkupsafe[0m[2m==3.0.3[0m
+[32m+[39m [1mmath-verify[0m[2m==0.9.0[0m
+[32m+[39m [1mmbstrdecoder[0m[2m==1.1.5[0m
+[32m+[39m [1mmdurl[0m[2m==0.1.2[0m
+[32m+[39m [1mmore-itertools[0m[2m==11.1.0[0m
+[32m+[39m [1mmpmath[0m[2m==1.3.0[0m
+[32m+[39m [1mmultidict[0m[2m==6.7.1[0m
+[32m+[39m [1mmultiprocess[0m[2m==0.70.16[0m
+[32m+[39m [1mnetworkx[0m[2m==3.4.2[0m
+[32m+[39m [1mnltk[0m[2m==3.10.3[0m
+[32m+[39m [1mnumpy[0m[2m==2.2.6[0m
+[32m+[39m [1mpackaging[0m[2m==26.3[0m
+[32m+[39m [1mpandas[0m[2m==2.3.3[0m
+[32m+[39m [1mpathvalidate[0m[2m==3.3.1[0m
+[32m+[39m [1mpeft[0m[2m==0.20.0[0m
+[32m+[39m [1mpillow[0m[2m==11.1.0[0m
+[32m+[39m [1mportalocker[0m[2m==4.1.0[0m
+[32m+[39m [1mpropcache[0m[2m==0.5.2[0m
+[32m+[39m [1mprotobuf[0m[2m==7.35.1[0m
+[32m+[39m [1mpsutil[0m[2m==7.2.2[0m
+[32m+[39m [1mpyarrow[0m[2m==25.0.1[0m
+[32m+[39m [1mpygments[0m[2m==2.20.0[0m
+[32m+[39m [1mpyjwt[0m[2m==2.7.0[0m
+[32m+[39m [1mpytablewriter[0m[2m==1.2.1[0m
+[32m+[39m [1mpython-dateutil[0m[2m==2.9.0.post0[0m
+[32m+[39m [1mpytz[0m[2m==2026.3.post1[0m
+[32m+[39m [1mpyyaml[0m[2m==6.0.3[0m
+[32m+[39m [1mregex[0m[2m==2026.7.19[0m
+[32m+[39m [1mrequests[0m[2m==2.34.2[0m
+[32m+[39m [1mrich[0m[2m==15.0.0[0m
+[32m+[39m [1mrouge[0m[2m==1.0.1[0m
+[32m+[39m [1mrouge-score[0m[2m==0.1.2[0m
+[32m+[39m [1msacrebleu[0m[2m==2.6.0[0m
+[32m+[39m [1msafetensors[0m[2m==0.8.0[0m
+[32m+[39m [1mscikit-learn[0m[2m==1.7.2[0m
+[32m+[39m [1mscipy[0m[2m==1.15.3[0m
+[32m+[39m [1msentencepiece[0m[2m==0.2.2[0m
+[32m+[39m [1msetuptools[0m[2m==84.0.0[0m
+[32m+[39m [1mshellingham[0m[2m==1.5.4[0m
+[32m+[39m [1msix[0m[2m==1.17.0[0m
+[32m+[39m [1msqlitedict[0m[2m==2.1.0[0m
+[32m+[39m [1msympy[0m[2m==1.14.0[0m
+[32m+[39m [1mtabledata[0m[2m==1.3.5[0m
+[32m+[39m [1mtabulate[0m[2m==0.10.0[0m
+[32m+[39m [1mtcolorpy[0m[2m==0.1.7[0m
+[32m+[39m [1mtenacity[0m[2m==9.1.4[0m
+[32m+[39m [1mthreadpoolctl[0m[2m==3.6.0[0m
+[32m+[39m [1mtiktoken[0m[2m==0.13.0[0m
+[32m+[39m [1mtokenizers[0m[2m==0.22.2[0m
+[32m+[39m [1mtorch[0m[2m==2.13.0+cpu[0m
+[32m+[39m [1mtqdm[0m[2m==4.70.0[0m
+[32m+[39m [1mtransformers[0m[2m==5.15.0[0m
+[32m+[39m [1mtypepy[0m[2m==1.3.5[0m
+[32m+[39m [1mtyper[0m[2m==0.27.1[0m
+[32m+[39m [1mtyping-extensions[0m[2m==4.16.0[0m
+[32m+[39m [1mtzdata[0m[2m==2026.3[0m
+[32m+[39m [1murllib3[0m[2m==2.7.0[0m
+[32m+[39m [1mwonderwords[0m[2m==3.0.1[0m
+[32m+[39m [1mword2number[0m[2m==1.1[0m
+[32m+[39m [1mxxhash[0m[2m==4.0.0[0m
+[32m+[39m [1myarl[0m[2m==1.24.5[0m
+[32m+[39m [1mzstandard[0m[2m==0.25.0[0m
+2026-08-15 19:18:11,036 - utils.py:272 - INFO: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/run_workflows.py --model Muse-Glimmer-30B --workflow evals --device p300x2 --service-port 8000 --runtime-model-spec-json /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-15_19-17-50_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_Ti03T1k-.json --output-dir /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals
+2026-08-15 19:18:11,371 [INFO] workflow_module.runner: → command=workflow
+2026-08-15 19:18:11,371 [INFO] workflow.evals: === Workflow start: evals | model=Muse-Glimmer-30B device=P300X2 port=8000 output=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/Muse-Glimmer-30B_p300x2_evals ===
+2026-08-15 19:18:11,408 [INFO] workflow.evals: → task=llm_eval
+2026-08-15 19:18:11,408 [INFO] llm_module.eval_configs: Smoke-test mode enabled; running only first eval task: ifeval
+2026-08-15 19:18:11,408 [INFO] llm_module.server_control: Waiting for inference server at http://127.0.0.1:8000/health (timeout 5400s)
+2026-08-15 19:18:11,410 [INFO] llm_module.server_control: ✅ Inference server is healthy at http://127.0.0.1:8000/health
+2026-08-15 19:18:11,410 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=ifeval
+2026-08-15 19:18:11,410 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks ifeval --model local-chat-completions --model_args model=meta-models/Muse-Glimmer-30B,base_url=http://127.0.0.1:8000/v1/chat/completions,tokenizer_backend=huggingface,max_length=131072,timeout=3600,num_concurrent=32 --gen_kwargs stream=false,do_sample=true,temperature=1.0,top_p=0.95,top_k=64,max_gen_toks=8192,seed=42 --output_path /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/Muse-Glimmer-30B_p300x2_evals/eval_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 3
+2026-08-15 19:18:12,034 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:12 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-15 19:18:12,034 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:12 INFO     [config.evaluate_config:301] Using default fewshot_as_multiturn=True.
+2026-08-15 19:18:14,431 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:14 INFO     [_cli.run:376] Selected Tasks: ['ifeval']
+2026-08-15 19:18:15,505 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:15 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-15 19:18:15,505 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:15 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'do_sample': True, 'temperature': 1.0, 'top_p': 0.95, 'top_k': 64, 'max_gen_toks': 8192, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-15 19:18:15,505 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:15 INFO     [evaluator:235] Initializing local-chat-completions model, with arguments: {'model': 'meta-models/Muse-Glimmer-30B', 'base_url': 'http://127.0.0.1:8000/v1/chat/completions', 'tokenizer_backend': 'huggingface', 'max_length': 131072, 'timeout': 3600, 'num_concurrent': 32, 'trust_remote_code': True}
+2026-08-15 19:18:15,518 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:15 INFO     [models.api_models:284] Using max length 131072 - 1
+2026-08-15 19:18:15,518 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:15 INFO     [models.api_models:305] Using tokenizer huggingface
+2026-08-15 19:18:22,183 [INFO] test_module.llm_tests.llm_eval_tests: [nltk_data] Downloading package punkt_tab to /home/ttuser/nltk_data...
+2026-08-15 19:18:22,332 [INFO] test_module.llm_tests.llm_eval_tests: [nltk_data]   Unzipping tokenizers/punkt_tab.zip.
+2026-08-15 19:18:25,267 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-15 19:18:25,270 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split:   0%|          | 0/541 [00:00<?, ? examples/s]
+2026-08-15 19:18:25,270 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 100%|██████████| 541/541 [00:00<00:00, 200063.35 examples/s]
+2026-08-15 19:18:25,283 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [tasks:700] Selected tasks:
+2026-08-15 19:18:25,283 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [tasks:691] Task: ifeval (ifeval/ifeval.yaml)
+2026-08-15 19:18:25,283 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [evaluator:313] ifeval: Using gen_kwargs: {'until': [], 'do_sample': True, 'temperature': 1.0, 'max_gen_toks': 8192, 'stream': False, 'top_p': 0.95, 'top_k': 64, 'seed': 42}
+2026-08-15 19:18:25,283 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [evaluator:328] num_fewshot has been set to 0 for ifeval in its config. Manual configuration will be ignored.
+2026-08-15 19:18:25,283 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 WARNING  [evaluator:489] Chat template formatting change affects loglikelihood and multiple-choice tasks. See docs/chat-template-readme.md for details.
+2026-08-15 19:18:25,284 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [api.task:310] Building contexts for ifeval on rank 0...
+2026-08-15 19:18:25,284 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-15 19:18:25,284 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/3 [00:00<?, ?it/s]
+2026-08-15 19:18:25,284 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 3/3 [00:00<00:00, 31145.82it/s]
+2026-08-15 19:18:25,284 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [evaluator:583] Running generate_until requests
+2026-08-15 19:18:25,284 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:18:25 INFO     [models.api_models:955] Tokenized requests are disabled. Context + generation length is not checked.
+2026-08-15 19:18:25,285 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-15 19:18:47,802 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/3 [00:00<?, ?it/s]
+2026-08-15 19:19:17,729 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 1/3 [00:22<00:45, 22.52s/it]
+2026-08-15 19:20:25,346 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 2/3 [00:52<00:26, 26.88s/it]
+2026-08-15 19:20:25,346 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 3/3 [02:00<00:00, 45.48s/it]
+2026-08-15 19:20:25,346 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 3/3 [02:00<00:00, 40.02s/it]
+2026-08-15 19:20:25,397 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:20:25 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-15 19:20:25,397 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-15:19:20:25 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/Muse-Glimmer-30B_p300x2_evals/eval_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2/meta-models__Muse-Glimmer-30B/*.jsonl
+2026-08-15 19:20:26,263 [INFO] workflow_module.blocks_sink: BlockAccumulator: +1 block(s), total=1
+2026-08-15 19:20:26,263 [INFO] workflow_module.blocks_sink:   - kind=evals id=Muse-Glimmer-30B_P300X2 targets={'task_name': 'ifeval', 'tolerance': 0.05, 'published_score': 77.0, 'published_score_ref': 'https://huggingface.co/meta-models/Muse-Glimmer-30B (model card, IFBench 77.0)'}
+2026-08-15 19:20:26,263 [INFO] workflow.evals: ✅ llm_eval blocks=1 kind=evals (134.9s)
+2026-08-15 19:20:26,263 [INFO] workflow.evals: Acceptance: PASS (0 blocker(s))
+2026-08-15 19:20:26,263 [INFO] report_module.report_file_saver: Saved markdown to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/report_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.md
+2026-08-15 19:20:26,264 [INFO] report_module.report_file_saver: Saved JSON to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.json
+2026-08-15 19:20:26,264 [INFO] report_module.report_file_saver: Saved JSON to: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.json
+2026-08-15 19:20:26,264 [INFO] report_module.generator: Generated report: md=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/report_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.md, json=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.json
+2026-08-15 19:20:26,264 [INFO] workflow.evals: Wrote markdown: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/report_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.md
+2026-08-15 19:20:26,264 [INFO] workflow.evals: Wrote json:     /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/reports_output/evals/data/report_data_meta-models__Muse-Glimmer-30B_2026-08-15T232026+0000.json
+2026-08-15 19:20:26,264 [INFO] workflow.evals: === Workflow done: evals (rc=0) ===
+2026-08-15 19:20:26,264 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-15 19:20:26,287 - runner.py:42 - INFO: ✅ command=evals rc=0
+2026-08-15 19:20:26,288 - run.py:1163 - INFO: Completed run.py.
+2026-08-15 19:20:26,288 - run.py:1169 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-08-15 19:20:26,288 - run.py:1173 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-08-15 19:20:26,288 - run.py:1177 - INFO: This log file is saved on local machine at: /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/run_logs/run_2026-08-15_19-17-50_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_evals_U_WN4WCS.log

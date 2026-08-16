@@ -1078,11 +1078,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.manual_seed(
-            seeds=self.seeds_tt_tensor,
-            user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self._sampling_sub_core_grids,
-        )
         # Perform the actual sampling with top-k, top-p, and temperature.
         # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
@@ -1093,6 +1088,23 @@ class TTSampling(LightweightModule):
         # and its known limitation (>max_top_k maxima tied within one device shard).
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
+        )
+        # ``manual_seed`` must be the LAST op before ``ttnn.sampling``: it installs the per-core
+        # PRNG state that ``sampling``'s ``generate_rand_tile`` then advances, and that state is a
+        # register on the core, not a tensor.  Any compute kernel dispatched to the same core in
+        # between destroys it, and the affected users silently fall back to whatever RNG state that
+        # kernel left -- so two users given the *same* seed draw different random numbers, purely as
+        # a function of which core they sit on.  Measured, not assumed: with the seed call placed
+        # before ``_adjust_values_for_tiebreak`` (which typecasts int32 -> bfloat16), the users
+        # mapped to the cores that typecast ran on disagreed with the other 30 on 19 of 20 seeds;
+        # moving the call here made all 32 agree on every seed.  ``ttnn.typecast(-> bfloat16)`` and
+        # ``ttnn.exp`` both reproduce it; ``add``, ``abs`` and ``typecast(-> int32)`` do not, so it
+        # is a property of the intervening kernel, not of dispatch in general, and ordering is the
+        # only defence this level has.
+        ttnn.manual_seed(
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
         tt_out_tok = ttnn.sampling(
             sampling_values,

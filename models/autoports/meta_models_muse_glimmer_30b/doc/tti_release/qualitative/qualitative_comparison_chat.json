@@ -1,0 +1,74 @@
+[
+  {
+    "id": "p0",
+    "tt_tokens": 127,
+    "tt_adjacent_dup": 0.0,
+    "hf_adjacent_dup": 0.0,
+    "tt_trigram_loop": 0.0945,
+    "hf_trigram_loop": 0.1172,
+    "tt_non_ascii": 0.0,
+    "hf_non_ascii": 0.0,
+    "first_divergence_from_hf": 2,
+    "exact_match": false
+  },
+  {
+    "id": "p1",
+    "tt_tokens": 127,
+    "tt_adjacent_dup": 0.0,
+    "hf_adjacent_dup": 0.0,
+    "tt_trigram_loop": 0.0472,
+    "hf_trigram_loop": 0.0469,
+    "tt_non_ascii": 0.0018,
+    "hf_non_ascii": 0.0,
+    "first_divergence_from_hf": 1,
+    "exact_match": false
+  },
+  {
+    "id": "p2",
+    "tt_tokens": 127,
+    "tt_adjacent_dup": 0.0,
+    "hf_adjacent_dup": 0.0,
+    "tt_trigram_loop": 0.0709,
+    "hf_trigram_loop": 0.0469,
+    "tt_non_ascii": 0.0,
+    "hf_non_ascii": 0.0,
+    "first_divergence_from_hf": 2,
+    "exact_match": false
+  },
+  {
+    "id": "p3",
+    "tt_tokens": 127,
+    "tt_adjacent_dup": 0.0,
+    "hf_adjacent_dup": 0.0,
+    "tt_trigram_loop": 0.0709,
+    "hf_trigram_loop": 0.0703,
+    "tt_non_ascii": 0.0017,
+    "hf_non_ascii": 0.0017,
+    "first_divergence_from_hf": 2,
+    "exact_match": false
+  },
+  {
+    "id": "p4",
+    "tt_tokens": 127,
+    "tt_adjacent_dup": 0.0,
+    "hf_adjacent_dup": 0.0,
+    "tt_trigram_loop": 0.1417,
+    "hf_trigram_loop": 0.0938,
+    "tt_non_ascii": 0.0018,
+    "hf_non_ascii": 0.0,
+    "first_divergence_from_hf": 2,
+    "exact_match": false
+  },
+  {
+    "id": "p5",
+    "tt_tokens": 127,
+    "tt_adjacent_dup": 0.0,
+    "hf_adjacent_dup": 0.0,
+    "tt_trigram_loop": 0.0709,
+    "hf_trigram_loop": 0.0469,
+    "tt_non_ascii": 0.0,
+    "hf_non_ascii": 0.0,
+    "first_divergence_from_hf": 2,
+    "exact_match": false
+  }
+]

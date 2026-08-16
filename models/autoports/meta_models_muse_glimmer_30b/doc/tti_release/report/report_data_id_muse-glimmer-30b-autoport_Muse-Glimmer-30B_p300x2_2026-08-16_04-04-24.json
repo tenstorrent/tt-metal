@@ -1,0 +1,1149 @@
+{
+    "metadata": {
+        "model_name": "meta-models/Muse-Glimmer-30B",
+        "device": "P300X2",
+        "generated_at": "2026-08-16T07:35:08+00:00",
+        "report_id": "id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_2026-08-16_04-04-24",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "python run.py --model Muse-Glimmer-30B --runtime-model-spec-json /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/specs/muse_glimmer_30b_autoport_release.json --tt-device p300x2 --workflow release --service-port 8000 --no-auth --skip-system-sw-validation",
+        "runtime_model_spec_json": "/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-16_02-39-22_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_eqbjPKm1.json",
+        "model_id": "id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2",
+        "model_repo": "meta-models/Muse-Glimmer-30B",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "7db0eca",
+        "vllm_commit": null,
+        "model_impl": "muse-glimmer-30b-autoport"
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": 77.0,
+                "published_score_ref": "https://huggingface.co/meta-models/Muse-Glimmer-30B (model card, IFBench 77.0)",
+                "gpu_reference_score": 77.0,
+                "gpu_reference_score_ref": "vendor-published IFBench score used as a conservative floor for the IFEval row; no Tenstorrent GPU control run exists for this checkpoint",
+                "score": 94.45471349353049,
+                "ratio_to_published": 1.2266845908250714,
+                "ratio_to_reference": 1.2266845908250714,
+                "accuracy_check": 2
+            },
+            "title": "LLM Eval \u2014 ifeval",
+            "task_type": "llm",
+            "id": "Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": 77.0,
+                "published_score_ref": "https://huggingface.co/meta-models/Muse-Glimmer-30B (model card, IFBench 77.0)"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "aime25",
+                "tolerance": 0.1,
+                "published_score": 94.7,
+                "published_score_ref": "https://huggingface.co/meta-models/Muse-Glimmer-30B (model card, AIME 2026 94.7, High Reasoning)",
+                "gpu_reference_score": 94.7,
+                "gpu_reference_score_ref": "vendor-published AIME score used as the reference; no Tenstorrent GPU control run exists for this checkpoint",
+                "score": 90.0,
+                "ratio_to_published": 0.9503695881731784,
+                "ratio_to_reference": 0.9503695881731784,
+                "accuracy_check": 2
+            },
+            "title": "LLM Eval \u2014 aime25",
+            "task_type": "llm",
+            "id": "Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "task_name": "aime25",
+                "tolerance": 0.1,
+                "published_score": 94.7,
+                "published_score_ref": "https://huggingface.co/meta-models/Muse-Glimmer-30B (model card, AIME 2026 94.7, High Reasoning)"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 72.1171,
+                "p50_ttft": 71.7358,
+                "p99_ttft": 74.9227,
+                "mean_tpot_ms": 23.0254,
+                "mean_e2el_ms": 2996.3404,
+                "tps_decode_throughput": 42.7154,
+                "request_throughput": 0.3337,
+                "error_request_count": null,
+                "target_check": 3,
+                "target_checks": {
+                    "functional": {
+                        "ttft": 88.3,
+                        "ttft_ratio": 0.8167281993204982,
+                        "ttft_check": 2,
+                        "tput_user": 11.33,
+                        "tput_user_ratio": 3.8332125960807195,
+                        "tput_user_check": 2,
+                        "tput": 11.33,
+                        "tput_ratio": 3.770114739629303,
+                        "tput_check": 2
+                    },
+                    "complete": {
+                        "ttft": 17.66,
+                        "ttft_ratio": 4.083640996602491,
+                        "ttft_check": 3,
+                        "tput_user": 56.65,
+                        "tput_user_ratio": 0.7666425192161439,
+                        "tput_user_check": 3,
+                        "tput": 56.65,
+                        "tput_ratio": 0.7540229479258607,
+                        "tput_check": 3
+                    },
+                    "target": {
+                        "ttft": 8.83,
+                        "ttft_ratio": 8.167281993204982,
+                        "ttft_check": 3,
+                        "tput_user": 113.3,
+                        "tput_user_ratio": 0.38332125960807195,
+                        "tput_user_check": 3,
+                        "tput": 113.3,
+                        "tput_ratio": 0.37701147396293033,
+                        "tput_check": 3
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:35:43"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 256,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 2052.3022,
+                "p50_ttft": 2045.7604,
+                "p99_ttft": 2114.1763,
+                "mean_tpot_ms": 23.0965,
+                "mean_e2el_ms": 4985.5551,
+                "tps_decode_throughput": 821.4029,
+                "request_throughput": 6.4172,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:36:36"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 127,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 71.3603,
+                "p50_ttft": 71.2007,
+                "p99_ttft": 73.4997,
+                "mean_tpot_ms": 23.4796,
+                "mean_e2el_ms": 24090.9432,
+                "tps_decode_throughput": 42.5051,
+                "request_throughput": 0.0415,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:38:46"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 127,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 2050.0746,
+                "p50_ttft": 2046.091,
+                "p99_ttft": 2067.1003,
+                "mean_tpot_ms": 24.0356,
+                "mean_e2el_ms": 26638.4791,
+                "tps_decode_throughput": 1230.0342,
+                "request_throughput": 1.2012,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:41:05"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 1023,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 154.5043,
+                "p50_ttft": 153.9444,
+                "p99_ttft": 156.8497,
+                "mean_tpot_ms": 23.8851,
+                "mean_e2el_ms": 3187.9158,
+                "tps_decode_throughput": 40.1483,
+                "request_throughput": 0.3137,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:41:31"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 1023,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4687.319,
+                "p50_ttft": 4686.2401,
+                "p99_ttft": 4719.3729,
+                "mean_tpot_ms": 24.6839,
+                "mean_e2el_ms": 7822.1788,
+                "tps_decode_throughput": 523.5297,
+                "request_throughput": 4.0901,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:42:16"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 2047,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 270.6703,
+                "p50_ttft": 271.5646,
+                "p99_ttft": 273.6471,
+                "mean_tpot_ms": 24.1923,
+                "mean_e2el_ms": 3343.0941,
+                "tps_decode_throughput": 38.2849,
+                "request_throughput": 0.2991,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:42:41"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 2047,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 8181.407,
+                "p50_ttft": 8177.6028,
+                "p99_ttft": 8200.0552,
+                "mean_tpot_ms": 25.6757,
+                "mean_e2el_ms": 11442.2214,
+                "tps_decode_throughput": 357.9148,
+                "request_throughput": 2.7962,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:43:40"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4095,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 490.2096,
+                "p50_ttft": 489.088,
+                "p99_ttft": 495.1843,
+                "mean_tpot_ms": 24.4596,
+                "mean_e2el_ms": 3596.5822,
+                "tps_decode_throughput": 35.5867,
+                "request_throughput": 0.278,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:44:08"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 4095,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 15167.6217,
+                "p50_ttft": 15138.7663,
+                "p99_ttft": 15214.2531,
+                "mean_tpot_ms": 26.1615,
+                "mean_e2el_ms": 18490.1375,
+                "tps_decode_throughput": 221.4966,
+                "request_throughput": 1.7304,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:45:37"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8191,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 986.9955,
+                "p50_ttft": 986.9955,
+                "p99_ttft": 990.3798,
+                "mean_tpot_ms": 24.9063,
+                "mean_e2el_ms": 4150.101,
+                "tps_decode_throughput": 30.8404,
+                "request_throughput": 0.2409,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:45:58"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 64,
+                "input_sequence_length": 8191,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 30355.8247,
+                "p50_ttft": 30813.6083,
+                "p99_ttft": 30927.5992,
+                "mean_tpot_ms": 30.3652,
+                "mean_e2el_ms": 34212.2048,
+                "tps_decode_throughput": 119.7095,
+                "request_throughput": 0.9352,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:47:21"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 16383,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 2187.6467,
+                "p50_ttft": 2187.6467,
+                "p99_ttft": 2191.193,
+                "mean_tpot_ms": 25.8648,
+                "mean_e2el_ms": 5472.4717,
+                "tps_decode_throughput": 23.3885,
+                "request_throughput": 0.1827,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:47:48"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 64,
+                "input_sequence_length": 16383,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 55698.8801,
+                "p50_ttft": 54101.2323,
+                "p99_ttft": 69299.7838,
+                "mean_tpot_ms": 135.3858,
+                "mean_e2el_ms": 72892.8765,
+                "tps_decode_throughput": 56.1875,
+                "request_throughput": 0.439,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:50:33"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 32767,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4769.7217,
+                "p50_ttft": 4769.7217,
+                "p99_ttft": 4769.7217,
+                "mean_tpot_ms": 27.6308,
+                "mean_e2el_ms": 8278.8394,
+                "tps_decode_throughput": 15.4603,
+                "request_throughput": 0.1208,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:50:58"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 31,
+                "num_requests": 31,
+                "input_sequence_length": 32767,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 98419.1285,
+                "p50_ttft": 98312.6631,
+                "p99_ttft": 147453.4154,
+                "mean_tpot_ms": 420.3528,
+                "mean_e2el_ms": 151803.9373,
+                "tps_decode_throughput": 26.1371,
+                "request_throughput": 0.2042,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:53:51"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 65535,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 10835.9694,
+                "p50_ttft": 10835.9694,
+                "p99_ttft": 10835.9694,
+                "mean_tpot_ms": 31.5087,
+                "mean_e2el_ms": 14837.5805,
+                "tps_decode_throughput": 8.6265,
+                "request_throughput": 0.0674,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:54:30"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 16,
+                "num_requests": 16,
+                "input_sequence_length": 65535,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 118210.2795,
+                "p50_ttft": 121337.6043,
+                "p99_ttft": 179302.6767,
+                "mean_tpot_ms": 521.5905,
+                "mean_e2el_ms": 184452.2781,
+                "tps_decode_throughput": 10.3812,
+                "request_throughput": 0.0811,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "meta-models__Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "meta-models/Muse-Glimmer-30B",
+                "device": "P300X2",
+                "timestamp": "2026-08-16 03:58:16"
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "success": true,
+                "child_result": "OK",
+                "status": "pass",
+                "attempts": 1,
+                "logs": [],
+                "elapsed_seconds": 0.0040146890096366405,
+                "test_name": "LoggerForkSafetyTest",
+                "description": "Test for logging fork safety to prevent deadlocks"
+            },
+            "title": "Logger Fork Safety",
+            "task_type": "unit",
+            "id": "Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "num_of_devices": 4
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "endpoint_url": "http://127.0.0.1:8000/v1/chat/completions",
+                "model_name": "meta-models/Muse-Glimmer-30B",
+                "task_name": "vllm_chat_completions",
+                "parameter_conformance_summary": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "status": "\u2705 PASS",
+                        "summary": "3/3 passed"
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_n",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "status": "\u274c FAIL",
+                        "summary": "8/9 passed"
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    }
+                ],
+                "detailed_test_results": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "parametrization": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[temperature-0.0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_k-1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_p-0.01]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "parametrization": "test_logprobs",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[10]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[5]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[3]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "parametrization": "test_non_uniform_seeding",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u274c FAILED",
+                        "message": "Traceback:\nAssertionError: Test failed: Penalty unexpectedly reduced diversity.\nassert 0.12376237623762376 >= (0.15079365079365079 * 0.9). Base: The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of b..."
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "parametrization": "test_seed_reproducibility",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    }
+                ],
+                "success": false,
+                "status": "fail",
+                "attempts": 1,
+                "logs": [
+                    "/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/lib/python3.10/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.",
+                    "The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"",
+                    "",
+                    "  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))",
+                    "\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[31mF\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[31m                                                   [100%]\u001b[0m",
+                    "=================================== FAILURES ===================================",
+                    "\u001b[31m\u001b[1m__________ test_penalties[presence_penalty-1.2-repeat_trap-messages0] __________\u001b[0m",
+                    "",
+                    "report_test = None",
+                    "api_client = <function api_client.<locals>._make_request at 0x79f49b2052d0>",
+                    "prompt_name = 'repeat_trap'",
+                    "messages = [{'content': 'Write a very repetitive story.', 'role': 'user'}]",
+                    "penalty_param = 'presence_penalty', penalty_val = 1.2",
+                    "request = <FixtureRequest for <Function test_penalties[presence_penalty-1.2-repeat_trap-messages0]>>",
+                    "",
+                    "    @pytest.mark.parametrize(\"prompt_name, messages\", PENALTY_PROMPTS.items())",
+                    "    @pytest.mark.parametrize(",
+                    "        \"penalty_param, penalty_val\",",
+                    "        [",
+                    "            (\"presence_penalty\", 1.2),",
+                    "            (\"frequency_penalty\", 1.2),",
+                    "            (\"repetition_penalty\", 1.5),  # vLLM implements this, OpenAI uses the other two",
+                    "        ],",
+                    "    )",
+                    "    def test_penalties(",
+                    "        report_test, api_client, prompt_name, messages, penalty_param, penalty_val, request",
+                    "    ):",
+                    "        \"\"\"Tests repetition, presence, and frequency penalties.\"\"\"",
+                    "    ",
+                    "        # Baseline run (no penalty)",
+                    "        payload_base = {",
+                    "            \"messages\": messages,",
+                    "            \"temperature\": 0.1,",
+                    "            \"max_tokens\": 1024,",
+                    "            \"seed\": 1234,",
+                    "        }",
+                    "        response_base = api_client(payload_base, timeout=None)",
+                    "    ",
+                    "        # Test run (with penalty)",
+                    "        payload_test = payload_base.copy()",
+                    "        payload_test[penalty_param] = penalty_val",
+                    "        response_test = api_client(payload_test, timeout=None)",
+                    "    ",
+                    "        # Compute baseline and test statistics",
+                    "        text_base = response_base[\"choices\"][0][\"message\"][\"content\"]",
+                    "        text_test = response_test[\"choices\"][0][\"message\"][\"content\"]",
+                    "    ",
+                    "        base_stats = repetition_stats(text_base)",
+                    "        test_stats = repetition_stats(text_test)",
+                    "    ",
+                    "        try:",
+                    "            # 1. Diversity should not decrease (penalties push diversity up)",
+                    ">           assert test_stats[\"unique_ratio\"] >= base_stats[\"unique_ratio\"] * 0.90, (",
+                    "                \"Penalty unexpectedly reduced diversity.\"",
+                    "            )",
+                    "\u001b[1m\u001b[31mE           AssertionError: Penalty unexpectedly reduced diversity.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           assert 0.12376237623762376 >= (0.15079365079365079 * 0.9)\u001b[0m",
+                    "",
+                    "\u001b[1m\u001b[31mllm_module/test_vllm_chat_completions.py\u001b[0m:307: AssertionError",
+                    "",
+                    "\u001b[33mDuring handling of the above exception, another exception occurred:\u001b[0m",
+                    "",
+                    "report_test = None",
+                    "api_client = <function api_client.<locals>._make_request at 0x79f49b2052d0>",
+                    "prompt_name = 'repeat_trap'",
+                    "messages = [{'content': 'Write a very repetitive story.', 'role': 'user'}]",
+                    "penalty_param = 'presence_penalty', penalty_val = 1.2",
+                    "request = <FixtureRequest for <Function test_penalties[presence_penalty-1.2-repeat_trap-messages0]>>",
+                    "",
+                    "    @pytest.mark.parametrize(\"prompt_name, messages\", PENALTY_PROMPTS.items())",
+                    "    @pytest.mark.parametrize(",
+                    "        \"penalty_param, penalty_val\",",
+                    "        [",
+                    "            (\"presence_penalty\", 1.2),",
+                    "            (\"frequency_penalty\", 1.2),",
+                    "            (\"repetition_penalty\", 1.5),  # vLLM implements this, OpenAI uses the other two",
+                    "        ],",
+                    "    )",
+                    "    def test_penalties(",
+                    "        report_test, api_client, prompt_name, messages, penalty_param, penalty_val, request",
+                    "    ):",
+                    "        \"\"\"Tests repetition, presence, and frequency penalties.\"\"\"",
+                    "    ",
+                    "        # Baseline run (no penalty)",
+                    "        payload_base = {",
+                    "            \"messages\": messages,",
+                    "            \"temperature\": 0.1,",
+                    "            \"max_tokens\": 1024,",
+                    "            \"seed\": 1234,",
+                    "        }",
+                    "        response_base = api_client(payload_base, timeout=None)",
+                    "    ",
+                    "        # Test run (with penalty)",
+                    "        payload_test = payload_base.copy()",
+                    "        payload_test[penalty_param] = penalty_val",
+                    "        response_test = api_client(payload_test, timeout=None)",
+                    "    ",
+                    "        # Compute baseline and test statistics",
+                    "        text_base = response_base[\"choices\"][0][\"message\"][\"content\"]",
+                    "        text_test = response_test[\"choices\"][0][\"message\"][\"content\"]",
+                    "    ",
+                    "        base_stats = repetition_stats(text_base)",
+                    "        test_stats = repetition_stats(text_test)",
+                    "    ",
+                    "        try:",
+                    "            # 1. Diversity should not decrease (penalties push diversity up)",
+                    "            assert test_stats[\"unique_ratio\"] >= base_stats[\"unique_ratio\"] * 0.90, (",
+                    "                \"Penalty unexpectedly reduced diversity.\"",
+                    "            )",
+                    "    ",
+                    "            # 2. Heavy repetition should decrease",
+                    "            #    For repetition-heavy prompts, penalties reduce top-token dominance",
+                    "            if prompt_name == \"repeat_trap\" and penalty_param != \"presence_penalty\":",
+                    "                most_common_penalty = test_stats[\"most_common\"][0][1]",
+                    "                most_common_baseline = base_stats[\"most_common\"][0][1]",
+                    "                assert most_common_penalty <= most_common_baseline, (",
+                    "                    \"Penalty didn't reduce repetition on repetition-trap prompt.\"",
+                    "                )",
+                    "    ",
+                    "            # 3. Length differences accepted but should not be identical",
+                    "            assert test_stats[\"len\"] != base_stats[\"len\"], (",
+                    "                \"Penalty had no measurable effect on output length.\"",
+                    "            )",
+                    "    ",
+                    "            # For vLLM-specific repetition_penalty, check more aggressive behavior",
+                    "            if penalty_param == \"repetition_penalty\":",
+                    "                assert test_stats[\"unique_ratio\"] > base_stats[\"unique_ratio\"], (",
+                    "                    \"vLLM repetition_penalty did not increase diversity enough.\"",
+                    "                )",
+                    "        except AssertionError as e:",
+                    "            msg = f\"Test failed: {str(e)}. Base: {text_base}, Test: {text_test}\"",
+                    ">           raise AssertionError(msg)",
+                    "\u001b[1m\u001b[31mE           AssertionError: Test failed: Penalty unexpectedly reduced diversity.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           assert 0.12376237623762376 >= (0.15079365079365079 * 0.9). Base: The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He got out of bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He got out of bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He got out of bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The store door was open.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The store door was open.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The store door was open.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He said hello to the clerk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He said hello to the clerk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He said hello to the clerk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He bought a bottle of milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He bought a bottle of milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He bought a bottle of milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He paid for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He paid for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He paid for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put the milk in the fridge.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put the milk in the fridge.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put the milk in the fridge.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He sat at the table.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He sat at the table.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He sat at the table.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He drank the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He drank the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He drank the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He got out of bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He got out of bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He got out of bed.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           He walked to the store., Test: The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man made coffee.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man wanted milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man reached for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man had no money.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man made coffee.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man wanted milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man reached for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man had no money.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man made coffee.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man wanted milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man reached for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man had no money.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man made coffee.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man wanted milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man reached for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man had no money.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man woke up.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man made coffee.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man put on his shoes.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went to the store.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man wanted milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man reached for the milk.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man had no money.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           The man went home.\u001b[0m",
+                    "\u001b[1m\u001b[31mE           \u001b[0m",
+                    "\u001b[1m\u001b[31mE           And then the man woke up again.\u001b[0m",
+                    "",
+                    "\u001b[1m\u001b[31mllm_module/test_vllm_chat_completions.py\u001b[0m:332: AssertionError",
+                    "---------------------------- Captured stderr setup -----------------------------",
+                    "2026-08-16 03:58:54,272 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
+                    "2026-08-16 03:58:54,272 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
+                    "------------------------------ Captured log setup ------------------------------",
+                    "\u001b[33mWARNING \u001b[0m utils.prompt_client:prompt_client.py:127 Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
+                    "\u001b[33mWARNING \u001b[0m utils.prompt_client:prompt_client.py:127 Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
+                    "\u001b[36m\u001b[1m=========================== short test summary info ============================\u001b[0m",
+                    "\u001b[31mFAILED\u001b[0m llm_module/test_vllm_chat_completions.py::\u001b[1mtest_penalties[presence_penalty-1.2-repeat_trap-messages0]\u001b[0m - AssertionError: Test failed: Penalty unexpectedly reduced diversity.",
+                    "\u001b[31m\u001b[31m\u001b[1m1 failed\u001b[0m, \u001b[32m21 passed\u001b[0m\u001b[31m in 367.88s (0:06:07)\u001b[0m\u001b[0m"
+                ],
+                "elapsed_seconds": 368.18167184799677,
+                "test_name": "VLLMParamConformanceTest",
+                "description": "vLLM chat/completions parameter conformance"
+            },
+            "title": "Vllm Chat Completions",
+            "task_type": "functional",
+            "id": "Muse-Glimmer-30B_P300X2",
+            "targets": {
+                "num_of_devices": 4,
+                "num_concurrent_requests": 4
+            }
+        }
+    ],
+    "acceptance_criteria": false,
+    "acceptance_blockers": {
+        "spec.spec_tests:Vllm Chat Completions": "Vllm Chat Completions reported status=fail (attempts=1)",
+        "task:spec_tests": "Task 'spec_tests' failed (exit=1) after producing a report block."
+    },
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "FAIL",
+        "model_status": "FUNCTIONAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 18,
+                "passed": 1,
+                "failed": 0,
+                "na": 17,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "PASS",
+                "total": 2,
+                "passed": 2,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "FAIL",
+                "total": 1,
+                "passed": 0,
+                "failed": 1,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {
+                    "spec.spec_tests:Vllm Chat Completions": "Vllm Chat Completions reported status=fail (attempts=1)"
+                },
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u274c `FAIL`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \u2705 `PASS` (1/18 passed, 17 NA)\n- Evals: \u2705 `PASS` (2/2 passed)\n- Spec Tests: \u274c `FAIL` (0/1 passed, 1 failed)\n\n#### Blockers\n\n- `spec.spec_tests:Vllm Chat Completions`: Vllm Chat Completions reported status=fail (attempts=1)\n- `task:spec_tests`: Task 'spec_tests' failed (exit=1) after producing a report block."
+}

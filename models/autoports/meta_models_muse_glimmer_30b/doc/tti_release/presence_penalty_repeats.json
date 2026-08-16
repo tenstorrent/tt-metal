@@ -1,0 +1,72 @@
+{
+  "_what": "the failing row's own two requests, repeated 3x on the shipped device sampler, to measure whether the row is a stable signal or a coin flip",
+  "payload": {
+    "temperature": 0.1,
+    "max_tokens": 1024,
+    "seed": 1234,
+    "presence_penalty": 1.2
+  },
+  "identical_base_texts": true,
+  "identical_penalty_texts": true,
+  "assertion_ratios": [
+    0.8207399687337155,
+    0.8207399687337155,
+    0.8207399687337155
+  ],
+  "passes": 0,
+  "trials": 3,
+  "stats": {
+    "base": [
+      {
+        "len": 252,
+        "unique": 38,
+        "unique_ratio": 0.15079365079365079,
+        "entropy": 4.6821
+      },
+      {
+        "len": 252,
+        "unique": 38,
+        "unique_ratio": 0.15079365079365079,
+        "entropy": 4.6821
+      },
+      {
+        "len": 252,
+        "unique": 38,
+        "unique_ratio": 0.15079365079365079,
+        "entropy": 4.6821
+      }
+    ],
+    "penalty": [
+      {
+        "len": 202,
+        "unique": 25,
+        "unique_ratio": 0.12376237623762376,
+        "entropy": 3.8134
+      },
+      {
+        "len": 202,
+        "unique": 25,
+        "unique_ratio": 0.12376237623762376,
+        "entropy": 3.8134
+      },
+      {
+        "len": 202,
+        "unique": 25,
+        "unique_ratio": 0.12376237623762376,
+        "entropy": 3.8134
+      }
+    ]
+  },
+  "texts": {
+    "base": [
+      "The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.\n\nThe store door was open.\nThe store door was open.\nThe store door was open.\n\nHe said hello to the clerk.\nHe said hello to the clerk.\nHe said hello to the clerk.\n\nHe bought a bottle of milk.\nHe bought a bottle of milk.\nHe bought a bottle of milk.\n\nHe paid for the milk.\nHe paid for the milk.\nHe paid for the milk.\n\nHe walked home.\nHe walked home.\nHe walked home.\n\nHe put the milk in the fridge.\nHe put the milk in the fridge.\nHe put the milk in the fridge.\n\nHe sat at the table.\nHe sat at the table.\nHe sat at the table.\n\nHe drank the milk.\nHe drank the milk.\nHe drank the milk.\n\nThe man went to bed.\nThe man went to bed.\nThe man went to bed.\n\nThe man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.",
+      "The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.\n\nThe store door was open.\nThe store door was open.\nThe store door was open.\n\nHe said hello to the clerk.\nHe said hello to the clerk.\nHe said hello to the clerk.\n\nHe bought a bottle of milk.\nHe bought a bottle of milk.\nHe bought a bottle of milk.\n\nHe paid for the milk.\nHe paid for the milk.\nHe paid for the milk.\n\nHe walked home.\nHe walked home.\nHe walked home.\n\nHe put the milk in the fridge.\nHe put the milk in the fridge.\nHe put the milk in the fridge.\n\nHe sat at the table.\nHe sat at the table.\nHe sat at the table.\n\nHe drank the milk.\nHe drank the milk.\nHe drank the milk.\n\nThe man went to bed.\nThe man went to bed.\nThe man went to bed.\n\nThe man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.",
+      "The man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store.\n\nThe store door was open.\nThe store door was open.\nThe store door was open.\n\nHe said hello to the clerk.\nHe said hello to the clerk.\nHe said hello to the clerk.\n\nHe bought a bottle of milk.\nHe bought a bottle of milk.\nHe bought a bottle of milk.\n\nHe paid for the milk.\nHe paid for the milk.\nHe paid for the milk.\n\nHe walked home.\nHe walked home.\nHe walked home.\n\nHe put the milk in the fridge.\nHe put the milk in the fridge.\nHe put the milk in the fridge.\n\nHe sat at the table.\nHe sat at the table.\nHe sat at the table.\n\nHe drank the milk.\nHe drank the milk.\nHe drank the milk.\n\nThe man went to bed.\nThe man went to bed.\nThe man went to bed.\n\nThe man woke up.\nThe man woke up.\nThe man woke up.\n\nHe got out of bed.\nHe got out of bed.\nHe got out of bed.\n\nHe put on his shoes.\nHe put on his shoes.\nHe put on his shoes.\n\nHe walked to the store.\nHe walked to the store.\nHe walked to the store."
+    ],
+    "penalty": [
+      "The man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nAnd then the man woke up again.",
+      "The man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nAnd then the man woke up again.",
+      "The man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nThe man woke up.\n\nThe man made coffee.\n\nThe man put on his shoes.\n\nThe man went to the store.\n\nThe man wanted milk.\n\nThe man reached for the milk.\n\nThe man had no money.\n\nThe man went home.\n\nAnd then the man woke up again."
+    ]
+  }
+}

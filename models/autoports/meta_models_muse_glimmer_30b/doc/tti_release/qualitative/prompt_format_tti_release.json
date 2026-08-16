@@ -1,0 +1,57 @@
+{
+  "_what": "the $qualitative-check prompt-format record for the TTI release stage, covering the paths the shared suite does not: the release EVALS and the API conformance suite, which both talk to /v1/chat/completions.",
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "hf_revision": "f84ecc3a0ea984a4c04542a84269e3d065350a6e",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "prompt_mode_reason": "the checkpoint ships a non-empty chat_template.jinja, so it is chat/instruct and every release check renders through it. No raw-completion output is used as a quality verdict.",
+  "release_evals": {
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    "lm_eval_model": "local-chat-completions",
+    "apply_chat_template": true,
+    "who_renders": "lm-eval sends OpenAI `messages`; the vLLM server renders them with the checkpoint's own chat_template.jinja. Nothing in this stage re-implements or overrides the template.",
+    "tasks": [
+      "ifeval",
+      "aime25"
+    ],
+    "sampling": "temperature 1.0, top_p 0.95, top_k 64 -- the model card's Best Practices section",
+    "reasoning_strength": "left at the chat template's own default ('high'); not overridden",
+    "reasoning_parser": "muse_glimmer (tt/reasoning_parser.py). The template's assistant turn is channelled, so without it lm-eval would score the analysis channel as the answer."
+  },
+  "rendered_prompt_example": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a 4 sentence summary of photosynthesis."
+      }
+    ],
+    "rendered": "<|begin_of_text|><|start|>system<|message|>You are a helpful AI assistant.\nKnowledge cutoff: 2026-01-04.\nCurrent date: 2026-08-15.\n\nReasoning strength: high.\n\n# Valid recipients: \"self\", \"user\".<|eot|><|start|>user<|message|>Write a 4 sentence summary of photosynthesis.<|eot|><|start|>assistant",
+    "token_count": 65,
+    "first_token_ids": [
+      200000,
+      200022,
+      15651,
+      200023,
+      4662,
+      583,
+      262,
+      19933,
+      12133,
+      43910,
+      335,
+      111198,
+      67059,
+      38,
+      220,
+      837
+    ],
+    "note": "the system message embeds today's date, so this exact string is date-dependent; it is recorded to show the template that is actually applied, not as a pinned input"
+  },
+  "shared_suite": {
+    "artifacts": "doc/tti_release/qualitative/",
+    "verdict_arm": "qualitative_tt_chat.json -- pinned chat-rendered token ids, same input as the HF control and every earlier TT stage",
+    "raw_completion_arm": "qualitative_runner/vllm_qualitative_outputs.json -- labelled continuation stress coverage, not a verdict",
+    "degenerate_gate": "qualitative/degenerate_check.json"
+  }
+}

@@ -1,0 +1,89 @@
+{
+ "date": "20260816-033543",
+ "endpoint_type": "openai-chat",
+ "backend": "openai-chat",
+ "label": null,
+ "model_id": "meta-models/Muse-Glimmer-30B",
+ "tokenizer_id": "meta-models/Muse-Glimmer-30B",
+ "num_prompts": 8,
+ "request_rate": "inf",
+ "burstiness": 1.0,
+ "max_concurrency": 1,
+ "duration": 23.972593039041385,
+ "completed": 8,
+ "failed": 0,
+ "total_input_tokens": 1016,
+ "total_output_tokens": 1024,
+ "request_throughput": 0.3337144207542057,
+ "request_goodput": null,
+ "output_throughput": 42.71544585653833,
+ "total_token_throughput": 85.09717729232246,
+ "input_lens": [
+  127,
+  127,
+  127,
+  127,
+  127,
+  127,
+  127,
+  127
+ ],
+ "output_lens": [
+  128,
+  128,
+  128,
+  128,
+  128,
+  128,
+  128,
+  128
+ ],
+ "ttfts": [
+  0.07165425998391584,
+  0.07034540001768619,
+  0.07255530101247132,
+  0.07099436997668818,
+  0.07499103399459273,
+  0.07056415802799165,
+  0.07401506998576224,
+  0.07181733101606369
+ ],
+ "errors": [
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  ""
+ ],
+ "max_output_tokens_per_s": 44.0,
+ "max_concurrent_requests": 2,
+ "mean_ttft_ms": 72.11711550189648,
+ "median_ttft_ms": 71.73579549998976,
+ "std_ttft_ms": 1.5479406247801923,
+ "p99_ttft_ms": 74.92271651397459,
+ "mean_tpot_ms": 23.025379942830444,
+ "median_tpot_ms": 23.03220794076012,
+ "std_tpot_ms": 0.011374544558965981,
+ "p99_tpot_ms": 23.03738048978014,
+ "mean_itl_ms": 22.845434703071987,
+ "median_itl_ms": 23.012677527731284,
+ "std_itl_ms": 2.069877410928891,
+ "p99_itl_ms": 24.001031462103125,
+ "mean_e2el_ms": 2996.3403682413627,
+ "median_e2el_ms": 2996.596741490066,
+ "std_e2el_ms": 2.109021366489163,
+ "p99_e2el_ms": 2999.969761305256,
+ "_trimmed_for_evidence": {
+  "itls": {
+   "n": 8,
+   "note": "dropped by copy_back.sh: raw per-token/per-request payload; this file's summary statistics are computed from it"
+  },
+  "generated_texts": {
+   "n": 8,
+   "note": "dropped by copy_back.sh: raw per-token/per-request payload; this file's summary statistics are computed from it"
+  }
+ }
+}

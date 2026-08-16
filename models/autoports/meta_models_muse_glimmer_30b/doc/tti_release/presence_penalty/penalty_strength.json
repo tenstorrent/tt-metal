@@ -1,0 +1,37 @@
+{
+  "_what": "why presence_penalty is the one of the three penalty rows that fails on 'repeat_trap': it is the only one whose strength does not grow with the number of repetitions, and it is the weakest of the three at every repetition count. Logit L=20, the binade measured in arithmetic_probe.json.",
+  "top_logit_assumed": 20.0,
+  "rows": [
+    {
+      "occurrences_so_far": 1,
+      "presence_1.2_shift": -1.25,
+      "frequency_1.2_shift": -1.2,
+      "repetition_1.5_shift": -6.666666666666666
+    },
+    {
+      "occurrences_so_far": 2,
+      "presence_1.2_shift": -1.25,
+      "frequency_1.2_shift": -2.4,
+      "repetition_1.5_shift": -6.666666666666666
+    },
+    {
+      "occurrences_so_far": 5,
+      "presence_1.2_shift": -1.25,
+      "frequency_1.2_shift": -6.0,
+      "repetition_1.5_shift": -6.666666666666666
+    },
+    {
+      "occurrences_so_far": 10,
+      "presence_1.2_shift": -1.25,
+      "frequency_1.2_shift": -12.0,
+      "repetition_1.5_shift": -6.666666666666666
+    },
+    {
+      "occurrences_so_far": 20,
+      "presence_1.2_shift": -1.25,
+      "frequency_1.2_shift": -24.0,
+      "repetition_1.5_shift": -6.666666666666666
+    }
+  ],
+  "test_source_corroboration": "llm_module/test_vllm_chat_completions.py:313 -- `if prompt_name == \"repeat_trap\" and penalty_param != \"presence_penalty\":` -- the suite already exempts presence_penalty from its 'heavy repetition should decrease' assertion on this exact prompt. The unique_ratio assertion at line 307 is a proxy for the same property and is not exempted."
+}

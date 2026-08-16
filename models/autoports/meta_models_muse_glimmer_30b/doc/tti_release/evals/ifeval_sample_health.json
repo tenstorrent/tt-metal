@@ -1,0 +1,3808 @@
+{
+ "_what": "per-document health of one lm-eval run: response length, score, and whether the turn reached the model's visible channel. No model text. This is the artifact that makes an under-budgeted generation limit visible without copying samples_*.jsonl.",
+ "task": "ifeval",
+ "source": "samples_ifeval_2026-08-16T02-57-28.201205.jsonl",
+ "n": 541,
+ "empty_responses": 0,
+ "truncated_inside_analysis_channel": 1,
+ "truncated_docs": [
+  {
+   "doc_id": 162,
+   "key": 1880,
+   "chars": 261038,
+   "score": false,
+   "reached_visible_channel": false
+  }
+ ],
+ "max_chars": 261038,
+ "score_key": "prompt_level_strict_acc",
+ "rows": [
+  {
+   "doc_id": 0,
+   "key": 1000,
+   "chars": 2278,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 1,
+   "key": 1001,
+   "chars": 980,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 2,
+   "key": 1005,
+   "chars": 1597,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 3,
+   "key": 1012,
+   "chars": 734,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 4,
+   "key": 1019,
+   "chars": 58,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 5,
+   "key": 102,
+   "chars": 340,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 6,
+   "key": 1021,
+   "chars": 635,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 7,
+   "key": 1040,
+   "chars": 1170,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 8,
+   "key": 1051,
+   "chars": 585,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 9,
+   "key": 1069,
+   "chars": 3498,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 10,
+   "key": 1072,
+   "chars": 3246,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 11,
+   "key": 1075,
+   "chars": 984,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 12,
+   "key": 1082,
+   "chars": 1144,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 13,
+   "key": 1087,
+   "chars": 2001,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 14,
+   "key": 1092,
+   "chars": 945,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 15,
+   "key": 1094,
+   "chars": 263,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 16,
+   "key": 1098,
+   "chars": 17,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 17,
+   "key": 1107,
+   "chars": 150,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 18,
+   "key": 1108,
+   "chars": 209,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 19,
+   "key": 1122,
+   "chars": 169,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 20,
+   "key": 1127,
+   "chars": 998,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 21,
+   "key": 1128,
+   "chars": 227,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 22,
+   "key": 1129,
+   "chars": 582,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 23,
+   "key": 1130,
+   "chars": 287,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 24,
+   "key": 1131,
+   "chars": 2143,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 25,
+   "key": 1132,
+   "chars": 1055,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 26,
+   "key": 1137,
+   "chars": 494,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 27,
+   "key": 1139,
+   "chars": 165,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 28,
+   "key": 1147,
+   "chars": 231,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 29,
+   "key": 1148,
+   "chars": 340,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 30,
+   "key": 1153,
+   "chars": 403,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 31,
+   "key": 1154,
+   "chars": 2132,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 32,
+   "key": 1162,
+   "chars": 215,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 33,
+   "key": 1174,
+   "chars": 225,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 34,
+   "key": 1180,
+   "chars": 1527,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 35,
+   "key": 1187,
+   "chars": 123,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 36,
+   "key": 1203,
+   "chars": 1001,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 37,
+   "key": 1216,
+   "chars": 6954,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 38,
+   "key": 1217,
+   "chars": 530,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 39,
+   "key": 1219,
+   "chars": 784,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 40,
+   "key": 122,
+   "chars": 2070,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 41,
+   "key": 1220,
+   "chars": 780,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 42,
+   "key": 1233,
+   "chars": 277,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 43,
+   "key": 1236,
+   "chars": 939,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 44,
+   "key": 1237,
+   "chars": 1446,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 45,
+   "key": 1242,
+   "chars": 21,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 46,
+   "key": 1246,
+   "chars": 679,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 47,
+   "key": 1248,
+   "chars": 1696,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 48,
+   "key": 1251,
+   "chars": 2280,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 49,
+   "key": 1258,
+   "chars": 3836,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 50,
+   "key": 1259,
+   "chars": 45,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 51,
+   "key": 1262,
+   "chars": 340,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 52,
+   "key": 1265,
+   "chars": 3996,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 53,
+   "key": 1268,
+   "chars": 411,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 54,
+   "key": 127,
+   "chars": 2122,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 55,
+   "key": 1281,
+   "chars": 370,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 56,
+   "key": 1286,
+   "chars": 667,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 57,
+   "key": 1287,
+   "chars": 437,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 58,
+   "key": 13,
+   "chars": 1503,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 59,
+   "key": 1300,
+   "chars": 1409,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 60,
+   "key": 1305,
+   "chars": 214,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 61,
+   "key": 1307,
+   "chars": 3151,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 62,
+   "key": 1314,
+   "chars": 1610,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 63,
+   "key": 1322,
+   "chars": 2293,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 64,
+   "key": 1325,
+   "chars": 790,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 65,
+   "key": 1332,
+   "chars": 1496,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 66,
+   "key": 1342,
+   "chars": 1890,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 67,
+   "key": 1348,
+   "chars": 647,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 68,
+   "key": 136,
+   "chars": 335,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 69,
+   "key": 1361,
+   "chars": 1575,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 70,
+   "key": 1367,
+   "chars": 2506,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 71,
+   "key": 1372,
+   "chars": 1475,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 72,
+   "key": 1375,
+   "chars": 983,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 73,
+   "key": 1377,
+   "chars": 1935,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 74,
+   "key": 1379,
+   "chars": 298,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 75,
+   "key": 1381,
+   "chars": 639,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 76,
+   "key": 1389,
+   "chars": 563,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 77,
+   "key": 1392,
+   "chars": 1944,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 78,
+   "key": 1393,
+   "chars": 1793,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 79,
+   "key": 1402,
+   "chars": 402,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 80,
+   "key": 1418,
+   "chars": 677,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 81,
+   "key": 142,
+   "chars": 137,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 82,
+   "key": 143,
+   "chars": 512,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 83,
+   "key": 1436,
+   "chars": 879,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 84,
+   "key": 1446,
+   "chars": 2360,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 85,
+   "key": 1466,
+   "chars": 875,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 86,
+   "key": 1476,
+   "chars": 123,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 87,
+   "key": 1477,
+   "chars": 367,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 88,
+   "key": 1480,
+   "chars": 2260,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 89,
+   "key": 1481,
+   "chars": 1069,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 90,
+   "key": 1498,
+   "chars": 1614,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 91,
+   "key": 1508,
+   "chars": 66,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 92,
+   "key": 1512,
+   "chars": 1020,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 93,
+   "key": 1516,
+   "chars": 214,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 94,
+   "key": 1518,
+   "chars": 2862,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 95,
+   "key": 152,
+   "chars": 8485,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 96,
+   "key": 1531,
+   "chars": 2828,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 97,
+   "key": 1535,
+   "chars": 228,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 98,
+   "key": 1537,
+   "chars": 711,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 99,
+   "key": 1546,
+   "chars": 998,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 100,
+   "key": 1548,
+   "chars": 1194,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 101,
+   "key": 1551,
+   "chars": 3444,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 102,
+   "key": 1561,
+   "chars": 468,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 103,
+   "key": 1566,
+   "chars": 1707,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 104,
+   "key": 1571,
+   "chars": 406,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 105,
+   "key": 1580,
+   "chars": 723,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 106,
+   "key": 1582,
+   "chars": 171,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 107,
+   "key": 1591,
+   "chars": 406,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 108,
+   "key": 1592,
+   "chars": 279,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 109,
+   "key": 1593,
+   "chars": 523,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 110,
+   "key": 16,
+   "chars": 1978,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 111,
+   "key": 1601,
+   "chars": 355,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 112,
+   "key": 1609,
+   "chars": 781,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 113,
+   "key": 1619,
+   "chars": 851,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 114,
+   "key": 1620,
+   "chars": 968,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 115,
+   "key": 1627,
+   "chars": 843,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 116,
+   "key": 1629,
+   "chars": 550,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 117,
+   "key": 163,
+   "chars": 1324,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 118,
+   "key": 1634,
+   "chars": 591,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 119,
+   "key": 164,
+   "chars": 1167,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 120,
+   "key": 1643,
+   "chars": 8660,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 121,
+   "key": 1644,
+   "chars": 1120,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 122,
+   "key": 1645,
+   "chars": 50,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 123,
+   "key": 1646,
+   "chars": 2736,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 124,
+   "key": 1653,
+   "chars": 839,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 125,
+   "key": 1656,
+   "chars": 1360,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 126,
+   "key": 1658,
+   "chars": 1219,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 127,
+   "key": 1659,
+   "chars": 1481,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 128,
+   "key": 1667,
+   "chars": 2552,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 129,
+   "key": 167,
+   "chars": 4378,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 130,
+   "key": 1670,
+   "chars": 1392,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 131,
+   "key": 1675,
+   "chars": 40,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 132,
+   "key": 168,
+   "chars": 2493,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 133,
+   "key": 1686,
+   "chars": 1548,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 134,
+   "key": 1691,
+   "chars": 1675,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 135,
+   "key": 1705,
+   "chars": 981,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 136,
+   "key": 1713,
+   "chars": 3017,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 137,
+   "key": 1730,
+   "chars": 1718,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 138,
+   "key": 1733,
+   "chars": 2429,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 139,
+   "key": 1738,
+   "chars": 2,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 140,
+   "key": 1739,
+   "chars": 337,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 141,
+   "key": 1746,
+   "chars": 2361,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 142,
+   "key": 1759,
+   "chars": 1730,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 143,
+   "key": 1773,
+   "chars": 1579,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 144,
+   "key": 1776,
+   "chars": 599,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 145,
+   "key": 1779,
+   "chars": 1474,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 146,
+   "key": 1781,
+   "chars": 6588,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 147,
+   "key": 179,
+   "chars": 4992,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 148,
+   "key": 1793,
+   "chars": 790,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 149,
+   "key": 1800,
+   "chars": 1224,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 150,
+   "key": 1802,
+   "chars": 322,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 151,
+   "key": 181,
+   "chars": 2049,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 152,
+   "key": 1813,
+   "chars": 121,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 153,
+   "key": 1823,
+   "chars": 2888,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 154,
+   "key": 1825,
+   "chars": 362,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 155,
+   "key": 1834,
+   "chars": 2026,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 156,
+   "key": 1837,
+   "chars": 1054,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 157,
+   "key": 1843,
+   "chars": 24,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 158,
+   "key": 1845,
+   "chars": 1630,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 159,
+   "key": 1857,
+   "chars": 100,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 160,
+   "key": 1858,
+   "chars": 1314,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 161,
+   "key": 1879,
+   "chars": 2346,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 162,
+   "key": 1880,
+   "chars": 261038,
+   "score": false,
+   "reached_visible_channel": false
+  },
+  {
+   "doc_id": 163,
+   "key": 1883,
+   "chars": 219,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 164,
+   "key": 1886,
+   "chars": 222,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 165,
+   "key": 1893,
+   "chars": 844,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 166,
+   "key": 1897,
+   "chars": 598,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 167,
+   "key": 19,
+   "chars": 3503,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 168,
+   "key": 1902,
+   "chars": 781,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 169,
+   "key": 1906,
+   "chars": 270,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 170,
+   "key": 1908,
+   "chars": 3633,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 171,
+   "key": 1922,
+   "chars": 664,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 172,
+   "key": 1927,
+   "chars": 701,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 173,
+   "key": 1928,
+   "chars": 411,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 174,
+   "key": 1934,
+   "chars": 336,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 175,
+   "key": 1936,
+   "chars": 382,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 176,
+   "key": 1939,
+   "chars": 1055,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 177,
+   "key": 1943,
+   "chars": 993,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 178,
+   "key": 1944,
+   "chars": 1030,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 179,
+   "key": 1954,
+   "chars": 1800,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 180,
+   "key": 1964,
+   "chars": 490,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 181,
+   "key": 1967,
+   "chars": 647,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 182,
+   "key": 1980,
+   "chars": 2109,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 183,
+   "key": 1996,
+   "chars": 1632,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 184,
+   "key": 1999,
+   "chars": 700,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 185,
+   "key": 201,
+   "chars": 487,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 186,
+   "key": 2010,
+   "chars": 1149,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 187,
+   "key": 2015,
+   "chars": 119,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 188,
+   "key": 202,
+   "chars": 8,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 189,
+   "key": 2023,
+   "chars": 1279,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 190,
+   "key": 2028,
+   "chars": 842,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 191,
+   "key": 2034,
+   "chars": 644,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 192,
+   "key": 2035,
+   "chars": 253,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 193,
+   "key": 2041,
+   "chars": 2874,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 194,
+   "key": 2063,
+   "chars": 306,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 195,
+   "key": 2069,
+   "chars": 807,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 196,
+   "key": 2070,
+   "chars": 1380,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 197,
+   "key": 2071,
+   "chars": 492,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 198,
+   "key": 2078,
+   "chars": 226,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 199,
+   "key": 2084,
+   "chars": 767,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 200,
+   "key": 209,
+   "chars": 3972,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 201,
+   "key": 2097,
+   "chars": 1386,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 202,
+   "key": 2100,
+   "chars": 323,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 203,
+   "key": 2107,
+   "chars": 129,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 204,
+   "key": 2118,
+   "chars": 827,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 205,
+   "key": 2136,
+   "chars": 164,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 206,
+   "key": 2139,
+   "chars": 395,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 207,
+   "key": 2142,
+   "chars": 3237,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 208,
+   "key": 2143,
+   "chars": 424,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 209,
+   "key": 2162,
+   "chars": 1173,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 210,
+   "key": 2164,
+   "chars": 1302,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 211,
+   "key": 2169,
+   "chars": 1429,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 212,
+   "key": 218,
+   "chars": 1103,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 213,
+   "key": 2180,
+   "chars": 1026,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 214,
+   "key": 219,
+   "chars": 197,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 215,
+   "key": 2192,
+   "chars": 227,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 216,
+   "key": 2195,
+   "chars": 633,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 217,
+   "key": 2207,
+   "chars": 424,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 218,
+   "key": 2209,
+   "chars": 2325,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 219,
+   "key": 2215,
+   "chars": 1015,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 220,
+   "key": 2216,
+   "chars": 1447,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 221,
+   "key": 2225,
+   "chars": 420,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 222,
+   "key": 2229,
+   "chars": 2931,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 223,
+   "key": 2230,
+   "chars": 154,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 224,
+   "key": 2239,
+   "chars": 42,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 225,
+   "key": 2243,
+   "chars": 493,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 226,
+   "key": 2245,
+   "chars": 10,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 227,
+   "key": 2246,
+   "chars": 2888,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 228,
+   "key": 2247,
+   "chars": 1615,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 229,
+   "key": 2250,
+   "chars": 2057,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 230,
+   "key": 2253,
+   "chars": 2452,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 231,
+   "key": 2265,
+   "chars": 862,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 232,
+   "key": 2266,
+   "chars": 338,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 233,
+   "key": 2268,
+   "chars": 649,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 234,
+   "key": 227,
+   "chars": 169,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 235,
+   "key": 2273,
+   "chars": 925,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 236,
+   "key": 2275,
+   "chars": 2734,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 237,
+   "key": 2284,
+   "chars": 2575,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 238,
+   "key": 2292,
+   "chars": 2088,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 239,
+   "key": 2299,
+   "chars": 83,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 240,
+   "key": 2303,
+   "chars": 1874,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 241,
+   "key": 2304,
+   "chars": 3232,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 242,
+   "key": 2305,
+   "chars": 162,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 243,
+   "key": 2309,
+   "chars": 328,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 244,
+   "key": 2311,
+   "chars": 392,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 245,
+   "key": 2314,
+   "chars": 23,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 246,
+   "key": 2323,
+   "chars": 1645,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 247,
+   "key": 2324,
+   "chars": 213,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 248,
+   "key": 2328,
+   "chars": 1722,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 249,
+   "key": 2337,
+   "chars": 674,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 250,
+   "key": 2341,
+   "chars": 162,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 251,
+   "key": 2350,
+   "chars": 271,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 252,
+   "key": 2355,
+   "chars": 1048,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 253,
+   "key": 2357,
+   "chars": 1378,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 254,
+   "key": 2359,
+   "chars": 65,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 255,
+   "key": 2362,
+   "chars": 217,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 256,
+   "key": 2372,
+   "chars": 617,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 257,
+   "key": 2374,
+   "chars": 1945,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 258,
+   "key": 2380,
+   "chars": 217,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 259,
+   "key": 2381,
+   "chars": 2716,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 260,
+   "key": 2383,
+   "chars": 132,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 261,
+   "key": 2386,
+   "chars": 944,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 262,
+   "key": 2391,
+   "chars": 2044,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 263,
+   "key": 2392,
+   "chars": 1836,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 264,
+   "key": 2395,
+   "chars": 390,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 265,
+   "key": 2396,
+   "chars": 1019,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 266,
+   "key": 2398,
+   "chars": 496,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 267,
+   "key": 24,
+   "chars": 775,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 268,
+   "key": 240,
+   "chars": 843,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 269,
+   "key": 2404,
+   "chars": 130,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 270,
+   "key": 2416,
+   "chars": 1174,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 271,
+   "key": 2417,
+   "chars": 209,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 272,
+   "key": 2422,
+   "chars": 404,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 273,
+   "key": 2432,
+   "chars": 1426,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 274,
+   "key": 2436,
+   "chars": 504,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 275,
+   "key": 2439,
+   "chars": 243,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 276,
+   "key": 2441,
+   "chars": 829,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 277,
+   "key": 2447,
+   "chars": 382,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 278,
+   "key": 2449,
+   "chars": 414,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 279,
+   "key": 2457,
+   "chars": 420,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 280,
+   "key": 2464,
+   "chars": 636,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 281,
+   "key": 2465,
+   "chars": 293,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 282,
+   "key": 2467,
+   "chars": 1559,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 283,
+   "key": 247,
+   "chars": 1072,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 284,
+   "key": 2471,
+   "chars": 3830,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 285,
+   "key": 2475,
+   "chars": 620,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 286,
+   "key": 2482,
+   "chars": 503,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 287,
+   "key": 2485,
+   "chars": 228,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 288,
+   "key": 2497,
+   "chars": 779,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 289,
+   "key": 2505,
+   "chars": 694,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 290,
+   "key": 251,
+   "chars": 224,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 291,
+   "key": 2515,
+   "chars": 1077,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 292,
+   "key": 2517,
+   "chars": 74,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 293,
+   "key": 2531,
+   "chars": 831,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 294,
+   "key": 2532,
+   "chars": 1243,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 295,
+   "key": 2534,
+   "chars": 893,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 296,
+   "key": 2549,
+   "chars": 1248,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 297,
+   "key": 2563,
+   "chars": 429,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 298,
+   "key": 2567,
+   "chars": 1934,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 299,
+   "key": 2571,
+   "chars": 135,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 300,
+   "key": 2577,
+   "chars": 545,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 301,
+   "key": 2583,
+   "chars": 286,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 302,
+   "key": 2585,
+   "chars": 1580,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 303,
+   "key": 2589,
+   "chars": 483,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 304,
+   "key": 2590,
+   "chars": 1190,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 305,
+   "key": 2591,
+   "chars": 934,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 306,
+   "key": 2596,
+   "chars": 418,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 307,
+   "key": 260,
+   "chars": 197,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 308,
+   "key": 2602,
+   "chars": 182,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 309,
+   "key": 2605,
+   "chars": 639,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 310,
+   "key": 2616,
+   "chars": 1006,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 311,
+   "key": 2617,
+   "chars": 433,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 312,
+   "key": 2622,
+   "chars": 500,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 313,
+   "key": 2628,
+   "chars": 584,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 314,
+   "key": 2637,
+   "chars": 2946,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 315,
+   "key": 2649,
+   "chars": 144,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 316,
+   "key": 2653,
+   "chars": 497,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 317,
+   "key": 2662,
+   "chars": 190,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 318,
+   "key": 2667,
+   "chars": 191,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 319,
+   "key": 2674,
+   "chars": 557,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 320,
+   "key": 2677,
+   "chars": 154,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 321,
+   "key": 2683,
+   "chars": 1017,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 322,
+   "key": 2685,
+   "chars": 959,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 323,
+   "key": 2691,
+   "chars": 1606,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 324,
+   "key": 2704,
+   "chars": 196,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 325,
+   "key": 2713,
+   "chars": 438,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 326,
+   "key": 2716,
+   "chars": 949,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 327,
+   "key": 2724,
+   "chars": 1571,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 328,
+   "key": 2728,
+   "chars": 993,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 329,
+   "key": 2736,
+   "chars": 704,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 330,
+   "key": 2739,
+   "chars": 308,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 331,
+   "key": 2749,
+   "chars": 3287,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 332,
+   "key": 2751,
+   "chars": 3348,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 333,
+   "key": 2752,
+   "chars": 417,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 334,
+   "key": 2759,
+   "chars": 1232,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 335,
+   "key": 2765,
+   "chars": 2265,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 336,
+   "key": 2768,
+   "chars": 1031,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 337,
+   "key": 2779,
+   "chars": 487,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 338,
+   "key": 2780,
+   "chars": 206,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 339,
+   "key": 2785,
+   "chars": 1701,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 340,
+   "key": 2787,
+   "chars": 872,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 341,
+   "key": 279,
+   "chars": 94,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 342,
+   "key": 2790,
+   "chars": 1510,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 343,
+   "key": 2798,
+   "chars": 670,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 344,
+   "key": 2801,
+   "chars": 180,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 345,
+   "key": 2807,
+   "chars": 392,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 346,
+   "key": 281,
+   "chars": 114,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 347,
+   "key": 2811,
+   "chars": 692,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 348,
+   "key": 2817,
+   "chars": 818,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 349,
+   "key": 2820,
+   "chars": 374,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 350,
+   "key": 2825,
+   "chars": 367,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 351,
+   "key": 2828,
+   "chars": 1134,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 352,
+   "key": 2829,
+   "chars": 362,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 353,
+   "key": 2832,
+   "chars": 908,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 354,
+   "key": 2844,
+   "chars": 1480,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 355,
+   "key": 2849,
+   "chars": 206,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 356,
+   "key": 2853,
+   "chars": 833,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 357,
+   "key": 2857,
+   "chars": 3873,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 358,
+   "key": 2859,
+   "chars": 506,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 359,
+   "key": 286,
+   "chars": 411,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 360,
+   "key": 2870,
+   "chars": 1435,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 361,
+   "key": 2871,
+   "chars": 1689,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 362,
+   "key": 288,
+   "chars": 830,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 363,
+   "key": 2880,
+   "chars": 834,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 364,
+   "key": 2887,
+   "chars": 1075,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 365,
+   "key": 2889,
+   "chars": 226,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 366,
+   "key": 2904,
+   "chars": 3241,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 367,
+   "key": 2905,
+   "chars": 1714,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 368,
+   "key": 2908,
+   "chars": 450,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 369,
+   "key": 2909,
+   "chars": 2814,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 370,
+   "key": 2912,
+   "chars": 1281,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 371,
+   "key": 2918,
+   "chars": 1727,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 372,
+   "key": 292,
+   "chars": 2738,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 373,
+   "key": 2921,
+   "chars": 113,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 374,
+   "key": 2925,
+   "chars": 804,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 375,
+   "key": 2929,
+   "chars": 580,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 376,
+   "key": 2941,
+   "chars": 1193,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 377,
+   "key": 2943,
+   "chars": 809,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 378,
+   "key": 295,
+   "chars": 1301,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 379,
+   "key": 2957,
+   "chars": 196,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 380,
+   "key": 296,
+   "chars": 930,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 381,
+   "key": 2969,
+   "chars": 1173,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 382,
+   "key": 2977,
+   "chars": 507,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 383,
+   "key": 2985,
+   "chars": 950,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 384,
+   "key": 2997,
+   "chars": 2115,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 385,
+   "key": 30,
+   "chars": 6158,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 386,
+   "key": 3001,
+   "chars": 505,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 387,
+   "key": 301,
+   "chars": 985,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 388,
+   "key": 3025,
+   "chars": 224,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 389,
+   "key": 3035,
+   "chars": 685,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 390,
+   "key": 3041,
+   "chars": 522,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 391,
+   "key": 3048,
+   "chars": 1132,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 392,
+   "key": 3057,
+   "chars": 247,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 393,
+   "key": 3063,
+   "chars": 1368,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 394,
+   "key": 3069,
+   "chars": 393,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 395,
+   "key": 3071,
+   "chars": 1776,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 396,
+   "key": 3073,
+   "chars": 344,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 397,
+   "key": 3079,
+   "chars": 1081,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 398,
+   "key": 3081,
+   "chars": 2190,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 399,
+   "key": 3084,
+   "chars": 62,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 400,
+   "key": 3089,
+   "chars": 3357,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 401,
+   "key": 3091,
+   "chars": 766,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 402,
+   "key": 3098,
+   "chars": 1111,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 403,
+   "key": 3109,
+   "chars": 1625,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 404,
+   "key": 3112,
+   "chars": 136,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 405,
+   "key": 3114,
+   "chars": 6167,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 406,
+   "key": 3126,
+   "chars": 2565,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 407,
+   "key": 3130,
+   "chars": 979,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 408,
+   "key": 3131,
+   "chars": 2338,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 409,
+   "key": 3150,
+   "chars": 522,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 410,
+   "key": 3156,
+   "chars": 1732,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 411,
+   "key": 3166,
+   "chars": 790,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 412,
+   "key": 3186,
+   "chars": 1563,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 413,
+   "key": 3188,
+   "chars": 460,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 414,
+   "key": 3191,
+   "chars": 769,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 415,
+   "key": 3195,
+   "chars": 52,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 416,
+   "key": 3198,
+   "chars": 951,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 417,
+   "key": 32,
+   "chars": 146,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 418,
+   "key": 3203,
+   "chars": 1903,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 419,
+   "key": 3204,
+   "chars": 867,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 420,
+   "key": 321,
+   "chars": 2696,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 421,
+   "key": 322,
+   "chars": 465,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 422,
+   "key": 3221,
+   "chars": 797,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 423,
+   "key": 3223,
+   "chars": 1493,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 424,
+   "key": 3224,
+   "chars": 265,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 425,
+   "key": 3241,
+   "chars": 1117,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 426,
+   "key": 3243,
+   "chars": 1299,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 427,
+   "key": 3245,
+   "chars": 934,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 428,
+   "key": 3256,
+   "chars": 352,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 429,
+   "key": 3263,
+   "chars": 566,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 430,
+   "key": 3272,
+   "chars": 375,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 431,
+   "key": 3276,
+   "chars": 431,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 432,
+   "key": 3280,
+   "chars": 761,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 433,
+   "key": 3281,
+   "chars": 998,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 434,
+   "key": 3287,
+   "chars": 3530,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 435,
+   "key": 3294,
+   "chars": 288,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 436,
+   "key": 3305,
+   "chars": 1355,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 437,
+   "key": 331,
+   "chars": 438,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 438,
+   "key": 3311,
+   "chars": 158,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 439,
+   "key": 3315,
+   "chars": 2296,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 440,
+   "key": 332,
+   "chars": 297,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 441,
+   "key": 3323,
+   "chars": 78,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 442,
+   "key": 3324,
+   "chars": 2390,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 443,
+   "key": 3326,
+   "chars": 1176,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 444,
+   "key": 3327,
+   "chars": 1049,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 445,
+   "key": 3329,
+   "chars": 4523,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 446,
+   "key": 3335,
+   "chars": 126,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 447,
+   "key": 334,
+   "chars": 82,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 448,
+   "key": 3345,
+   "chars": 490,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 449,
+   "key": 3350,
+   "chars": 902,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 450,
+   "key": 3351,
+   "chars": 1034,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 451,
+   "key": 3362,
+   "chars": 285,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 452,
+   "key": 3367,
+   "chars": 848,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 453,
+   "key": 3369,
+   "chars": 402,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 454,
+   "key": 337,
+   "chars": 2208,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 455,
+   "key": 3371,
+   "chars": 1031,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 456,
+   "key": 3376,
+   "chars": 223,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 457,
+   "key": 3380,
+   "chars": 896,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 458,
+   "key": 3386,
+   "chars": 376,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 459,
+   "key": 340,
+   "chars": 79,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 460,
+   "key": 3401,
+   "chars": 1212,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 461,
+   "key": 3407,
+   "chars": 479,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 462,
+   "key": 3409,
+   "chars": 101,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 463,
+   "key": 3414,
+   "chars": 980,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 464,
+   "key": 3415,
+   "chars": 491,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 465,
+   "key": 3424,
+   "chars": 808,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 466,
+   "key": 3425,
+   "chars": 7288,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 467,
+   "key": 3428,
+   "chars": 507,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 468,
+   "key": 3429,
+   "chars": 7150,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 469,
+   "key": 343,
+   "chars": 2330,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 470,
+   "key": 3434,
+   "chars": 1607,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 471,
+   "key": 3439,
+   "chars": 4363,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 472,
+   "key": 3442,
+   "chars": 78,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 473,
+   "key": 3445,
+   "chars": 536,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 474,
+   "key": 3453,
+   "chars": 1616,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 475,
+   "key": 3455,
+   "chars": 1512,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 476,
+   "key": 3456,
+   "chars": 1076,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 477,
+   "key": 3478,
+   "chars": 250,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 478,
+   "key": 3479,
+   "chars": 662,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 479,
+   "key": 3484,
+   "chars": 2529,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 480,
+   "key": 349,
+   "chars": 131,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 481,
+   "key": 3494,
+   "chars": 1002,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 482,
+   "key": 3502,
+   "chars": 453,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 483,
+   "key": 3505,
+   "chars": 1128,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 484,
+   "key": 3506,
+   "chars": 3312,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 485,
+   "key": 3513,
+   "chars": 1761,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 486,
+   "key": 3518,
+   "chars": 540,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 487,
+   "key": 3534,
+   "chars": 1469,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 488,
+   "key": 3536,
+   "chars": 1568,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 489,
+   "key": 3538,
+   "chars": 3845,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 490,
+   "key": 3540,
+   "chars": 661,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 491,
+   "key": 3549,
+   "chars": 75,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 492,
+   "key": 3557,
+   "chars": 1800,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 493,
+   "key": 3563,
+   "chars": 83,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 494,
+   "key": 3565,
+   "chars": 550,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 495,
+   "key": 3567,
+   "chars": 929,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 496,
+   "key": 3569,
+   "chars": 2214,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 497,
+   "key": 357,
+   "chars": 1031,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 498,
+   "key": 3572,
+   "chars": 195,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 499,
+   "key": 3595,
+   "chars": 69,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 500,
+   "key": 3606,
+   "chars": 2097,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 501,
+   "key": 3608,
+   "chars": 1901,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 502,
+   "key": 3615,
+   "chars": 186,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 503,
+   "key": 3617,
+   "chars": 98,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 504,
+   "key": 3619,
+   "chars": 372,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 505,
+   "key": 3623,
+   "chars": 110,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 506,
+   "key": 3624,
+   "chars": 1100,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 507,
+   "key": 3629,
+   "chars": 1163,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 508,
+   "key": 3631,
+   "chars": 591,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 509,
+   "key": 3633,
+   "chars": 921,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 510,
+   "key": 3644,
+   "chars": 2481,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 511,
+   "key": 3653,
+   "chars": 1537,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 512,
+   "key": 3669,
+   "chars": 263,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 513,
+   "key": 3672,
+   "chars": 154,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 514,
+   "key": 3680,
+   "chars": 1948,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 515,
+   "key": 3682,
+   "chars": 1063,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 516,
+   "key": 3690,
+   "chars": 1656,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 517,
+   "key": 3691,
+   "chars": 333,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 518,
+   "key": 3697,
+   "chars": 2026,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 519,
+   "key": 3703,
+   "chars": 102,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 520,
+   "key": 3709,
+   "chars": 263,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 521,
+   "key": 371,
+   "chars": 136,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 522,
+   "key": 3710,
+   "chars": 1516,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 523,
+   "key": 3718,
+   "chars": 538,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 524,
+   "key": 3719,
+   "chars": 1142,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 525,
+   "key": 3724,
+   "chars": 186,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 526,
+   "key": 3732,
+   "chars": 1110,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 527,
+   "key": 3739,
+   "chars": 62,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 528,
+   "key": 374,
+   "chars": 174,
+   "score": false,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 529,
+   "key": 3743,
+   "chars": 180,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 530,
+   "key": 3744,
+   "chars": 757,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 531,
+   "key": 3748,
+   "chars": 172,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 532,
+   "key": 3749,
+   "chars": 19,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 533,
+   "key": 3750,
+   "chars": 233,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 534,
+   "key": 3751,
+   "chars": 304,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 535,
+   "key": 3752,
+   "chars": 123,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 536,
+   "key": 3753,
+   "chars": 16,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 537,
+   "key": 3754,
+   "chars": 19,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 538,
+   "key": 3755,
+   "chars": 16,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 539,
+   "key": 3756,
+   "chars": 359,
+   "score": true,
+   "reached_visible_channel": true
+  },
+  {
+   "doc_id": 540,
+   "key": 3757,
+   "chars": 19,
+   "score": true,
+   "reached_visible_channel": true
+  }
+ ]
+}

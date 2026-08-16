@@ -24,3 +24,7 @@ __pycache__/
 # <arm>/server_excerpt.log instead, which carries the configuration, the TT-side lines
 # and the tail. Re-ignore the raw ones, after the un-ignore so this wins.
 doc/optimized_vllm/*/server/server*.log
+
+# Same for the TTI-release stage's server: one raw server.log per arm, tens of
+# MB each. doc/tti_release/logs/server_excerpt.log is committed instead.
+doc/tti_release/server/server*.log

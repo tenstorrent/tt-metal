@@ -1,0 +1,45 @@
+{
+  "_what": "device-free confirmation, in torch bfloat16, of the quantization the on-device presence penalty is subject to: the penalty is stored in bf16 and the subtraction result is stored back into bf16 logits, so the EFFECTIVE penalty is the requested one snapped to the logit's own bf16 spacing. No Tenstorrent device and no server involved.",
+  "bf16_of_1.2": 1.203125,
+  "effective_penalty_for_requested_1.2_by_logit_magnitude": {
+    "8.0": 1.1875,
+    "12.0": 1.1875,
+    "16.0": 1.1875,
+    "20.0": 1.25,
+    "24.0": 1.25,
+    "31.875": 1.25
+  },
+  "effective_penalty_at_logit_20_by_requested_penalty": {
+    "0.5": {
+      "bf16_of_penalty": 0.5,
+      "effective_penalty": 0.5,
+      "exact": true
+    },
+    "0.7": {
+      "bf16_of_penalty": 0.69921875,
+      "effective_penalty": 0.75,
+      "exact": false
+    },
+    "1.1": {
+      "bf16_of_penalty": 1.1015625,
+      "effective_penalty": 1.125,
+      "exact": false
+    },
+    "1.2": {
+      "bf16_of_penalty": 1.203125,
+      "effective_penalty": 1.25,
+      "exact": false
+    },
+    "1.25": {
+      "bf16_of_penalty": 1.25,
+      "effective_penalty": 1.25,
+      "exact": true
+    },
+    "2.0": {
+      "bf16_of_penalty": 2.0,
+      "effective_penalty": 2.0,
+      "exact": true
+    }
+  },
+  "why_it_matters": "at the one greedy step where the device and vLLM's host sampler disagree (arithmetic_probe.json), the challenger sat exactly 1.25 below the winner, and the effective device penalty on that binade is exactly 1.25 -- an exact tie, resolved by TTSampling's lowest-global-token-id greedy tiebreak."
+}

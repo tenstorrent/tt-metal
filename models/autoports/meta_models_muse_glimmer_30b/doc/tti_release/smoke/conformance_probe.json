@@ -1,0 +1,29 @@
+{
+  "_what": "PRE-FIX arm, kept as the evidence that made the fix necessary. Taken while tt/reasoning_parser.py still returned content=None for a turn cut off inside the analysis channel. The three `content: null` entries below are exactly what broke four tt-inference-server conformance rows with `TypeError: argument of type 'NoneType' is not iterable`. The SHIPPED parser returns such a turn unsplit, so `content` is a string for every response the server can produce -- see README.md 'The API returned the analysis channel as the answer', and tests/test_reasoning_parser.py::test_content_is_always_a_string. Do not read this file as the shipped behaviour.",
+  "_arm": "pre-fix (content=None on truncation)",
+  "_superseded_by": "the shipped parser; see tests/test_reasoning_parser.py and the release conformance result (21/22)",
+  "echo_max32_default_reasoning": {
+    "finish_reason": "length",
+    "completion_tokens": 32,
+    "content": null,
+    "reasoning": "Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: The quick brown fox jumps over the lazy dog.\n\nWe"
+  },
+  "echo_max512_default_reasoning": {
+    "finish_reason": "stop",
+    "completion_tokens": 203,
+    "content": "The quick brown fox jumps over the lazy dog.",
+    "reasoning": "Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: The quick brown fox jumps over the lazy dog.\n\nWe need to repeat the sentence exactly, with no extra words, no quotes, and no commentary.\n\nThe instruction is to repeat sentence exactly. So output: The quick brown fox jumps over the lazy dog.\n\nWe must ensure no extra words, no quotes, no commentary. Just the sentence.\n\nPotential issue: The user asks to repeat sentence exactly. That's allowed. It's not disallowed. It's fine.\n\nWe should output exactly that sentence.\n\nNo extra punctuation? The sentence ends with period. Should include period.\n\nThe quick brown fox jumps over the lazy dog.\n\nMake sure no trailing spaces? Probably fine.\n\nWe must not add quotes. So just output sentence.\n\nPotential trick: The instruction says no extra words, no quotes, and no commentary. So just output.\n\nComply.\n\n"
+  },
+  "echo_max32_reasoning_low": {
+    "finish_reason": "length",
+    "completion_tokens": 32,
+    "content": null,
+    "reasoning": "Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: The quick brown fox jumps over the lazy dog.\n\nWe"
+  },
+  "stop_seq_count_to_5": {
+    "finish_reason": "stop",
+    "completion_tokens": 13,
+    "content": null,
+    "reasoning": "Count to 5 and then say '"
+  }
+}

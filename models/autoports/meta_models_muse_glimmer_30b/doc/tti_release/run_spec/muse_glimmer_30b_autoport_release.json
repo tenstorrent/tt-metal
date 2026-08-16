@@ -1,0 +1,142 @@
+{
+  "model_id": "id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2",
+  "impl": {
+    "impl_id": "muse_glimmer_30b_autoport",
+    "impl_name": "muse-glimmer-30b-autoport",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/meta_models_muse_glimmer_30b"
+  },
+  "hf_model_repo": "meta-models/Muse-Glimmer-30B",
+  "model_name": "Muse-Glimmer-30B",
+  "inference_engine": "vLLM",
+  "device_type": "P300X2",
+  "device_model_spec": {
+    "device": "P300X2",
+    "max_concurrency": 32,
+    "max_context": 131072,
+    "max_tokens_all_users_override": 1050624,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 128,
+        "osl": 128,
+        "max_concurrency": 1,
+        "num_prompts": 8,
+        "image_height": null,
+        "image_width": null,
+        "images_per_prompt": null,
+        "task_type": "text",
+        "theoretical_ttft_ms": null,
+        "theoretical_tput_user": null,
+        "targets": {
+          "functional": {
+            "ttft_ms": 88.3,
+            "tput_user": 11.33,
+            "tput": 11.33,
+            "tolerance": 0.0
+          },
+          "complete": {
+            "ttft_ms": 17.66,
+            "tput_user": 56.65,
+            "tput": 56.65,
+            "tolerance": 0.0
+          },
+          "target": {
+            "ttft_ms": 8.83,
+            "tput_user": 113.3,
+            "tput": 113.3,
+            "tolerance": 0.0
+          }
+        },
+        "target_peak_perf": {
+          "customer_functional": 0.1,
+          "customer_complete": 0.5,
+          "customer_sellable": 0.8
+        },
+        "num_inference_steps": null,
+        "structured_dataset": null,
+        "structured_output_ratio": null
+      }
+    ],
+    "vllm_args": {
+      "model": "meta-models/Muse-Glimmer-30B",
+      "block_size": "64",
+      "max_model_len": "131072",
+      "max_num_seqs": "32",
+      "max_num_batched_tokens": "131072",
+      "max-log-len": "32",
+      "seed": "9472",
+      "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"fabric_packet_payload_bytes\": 8192, \"trace_region_size\": 400000000, \"l1_small_size\": 6144, \"trace_mode\": \"decode_only\", \"sample_on_device_mode\": \"all\"}}"
+    },
+    "override_tt_config": {
+      "fabric_config": "FABRIC_1D_RING",
+      "fabric_packet_payload_bytes": 8192,
+      "trace_region_size": 400000000,
+      "l1_small_size": 6144,
+      "trace_mode": "decode_only",
+      "sample_on_device_mode": "all"
+    },
+    "env_vars": {
+      "MESH_DEVICE": "P300x2",
+      "ARCH_NAME": "blackhole"
+    },
+    "tensor_cache_timeout": 5400.0,
+    "system_requirements": null,
+    "known_issues": [],
+    "eval_max_retries": null,
+    "image_benchmark_num_batches": 3
+  },
+  "system_requirements": null,
+  "env_vars": {
+    "VLLM_CONFIGURE_LOGGING": "1",
+    "VLLM_RPC_TIMEOUT": "900000",
+    "VLLM_TARGET_DEVICE": "tt",
+    "TORCHDYNAMO_DISABLE": "1",
+    "MESH_DEVICE": "P300x2",
+    "ARCH_NAME": "blackhole"
+  },
+  "tt_metal_commit": "7db0eca",
+  "vllm_commit": null,
+  "hf_weights_repo": "meta-models/Muse-Glimmer-30B",
+  "param_count": 30,
+  "min_disk_gb": 80,
+  "min_ram_gb": 75.0,
+  "model_type": "LLM",
+  "repacked": 0,
+  "version": "0.20.0",
+  "docker_image": "ghcr.io/tenstorrent/tt-media-inference-server:0.20.0-7db0eca",
+  "status": "FUNCTIONAL",
+  "code_link": "https://github.com/tenstorrent/tt-metal/tree/7db0eca/models/autoports/meta_models_muse_glimmer_30b",
+  "override_tt_config": {
+    "fabric_config": "FABRIC_1D_RING",
+    "fabric_packet_payload_bytes": 8192,
+    "trace_region_size": 400000000,
+    "l1_small_size": 6144,
+    "trace_mode": "decode_only",
+    "sample_on_device_mode": "all"
+  },
+  "supported_modalities": [
+    "text"
+  ],
+  "subdevice_type": null,
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {},
+  "cli_args": {
+    "model": "Muse-Glimmer-30B",
+    "workflow": "release",
+    "device": "p300x2",
+    "tt_device": "p300x2",
+    "impl": "muse_glimmer_30b_autoport",
+    "engine": "vLLM",
+    "docker_server": false,
+    "local_server": false,
+    "service_port": "8000",
+    "server_url": null,
+    "no_auth": true,
+    "disable_trace_capture": false,
+    "limit_samples_mode": null,
+    "runtime_model_spec_json": "/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/specs/muse_glimmer_30b_autoport_release.json"
+  }
+}
