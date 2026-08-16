@@ -7,31 +7,30 @@ Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per
 
 - Branch: `sjovic/mcast-migration`; approved rollout plan materialized at `830190c9721`.
 - Baseline: `origin/llk_helper_library` at `dc9282be7d5`.
-- Ledger API: v10.
+- Ledger API: v11.
 - Materialized helper API: v11.
 
-The version mismatch is intentional at this checkpoint. `reconcile-dm-helper` aligned the ledger
-inventory with the source tree but does not perform Tier-0 device validation or API-version write-back
-owned by `apply-dm-helper`.
+Tier 0 API-v11 verification/write-back completed on 2026-08-16. Tier 0.1 remains pending only because
+its plan-mandated historical matched performance baseline requires a separately authorized checkout.
 
 ## Current paper state
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v10 | 17 | 14 |
-| pending | 3 | 9 |
+| migrated at ledger API v11 | 18 | 18 |
+| pending | 2 | 5 |
 | deferred | 84 | 0 |
 | quarantined | 0 | 0 |
 
-All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. Twelve
-migrated kernels changed across the baseline move or conflict-composed rebase and carry
-`needs_recheck`. The approved plan audit added 13 previously omitted call-site/receiver companions: two
+All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
+post-rebase `needs_recheck` flags were cleared after complete mapped API-v11 verification. The approved
+plan audit added 13 previously omitted call-site/receiver companions: two
 Matmul Decode two-hub readers, three programming/lab example receivers, four Quasar Matmul receivers,
 and four Quasar Conv receivers. The production and Quasar `conv_reader_common.hpp` files are recorded as
 atomic-scope support dependencies, not false call-site rows. Deferred factories are mapped in the reconcile
 report; `host_bindings` retains its convention of migrated or source-integrated pending bindings only.
 
-## Migrated units awaiting API-v11 re-entry
+## API-v11 verified migrated units
 
 | Unit | Kernels | Bindings | Existing evidence |
 |---|---:|---:|---|
@@ -44,9 +43,11 @@ report; `host_bindings` retains its convention of migrated or source-integrated 
 | `topk-multicore-final-readiness` | 2 | 1 | exact JIT, 14 passed / 12 expected xfails |
 | `layernorm-sharded-pre-allgather` | 2 | 1 | pre 126, post 136, sharded 208 |
 
-These rows remain stamped v10 until the API-v11 apply gate is green.
+These units are stamped at API v11. Tier 0.2 `matmul-in0-mcast-block-sharded` is also migrated at v11:
+its exact zero-hit-cache probe, complete mapped inventory, and inherited matched performance evidence
+passed on 2026-08-16.
 
-## Open `needs_recheck`
+## Closed `needs_recheck`
 
 | Unit | Kernels | Reason |
 |---|---|---|
@@ -56,18 +57,18 @@ These rows remain stamped v10 until the API-v11 apply gate is green.
 | TopK | `reader_final_topk.cpp`, `writer_local_topk.cpp` | baseline DFB changes composed with helper-owned readiness |
 | Sort | `coordinator_single_row_multi_core.cpp`, `reader_single_row_multi_core.cpp` | baseline UInt16 and partial-grid hang fixes composed with the split helper channels |
 
-`apply-dm-helper` must run their complete mapped verify-only coverage and clear the flags when green.
-The enclosing rebase workflow already passed focused post-rebase probes, but reconciliation keeps the
-flags until the complete mapped inventories are recorded by the apply workflow.
+All 12 flags are cleared. The 2026-08-16 apply verification passed the build, exact route probes,
+complete mapped operation inventories, 80 helper device tests, 17 source-audit tests, and 32 host
+fixture tests. Claude C3 independently approved the write-back.
 
 ## Source-integrated pending work
 
 | Area | Kernel/binding rows | Remaining work |
 |---|---|---|
-| Matmul in0 interleaved | sender and receiver; five host bindings | API-v11 validation, exact fresh-JIT evidence, complete mapped inventories, performance evidence, ledger write-back |
-| Matmul in0 block-sharded | hybrid reader; four legacy/descriptor 1D/2D bindings | Validate rotating sender topology and the exact block-sharded routes, then write back atomically |
-The Matmul API-007 and block-sharded topology blockers are resolved in source. Pending status is
-retained because reconciliation does not substitute source inspection for build/device evidence.
+| Matmul in0 interleaved | sender and receiver; five host bindings | Route-specific historical matched performance baseline and ledger write-back |
+The Matmul API-007 and block-sharded topology blockers are resolved in source. Interleaved pending
+status is retained because the approved plan requires a matched pre-unit baseline at `45033178088b`,
+and the separately gated historical checkout was not authorized.
 Block-sharded Conv activation is deferred: its producer-overlapped streaming multicast remains the R4
 design gap and continues to use the established raw primitive path.
 
@@ -87,10 +88,5 @@ factory, ABI, channel split, or data flow.
 
 ## Next action
 
-Run `apply-dm-helper` from the reconciled state:
-
-1. validate and stamp the v10 fleet at API v11;
-2. clear the 12 `needs_recheck` flags through complete mapped verify-only coverage;
-3. validate and write back the two interleaved Matmul kernels and five bindings;
-4. validate and write back the block-sharded Matmul kernel and four bindings;
-5. update logs and the live report after each atomic unit completes.
+Proceed with approved Tier 1 unit 6. Keep the two interleaved Matmul kernels and five bindings pending
+until a future instruction separately authorizes the historical performance checkout.

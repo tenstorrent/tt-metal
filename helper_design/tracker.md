@@ -59,13 +59,28 @@ the same required command returned `REVISE`; all corrections were incorporated:
 Claude confirmed the 13 paths exactly match Appendix B, both support headers are correctly excluded from
 ledger rows, no 14th candidate exists, and there is no integrity blocker.
 
+### C3 — Tier 0 API-v11 and write-back gate
+
+The first bounded Tier 0 review was terminated after six minutes without output. A narrower retry with
+the same required model returned PASS:
+
+- clear all 12 `needs_recheck` flags and stamp the existing 17-kernel / 14-binding fleet at API v11;
+- migrate Tier 0.2's hybrid kernel and four bindings at API v11 using the plan-authorized inherited
+  matched medians (+0.643% and -0.045%);
+- keep Tier 0.1's two kernels and five bindings pending because its route-specific historical baseline
+  requires the separately authorized checkout that was not performed;
+- no correctness, API, LOC, or integrity issue blocks those exact ledger mutations.
+
+Claude requested that the 302/188 Matmul result explicitly state that the mapped
+`MM-IN0-INTERLEAVED` and `MM-BLOCK-SHARDED-HYBRID` nodes were included; the tracker and ledger now do so.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
 | Reconciliation | complete | 104 unique entries: 17 migrated, 3 pending, 84 deferred; no removal/rename/clobber |
-| Tier 0.1 Matmul in0 interleaved | pending | Historical matched performance checkout is not authorized; verification can proceed |
-| Tier 0.2 Matmul in0 block-sharded | pending | Matched performance evidence exists in archived 2026-08-07 plan |
+| Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
+| Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | pending | Required behavior and test collection not started |
 | Tier 2.7 DRAM-sharded Matmul | pending | Required behavior and test collection not started |
 | Tier 2.8 group-attention Matmul | pending | Required behavior and post-flag-barrier proof not started |
@@ -81,3 +96,25 @@ ledger rows, no 14th candidate exists, and there is no integrity blocker.
 4. Reconciliation matched the approved boundary exactly. Added 13 kernel/receiver rows, kept two
    `conv_reader_common.hpp` headers support-only, regenerated the deferred factory map in
    `archive/reconciliation/reconcile_2026-08-16-plan-inventory.md`, and preserved all existing rollout state.
+5. Rebuilt the current checkout with `./build_metal.sh`; the Release build passed. No production source
+   was changed during Tier 0 verification.
+6. Ran one exact `--dev --no-precompile` operation node for each Tier 0 route. Matmul 2D in0 multicast,
+   GroupNorm legacy, LayerNorm pre-allgather, TopK, Sort, Conv height-sharded, Conv block-sharded, and
+   Conv width-sharded all passed. The isolated caches contained the expected sender/receiver artifacts
+   for Matmul, GroupNorm, LayerNorm, TopK, Sort, and the Conv 1D/2D weight routes. The width and
+   block-sharded probes were repeated with the runtime's canonical `TT_METAL_CACHE` variable; both
+   reported zero cache hits and contained their exact width-activation and hybrid Matmul artifacts.
+7. Revalidated the helper fleet: `test_mcast_pipe.py` 80 passed, source audit 17 passed, and
+   `McastHostFixture.*` 32 passed.
+8. Ran the complete mapped Tier 0 operation inventories sequentially through `run_safe_pytest.sh`:
+   Matmul 302 passed / 188 expected skips (including `MM-IN0-INTERLEAVED` and
+   `MM-BLOCK-SHARDED-HYBRID`); sparse Matmul 11 passed; GroupNorm 235 passed / 10
+   device-shape skips; distributed LayerNorm 190 passed / 10 pre-existing non-running xfails; sharded
+   LayerNorm 280 passed; TopK 25 passed / 12 expected BFLOAT8_B pad xfails; Sort 9 passed; Conv DRAM
+   routes 17 passed. The three exact Conv feature nodes also passed.
+9. Tier 0.1 cannot satisfy its performance gate without the plan's separately authorized reversible
+   historical checkout at `45033178088b`; no checkout was attempted. Tier 0.2 has the plan-approved
+   inherited matched medians (+0.643% and -0.045%).
+10. After Claude C3, advanced `ledger.json.current_api_version` from 10 to 11, stamped all 17 existing
+    migrated kernel rows and 14 existing migrated host bindings at v11, cleared the 12 `needs_recheck`
+    flags, and migrated Tier 0.2's one kernel plus four bindings. Tier 0.1 remains unchanged and pending.

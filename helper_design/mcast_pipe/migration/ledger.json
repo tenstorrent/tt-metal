@@ -21,7 +21,7 @@
       ],
       "migration_unit": "conv2d-weights-single-sender-rect",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
       "validation_set": [
         "build_metal.sh: passed",
@@ -49,7 +49,7 @@
       ],
       "migration_unit": "conv2d-weights-fixed-line",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
       "validation_set": [
         "build_metal.sh: passed",
@@ -77,7 +77,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
@@ -111,7 +111,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
@@ -145,7 +145,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
@@ -179,7 +179,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
@@ -213,7 +213,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
@@ -242,7 +242,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
@@ -274,7 +274,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
@@ -303,7 +303,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
       "validation_set": [
         "build_metal.sh: passed",
@@ -336,7 +336,7 @@
       ],
       "migration_unit": "sort-single-row-control",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
       "validation_set": [
         "build_metal.sh: passed",
@@ -365,7 +365,7 @@
       ],
       "migration_unit": "conv2d-activation-width-sharded",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "c3f5e53a19a8179cda08436d8964860a32005fbe",
       "validation_set": [
         "build_metal.sh: passed",
@@ -395,7 +395,7 @@
       ],
       "migration_unit": "topk-multicore-final-readiness",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
       "validation_set": [
         "build_metal.sh: passed",
@@ -419,7 +419,7 @@
       ],
       "migration_unit": "layernorm-sharded-pre-allgather",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "e58c66ef53167a05703190700f884107da0bddc4",
       "validation_set": [
         "separate builder-split prerequisite 4ef7e9a57a6: build passed; LN-PRE-ALLGATHER 126 passed; LN-POST-ALLGATHER 136 passed; LN-SHARDED 208 passed",
@@ -532,13 +532,17 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
       ],
       "migration_unit": "matmul-in0-mcast-block-sharded",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
-      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-07",
-      "flags": ["source-integrated", "apply-verification-pending"]
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-1d:descriptor",
@@ -548,13 +552,17 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
       ],
       "migration_unit": "matmul-in0-mcast-block-sharded",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
-      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-07",
-      "flags": ["source-integrated", "apply-verification-pending"]
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-2d:legacy",
@@ -564,13 +572,17 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
       ],
       "migration_unit": "matmul-in0-mcast-block-sharded",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
-      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-07",
-      "flags": ["source-integrated", "apply-verification-pending"]
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-2d:descriptor",
@@ -580,13 +592,17 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
       ],
       "migration_unit": "matmul-in0-mcast-block-sharded",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
-      "validation_set": ["MM-BLOCK-SHARDED-HYBRID"],
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-07",
-      "flags": ["source-integrated", "apply-verification-pending"]
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
     }
   ],
   "entries": [
@@ -634,7 +650,7 @@
       "role": "hybrid",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
@@ -653,10 +669,8 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "V10 current after self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
-      "flags": [
-        "needs_recheck"
-      ],
+      "inventory_note": "API v11 verified from the original v10 self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-16: complete mapped verification passed. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) remains valid.",
+      "flags": [],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
@@ -666,7 +680,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
       "validation_set": [
         "build_metal.sh: passed",
@@ -685,10 +699,8 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "V10 current after self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
-      "flags": [
-        "needs_recheck"
-      ],
+      "inventory_note": "API v11 verified from the original v10 self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-16: complete mapped verification passed. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) remains valid.",
+      "flags": [],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
     },
@@ -716,19 +728,19 @@
       "op_family": "matmul",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
       "validation_set": [
-        "MM-BLOCK-SHARDED-HYBRID exact isolation; migrated PCC 0.981998/0.983415, baseline passed"
+        "MM-BLOCK-SHARDED-HYBRID exact isolation; migrated PCC 0.981998/0.983415, baseline passed",
+        "2026-08-16 MM-BLOCK-SHARDED-HYBRID included in mapped Matmul run: 302 passed / 188 expected skips",
+        "2026-08-16 exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache; hybrid reader artifact confirmed",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "inventory_note": "Source integrated with API-v11 independent rotating senders and restored receiver geometry; apply verification and ledger write-back remain pending.",
-      "flags": [
-        "source-integrated",
-        "apply-verification-pending"
-      ]
+      "last_verified": "2026-08-16",
+      "inventory_note": "Migrated at API v11 with independent rotating senders and restored receiver geometry; correctness and inherited matched performance gates passed.",
+      "flags": ["fully-end-to-end"]
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
@@ -837,7 +849,7 @@
       "role": "sender",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
       "validation_set": [
         "build_metal.sh: passed",
@@ -863,7 +875,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
       "validation_set": [
         "build_metal.sh: passed",
@@ -889,7 +901,7 @@
       "role": "sender",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
       "validation_set": [
         "build_metal.sh: passed",
@@ -915,7 +927,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
       "validation_set": [
         "build_metal.sh: passed",
@@ -941,7 +953,7 @@
       "role": "hybrid",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "c3f5e53a19a8179cda08436d8964860a32005fbe",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1051,7 +1063,7 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
       "validation_set": [
         "GN legacy inventory: 108 passed, 2 expected skips",
@@ -1062,10 +1074,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
+      "inventory_note": "API v11 verified from the original v10 migration. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
       "flags": [
-        "tier:2a",
-        "needs_recheck"
+        "tier:2a"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1075,7 +1086,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
       "validation_set": [
         "GN legacy inventory: 124 passed, 8 expected skips",
@@ -1084,10 +1095,8 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
-      "flags": [
-        "needs_recheck"
-      ],
+      "inventory_note": "API v11 verified from the original v10 migration; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "flags": [],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
@@ -1096,7 +1105,7 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "e58c66ef53167a05703190700f884107da0bddc4",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1106,12 +1115,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "inventory_note": "Fully end-to-end v10 migration: handshaked Flag signal-only sender uses whole-grid Mcast2D or per-line Mcast1D; gather reads and final write barrier remain operation-owned.",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: handshaked Flag signal-only sender uses whole-grid Mcast2D or per-line Mcast1D; gather reads and final write barrier remain operation-owned.",
       "flags": [
         "acked-signal-only",
         "fully-end-to-end",
-        "atomic-unit:layernorm-sharded-pre-allgather",
-        "needs_recheck"
+        "atomic-unit:layernorm-sharded-pre-allgather"
       ]
     },
     {
@@ -1120,7 +1128,7 @@
       "role": "receiver",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "e58c66ef53167a05703190700f884107da0bddc4",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1130,12 +1138,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "inventory_note": "Fully end-to-end v10 migration: handshaked Flag signal-only receiver uses receive_signal; two-stage line coordinators use the sender face. Gather reads, second-stage semaphore, and final atomic barrier remain operation-owned.",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: handshaked Flag signal-only receiver uses receive_signal; two-stage line coordinators use the sender face. Gather reads, second-stage semaphore, and final atomic barrier remain operation-owned.",
       "flags": [
         "acked-signal-only",
         "fully-end-to-end",
-        "atomic-unit:layernorm-sharded-pre-allgather",
-        "needs_recheck"
+        "atomic-unit:layernorm-sharded-pre-allgather"
       ]
     },
     {
@@ -1162,7 +1169,7 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
       "validation_set": [
         "GN Welford inventory: 108 passed, 2 expected skips",
@@ -1173,10 +1180,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
+      "inventory_note": "API v11 verified from the original v10 migration. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
       "flags": [
-        "tier:2a",
-        "needs_recheck"
+        "tier:2a"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1204,7 +1210,7 @@
       "role": "receiver",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
       "validation_set": [
         "GN Welford inventory: 116 passed, 8 expected skips",
@@ -1213,10 +1219,8 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
-      "flags": [
-        "needs_recheck"
-      ],
+      "inventory_note": "API v11 verified from the original v10 migration; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "flags": [],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
@@ -1389,7 +1393,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
       "migration_unit": "topk-multicore-final-readiness",
       "validation_set": [
@@ -1401,12 +1405,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "inventory_note": "Fully end-to-end v10 migration: sender-side no-handshake Counter readiness uses an adopted, host-zeroed semaphore; the arrival counter remains operation-owned.",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: sender-side no-handshake Counter readiness uses an adopted, host-zeroed semaphore; the arrival counter remains operation-owned.",
       "flags": [
         "race-free-no-handshake-init",
         "fully-end-to-end",
-        "atomic-unit:topk-multicore-final-readiness",
-        "needs_recheck"
+        "atomic-unit:topk-multicore-final-readiness"
       ]
     },
     {
@@ -1415,7 +1418,7 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
       "migration_unit": "topk-multicore-final-readiness",
       "validation_set": [
@@ -1427,12 +1430,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "inventory_note": "Fully end-to-end v10 migration: receiver-side no-handshake Counter readiness is helper-owned; value/index unicast and the arrival counter remain operation-owned.",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: receiver-side no-handshake Counter readiness is helper-owned; value/index unicast and the arrival counter remain operation-owned.",
       "flags": [
         "race-free-no-handshake-init",
         "fully-end-to-end",
-        "atomic-unit:topk-multicore-final-readiness",
-        "needs_recheck"
+        "atomic-unit:topk-multicore-final-readiness"
       ]
     },
     {
@@ -1460,7 +1462,7 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1472,12 +1474,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "MIGRATED API v10: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
+      "inventory_note": "API v11 verified from the v10 migration: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
-        "fully-end-to-end",
-        "needs_recheck"
+        "fully-end-to-end"
       ]
     },
     {
@@ -1486,7 +1487,7 @@
       "role": "receiver",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 10,
+      "migrated_api_version": 11,
       "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
       "validation_set": [
         "build_metal.sh: passed",
@@ -1498,12 +1499,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "inventory_note": "MIGRATED API v10: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
+      "inventory_note": "API v11 verified from the v10 migration: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
-        "fully-end-to-end",
-        "needs_recheck"
+        "fully-end-to-end"
       ]
     },
     {
@@ -2570,8 +2570,20 @@
       "added_by_reconcile": "2026-08-16"
     }
   ],
+  "last_apply_verification": {
+    "date": "2026-08-16",
+    "api_version": 11,
+    "result": "PASS",
+    "verified_existing_migrated_kernels": 17,
+    "verified_existing_migrated_host_bindings": 14,
+    "cleared_needs_recheck": 12,
+    "migrated_units": ["matmul-in0-mcast-block-sharded"],
+    "retained_pending_units": ["matmul-in0-mcast-interleaved"],
+    "validation": "build passed; exact route probes and complete mapped inventories passed; helper device 80/80, source audit 17/17, host fixture 32/32",
+    "claude_review": "PASS: v11 fleet stamp and Tier 0.2 write-back permitted; Tier 0.1 remains pending without separately authorized historical matched baseline"
+  },
   "reconciled": "2026-08-16",
-  "current_api_version": 10,
+  "current_api_version": 11,
   "baseline_ref": "origin/llk_helper_library @ dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
   "reconcile_history": [
     {

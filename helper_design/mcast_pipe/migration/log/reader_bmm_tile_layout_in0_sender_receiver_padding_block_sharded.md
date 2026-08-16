@@ -76,3 +76,18 @@ per-send flag-VALID re-assert (helper fix 20cf0df46ee that lifted this from quar
 Validation: `test_matmul_2d_multiple_output_blocks_per_core` --run-all = **56 passed, 72 skipped, 0 failed,
 NO HANG**; 2D smoke (transpose_mcast=True + in0_sharded=True, grid (8,4)) PASS. JIT-built confirmed
 (`generated/watcher/watcher.log`). diff_lines_removed: 3 (template arg + 2-line constexpr decl).
+
+## API v11 verification and Tier 0.2 write-back (2026-08-16)
+
+- No production rewrite was needed. The source-integrated unit commits remain `1d18a2ca59a` and
+  `a1c9c1f68bc`; their production kernel and factory `.cpp` changes satisfy the plan's per-file
+  LOC-negative gate.
+- Current exact isolation passed under `--dev` with `transpose_mcast=True`, `in0_sharded=True`,
+  `out_sharded=False`, grid `(8,4)`, and `b=1`. A canonical isolated `TT_METAL_CACHE` reported 0/24
+  hits and contained `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded`.
+- The complete mapped Matmul run included `MM-BLOCK-SHARDED-HYBRID`: 302 passed and 188 expected skips.
+- Inherited plan-authorized matched 800 MHz medians from the 2026-08-07 record remain inside the +2.00%
+  limit: SDXL +0.643%, transposed -0.045%.
+- `./build_metal.sh`, helper device/source suites, and host fixture all passed at the current checkout.
+- Claude C3 returned PASS for API-v11 write-back. Ledger result: kernel and all four legacy/descriptor
+  bindings migrated at API v11.
