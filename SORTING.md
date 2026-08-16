@@ -19,12 +19,31 @@
 
 ## 0a. RESULTS — read this first
 
+> [!IMPORTANT]
+> **2026-08-16 campaign close-out.** The integration gap this section describes is
+> closed: see `HANDOFF.md` → "FINAL RESULTS" for the committed, op-level-measured
+> table (replay default-on: `ttnn.topk` single-core 1.154–1.202x; column-parallel
+> multi-core `topk_large_indices`: 24–89 µs on single-row k∈[512,2048], ~3000–4500x
+> vs the single-core `ttnn.topk` cliff; unfused SFPLOADMACRO step 1.053–1.090x on
+> the shipping path). Every `[DISPUTED]` tag below is adjudicated there — in
+> particular the K=512 fused step re-measures at **1.136x** (1.174x does not
+> reproduce) and the SFPSWAP lane-mapping question resolved as 4-rows×even-columns
+> (the ISA docs were right). The subsections below stand as the campaign record.
+
 Everything below is measured on Blackhole silicon in the tt-llk perf harness, two-point
 slope, 5 runs/point, with an `SFPSWAP` control that must land at exactly 2.00x the
 `SFPLOAD` floor or the run is discarded. Correctness is exact-integer or bit-exact against
 a torch golden, never PCC.
 
 ### The headline number is END TO END
+
+> [!WARNING]
+> **SUPERSEDED (2026-08-16).** This table predates §0a-ter and §0a-bis, which
+> re-measure both rows (4.034 / 6.879 in §0a-ter, and §0a-bis shows the "floor"
+> underneath both was never hardware). It is kept for history; quote §0a-ter and
+> §0a-bis instead. The 4.175 / 6.930 values are additionally
+> [DISPUTED — being re-measured 2026-08-16, see canonical sweep] against the
+> 3.855 / 6.879 values later in this document.
 
 | | cyc per 32-element vector | basis |
 | :--- | ---: | :--- |
@@ -42,7 +61,9 @@ kernel: **PACK overlaps unpack** (`base` = 4.078 = `max(3.938, 1.25)`, not the s
 **the SFPU does not** — math and unpack both drive the Dest register file and serialise
 (`sfpu` = 5.438 ~= 3.938 + 1.5; `xlmerge` = 6.930 ~= 3.938 + 2.844). And 32-bit
 `unpack_to_dest` at **3.938 cyc/vector is a floor no 32-bit-fused Top-K can beat**, this
-one included.
+one included. [DISPUTED — being re-measured 2026-08-16, see canonical sweep: 3.938 here
+vs 3.855 in §0a-bis/§0a-ter vs 4.175 above; 6.930 here vs 6.879 in §0a-ter. §0a-bis also
+shows this "floor" is the LLK handshake, not hardware.]
 
 So the packer path does not win by having faster SFPU work. **It wins by using no SFPU at
 all**, so nothing serialises against the unpacker. An earlier revision of this document
@@ -54,7 +75,7 @@ includes the unpacker, and it was never reachable.
 | result | measurement | correctness |
 | :--- | :--- | :--- |
 | **`_topk_xl_merge_` beaten** | 2.844 -> **1.438** cyc/vec (1.978x); body 2.499 -> **1.000**, the architectural floor | **71/71** vs shipping golden, + mutation control |
-| **`topk_local_sort` -11.9%** | `TOPK_REPLAY_STEP_STORE`, end_phase 5 | ttnn **191 passed**, 8 skipped, 80 xfailed |
+| **`topk_local_sort` -11.9%** [DISPUTED — being re-measured 2026-08-16, see canonical sweep; HANDOFF.md quotes 4877→4397 = 1.109x, which is -9.8%, not -11.9%] | `TOPK_REPLAY_STEP_STORE`, end_phase 5 | ttnn **191 passed**, 8 skipped, 80 xfailed |
 | **Threshold search 194x cheaper** | packer exponent histogram, **128 cyc** vs 24,876 for binary search | 38/38 functional, 6/6 perf |
 | **Arbitrary k is free** | k appears only as an integer compared against a count; **k=5, 17, 100, 1000 are bit-identical kernels** | — |
 | Four-sub-unit macro | Load+Simple+MAD+Round+Store at **1.000** cyc/vec | — |
@@ -77,14 +98,22 @@ includes the unpacker, and it was never reachable.
 
 ### What is NOT established
 
-- **Negative thresholds are uncovered.** `MIN_THRESHOLD_RELU` cannot express one, and the
-  1.003 `MaskStore` writes -1/0 masks that destroy the values — a timing probe, not a
-  usable filter. A correct SFPU fallback is ~2.0 cyc/vector and still additive on the
-  unpacker. Analysed, not built. **This matters for signed logits, i.e. real MoE routing.**
-- No end-to-end `ttnn.topk` device number: this build has no profiler instrumentation, so
-  the fraction of its time spent in `topk_local_sort` is unmeasured.
-- Below N ~ 2048 the sorting networks win outright; the rebuild is **81%** of the real
-  `topk_xl` reduction step and is the next target.
+> [!NOTE]
+> All three bullets below are **STALE — superseded by later sections** (kept for
+> history):
+>
+> - ~~Negative thresholds are uncovered~~ — **superseded by §0a-ter**, which builds
+>   and measures the `SFPGT`+`SFPAND` SFPU fallback (2 issues/vector, 9 passed on
+>   device).
+> - ~~No end-to-end `ttnn.topk` device number / no profiler instrumentation~~ —
+>   **stale.** The current build has `ENABLE_TRACY=ON` (`build/CMakeCache.txt`) and
+>   an end-to-end Tracy report exists
+>   (`generated/profiler/reports/2026_08_16_07_25_00/`); see HANDOFF.md's bottom
+>   line. What remains unmeasured is the *fraction* of `ttnn.topk` time spent inside
+>   `topk_local_sort`.
+> - ~~The rebuild is the next target~~ — **superseded by §0a-quater and
+>   §0a-quinquies**, which price and optimize it. The "below N ~ 2048 the sorting
+>   networks win outright" observation stands.
 
 ## 0. What Changed and Why
 
@@ -127,7 +156,7 @@ everything above. **`unpack_to_dest` is not slow. The LLK's per-tile handshake i
 | raw UNPACR -> SrcA | Float32 | 1.001 | 127.8 |
 | raw UNPACR -> SrcA | Float16_b | 0.503 | 127.2 |
 | raw UNPACR -> SrcA | Bfp8_b | 0.285 | 119.2 |
-| **stock LLK -> Dest** | Float32 | **3.855** | **33.2** |
+| **stock LLK -> Dest** | Float32 | **3.855** [DISPUTED — being re-measured 2026-08-16, see canonical sweep; elsewhere 3.938 (§0a, B3) and 4.175 (§0a headline)] | **33.2** |
 
 **The Blackhole unpacker does 128 B/cycle, to Dest as well as SrcA, at every format
 width.** The three raw-SrcA points scale exactly with tile bytes, which independently
@@ -166,7 +195,7 @@ the `MATH_PACK` semaphore, i.e. address partitioning, exactly the mechanism that
 
 | arm | L1_TO_L1 cyc/vector |
 | :--- | ---: |
-| stock LLK unpack + pack | 3.855 (UNPACK_ISOLATE; matches the 4.175 synchronised figure) |
+| stock LLK unpack + pack | 3.855 (UNPACK_ISOLATE) [DISPUTED — being re-measured 2026-08-16, see canonical sweep; "matches the 4.175 synchronised figure" overstated — 3.855 vs 4.175 is an 8.3% gap] |
 | raw unpack + pack, **same** Dest region | 2.456 (~ sum) |
 | **raw unpack + pack, SPLIT Dest region** | **1.257** (= `max`) |
 
@@ -249,7 +278,7 @@ document did not separate out.
 | **relucomp (packer filter, zero SFPU)** | **4.034** |
 | mask1 (1 issue/vec, destructive probe) | 5.411 |
 | **negfilter (2 issues/vec, value-preserving)** | **6.415** |
-| `_topk_xl_merge_` | 6.879 |
+| `_topk_xl_merge_` | 6.879 [DISPUTED — being re-measured 2026-08-16, see canonical sweep; §0a/B2 quote 6.930 for the same arm] |
 
 The pipeline is **perfectly linear in math-thread issues**:
 `L1_TO_L1 = 4.132 + 0.275 + 1.004 x issues/vector`. Each SFPU issue costs a full ~1.00
@@ -328,14 +357,17 @@ remain unspent.**
 | level | before | after | |
 | :--- | ---: | ---: | ---: |
 | rebuild alone | 374 | **350** | 1.069x |
-| **reduction step** (with the macro merge, 91 -> 46) | 465 | **396** | **1.174x** |
+| **reduction step** (with the macro merge, 91 -> 46) | 465 | **396** | **1.174x** [DISPUTED — being re-measured 2026-08-16, see canonical sweep; §0a-quinquies and HANDOFF.md give 459 → 404 = 1.136x for the same K=512 step] |
 
 **Irreducible: ~326 of 374** — 143 transpose, 144 `SFPSWAP` (exactly the comparator count
 for 9 levels), 64 load/store, 8 `SFPTRANSP`.
 
-**Correctness 74/74** against the shipping torch golden (K=512/1024/2048, both directions,
-fused and unfused, num_chunks 2 and 4), with a mutation control, independently re-run on
-device.
+**Correctness 74/74** — this section's suite (`test_topk_rebuild_macro.py`) — against
+the shipping torch golden (K=512/1024/2048, both directions, fused and unfused,
+num_chunks 2 and 4), with a mutation control, independently re-run on device. (The
+76/76 quoted in §0a-quinquies and HANDOFF.md is a *different, later* suite,
+`test_topk_rebuild_full_macro.py`, which adds the macro-store arm and a second
+mutation control — the two counts are not a contradiction.)
 
 ### The bug that timing could never have caught — the best cautionary tale of this work
 
@@ -366,7 +398,9 @@ first level has both operands freshly loaded, so only it can ride a macro. At K>
 `canonical_big_block` sub-blocks A and B are **single-level** bodies whose store address
 equals their load address, so the merge's *full* trick (swap **and** store on the macro)
 applies wholesale. Verified structurally before building: `bitonic_sort_len_k` is exactly
-4 `SFPSWAP` (`ckernel_sfpu_topk_xl.h:830`), and the header's own comment (`:1064-1066`)
+4 `SFPSWAP` **in the fused mode measured here** (`ckernel_sfpu_topk_xl.h:830`; the
+header's own recording-window census at `:131-132` gives **2** for unfused, where the
+index swaps are issued separately), and the header's own comment (`:1064-1066`)
 confirms rsf=1 at K=512 compiles both sub-blocks away.
 
 | rebuild, cyc/call | K=512 | K=1024 | K=2048 |
@@ -401,7 +435,7 @@ loss**.
 
 | K | shipping | ours | speedup |
 | ---: | ---: | ---: | ---: |
-| 512 | 459 | 404 | 1.136x |
+| 512 | 459 | 404 | 1.136x [DISPUTED — being re-measured 2026-08-16, see canonical sweep; §0a-quater gives 465 → 396 = 1.174x for the same K=512 step] |
 | 1024 | 987 | 817 | **1.208x** |
 | 2048 | 2135 | 1701 | **1.255x** |
 
@@ -430,11 +464,26 @@ tree but unused**. Each entry says how it was established and what it costs to g
 This is the section to read if you are writing SFPU or packer code, whether or not you
 care about sorting.
 
+> [!IMPORTANT]
+> **Sourcing caveat on every ISA-doc citation below.** Several pages cited in this
+> section do not exist in the `BlackholeA0` tree: `LReg.md` and `MatrixUnit.md` are
+> 3-line stubs redirecting to the Wormhole tree (the `MatrixUnit.md` stub explicitly
+> says "similar, but **not identical**"), and `WaitGate.md` and the entire
+> `Packers/{Compression,ReLU,ExponentHistogram}.md` set exist **only** in the
+> `WormholeB0` tree. So items A1/A2/A3/A5, B1, B4 and the `MatrixUnit.md` argument in
+> §0a-bis are silicon-vs-**Wormhole-page** comparisons. Where BH silicon disagrees
+> with a WH-tree page, the honest upstream report is "**Blackhole differs from the
+> Wormhole page and is undocumented on Blackhole**", not "the documentation is
+> wrong" — there is no Blackhole page to be wrong.
+
 ### A. Wrong or missing in the documentation
 
-**A1. The packer's zero-run counter counts PRECEDING zeroes on Blackhole, not following.**
-`Packers/Compression.md:3` says *"how many zeroes appear **after** that datum"*. On BH it
-is the count **before**. Established by construction: raw group 0 of a stride-16 pattern
+**A1. The packer's zero-run counter counts PRECEDING zeroes on Blackhole — differing
+from the Wormhole-tree page; Blackhole has no packer-compression page at all.**
+`Packers/Compression.md:3` (WormholeB0 tree only) says *"how many zeroes appear
+**after** that datum"*. On BH it is the count **before** — i.e. BH silicon differs from
+the WH page and is undocumented, rather than "the documentation is wrong".
+Established by construction: raw group 0 of a stride-16 pattern
 was datums `[v0,v1,v2,v3,0]` with nibbles `[0,15,15,15,14]`, and only the "before" reading
 reconstructs the source. A decoder written to the documented semantics is **bit-perfect on
 symmetric patterns (all-zero, dense, front-loaded) and garbage on asymmetric ones** — the
@@ -485,12 +534,17 @@ than adding one.
 
 **B2. The SFPU does NOT overlap `unpack_to_dest`; the packer DOES.** Measured in one
 kernel: `stream+pack` = 4.078 = `max(3.938, 1.25)` (concurrent), but `+MaskStore` = 5.438
-~= `3.938 + 1.5` and `+topk_xl merge` = 6.930 ~= `3.938 + 2.844` (serialised). Math and
+~= `3.938 + 1.5` and `+topk_xl merge` = 6.930 ~= `3.938 + 2.844` (serialised)
+[DISPUTED — being re-measured 2026-08-16, see canonical sweep: 3.938 vs 3.855 (§0a-bis,
+§0a-ter) and 6.930 vs 6.879 (§0a-ter)]. Math and
 unpack both drive the Dest register file. **This invalidates any design costed from
 `MATH_ISOLATE` numbers alone** — those measure with the operand already resident in Dest.
 
-**B3. 32-bit `unpack_to_dest` runs at 3.938 cyc per 32-element vector (32.5 B/cyc).** A
-hard floor for any 32-bit-fused Top-K.
+**B3. 32-bit `unpack_to_dest` runs at 3.938 cyc per 32-element vector (32.5 B/cyc).**
+[DISPUTED — being re-measured 2026-08-16, see canonical sweep; §0a-bis measures the same
+stock path at 3.855.] A hard floor for any 32-bit-fused Top-K *on the stock LLK path* —
+§0a-bis shows the floor is the per-tile handshake, not hardware (raw UNPACR -> Dest is
+1.004).
 
 **B4. `SFPLOADMACRO` can express a MAP at 1.000 cyc/vector but never a REDUCTION.**
 Macro-scheduled destinations are restricted to `macroVD` (clobbered by the next load) or
@@ -530,8 +584,11 @@ defined for this mode"*. The LLK exposes only `ALL_ROWS_MAX = 1` (VD = min). Sin
 always overrides `Insn.VD`, and `macroVD` is the only register the Store slot can reach,
 Mod1=9 is what makes a macro-scheduled compare-exchange usable.
 
-**C4. `SFPGT`/`SFPLE` are new in Blackhole and used by nothing.** Census across the
-shipping sort/topk headers: **230 `SFPSWAP` sites, 0 `SFPGT`/`SFPLE`**. And that is
+**C4. `SFPGT`/`SFPLE` are new in Blackhole and unused by any sort/topk kernel — but
+NOT "used by nothing".** Shipping call sites exist outside sorting:
+`ckernel_sfpu_rounding_ops.h:57,:69` (BH; the WH twin explicitly notes WH lacks `SFPGT`)
+and `ckernel_sfpu_softmax_k.h:76`. The correct scoped census across the shipping
+sort/topk headers is: **230 `SFPSWAP` sites, 0 `SFPGT`/`SFPLE`**. And that is
 defensible for *sorting* — a compare-exchange from `SFPGT` + blend costs 4-5 instructions
 against `SFPSWAP`'s 1 (which yields min *and* max), and loses categorically inside a macro
 since every blend needs >= 2 Simple instructions and a macro schedules one. `SFPGT` wins
@@ -590,8 +647,12 @@ root (changing pytest's rootdir away from `tests/python_tests` and its `pytest.i
 Use a bare `flock /tmp/tt-device.lock` instead, which still interoperates with other users
 of that lock.
 
-**D7. This build has no profiler instrumentation**, so Tracy captures nothing and no
-end-to-end `ttnn` Device Kernel Duration is available without a rebuild.
+**D7. STALE — superseded 2026-08-16.** ~~This build has no profiler instrumentation~~:
+true of an earlier build only. The current build has `ENABLE_TRACY=ON`
+(`build/CMakeCache.txt`) and an end-to-end Tracy report exists
+(`generated/profiler/reports/2026_08_16_07_25_00/ops_perf_results_*.csv`, the source of
+HANDOFF.md's `ttnn.topk` numbers). The trap it recorded remains real: `build_metal.sh`
+honours a cached `ENABLE_TRACY=OFF` and cannot re-enable it (see HANDOFF.md "Traps").
 
 ## 1. Audit of TT-Metal Sorting & Top-K Implementations
 
@@ -1346,7 +1407,7 @@ inner loop, and had two flags built to fix it. **Both fail. Neither should be up
 | `TOPK_HOIST_INIT_GUARDS` | **+0.057 cyc/vec** (nothing) | identical (3907 B) |
 | `TOPK_MOP_INNER_LOOP` | **+0.698 cyc/vec (0.92% SLOWER)** | +244 B |
 | **`TOPK_REPLAY_STEP_LOAD`** | **-5.866 (-7.70%)** | +4 B |
-| **`TOPK_REPLAY_STEP_STORE`** | **-9.062 (-11.90%)** | +76 B |
+| **`TOPK_REPLAY_STEP_STORE`** | **-9.062 (-11.90%)** [DISPUTED — being re-measured 2026-08-16, see canonical sweep; HANDOFF.md's bottom line quotes 4877→4397 = 1.109x (-9.8%) for the same change] | +76 B |
 
 **Why the hypothesis was wrong.** Disassembling the *default* math ELF shows GCC had
 **already fully unrolled the d-loop and unswitched all three init guards**. The phase-0
