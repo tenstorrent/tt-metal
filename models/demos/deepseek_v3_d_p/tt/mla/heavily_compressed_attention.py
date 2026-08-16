@@ -87,8 +87,8 @@ class _TtHCABase(LightweightModule):
         return self._from_torch(torch.zeros(*shape, dtype=torch.int32), dtype=dtype, layout=layout)
 
     def _push_scalar(self, buf, v):
-        """Overwrite an existing device buffer with one value -- 4 bytes, and the only thing forward still
-        sends from host."""
+        """Overwrite an existing device buffer with one value -- the only thing forward still sends from
+        host."""
         host_dtype = torch.float32 if buf.dtype == ttnn.float32 else torch.int32
         host = self._from_torch(
             torch.full(tuple(buf.shape), v, dtype=host_dtype), dtype=buf.dtype, layout=buf.layout, on_device=False
@@ -328,8 +328,7 @@ class TtHCACompressor(_TtHCABase):
                 else:
                     gate = t
 
-        usable = (seq_len // self.compress_rate) * self.compress_rate
-        n_windows = usable // self.compress_rate  # windows this chip owns
+        n_windows = seq_len // self.compress_rate  # windows this chip owns
         t_real = seq_len_actual // self.compress_rate
         # prepare_input pads the sequence to a multiple of compress_rate * sp_factor, so every chip is
         # left with at least one whole window. Asserted and not handled: the empty-slab branch this
@@ -338,12 +337,10 @@ class TtHCACompressor(_TtHCABase):
             f"each chip needs at least one whole compression window: {seq_len} rows is under "
             f"compress_rate {self.compress_rate}; run prepare_input on the hidden states first"
         )
-        gate = ttnn.slice(gate, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
         gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, self.head_dim])
         gate = ttnn.add(gate, self.position_bias)
         weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
 
-        kv = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
         kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
         pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
 
@@ -726,7 +723,6 @@ class TtHCA(_TtHCABase):
         batch, seq_local = q.shape[0], q.shape[2]
         seq_len = seq_local * self.sp_factor  # global query/main-key length
         num_heads_local = self.num_heads // self.tp_factor
-        carry_len = carry.shape[2]
 
         # Per-chip SDPA needs every key on every chip; compressed_kv is already replicated.
         if self.sp_factor > 1:
@@ -754,8 +750,6 @@ class TtHCA(_TtHCABase):
 
         # Pad Sk to a multiple of 32 by hand: SDPA would pad it with zeros, and the mask reads its own pad
         # columns as "attend", which would pollute the softmax. The mask -infs the columns added here.
-        sk = carry_len + seq_len + compressed_kv.shape[2]
-        sk_pad = ((sk + 31) // 32) * 32
         parts = [carry, sliding_kv, compressed_kv]
         if self._kv_pad is not None:
             parts.append(self._kv_pad)

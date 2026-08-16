@@ -8,8 +8,10 @@ reference modeling_deepseek_v4.py.
 
 Every test drives a public forward -- no TtHCA private method is called directly:
   - TtHCACompressor.forward        compressed KV entries + block bias
-  - TtHCA.forward, single-shot     single device (all 64 heads) and mesh, 12 prompt lengths
-  - TtHCA.forward, chunked         TtHCAState across chunks, 3 scenarios + a 14-chunk 57K run
+  - TtHCA.forward, single-shot     single device and mesh, 5 prompt lengths
+  - TtHCA.forward, chunked         TtHCAState across chunks, 4 scenarios + two 56K runs
+
+Each of them runs on both V4 variants, flash and pro.
 
 Device-perf for the same block lives in tests/perf/test_ttnn_hca_perf.py.
 """
@@ -261,11 +263,8 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len, mode
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
 def test_hca_forward(device, seq_len, model_config):
-    """Single-shot TtHCA.forward against DeepseekV4Attention.forward.
-
-    Single device, so this is the only test that runs _o_proj with all 64 heads on one chip -- the
-    shape whose nlp_concat_heads L1 footprint is largest. Keep it: the mesh tests shard the heads
-    down to 16 and would not catch a head-count-dependent circular-buffer blowup."""
+    """Single-shot TtHCA.forward against DeepseekV4Attention.forward, on one device: sp=tp=1, so this
+    is the only test that runs the block with no collectives and every head on one chip."""
     torch.manual_seed(_SEED)
     batch = 1
     config = _config(model_config)
@@ -513,11 +512,11 @@ def test_hca_chunked_prefill_mesh(
 def test_hca_long_chunked_prefill_mesh(
     mesh_device, device_params, topology, name, chunk_size, iters_valid, model_config, long_pcc
 ):
-    """Demo-sized prompts, ~57K tokens, 440-448 entries deep.
+    """Demo-sized prompts, 56,320 tokens, 440 entries deep.
 
     The reference is chunked here, unlike the short scenarios. An unchunked one is not an option at
     this length: eager attention (forced, since sinks make V4 eager-only) materializes
-    [1, num_heads, S, S] scores = 726 GB at 57K. The short scenarios are what pin chunked == plain
+    [1, num_heads, S, S] scores = 726 GB at this length. The short scenarios are what pin chunked == plain
     attention; this test only shows it stays true that many chunks deep."""
     torch.manual_seed(_SEED)
 
