@@ -45,7 +45,7 @@ docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porti
 
 ## Reading the CSV
 
-**Reference every column by its header name, not its position.** The sheet evolves — columns get added and reordered — so read the **header row** (row 1) to find a column by name; never hard-code "column N." **Match on the distinctive stem of the header, not the whole string**: the parenthetical suffixes are edited from time to time (`Override runtime args method?` has carried more than one), so an exact-string match on a full header can miss a column that is right there. Columns are added far more often than removed, but do not assume a name you remember is still present — check the header row. A grep-by-op-path lookup gives you the row; the header row tells you which cell is which. (Do not reproduce a positional column list here — it goes stale the moment a column is inserted.)
+**Reference every column by its header name, not its position.** The sheet evolves — columns get added and reordered — so read the **header row** (row 1) to find a column by name; never hard-code "column N." **Match on the distinctive stem of the header, not the whole string**: the parenthetical suffixes are edited from time to time (`Override runtime args method?` has carried more than one), so an exact-string match on a full header can miss a column that is right there. Columns are added far more often than removed, but they *do* get retired, so never assume a name you remember is still present — resolve it against the header row you just fetched. A grep-by-op-path lookup gives you the row; the header row tells you which cell is which. (Do not reproduce a positional column list here — it goes stale the moment a column is inserted.)
 
 One row per **(op, DeviceOperation, ProgramFactory variant)** — an op with several factories has several rows. The columns the audit reads, by name:
 
@@ -59,8 +59,7 @@ One row per **(op, DeviceOperation, ProgramFactory variant)** — an op with sev
 - **`Override runtime args method?`** — has an `override_runtime_arguments` method? Read it together with `Concept`: on a `descriptor`/PD op this is the Metal 2.0 target-concept signal, while on a *legacy* op the same method name is just part of the legacy-concept signature. Distinct from `get_dynamic_runtime_args` above — the two are TTNN's successive runtime-arg-update mechanisms.
 - **`Pybind descriptor (…)`** — pybinds factory / device-op internals (`create_descriptor`)?
 - **`Smuggled pointer (…)`** — an un-annotated pointer argument (a PD-migration bug).
-- **`Is safe to port?`** — a correctness call from the sheet owner. Its derivation is stale and the column is expected to be retired; **the audit does not read it.**
-- **`Is able to port?`** — the derived verdict, and the cell the audit reads. Its derivation lives in the sheet; the recipe deliberately does not mirror it.
+- **`Is able to port?`** — the derived verdict, and the cell the audit reads. **You will not be able to see how it was reached**: the CSV carries values, not formulas, so a verdict that doesn't follow from the columns in front of you is normal — the derivation can turn on things the audit has no view of. Read the cell; don't vet it. See the [audit's routing rules](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite) for what to do with a `no` you can't attribute.
 - **`TensorParameter relaxation`** — whether the op needs a relaxation of the strict `TensorSpec` match. Values are short tags (`none`, `dynamic`, and analysis-state markers); **quote the cell verbatim** rather than paraphrasing it, since the vocabulary distinguishes work that is queued from work already scheduled.
 - **`Known op issues`** — free text, reserved for problems that must be cleared before a port. Read the cell; it names its own owner.
 - **`Op Classification`** — a derived summary of an op's overall state, including whether it reads as *broken*.
@@ -71,9 +70,10 @@ The sheet may carry other, informational columns (e.g. `Model`); find any of the
 
 Notes:
 
-- Cell values are mostly `yes` / `no`, but some are `warning`, `PR` (handled in an in-flight PR), blank, or other short tags. **Diego owns these classifications.** The sheet is a shortcut to work you'd otherwise do by hand — **trust it, but cross-check the cheaply-checkable columns against the code** (per the audit subject). On a code-vs-sheet **conflict, or a missing op, the sheet is broken → gate the port** and route it to the readiness-sheet owner to reconcile.
+- Cell values are mostly `yes` / `no`, but some are `warning`, `PR` (handled in an in-flight PR), blank, or other short tags. **Diego owns these classifications.** The sheet is a shortcut to work you'd otherwise do by hand — **trust it, but cross-check the cheaply-checkable columns against the code** (per the audit subject). On a code-vs-sheet **conflict on one of those columns, or a missing op, the sheet is broken → gate the port** and route it to the readiness-sheet owner to reconcile. That claim is only available where you hold independent evidence — a *derived* cell you can't explain is not a conflict, and the audit routes it differently.
 - **Ignore the trailing summary block.** The last rows aren't ops — they're category totals (`With Smuggled pointers, 66`, and similar) and stray labels. A grep-by-op-path lookup skips them naturally.
 - CSV export covers only the sheet's first tab (`Sheet1`), which today holds all the data.
+- **CSV flattens formulas to values.** Several columns are computed, not hand-entered, and you see only what they evaluated to. That is the intended working set — derived cells are read, not vetted (see `Is able to port?` above) — but know that it's what you're holding, so an unexplained value reads as *out of my view* rather than *wrong*.
 
 ## Troubleshooting
 
