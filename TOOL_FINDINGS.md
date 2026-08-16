@@ -98,6 +98,7 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
+| **F44** | the optimize objective times a capture-and-verify harness (eager pass + trace capture + 2 readbacks + release + host PCC, ONE decode step) rather than inference — so capture cost is weighted 4×/iteration and the 24-frame decode that dominates deployment enters once | **YES — with F42/F43** | medium |
 | **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
 | **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` against threshold 0.99 — no range check anywhere, and the pytest exit code is deliberately ignored, so the regex scrape is the only signal | **YES — first, one line** | trivial |
 | **F6** | `mcp` is **declared nowhere** → all 10 agent tools silently absent → 11 h stall | **YES — first** | trivial |
@@ -3907,6 +3908,90 @@ own output is wrong by construction, in the direction that flatters the hand-wri
    `NA`.
 3. **Assert the invariant.** `per_token_ms <= forward_wall_ms` whenever `OSL > 1`; equality is only
    valid at `OSL == 1`, and the two being equal is exactly what this bug looks like.
+
+---
+
+## ★★★★ F44 — the number every optimisation is judged by is a capture-and-verify harness, not an inference measurement
+
+**Status: live; it is the objective function of the entire optimize stage** · severity: the metric
+being minimised is dominated by costs that do not exist in deployment · reported: not yet
+
+The optimize stage ranks every candidate edit by `full_pipeline_ms`. That number comes from the
+generated perf test's `_forward()`, which is:
+
+```python
+def _forward():
+    """The model's OWN self-recording function: per stage it stages inputs resident,
+    then captures / executes / releases its own trace."""
+    return pipe.trace_capture_selftest(device, verbose=True)
+```
+
+`trace_capture_selftest` (`tt/pipeline.py:597`) is documented as *"Capture **ONE step per stage** in
+begin/end_trace_capture, execute it, check it against the eager result, then RELEASE before the next
+stage."* Per stage, inside the timed region:
+
+```python
+eager  = ttnn.to_torch(step()).float()   # 1. a full EAGER execution
+tid    = ttnn.begin_trace_capture(...)   # 2. trace CAPTURE (record + compile)
+out    = step()
+         ttnn.end_trace_capture(...)
+         ttnn.execute_trace(...)         # 3. ONE trace replay  <- the only deployment-shaped work
+traced = ttnn.to_torch(out).float()      # 4. a second device->host readback
+         ttnn.release_trace(device, tid) # 5. trace RELEASE
+p      = ref.pcc(eager, traced)          # 6. a HOST-side PCC computation
+```
+
+Steps 1, 2, 4, 5 and 6 do not occur in a deployed inference loop at all. Capture and release happen
+once at startup; the eager pass never happens; a production step does not read its own output back
+twice and correlate it on the host. Only step 3 resembles serving.
+
+### What the metric therefore weights
+
+Measured shape of the run, from the test's own runtime output:
+
+```
+PERF_ISL_TOKENS=32
+PERF_OSL_TOKENS=4
+[perf] vocode input pinned to 4 audio frames
+[trace] prefill: OK C=224   decode: OK C=64   flow: OK C=3   vocode: OK C=32
+```
+
+- **one** decode step, **one** prefill, **one** flow, vocode over 4 frames;
+- against a product workload of a 200-id prompt and **24 frames** (`demo_tts.py --max-frames 24`);
+- so the repeated cost that dominates deployment — decode, 24× — enters the objective **once**,
+  while per-stage capture/release/eager/readback overhead enters **four times, every iteration**.
+
+An edit that makes trace *capture* cheaper scores. An edit that makes steady-state *decode* cheaper
+barely moves the number. The optimizer is not being dishonest — it is faithfully minimising what it
+was handed.
+
+### Why this is separable from F41 and F43
+
+F41 is about the depth knob failing to bound the window. F43 is about the per-token label being the
+per-call time. **F44 is about the workload itself being the wrong shape** — even with the depth knob
+working and the label fixed, timing a capture-verify-release cycle would still not be timing
+inference.
+
+### It also explains a number that cannot be compared
+
+A hand-written TTNN port of this model reports **26.9 ms/frame** steady state (RTF 0.357). The
+tool's `full_pipeline_ms` is **1466.79 ms** for one capture-and-verify pass over four stages. These
+are not the same quantity and no ratio between them is meaningful. Any comparison table that places
+them side by side is wrong, and the error is large — not a few percent, but a different measurement
+entirely.
+
+### Fixes
+
+1. **Time replay, not capture.** Capture once outside the timed region; time `execute_trace` only.
+   The pipeline already separates `<stage>_trace_setup` from `<stage>_trace_step`, so the split
+   exists.
+2. **Drop the verification work from the timed path.** The eager execution, the second readback and
+   `ref.pcc` are correctness machinery; they belong in the PCC gate, which already runs separately.
+3. **Weight decode by the real horizon.** Run OSL decode steps per iteration rather than one, so the
+   objective's shape matches the product's (`TT_PERF_OSL_TOKENS` and `PERF_MCP_FULLPIPE_TOKENS`
+   already exist as the knobs).
+4. **Report the shape next to the number.** `1466.79 ms (prefill 1 + decode 1 + flow 1 + vocode 4,
+   capture+verify included)` is honest; `FULL-model end-to-end` is not.
 
 ---
 
