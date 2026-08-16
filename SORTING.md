@@ -17,6 +17,75 @@
 
 ---
 
+## 0a. RESULTS — read this first
+
+Everything below is measured on Blackhole silicon in the tt-llk perf harness, two-point
+slope, 5 runs/point, with an `SFPSWAP` control that must land at exactly 2.00x the
+`SFPLOAD` floor or the run is discarded. Correctness is exact-integer or bit-exact against
+a torch golden, never PCC.
+
+### The headline number is END TO END
+
+| | cyc per 32-element vector | basis |
+| :--- | ---: | :--- |
+| **Packer-resident Top-K filter** | **4.175** | L1_TO_L1, full pipeline |
+| `_topk_xl_merge_` (shipping) | 6.930 | L1_TO_L1, same kernel, same stream |
+| **speedup** | **1.66-1.68x** | |
+
+Cascade to K=32 at N=32768: **~6,509 cycles** vs **7,165** for a *single* `topk_xl` merge
+pass (**1.10x**, and generous to `topk_xl`), vs **78,024** for `topk_local_sort` (**12x**).
+
+### Why end-to-end is the only honest basis
+
+`MATH_ISOLATE` measures with the operand **already resident in Dest**. Measured in one
+kernel: **PACK overlaps unpack** (`base` = 4.078 = `max(3.938, 1.25)`, not the sum), but
+**the SFPU does not** — math and unpack both drive the Dest register file and serialise
+(`sfpu` = 5.438 ~= 3.938 + 1.5; `xlmerge` = 6.930 ~= 3.938 + 2.844). And 32-bit
+`unpack_to_dest` at **3.938 cyc/vector is a floor no 32-bit-fused Top-K can beat**, this
+one included.
+
+So the packer path does not win by having faster SFPU work. **It wins by using no SFPU at
+all**, so nothing serialises against the unpacker. An earlier revision of this document
+claimed 1.7x from `max(1.003, 1.648)`; that combined two isolate numbers neither of which
+includes the unpacker, and it was never reachable.
+
+### Component results (isolate basis — real, but NOT end-to-end)
+
+| result | measurement | correctness |
+| :--- | :--- | :--- |
+| **`_topk_xl_merge_` beaten** | 2.844 -> **1.438** cyc/vec (1.978x); body 2.499 -> **1.000**, the architectural floor | **71/71** vs shipping golden, + mutation control |
+| **`topk_local_sort` -11.9%** | `TOPK_REPLAY_STEP_STORE`, end_phase 5 | ttnn **191 passed**, 8 skipped, 80 xfailed |
+| **Threshold search 194x cheaper** | packer exponent histogram, **128 cyc** vs 24,876 for binary search | 38/38 functional, 6/6 perf |
+| **Arbitrary k is free** | k appears only as an integer compared against a count; **k=5, 17, 100, 1000 are bit-identical kernels** | — |
+| Four-sub-unit macro | Load+Simple+MAD+Round+Store at **1.000** cyc/vec | — |
+| Threshold + compaction, zero SFPU | dense fp32 tile 4096 -> **640 B** in one PACR | **5/5 bit-exact** |
+
+### Hardware facts found here that are not in the documentation
+
+- The packer **exponent histogram works on Blackhole at zero cost** and is used by no file
+  in the tree — but it **samples 1 datum in 8**, in the fixed pattern `p mod 64 < 8`.
+- `ENABLE_ACC_STATS_Enable_ADDR32` is **45 on Blackhole, 46 on Wormhole**. Using the WH
+  value on BH pokes the wrong register silently.
+- The packer's zero-run counter counts zeroes **PRECEDING** its datum on BH, not following
+  as documented.
+- The packer's `MIN_THRESHOLD_RELU` compares in the **sign-magnitude total order, not
+  IEEE** — the same order `SFPGT` uses, which is the order Top-K wants.
+- `SFPSWAP Mod1 = 9` (VD = max) is documented with *"no enum currently defined for this
+  mode"*; the LLK only exposes `ALL_ROWS_MAX = 1`. This is the key to the merge win.
+- `ROW_2_MAX`/`ROW_3_MAX` are **5/6 on WH and BH**, silently duplicating `ROW_0/1_MAX`;
+  the ISA says 7/8 and Quasar has it right. Latent — nothing uses them.
+
+### What is NOT established
+
+- **Negative thresholds are uncovered.** `MIN_THRESHOLD_RELU` cannot express one, and the
+  1.003 `MaskStore` writes -1/0 masks that destroy the values — a timing probe, not a
+  usable filter. A correct SFPU fallback is ~2.0 cyc/vector and still additive on the
+  unpacker. Analysed, not built. **This matters for signed logits, i.e. real MoE routing.**
+- No end-to-end `ttnn.topk` device number: this build has no profiler instrumentation, so
+  the fraction of its time spent in `topk_local_sort` is unmeasured.
+- Below N ~ 2048 the sorting networks win outright; the rebuild is **81%** of the real
+  `topk_xl` reduction step and is the next target.
+
 ## 0. What Changed and Why
 
 Five independent audits were run against this document — one per section, plus an
