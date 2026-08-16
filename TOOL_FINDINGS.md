@@ -1,14 +1,50 @@
-# Findings — running `tt_hw_planner` / `perf_automation` on Voxtral-TTS Block 1
+# Findings — driving PR #46283's pipeline on Voxtral-TTS
 
-Running log of every issue hit while driving PR #46283's pipeline end-to-end, and what was done
-about it. Written so each entry stands alone: symptom first (what a user actually sees), then the
-real cause, then the fix, then how it was verified.
+Running log of every issue hit while driving the PR's `bring-up → emit-e2e → optimize` pipeline end
+to end, across two experiments, and what was done about it. Written so each entry stands alone:
+symptom first (what a user actually sees), then the real cause, then the fix, then how it was
+verified.
 
-**Why this file exists.** The failures so far have not announced themselves — each one surfaced
-three layers downstream of its cause, wearing a diagnosis that pointed at the wrong thing. A log
-of "what it said" next to "what it was" is the useful artifact.
+**Why this file exists.** The failures have not announced themselves — each surfaced several layers
+downstream of its cause, wearing a diagnosis that pointed at the wrong thing. A log of "what it
+said" next to "what it was" is the useful artifact.
 
-## The experiment
+---
+
+## READ THIS FIRST
+
+Two experiments against the same hand-built TTNN implementation, on one Blackhole p150b:
+
+| | Experiment 1 | Experiment 2 |
+|---|---|---|
+| model | Block 1 only (3.4B backbone, stock `MistralForCausalLM`) | **full three-block Voxtral-TTS** (4.0B: backbone + flow + codec) |
+| bring-up | 5/5 components, ~17 min of real work | **7/7 components, 114/114 ops on device, one round, 42 min** |
+| e2e | — | **PCC 0.9999834**, exact audio-code match, **0 code flips** |
+| optimize | ran unattended and worked | 22 attempts, 11 wins, **−15.5%** — see F46 |
+
+**The port is correct.** That result is solid and was measured by running the tests directly, not by
+reading the tool's status files. Bring-up in particular is genuinely impressive: a 4B three-stack
+model, no per-model code, entirely on device in one round.
+
+**No performance number in this document describes the delivered model.** That is F46, and it is the
+first thing to read.
+
+### The five that matter most
+
+| # | one line |
+|---|---|
+| **F46** | the optimizer spent 12 h improving `decode_step`, which the demo never calls; the shipped loop recomputes the whole prefix every frame |
+| **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` — no range check on a value that cannot exceed 1.0 |
+| **F36 + F37** | the graduation gate feeds `torch.randn` to components whose real captured inputs sit unread on disk, and its defaults can silently corrupt the golden |
+| **F34** | the overlay store restores a model deleted from HEAD, so a from-scratch run is unreachable and two runs from one commit differ invisibly |
+| **F29** | the CLI's `--pcc-target` default of 0.95 overrides the engine's documented 0.99 — measured here as the difference between a 0.9586 and a 0.9986 port |
+
+Everything else is indexed in the OWNERSHIP tables below. Entries marked **OURS** (S1–S7) are our
+own setup problems, recorded so they are never mistaken for tool defects.
+
+---
+
+## Experiment 1 — Block 1
 
 Port Voxtral-TTS **Block 1** (the 3.4B autoregressive backbone) with the tool, blind, and compare
 against a hand-built TTNN implementation of the same block that has been through 74 recorded
@@ -27,7 +63,7 @@ optimization experiments.
 
 ---
 
-## RESULT SO FAR — the port is CORRECT; the tool could not tell
+### Experiment 1 result — the port is CORRECT; the tool could not tell
 
 Bring-up **succeeded**. Verified by running the generated tests directly on the P150, not by
 reading the tool's status files:
