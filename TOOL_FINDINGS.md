@@ -3982,9 +3982,30 @@ PERF  (ISL=32, OSL=4)     [trace] prefill: C=32    decode: C=64    flow: C=3   v
 REAL  (200-id, 24 frames) [trace] prefill: C=224   decode: C=224   flow: C=3   vocode: C=32
 ```
 
-**Every matmul in the backbone is a different shape between the two.** The optimizer chose core
-grids, shard splits and a hand-written kernel's per-shape core count against a sequence of 32–64
-that is 224 in production — a 3.5–7× difference on the axis those choices are most sensitive to.
+**CORRECTION — the damage is narrower than "every matmul differs", and the distinction matters.**
+An earlier draft of this entry said every backbone matmul is a different shape between the two runs.
+That is wrong, and being wrong in the tool's *disfavour* is worth fixing explicitly.
+
+Decode emits **one token at a time**, and the device computes in 32×32 tiles, so that single row is
+padded to a full tile. Decode projections are therefore `M=32` **permanently** — in the small job
+and in production alike. Splitting the ops by what they actually depend on:
+
+| op class | small job | real job | same shape? |
+|---|---|---|---|
+| decode projections (QKV, MLP, out) | M=32 (1 padded token) | M=32 (1 padded token) | **yes — tuned correctly** |
+| decode attention (scores, probs) | context **64** | context **224** | no — 3.5× |
+| prefill (all of it) | M=**32** | M=**224** | no — 7× |
+
+The ledger shows both classes. `32 x 9216 x 3072` and `32 x 4096 x 3072` are projections, whose
+shape does not move with context. `32 x 128 x 32` is attention — 128 is `head_dim` and the trailing
+**32 is the context length**; that same op is `32 x 128 x 224` in production.
+
+So the bandwidth-bound reasoning quoted below is **genuinely correct for decode projections**: M is
+one tile there permanently, the weight really is streamed for a single row of work, and "only bytes
+help" holds at any horizon. The custom hi/lo kernel was built on a premise that is true in
+production. What is mis-tuned is **attention**, profiled at under a third of its real context, and
+**the whole of prefill**, profiled at a seventh of its real size — plus the proportion and depth
+distortions below.
 
 The tool established that sensitivity itself, in a commit message:
 
@@ -4018,11 +4039,14 @@ MatmulDeviceOperation 32 x 128  x 32
 > the weight in), and the profile puts them at 329–512 GB/s — already ON this board's roofline.
 > Cores cannot help; only BYTES can"*
 
-That is sound reasoning **at M=32**. At M=224 there is 7× the reuse and the op may not be at the
-bandwidth roof at all, so "cores cannot help" is exactly the claim that could invert. The custom
-hi/lo kernel built on that premise (streaming one weight instead of two) is likely still a win at
-any shape — but its *justification*, and the decision to stop pursuing core-level levers, were
-established in a regime the production workload may never enter.
+That reasoning is **sound and stays sound** for the decode projections it was applied to: decode
+emits one token, padded to one tile, at every horizon — so M=32 is not an artefact of the small job,
+it is the permanent production shape. The custom hi/lo kernel rests on a premise that holds.
+
+Where M *does* grow with the workload is **prefill** (M = padded prompt length: 32 here, 224 real).
+There, seven tile rows give 7× the reuse for the same weight traffic, so "already at the bandwidth
+roof, cores cannot help" is exactly the claim that can invert — and prefill was never profiled at
+its real size to find out.
 
 **This also disposes of the obvious cheap fix.** "Keep the small job for profiling, run the real job
 for timing" is not sufficient: per-op attribution gathered at C=64 mis-ranks the ops that dominate
