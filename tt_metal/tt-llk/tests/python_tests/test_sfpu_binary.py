@@ -728,6 +728,24 @@ def test_fresh_cpp_binary_max_min(formats, dest_acc, mathop, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_add_sub_int(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (_add_int_/_sub_int_ SIGN_MAGNITUDE raw path) vs fresh typed-C++
+    A/B over identical Int32 stimuli/golden; exact integer contract via the suite's
+    integer format gate (mirrors test_sfpu_binary_int)."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuMask],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -1772,9 +1790,7 @@ def test_sfpu_binary_bcast(
 @pytest.mark.parametrize(
     "binary_bcast_impl,label", [(0, "handwritten_replay"), (1, "generated_sfpi")]
 )
-def test_sfpu_binary_bcast_device_profile(
-    perf_report, binary_bcast_impl, label
-):
+def test_sfpu_binary_bcast_device_profile(perf_report, binary_bcast_impl, label):
     """Profile the same one-tile COL/ADD body for the handwritten/generated A/B."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -1816,6 +1832,4 @@ def test_sfpu_binary_bcast_device_profile(
     # scoped marker row; summing would make the second selector look 2x slower.
     cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
     assert cycles > 0
-    print(
-        f"BINARY_BCAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}"
-    )
+    print(f"BINARY_BCAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
