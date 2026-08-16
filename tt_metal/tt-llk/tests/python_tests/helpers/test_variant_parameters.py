@@ -34,6 +34,7 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
+    TopKPerfArm,
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
@@ -355,6 +356,64 @@ class COUNT_THR_BITS(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define THR_BITS 0x{self.count_thr_bits:08X}"
+
+
+# --- sources/topk_micro_op_perf.cpp (Blackhole Top-K micro-op baseline) ------
+#
+# Every field below MUST be emitted as `#define`, never `constexpr`, for exactly
+# the reason spelled out for COUNT_ARM above: the kernel guards each symbol with
+# `#ifndef` and supplies a fallback, and a `constexpr` leaves that guard
+# unsatisfied. All seven arms would then compile to the kernel's fallback body
+# while still hashing to distinct variant ids -- a sweep that silently measures
+# one thing seven times, with no error anywhere.
+#
+# Bundled into ONE parameter class rather than seven, so the derived CSV schema
+# (helpers/perf/test_schemas.py, a merge gate) carries one coherent block and a
+# row is self-describing: reading `topk_perf_arm` alone never tells you which
+# `end_phase`/`k` produced the number.
+
+
+@dataclass
+class TOPK_MICRO_OP(TemplateParameter):
+    """Compile-time configuration of the Top-K micro-op issue-rate baseline.
+
+    ``topk_perf_arm`` selects the body; the remaining fields are the parameters
+    that body reads. Fields not consumed by the selected arm are still emitted
+    (and still recorded in the CSV) so every row states the full configuration
+    it was built with.
+
+    ``topk_perf_iter_count`` is the number of times the arm's BODY runs inside
+    the timed region -- one replay pass for the two control arms, one micro-op
+    invocation for the rest. Two values per arm give the slope that cancels the
+    ~30-cycle profiler marker pair and every one-time cost inside the zone.
+    """
+
+    topk_perf_arm: TopKPerfArm = TopKPerfArm.GmgTop8
+    topk_perf_iter_count: int = 8
+    # _bitonic_topk_phases_steps' i_end_phase. ttnn's topk compute kernel passes
+    # 5; topk_test.cpp passes TOPK_LOGK - 1 (= 4 at K = 32).
+    topk_perf_end_phase: int = 5
+    # _bitonic_topk_merge's m_iter (the merge-tree level) and k.
+    topk_perf_m_iter: int = 0
+    topk_perf_k: int = 32
+    # 0 = SortDir::ArgMax (descending). Drives `idir` for the sort arms and
+    # `top_min` for the merge arm.
+    topk_perf_sort_dir: TopKSortDirection = TopKSortDirection.Descending
+    # STABLE_SORT template argument: a real perf axis, not a flag -- it changes
+    # the recorded compare-lattice lengths (e.g. phase 0 goes from 4 to 6).
+    topk_perf_stable: StableSort = StableSort.No
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"#define TOPK_PERF_ARM {self.topk_perf_arm.value}",
+            f"#define ITER_COUNT {self.topk_perf_iter_count}",
+            f"#define TOPK_END_PHASE {self.topk_perf_end_phase}",
+            f"#define TOPK_M_ITER {self.topk_perf_m_iter}",
+            f"#define TOPK_KVAL {self.topk_perf_k}",
+            f"#define TOPK_DIR {self.topk_perf_sort_dir.value}",
+            f"#define TOPK_STABLE {int(bool(self.topk_perf_stable.value))}",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass

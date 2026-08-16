@@ -87,12 +87,23 @@
 // itself. This is the same reason ckernel_sfpu_mul_int.h drives its macro
 // loop off ADDR_MOD_6/ADDR_MOD_7 rather than recomputing offsets.
 //
-// STATUS: WRITTEN, NEVER EXECUTED.
-// Every cycle count here is derived from the ISA docs, not measured. The
-// device in this machine was held by another process at authoring time. Run
-// under scripts/run_safe_pytest.sh, which flocks the device across agents.
-// ttsim cannot substitute: it does not implement SFPLOADMACRO and is
-// functional, not cycle-accurate.
+// STATUS: MEASURED ON BLACKHOLE SILICON. Results (two-point slope over
+// ITER_COUNT {512, 2048}, MATH_ISOLATE, 5 runs/point), after
+// test_profiler_overhead.py confirmed the marker pair at 30 +/- 5 cycles:
+//
+//   ReplayLoad  (Load only, floor)          1.000 cyc/vector   32.0 elem/cyc
+//   ReplaySwap  (SFPSWAP control)           2.000              16.0
+//   CountD1     (Load+SFPGT + sw SFPIADD)   1.998              16.0
+//   MacroTriple (Load+SFPGT+SFPMAD)         1.002              31.9
+//   MaskStore   (Load+SFPGT+SFPSTORE)       1.003              31.9
+//
+// The SFPSWAP control landing on 2.000 -- predicted from SFPSWAP.md:110 alone
+// -- is what makes the rest trustworthy.
+//
+// Run the consumer phase under `flock /tmp/tt-device.lock`; do NOT use
+// scripts/run_safe_pytest.sh, which cd's to the tt-metal root and activates
+// the wrong venv. ttsim cannot substitute: it does not implement
+// SFPLOADMACRO and is functional, not cycle-accurate.
 //
 // FIRST RUN ORDER (do not skip):
 //   1. tests/python_tests/test_profiler_overhead.py  -- confirms the marker

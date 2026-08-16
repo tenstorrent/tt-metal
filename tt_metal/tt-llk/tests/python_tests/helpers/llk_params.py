@@ -751,6 +751,61 @@ class CountArm(Enum):
     MaskStore = 4
 
 
+class TopKPerfArm(Enum):
+    """
+    Arm of the Blackhole Top-K micro-op issue-rate baseline.
+
+    Selects which body ``sources/topk_micro_op_perf.cpp`` compiles into its timed
+    region. The value IS the integer the kernel's ``TOPK_PERF_ARM`` preprocessor
+    comparison expects, so it is emitted verbatim.
+
+    ``vectors_per_body`` is the number of DISTINCT 32-element input vectors one
+    execution of that arm's body consumes. It is the divisor that converts the
+    two-point slope (cycles per body) into the comparable unit, cycles per
+    32-element vector. It is NOT the number of loads the body issues -- a bitonic
+    sort revisits its data once per phase, so loads far exceed data.
+
+    CtrlLoad:  control -- replay+MOP-fed stream of plain SFPLOAD. Expected ~1.0
+               cyc/vector (SFPLOAD is IPC 1 and the MOP expander sustains
+               1 instr/cycle). If this misses, the feed path is the limiter and
+               no other arm is interpretable.
+    CtrlSwap:  control -- replay+MOP-fed stream of plain SFPSWAP. MUST be ~2.0x
+               CtrlLoad; SFPSWAP is 2 backend cycles with a hardware-inserted,
+               non-fillable bubble. The tripwire.
+    LocalSort: ckernel::sfpu::_bitonic_topk_phases_steps -- ttnn.topk's
+               topk_local_sort. 2 value tiles = 2048 datums = 64 vectors.
+    Merge:     ckernel::sfpu::_bitonic_topk_merge, same 2-value-tile window.
+    GmgTop8:   ckernel::sfpu::bitonic_top8_ph0_to_ph3 -- the 25-instruction
+               generalized-MoE-gate single-face micro-op, LREG0..3 only.
+    GmgTop8Ls: GmgTop8 inside its load16/store8 envelope.
+    XlMerge:   ckernel::sfpu::_topk_xl_merge_<512, false, true>; 4 body iters x
+               8 fused value|index vectors.
+    """
+
+    CtrlLoad = 0
+    CtrlSwap = 1
+    LocalSort = 2
+    Merge = 3
+    GmgTop8 = 4
+    GmgTop8Ls = 5
+    XlMerge = 6
+
+    @property
+    def vectors_per_body(self) -> int:
+        return _TOPK_PERF_VECTORS_PER_BODY[self]
+
+
+_TOPK_PERF_VECTORS_PER_BODY = {
+    TopKPerfArm.CtrlLoad: 2,
+    TopKPerfArm.CtrlSwap: 2,
+    TopKPerfArm.LocalSort: 64,
+    TopKPerfArm.Merge: 64,
+    TopKPerfArm.GmgTop8: 4,
+    TopKPerfArm.GmgTop8Ls: 4,
+    TopKPerfArm.XlMerge: 32,
+}
+
+
 # Single pytest case runs every PerfRunType so the module CSV has one
 # homogeneous schema (mean/TEXT_SIZE columns for all modes in each row).
 # Pass as a nested list so @parametrize yields one value: the full mode list.

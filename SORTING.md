@@ -423,6 +423,70 @@ that is what makes the 1.000 floor reachable at all. Rule of thumb: a sequence a
 nothing from replay; one averaging ~1 (`SFPGT`, `SFPLOAD`, `SFPIADD`, `SFPSTORE`) is
 frontend-bound and requires it.
 
+#### MEASURED: the shipping micro-ops, same harness, same units
+
+All on Blackhole, MATH_ISOLATE, two-point slope, 5 runs/point, with the same
+`SFPLOAD`/`SFPSWAP` control pair carried in the same translation unit. The
+`SFPSWAP` control landed at exactly **2.00x** the load floor, so the measurement
+is trustworthy. `tests/sources/topk_micro_op_perf.cpp`, `perf_topk_micro_op.py`.
+
+| Kernel | cyc / 32-element vector |
+| :--- | ---: |
+| CONTROL `SFPLOAD` (frontend floor) | 1.000 |
+| CONTROL `SFPSWAP` (known 2 cycles) | 2.000 |
+| **Candidate: mask filter (`Load+SFPGT+SFPSTORE`)** | **1.003** |
+| Candidate: inline count (`+ software SFPIADD`) | 1.998 |
+| `_topk_xl_merge_`, K=512, fused | **2.844** |
+| `bitonic_top8_ph0_to_ph3` (MoE gate micro-op), bare | **11.000** |
+| `bitonic_top8_ph0_to_ph3`, with load/store envelope | 15.500 |
+| `_bitonic_topk_merge`, k=32 | 10.615 |
+| `topk_local_sort`, end_phase 4 | 47.784 |
+| **`topk_local_sort`, end_phase 5 — what `ttnn.topk` uses** | **76.195** |
+
+**Verdict, by opponent.** A threshold selector needs at least two full passes
+(count, then compact), so its floor is 2 x 1.003 ~= 2.0 cyc/vector.
+
+- **vs `ttnn.topk` (`topk_local_sort` @ 76.2): the filter wins by a landslide**,
+  at every N and K. In situ the shipping op consumes 4.76 cyc per *newly-consumed
+  element* (its 64-wide window is only half new data), a ~76-pass budget. Even a
+  20-pass threshold scheme is 4x ahead.
+- **vs the MoE gate micro-op (11.0 bare / 15.5 in situ): marginal.** At N=256,
+  k=8 the gate costs 188 cycles in situ; the filter costs 84 + 16P, so it wins
+  only if it converges in <= 6 passes, and below N ~= 105 its own 84-cycle
+  replay/MOP setup exceeds the entire micro-op. The gate is also already at its
+  instruction floor: 18 `SFPSWAP` x 2 + 7 `SFPTRANSP` x 1 predicts 43 cycles,
+  measured 44.
+- **vs `_topk_xl_merge_` (2.844): the filter LOSES outright.** Two passes cost
+  4.0 against 2.844, at every N and k. Not fixable by tuning -- `topk_xl` is
+  already MOP/replay-fed at ~1.3 cyc per SFPU instruction, i.e. near the same
+  frontend floor the candidate exploits, and it reduces 1024->512 in that one
+  pass. **Large-K selection should keep the bitonic merge.**
+
+#### The most valuable finding is a fix to the shipping op, not a new algorithm
+
+`topk_local_sort` and `topk_merge` are **RISC-V-issue-bound, not SFPU-bound**:
+~2.4 cycles per SFPU instruction against a ~1.1 backend-bound floor, because
+their load/store helpers use runtime-encoded `TT_SFPLOAD`/`TT_SFPSTORE` rather
+than replay-recorded bodies.
+
+The proof is clean: setting `STABLE_SORT=Yes` adds one `TTI_SFPSWAP` per inner
+iteration (32 per call) and changes the measured slope by **exactly 0.000** --
+only a fixed +20 cycle intercept. Adding real SFPU work costs nothing, so the
+SFPU is not the constraint.
+
+Two consequences, both cheap and both independent of the filter:
+
+1. **Replay-record the load/store bodies**, exactly as `ckernel_sfpu_topk_xl.h`
+   already does. This recovers most of the gap without changing the algorithm,
+   and benefits every existing caller.
+2. **Stop hardcoding `end_phase`.** `topk.cpp:154` pins `end_phase = 5` for every
+   K, while the API it calls documents `i_end_phase` as *"should be set to
+   log(K)-1"* (`compute_kernel_api.h:706`); the multi-core path honors this and
+   the single-core path does not. Measured: end_phase 4 is **47.8** vs
+   end_phase 5's **76.2** -- a 1.6x saving from one constant, more at lower K.
+   Needs correctness validation (the insertion-sort formulation may require the
+   full sort), but it is a one-line experiment.
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working
