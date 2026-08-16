@@ -45,6 +45,13 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
+    // Op-level invariant, so it lives here rather than in each program factory.
+    TT_FATAL(
+        !(input.dtype() == DataType::FLOAT32 && !args.compute_kernel_config.fp32_dest_acc_en),
+        "{}_pre_all_gather with Float32 input requires fp32_dest_acc_en=true in the compute kernel "
+        "config; otherwise precision is silently lost in the unpacker format conversion.",
+        args.norm_type == LayerNormDistributedType::RMSNORM ? "rms_norm" : "layer_norm");
+
     // Additional validation for Welford - requires recip_tensor
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
@@ -103,7 +110,8 @@ Tensor layer_norm_pre_all_gather(
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const LayerNormProgramConfig& program_config,
-    const std::optional<bool>& use_2d_core_grid) {
+    const std::optional<bool>& use_2d_core_grid,
+    bool fast_and_approximate_mode) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
 
     // Validate the residual before fill_implicit_tile_padding so a malformed residual surfaces
@@ -141,6 +149,7 @@ Tensor layer_norm_pre_all_gather(
             .compute_kernel_config = compute_kernel_config,
             .program_config = program_config,
             .use_2d_core_grid = use_2d_core_grid,
+            .fast_and_approximate_mode = fast_and_approximate_mode,
         },
         OperationType::tensor_args_t{
             .input = input_padded,

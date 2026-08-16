@@ -1,0 +1,141 @@
+name: "(infra) Test Owner Escalation"
+
+on:
+  schedule:
+    # 04:00 UTC every Tuesday. Org/Slack membership changes are infrequent
+    # enough that a daily check wasn't worth the noise.
+    - cron: "0 4 * * 2"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: test-escalation
+  cancel-in-progress: false
+
+env:
+  ESCALATION_LABEL: test-escalation
+
+jobs:
+  escalate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: python3 -m pip install pyyaml
+
+      - name: Fetch active Slack users
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+        run: |
+          set -euo pipefail
+          echo "Fetching all Slack users..."
+          MEMBERS_FILE="$(mktemp)"
+          echo "[]" > "$MEMBERS_FILE"
+          CURSOR=""
+          PAGE_COUNT=0
+
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            RESPONSE_FILE="$(mktemp)"
+            curl -s -X GET \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "$API_URL" > "$RESPONSE_FILE"
+
+            if [ "$(jq -r '.ok' "$RESPONSE_FILE")" != "true" ]; then
+              echo "::error::Failed to fetch Slack users: $(jq -r '.error // "unknown error"' "$RESPONSE_FILE")"
+              exit 1
+            fi
+
+            MERGE_FILE="$(mktemp)"
+            jq -s '.[0] + .[1]' "$MEMBERS_FILE" <(jq '.members' "$RESPONSE_FILE") > "$MERGE_FILE"
+            mv "$MERGE_FILE" "$MEMBERS_FILE"
+            PAGE_COUNT=$((PAGE_COUNT + 1))
+
+            CURSOR="$(jq -r '.response_metadata.next_cursor // ""' "$RESPONSE_FILE")"
+            rm -f "$RESPONSE_FILE"
+            if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+              break
+            fi
+          done
+
+          # Active == registered as non-DEACTIVATED
+          jq '[.[] | select(.deleted != true) | .id]' "$MEMBERS_FILE" > "${RUNNER_TEMP}/active_ids.json"
+          echo "Fetched $(jq length "$MEMBERS_FILE") users across $PAGE_COUNT pages; $(jq length "${RUNNER_TEMP}/active_ids.json") active."
+
+      - name: Exclude metal-infra blacklist from active set
+        run: |
+          set -euo pipefail
+          # Our Slack token can't read user groups, so metal-infra membership is
+          # maintained by hand as the `blacklist:` section of .github/TESTOWNERS.
+          # Removing those IDs from the active set makes their tests get flagged
+          # for reassignment, exactly like a departed owner would be.
+          BLACKLIST="${RUNNER_TEMP}/blacklist_ids.json"
+
+          # Blacklist entries are the only "- U..." list items in TESTOWNERS
+          # (team leads are "key: @handle" lines), so this matches just them.
+          IDS="$(grep -oE '^[[:space:]]*-[[:space:]]*U[A-Z0-9]+' .github/TESTOWNERS | grep -oE 'U[A-Z0-9]+' || true)"
+          echo "$IDS" | jq -R 'select(length > 0)' | jq -s 'unique' > "$BLACKLIST"
+          echo "metal-infra blacklist: $(jq length "$BLACKLIST") id(s)"
+
+          # active := active - blacklist  (array difference removes blacklisted IDs).
+          jq -n \
+            --slurpfile active "${RUNNER_TEMP}/active_ids.json" \
+            --slurpfile blacklist "$BLACKLIST" \
+            '$active[0] - $blacklist[0]' > "${RUNNER_TEMP}/active_ids.trimmed.json"
+          mv "${RUNNER_TEMP}/active_ids.trimmed.json" "${RUNNER_TEMP}/active_ids.json"
+          echo "Active after excluding blacklist: $(jq length "${RUNNER_TEMP}/active_ids.json")"
+
+      - name: Detect deactivated test owners
+        id: detect
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/utils/verify_test_owner.py \
+            --active-ids-file "${RUNNER_TEMP}/active_ids.json" \
+            > "${RUNNER_TEMP}/report.json"
+
+          COUNT="$(jq '.deactivated_owners | length' "${RUNNER_TEMP}/report.json")"
+          echo "flagged_owners=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Deactivated owners with tests: ${COUNT}"
+
+      - name: File escalation issue
+        # Skip entirely on days with nothing to reassign.
+        if: ${{ steps.detect.outputs.flagged_owners != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Render the issue body from the report we already produced above.
+          python3 .github/scripts/utils/render_escalation_issue.py \
+            --report "${RUNNER_TEMP}/report.json" \
+            --output "${RUNNER_TEMP}/issue_body.md" \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.sha }}"
+
+          TODAY="$(date -u +%F)"
+          TITLE="[${TODAY}] Test Escalation Assignment"
+
+          # Ensure the label exists (idempotent).
+          gh label create "$ESCALATION_LABEL" \
+            --description "Tests owned by deactivated Slack accounts, pending reassignment" \
+            --color B60205 2>/dev/null || true
+
+          # One fresh issue per day with reassignments.
+          gh issue create \
+            --title "$TITLE" \
+            --label "$ESCALATION_LABEL" \
+            --body-file "${RUNNER_TEMP}/issue_body.md"

@@ -771,11 +771,9 @@ uint32_t Cluster::get_arc_timer_heartbeat(const ChipId& chip_id) const {
     }
 
     auto* fw = tt_device->get_firmware_info_provider();
-    if (!fw) {
-        return 0;
-    }
 
-    return fw->get_heartbeat();  // ← THIS is the correct call path
+    const std::optional<uint32_t> heartbeat = fw->get_heartbeat();
+    return heartbeat.value_or(0);
 }
 
 bool Cluster::is_arc_telemetry_available(const ChipId& chip_id) const {

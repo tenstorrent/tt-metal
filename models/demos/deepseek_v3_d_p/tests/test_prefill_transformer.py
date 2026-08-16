@@ -13,9 +13,9 @@ Reference sources are checked in priority order:
 3. HF model computation (creates HF DeepseekV3Model and runs forward on the fly)
 
 Parametrized over:
-- use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
-- input_source: "random", "json_prompts", or InfiniteBench subset (passkey, kv_retrieval, etc.)
-- pcc_validation: per-stage PCC check (via return_intermediates) vs shape-only smoke test
+- (input_source, pcc_validation, use_pretrained): one coupled axis. A golden is a reference only
+  for the pretrained weights it was captured from, so PCC runs pair a single source per variant
+  with pretrained weights; everything else is smoke-only.
 - n_routed_experts / gate_fallback_mode: MoE configurations
 """
 
@@ -49,13 +49,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    ABC_1K_PATH,
-    ABC_SHORT_PATH,
-    P64TOK_PATH,
-    P960TOK_PATH,
-    PIE960_PATH,
     PROMPT_1K_PATH,
-    PROMPT_25K_PATH,
     ReferenceCacheKey,
     check_first_token_match,
     check_first_token_match_host_ref,
@@ -82,9 +76,10 @@ TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
 DETERMINISM_PCC_THRESHOLD = 1.0
 
-# Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
-# or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
-INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+# Only the subset that is still a parametrized input_source; downloaded on first use.
+INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
+# input_source meaning "this variant's own golden" — naming it after a prompt would go stale.
+VARIANT_DEFAULT_TRACE = "variant_default"
 SEQ_LEN_1K = 1024
 SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
@@ -212,15 +207,13 @@ def run_model(
         else False
     )
 
-    # Priority 1: debug trace on disk
+    # Priority 1: debug trace on disk. A golden is captured from the full pretrained model, so it is
+    # a reference only for a run with those weights and that expert count.
     trace = None
     trace_dir = None
     trace_sliced = False
-    trace_match = (
-        find_trace_dir(input_source, isl_total, padding_side, use_pretrained, n_routed_experts)
-        if pcc_validation
-        else None
-    )
+    trace_eligible = pcc_validation and use_pretrained and n_routed_experts == variant.model_config.NUM_ROUTED_EXPERTS
+    trace_match = find_trace_dir(input_source, isl_total, padding_side) if trace_eligible else None
     if trace_match is not None:
         trace_dir, trace_isl = trace_match
         trace = load_debug_trace(trace_dir, num_layers=num_layers)
@@ -233,27 +226,26 @@ def run_model(
             f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers}, "
             f"native_isl={trace_isl}, sliced={trace_sliced})"
         )
-    # Fallback: a variant may pin an explicit golden trace via variant.test_prefill_trace_default that
-    # find_trace_dir's (R1-centric, use_pretrained/256-expert) TRACE_LOOKUP doesn't cover. load_debug_trace
-    # reads both the single_file and chunked_group_a_v1 layouts and slices to isl_total, so the single-shot
-    # test just chops the prefix it needs (e.g. the first 5120 rows == a 5120 single-shot prefill).
-    elif pcc_validation and getattr(variant, "test_prefill_trace_default", None):
-        _pinned = variant.test_prefill_trace_default
-        if _pinned and os.path.isdir(_pinned) and os.path.exists(os.path.join(_pinned, "metadata.json")):
-            trace_dir = Path(_pinned)
-            trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
-            # load_debug_trace(isl=...) chops the per-row tensors (token_ids/decoder/kv) to isl_total, but
-            # the stored logits/next_token_id stay the full-sequence products (never isl-sliced). Mark the
-            # trace sliced when we chopped a longer golden, so the later full-model logits/first-token
-            # checks are skipped — otherwise trace_full_model stays True and they compare this shorter
-            # prefill against the 55k golden's final-token logits and false-fail.
-            native_isl = len(trace.metadata.get("token_ids", []))
-            if native_isl > isl_total:
-                trace_sliced = True
-            logger.info(
-                f"Loaded pinned debug trace from {trace_dir} "
-                f"(num_layers={num_layers}, isl={isl_total}, native_isl={native_isl}, sliced={trace_sliced})"
-            )
+    # Explicitly asked for this variant's own golden (TRACE_LOOKUP is longbook/R1-only). Not a
+    # fallback: only this input_source lands here, so no other row gets handed someone else's golden.
+    elif trace_eligible and input_source == VARIANT_DEFAULT_TRACE:
+        _pinned = getattr(variant, "test_prefill_trace_default", None)
+        assert _pinned and os.path.exists(os.path.join(_pinned, "metadata.json")), (
+            f"{variant.name}: input_source={VARIANT_DEFAULT_TRACE} needs a usable "
+            f"test_prefill_trace_default, got {_pinned}"
+        )
+        trace_dir = Path(_pinned)
+        trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
+        # load_debug_trace(isl=...) chops the per-row tensors, but the stored logits/next_token_id stay
+        # full-sequence. Mark a chopped golden sliced so the later full-model checks are skipped instead
+        # of comparing this shorter prefill against the golden's final-token logits.
+        native_isl = len(trace.metadata.get("token_ids", []))
+        if native_isl > isl_total:
+            trace_sliced = True
+        logger.info(
+            f"Loaded {variant.name} variant golden from {trace_dir} "
+            f"(num_layers={num_layers}, isl={isl_total}, native_isl={native_isl}, sliced={trace_sliced})"
+        )
 
     cache_key = ReferenceCacheKey(
         weight_type=weight_type,
@@ -306,39 +298,19 @@ def run_model(
         if input_source == "json_prompts":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
-            prompt_text = load_prompts_from_json(str(PROMPT_1K_PATH))
-            prompt_text = prompt_text[0] if isinstance(prompt_text, list) else prompt_text
-        elif input_source == "abc_1k":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(ABC_1K_PATH))
-        elif input_source == "abc_short":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(ABC_SHORT_PATH))
-        elif input_source == "p64tok":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(P64TOK_PATH))
-        elif input_source == "p960tok":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(P960TOK_PATH))
-        elif input_source == "pie960":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(PIE960_PATH))
-        elif input_source == "prompt_25k":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(PROMPT_25K_PATH))
+            # The file holds two prompts; one prefill takes one.
+            prompt_text = load_prompts_from_json(str(PROMPT_1K_PATH), max_prompts=1)[0]
         elif input_source in INFINITEBENCH_SUBSET_NAMES:
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:
                 prompt_text = json.load(f)["prompt"]
         else:
-            raise ValueError(f"Unknown input_source: {input_source}")
-        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
+            raise ValueError(
+                f"No tokens for input_source={input_source}: it has no prompt file, and "
+                f"variant.test_prefill_trace_default ({getattr(variant, 'test_prefill_trace_default', None)}) "
+                f"did not resolve"
+            )
+        token_ids, attention_mask, _ = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
         profiler.end("tokenization")
         logger.info(
             f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}, last 10 tokens: {token_ids[0, -10:].tolist()}"
@@ -857,25 +829,28 @@ def run_model(
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
-    "input_source",
+    "input_source, pcc_validation, use_pretrained",
     [
-        "json_prompts",
-        "abc_1k",
-        "abc_short",
-        "p64tok",
-        "p960tok",
-        "pie960",
-        "prompt_25k",
-        "random",
-        "passkey",
-        "kv_retrieval",
-        "longdialogue_qa_eng",
-        "longbook_qa_eng",
+        # The golden was captured from the pretrained model
+        ("longbook_qa_eng", True, True),
+        ("longbook_qa_eng", False, True),
+        ("longbook_qa_eng", False, False),
+        ("json_prompts", False, True),
+        ("json_prompts", False, False),
+        ("random", False, True),
+        ("random", False, False),
+    ],
+    ids=[
+        "pcc-longbook_qa_eng-pretrained",
+        "smoke-longbook_qa_eng-pretrained",
+        "smoke-longbook_qa_eng-random",
+        "smoke-json_prompts-pretrained",
+        "smoke-json_prompts-random",
+        "smoke-random-pretrained",
+        "smoke-random-random",
     ],
 )
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
@@ -999,25 +974,23 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
-    "input_source",
+    "input_source, pcc_validation, use_pretrained",
     [
-        "json_prompts",
-        "abc_1k",
-        "abc_short",
-        "p64tok",
-        "p960tok",
-        "pie960",
-        "prompt_25k",
-        "random",
-        "passkey",
-        "kv_retrieval",
-        "longdialogue_qa_eng",
-        "longbook_qa_eng",
+        (VARIANT_DEFAULT_TRACE, True, True),
+        ("json_prompts", False, True),
+        ("json_prompts", False, False),
+        ("random", False, True),
+        ("random", False, False),
+    ],
+    ids=[
+        "pcc-variant_default-pretrained",
+        "smoke-json_prompts-pretrained",
+        "smoke-json_prompts-random",
+        "smoke-random-pretrained",
+        "smoke-random-random",
     ],
 )
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
@@ -1118,8 +1091,14 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
-@pytest.mark.parametrize("input_source", ["json_prompts"])
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize(
+    "input_source, pcc_validation",
+    [
+        (VARIANT_DEFAULT_TRACE, True),
+        ("json_prompts", False),
+    ],
+    ids=["pcc-variant_default", "smoke-json_prompts"],
+)
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",

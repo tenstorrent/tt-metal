@@ -287,10 +287,28 @@ protected:
 };
 
 class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
+private:
+    inline static bool insufficient_devices_ = false;
+
 protected:
+    static void SetUpTestSuite() {
+        insufficient_devices_ = tt::tt_metal::GetNumAvailableDevices() < 8;
+        if (insufficient_devices_) {
+            return;
+        }
+        Fabric2DUDMModeFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (!insufficient_devices_) {
+            Fabric2DUDMModeFixture::TearDownTestSuite();
+        }
+    }
+
     void SetUp() override {
-        if (devices_.size() < 8) {
-            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
+        if (insufficient_devices_) {
+            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found "
+                         << tt::tt_metal::GetNumAvailableDevices();
         }
         Fabric2DUDMModeFixture::SetUp();
     }
