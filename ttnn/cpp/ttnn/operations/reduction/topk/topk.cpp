@@ -16,11 +16,18 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/gather/gather.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
+#include "ttnn/operations/experimental/topk_large_indices/topk_large_indices.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 
 #include <cstdint>
+#include <limits>
 
 namespace ttnn::operations::reduction::topk {
 namespace {
@@ -178,6 +185,187 @@ std::vector<Tensor> post_topk_transform_tensor(
 
     return result;
 }
+
+// ---------------------------------------------------------------------------
+// Large-k routing onto ttnn::experimental::topk_large_indices (Blackhole)
+// ---------------------------------------------------------------------------
+//
+// The device op's multi-core bitonic path is gated at k <= 64 (plus pow2 width
+// and width < 65536), so every larger k runs the single-core factory: k=512 at
+// W=65536 measures ~158 ms on one core. topk_large_indices is a Blackhole-only
+// multi-core top-k that has NONE of those gates (arbitrary width up to 2^30,
+// k up to 2048), but returns only UINT32 row-major indices, sorted by value
+// descending. This composite routes eligible calls through it:
+//
+//   TILE bf16 -> untilize -> topk_large_indices (k rounded up to a multiple
+//   of 16, its own constraint) -> RM gather of the values by index ->
+//   tilize values+indices -> sentinel fix -> index dtype match -> the shared
+//   post_topk_transform (slice to user k, rank/dim restore).
+//
+// Routing lives here at the composite level, NOT in the device op's
+// select_program_factory, so the device op's program hash is untouched.
+//
+// Contract matching vs the device op:
+//   * values: input dtype (bf16), TILE, sorted descending — satisfies both
+//     sorted=true and sorted=false callers (torch.topk(largest=True) order).
+//   * indices: the device op emits UINT16 when the (tile-padded) width fits
+//     16 bits and UINT32 otherwise (see compute_output_specs); the routed
+//     path typecasts to match that exact boundary.
+//   * -inf lanes: topk_large_indices marks lanes whose value is exactly bf16
+//     -inf with the sentinel index 0xFFFFFFFF instead of a real position.
+//     The gather reads with 32-bit wrapping pointer math, so a sentinel is a
+//     SAFE in-L1 garbage read; the eq/where pass below rewrites those value
+//     lanes back to -inf (bit-correct values). The INDEX for a -inf lane
+//     stays the sentinel (0xFFFF after a UINT16 typecast) — a known, benign
+//     divergence: the stock path is itself loose there (it can return
+//     indices pointing into its own -inf padding beyond the logical width).
+//
+// Expected op count and cost shape (bench note):
+//   untilize + topk_large_indices + gather + 2x tilize + eq + where
+//   [+ typecast] [+ 2x slice when k was rounded]  ~= 8-10 dispatches.
+//   Every stage except untilize and topk_large_indices touches only
+//   [rows, k_rounded <= 2048] tensors (micro-ops). Untilize reads the
+//   tile-padded input — for a single logical row that is a 32x read
+//   amplification (W=131072: 8 MB read / 256 KB written), but split across
+//   the full grid and DRAM-bandwidth-bound it is tens of microseconds, i.e.
+//   3 orders of magnitude below the 158 ms single-core baseline it replaces;
+//   no extra width gating is warranted. Host dispatch (~10 ops) dominates
+//   only when the row is small — which the k > 64 gate already bounds.
+
+// k <= 64 keeps the device op's fast multi-core bitonic path (when eligible)
+// and stays cheap even single-core; only larger k falls off the cliff.
+constexpr uint32_t large_k_route_min_k_exclusive = 64;
+// topk_large_indices LLK ceiling.
+constexpr uint32_t large_k_route_max_k = 2048;
+// topk_large_indices requires k to be a multiple of 16.
+constexpr uint32_t large_k_route_k_multiple = 16;
+// The RM gather stages one full input row-stick in L1 (W * 2 B for bf16):
+// 2^19 sticks = 1 MB, comfortably inside Blackhole's 1.5 MB budget next to
+// the index/output CBs. Wider rows fall back to the stock path.
+constexpr uint32_t large_k_route_max_width = 1u << 19;
+// Index sentinel topk_large_indices emits for exact bf16 -inf value lanes.
+constexpr uint32_t large_k_route_sentinel_index = 0xFFFFFFFFu;
+// gather selects its RM multi-core variant above GATHER_WT_THRESHOLD(60) * 32
+// index columns (gather_device_operation.cpp). That variant has no upstream
+// ROW_MAJOR test coverage and returned wrong values on silicon at
+// W_index=2048 (its reader fetches each core's index slice at byte offset
+// w_start*4, which is not NoC-read-aligned for most cores). Keep every
+// routed gather call at or below this width so only the silicon-proven RM
+// single-core variant runs, chunking wider index tensors (k > 1920 -> two
+// gathers + concat on [rows, <=1024] slices).
+constexpr uint32_t large_k_route_gather_max_index_width = 60 * 32;
+constexpr uint32_t large_k_route_gather_chunk_width = 1024;
+
+bool should_route_to_topk_large_indices(
+    const Tensor& transformed_tensor,
+    const uint32_t k,
+    const bool largest,
+    const bool stable,
+    const bool is_dim_last_idx,
+    const bool has_user_indices_tensor,
+    const bool has_preallocated_outputs,
+    const bool has_sub_core_grids) {
+    // topk_large_indices only produces largest-first (descending) results.
+    if (!largest) {
+        return false;
+    }
+    // stable=true promises lowest-index tie-breaking; topk_large_indices tie
+    // order is deterministic but unspecified.
+    if (stable) {
+        return false;
+    }
+    // The routed pipeline creates its own index tensor and fresh outputs, and
+    // ignores custom core grids; keep the stock path for all three.
+    if (has_user_indices_tensor || has_preallocated_outputs || has_sub_core_grids) {
+        return false;
+    }
+    // Conservative: only route reductions that were already on the last dim.
+    if (!is_dim_last_idx) {
+        return false;
+    }
+    if (k <= large_k_route_min_k_exclusive || k > large_k_route_max_k) {
+        return false;
+    }
+    if (transformed_tensor.dtype() != DataType::BFLOAT16) {
+        return false;
+    }
+    if (transformed_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    if (transformed_tensor.memory_config().is_sharded()) {
+        return false;
+    }
+    if (transformed_tensor.device()->arch() != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    const uint32_t width = transformed_tensor.logical_shape()[-1];
+    const uint32_t k_rounded = large_k_route_k_multiple * tt::div_up(k, large_k_route_k_multiple);
+    // topk_large_indices needs width >= its (rounded) k; the gather bounds
+    // the width from above. No pow2 / 16-bit width requirements here — that
+    // is the point of the route.
+    return width >= k_rounded && width <= large_k_route_max_width;
+}
+
+// Runs the routed pipeline on the 4D, last-dim-target TILE bf16 tensor.
+// Returns {values, indices} in TILE layout with last dim k_rounded, matching
+// what ttnn::prim::topk would have produced for adjusted_k == k_rounded, so
+// the shared post_topk_transform_tensor handles the rest.
+std::vector<Tensor> run_topk_large_indices_route(
+    const Tensor& transformed_tensor, const uint32_t k_rounded, const MemoryConfig& memory_config) {
+    // TILE -> ROW_MAJOR (topk_large_indices and the RM gather both want RM).
+    const Tensor input_rm = ttnn::to_layout(transformed_tensor, Layout::ROW_MAJOR);
+
+    // UINT32 row-major indices of the top k_rounded per row, sorted by value
+    // descending; -inf value lanes carry the sentinel index.
+    const Tensor indices_rm = ttnn::experimental::topk_large_indices(input_rm, k_rounded);
+
+    // Gather the values back by index (torch.gather semantics on the last
+    // dim). Sentinel indices wrap to a safe in-L1 garbage read; fixed below.
+    // Index tensors wider than gather's RM multi-core threshold are chunked
+    // so every call stays on the RM single-core variant (see the constant's
+    // comment for the silicon failure this avoids).
+    Tensor values_rm;
+    if (k_rounded <= large_k_route_gather_max_index_width) {
+        values_rm = ttnn::gather(input_rm, /*dim=*/-1, indices_rm, /*sparse_grad=*/false, memory_config);
+    } else {
+        const auto& indices_shape = indices_rm.logical_shape();  // 4D: [d0, d1, d2, k_rounded]
+        std::vector<Tensor> gathered_chunks;
+        gathered_chunks.reserve(tt::div_up(k_rounded, large_k_route_gather_chunk_width));
+        for (uint32_t chunk_start = 0; chunk_start < k_rounded; chunk_start += large_k_route_gather_chunk_width) {
+            const uint32_t chunk_end = std::min(chunk_start + large_k_route_gather_chunk_width, k_rounded);
+            const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+            const ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, chunk_start};
+            const ttsl::SmallVector<uint32_t> end_index = {
+                indices_shape[0], indices_shape[1], indices_shape[2], chunk_end};
+            const Tensor indices_chunk = ttnn::slice(indices_rm, start_index, end_index, step, memory_config);
+            gathered_chunks.push_back(
+                ttnn::gather(input_rm, /*dim=*/-1, indices_chunk, /*sparse_grad=*/false, memory_config));
+        }
+        values_rm = ttnn::concat(gathered_chunks, /*dim=*/-1, memory_config);
+    }
+
+    Tensor values = ttnn::to_layout(values_rm, Layout::TILE);
+    Tensor indices = ttnn::to_layout(indices_rm, Layout::TILE);
+
+    // Rewrite the value of every sentinel-index lane back to -inf: the
+    // sentinel is emitted precisely when the true value is exactly bf16 -inf.
+    const Tensor sentinel_mask = ttnn::eq(indices, large_k_route_sentinel_index, /*dtype=*/DataType::BFLOAT16);
+    values = ttnn::where(sentinel_mask, -std::numeric_limits<float>::infinity(), values);
+
+    // Match the device op's index dtype contract: UINT16 iff the tile-padded
+    // width fits 16 bits (compute_output_specs compares the padded shape).
+    const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
+    if (padded_width <= std::numeric_limits<uint16_t>::max()) {
+        indices = ttnn::typecast(indices, DataType::UINT16);
+    }
+
+    std::vector<Tensor> result;
+    result.reserve(2);
+    result.push_back(std::move(values));
+    result.push_back(std::move(indices));
+    return result;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -330,6 +518,29 @@ std::vector<Tensor> topk(
 
     // Rank normalization - convert to 4D tensor format
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+
+    // Large-k Blackhole routing: k in (64, 2048] falls off the device op's
+    // multi-core gate (k <= 64) onto its single-core factory; route those
+    // calls through the multi-core ttnn::experimental::topk_large_indices
+    // composite instead. See the comment block on
+    // should_route_to_topk_large_indices for the full predicate and contract.
+    if (operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+            transformed_tensor,
+            k,
+            largest,
+            stable,
+            is_dim_last_idx,
+            indices_tensor.has_value(),
+            preallocated_output_tensors.has_value(),
+            sub_core_grids.has_value())) {
+        const uint32_t k_rounded =
+            operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::large_k_route_k_multiple *
+            tt::div_up(k, operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::large_k_route_k_multiple);
+        auto routed_result = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::run_topk_large_indices_route(
+            transformed_tensor, k_rounded, input_memory_config);
+        return operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
+            transposed_tensor, routed_result, dim, is_dim_last_idx, k, k_rounded, original_lshape, input_memory_config);
+    }
 
     // Dimension size padding - ensure minimum dimension size for efficient processing
     auto padded_tensor = transformed_tensor;

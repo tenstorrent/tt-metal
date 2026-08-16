@@ -88,6 +88,30 @@ def test_topk_large_indices_row_major_bfloat16_uint32_indices(device, k, num_row
     _assert_topk_matches_torch(torch_input, tt_indices, k)
 
 
+def test_topk_large_indices_random_k2048_multichunk_multirow(device):
+    # PR2 triage repro (minimal): row-parallel factory, llk_k=2048, num_chunks=4,
+    # multiple rows, RANDOM input — the exact op-level combo behind the routed
+    # k=2048 cells that failed on silicon. If this passes while the routed
+    # composite fails, the composite's post-op chain (gather at index width
+    # 2048 -> gather's untested RM multi-core variant) is the culprit, not
+    # this op. Tie-safe value-multiset assertions (random bf16 has duplicates).
+    torch.manual_seed(0)
+    rows, n, k = 2, 8192, 2048
+    torch_input = torch.randn(rows, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+
+    assert indices.min() >= 0
+    assert indices.max() < n
+    for row_indices in indices:
+        assert row_indices.unique().numel() == k
+
+    actual_values = torch.gather(torch_input.float(), dim=-1, index=indices)
+    ref_values, _ = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    assert_equal(actual_values.sort(dim=-1).values, ref_values.sort(dim=-1).values)
+
+
 def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device):
     torch.manual_seed(0)
     rows = 8

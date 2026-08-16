@@ -262,3 +262,38 @@ def test_gather_multirow(input_shape, index_shape, dim, device):
 
     assert ttnn_gather.shape == index.shape
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+@pytest.mark.parametrize(
+    "index_width",
+    [
+        1024,  # <= 60*32: RmSingleRowSingleCore — silicon-proven (large-k topk routing at k<=1024)
+        1920,  # == threshold: still the single-core variant (selection is strictly-greater)
+        2048,  # >  60*32: RmSingleRowMultiCore — previously untested in ROW_MAJOR anywhere
+    ],
+)
+def test_gather_row_major_interleaved(index_width, device):
+    # ROW_MAJOR gather repro (PR2 triage): the routed large-k ttnn.topk failed
+    # on silicon exactly and only when the index width crossed gather's RM
+    # multi-core threshold (GATHER_WT_THRESHOLD(60) * 32 = 1920), i.e. only at
+    # k=2048. This exercises gather directly, no topk involved. Suspected
+    # mechanism in RmSingleRowMultiCore's reader: each core fetches its index
+    # slice at byte offset w_start * 4 within the row page — not NoC-read-
+    # aligned for most cores — into an aligned CB base, so the read data lands
+    # shifted and the core gathers real-but-wrong elements.
+    torch.manual_seed(0)
+    input_shape = [1, 1, 32, 8192]
+    index_shape = [1, 1, 32, index_width]
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    index = torch.randint(0, input_shape[-1], index_shape, dtype=torch.int64)
+
+    torch_gather = torch.gather(input, -1, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    ttnn_gather = ttnn.gather(ttnn_input, -1, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert ttnn_gather.layout == ttnn.Layout.ROW_MAJOR
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
