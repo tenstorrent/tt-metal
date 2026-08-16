@@ -1222,6 +1222,12 @@ directions, all three index ops, fp32, `DestSync.Half`, denormal fused words, al
 inputs), **plus a mutation control** — changing Mod1 from 9 to 1 produces
 `row 0: top-K value mismatch`.
 
+**Both independently re-verified.** The 71/71 was re-run from a clean build (71 passed,
+twice), and the mutation was re-applied by hand: `Mod1 = 9 -> 1` turns the suite into
+**9 failed, 62 passed** with a full value dump. `MERGE_USE_MACRO` defaults to 1, so the
+passing runs genuinely exercise the macro path rather than silently falling back to the
+shipping merge.
+
 **The honest caveat: the merge is only 20% of the reduction step.**
 
 | | cyc/call | cyc/vector |
