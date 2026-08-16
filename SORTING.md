@@ -917,6 +917,90 @@ Two conditions: a pack must be happening anyway (a dedicated pack pass costs 806
 dropping the win to 2,073 — still 2x/12.5x), and the 12.5% sample yields a bracketing power
 of two rather than an exact K-th value, so one refinement pass is needed.
 
+#### MEASURED: `_topk_xl_merge_` BEATEN — 2.844 -> 1.438 cyc/vector, correctness 71/71
+
+The best-engineered kernel in the tree, beaten on its own turf at large K, by a drop-in
+replacement with an identical signature. `tests/sources/topk_merge_macro_perf.cpp`,
+`topk_merge_macro_test.cpp`.
+
+**Where its 2.844 went.** The fused K=512 merge body is *not* a bitonic lattice — it is
+one compare-exchange level with the min half discarded: 8 `SFPLOAD` (8 cyc) + 4 `SFPSWAP`
+(8 cyc) + 4 `SFPSTORE` (4 cyc) = 20 cycles for 8 input vectors = 2.500. Measured body
+**2.499**. So it was at its floor *for that instruction mix* — and 12 of those 20 cycles
+buy work one `SFPLOADMACRO` carries for free.
+
+**`SFPGT` is the wrong lever, and the 230-to-0 census is not an oversight.** A
+compare-exchange from `SFPGT` + blend costs 4-5 instructions against `SFPSWAP`'s 1 (which
+yields min *and* max), and it loses **categorically inside a macro**: every blend needs
+>= 2 Simple-sub-unit instructions and a macro schedules **at most one**
+(`SFPLOADMACRO.md:5`). `SFPGT` wins only where the mask *is* the answer — the filter.
+
+**The winning move is not to replace `SFPSWAP` but to stop paying for it.** Three facts
+nothing in the tree had combined: `SFPSWAP` is legal in a macro's Simple slot
+(`SFPLOADMACRO.md:7` footnote ‡); a macro-scheduled `SFPSTORE` writes to **the address its
+load used** (`:140`), which for a merge is exactly where the result belongs; and the merge
+keeps only the max, so `SFPSWAP`'s min half is free collateral.
+
+```
+i0  SFPLOAD       L_B[m] <- B[i]
+i1  SFPLOADMACRO  L_A[m] <- A[i]  + Simple(SFPSWAP) + MAD(SFPNOP) + Store(delay 2)
+```
+
+8 instructions for the same 8 input vectors. `SFPSWAP` holds Simple for 2 cycles and
+macros are 2 cycles apart, so consecutive swaps **abut exactly** — fully hidden behind the
+load pair.
+
+Three non-obvious details had to be right:
+- **`Mod1 = 9`, not `ALL_ROWS_MAX` (=1).** The macro *always* overrides `Insn.VD`, so
+  `macroVD` — the only register the Store slot can reach — must receive the max. Mod1=1 is
+  "VD = min"; Mod1=9 is documented at `SFPSWAP.md:31` as the inverse and carries the note
+  *"no enum currently defined for this mode"* — the LLK only has `ALL_ROWS_MAX = 1`.
+- **Sequence bit `0x80` set** -> `Insn.VB = macroVD`. Clear gives `SFPSWAP(macroVD, macroVD)`,
+  a self-compare.
+- **Template `VC` is immutable**, so B cannot ping-pong per instruction; the rotation comes
+  from the **macro index** — 4 macros bound to 4 templates with VCs at LREG4..7, A rotating
+  LREG0..3 via the macro's own VD field.
+
+| arm | cyc/vector | predicted |
+| :--- | ---: | ---: |
+| CtrlLoad (control) | 1.000 | 1.000 |
+| CtrlSwap (tripwire) | 2.001 | 2.000 |
+| `XlCall` (shipping) | 2.844 | 2.844 |
+| `XlBody` | 2.499 | 2.500 |
+| **`MacroBody`** | **1.000** | 1.000 |
+| **`MacroCall`** | **1.438** | 1.438 |
+
+All six predictions landed. **Body 2.50x, full call 1.978x — and 1.000 is the
+architectural floor**, since every 32-element vector needs its own load-class instruction
+at one dequeue per cycle. The merge cannot go faster without reading less data.
+
+**Correctness, because the timing number alone proves nothing.** A misconfigured or
+all-zero `Sequence` degenerates `SFPLOADMACRO` into a plain `SFPLOAD` and measures the
+*same* 1.000 — issue rate is blind to whether any compare-exchange happened. So:
+**71/71 PASS** against the shipping torch golden (K=512/1024/2048, 2 and 4 chunks, both
+directions, all three index ops, fp32, `DestSync.Half`, denormal fused words, all-equal
+inputs), **plus a mutation control** — changing Mod1 from 9 to 1 produces
+`row 0: top-K value mismatch`.
+
+**The honest caveat: the merge is only 20% of the reduction step.**
+
+| | cyc/call | cyc/vector |
+| :--- | ---: | ---: |
+| `_topk_xl_rebuild_<512>` | 374.0 | 23.375 |
+| step, shipping merge + rebuild | 464.0 | 14.500 |
+| step, macro merge + rebuild | 419.0 | **13.094** |
+
+Step speedup **1.107x**, and the delta (1.407) matches `XlCall - MacroCall` (1.406) to
+three decimals — the win is exactly the merge win and nothing else. **The rebuild is 374
+of 464 cycles (81%)**, and its body is a `sort_16_alt` lattice with 16 `SFPSWAP` behind
+only 8 loads, so the same trick can hide at most half of them (bounded ~1.4x). That is
+where the remaining cycles are.
+
+Also found: the rebuild **cannot run in a MATH_ISOLATE harness** without an unpack-side
+`_llk_unpack_set_srcb_dummy_valid_()` per call — its `transpose_N_faces` stalls MATH on
+SrcB valid. This hung the device once (`TENSIX TIMED OUT`), was root-caused and fixed.
+It is why `perf_topk_micro_op.py` has no rebuild arm.
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working
