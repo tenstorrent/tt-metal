@@ -1,0 +1,16 @@
+{
+  "prompt": "Write a Python function that merges two sorted lists.",
+  "positions_compared": 48,
+  "mismatch_count": 1,
+  "mismatches": [
+    {
+      "index": 39,
+      "incremental_token": 1574,
+      "teacher_forced_token": 20694,
+      "top2_gap": 0.0625,
+      "incremental_token_rank": 1,
+      "logit_delta": 0.0625
+    }
+  ],
+  "verdict": "B_target_numerics"
+}

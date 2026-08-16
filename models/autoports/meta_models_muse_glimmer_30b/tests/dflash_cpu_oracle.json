@@ -1,0 +1,27 @@
+{
+  "prompt": "Write a Python function that merges two sorted lists.",
+  "max_new_tokens": 48,
+  "prompt_tokens": 67,
+  "output_lossless": false,
+  "tokens_compared": 48,
+  "baseline_tokens": 48,
+  "baseline_target_forwards": 48,
+  "baseline_seconds": 68.86015272140503,
+  "dflash_tokens": 48,
+  "dflash_target_forwards": 10,
+  "dflash_seconds": 16.62191605567932,
+  "accepted_tokens_per_target_forward": 5.333333333333333,
+  "forward_reduction": 4.8,
+  "dflash_query_lens": [
+    67,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16
+  ]
+}
