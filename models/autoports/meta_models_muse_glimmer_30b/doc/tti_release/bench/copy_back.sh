@@ -26,7 +26,7 @@ WORK_ROOT=/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b
 W=$WORK_ROOT/cache_root/workflow_logs
 REL=$W/reports_output/release
 
-mkdir -p "$DOC"/{report,run_spec,evals,benchmarks,logs}
+mkdir -p "$DOC"/{report,run_specs,evals,benchmarks,logs}
 
 # --- pick the release run -----------------------------------------------------
 if [ "$#" -ge 1 ]; then
@@ -63,12 +63,12 @@ print(m.group(1) if m else "")
 PY
 )
 if [ -n "$SPEC_FROM_REPORT" ] && [ -f "$SPEC_FROM_REPORT" ]; then
-  copy "$SPEC_FROM_REPORT" "$DOC/run_spec"
+  copy "$SPEC_FROM_REPORT" "$DOC/run_specs"
 else
   echo "  !! the report's runtime_model_spec_json path did not resolve: $SPEC_FROM_REPORT" >&2
 fi
 [ -f "$WORK_ROOT/specs/muse_glimmer_30b_autoport_release.json" ] &&
-  copy "$WORK_ROOT/specs/muse_glimmer_30b_autoport_release.json" "$DOC/run_spec"
+  copy "$WORK_ROOT/specs/muse_glimmer_30b_autoport_release.json" "$DOC/run_specs"
 
 echo "== eval results (aggregate JSON only; per-sample dumps are left behind) =="
 # One results file per task, and this stage runs two. Earlier release runs leave

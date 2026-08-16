@@ -1,7 +1,7 @@
 {
  "_what": "per-document health of one lm-eval run: response length, score, and whether the turn reached the model's visible channel. No model text. This is the artifact that makes an under-budgeted generation limit visible without copying samples_*.jsonl.",
  "task": "aime25",
- "source": "samples_aime25_2026-08-16T03-35-07.523663.jsonl",
+ "source": "samples_aime25_2026-08-16T05-36-34.670452.jsonl",
  "n": 30,
  "empty_responses": 0,
  "truncated_inside_analysis_channel": 0,

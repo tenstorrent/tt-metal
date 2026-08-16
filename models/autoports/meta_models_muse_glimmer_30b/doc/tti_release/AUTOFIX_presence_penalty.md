@@ -230,6 +230,25 @@ trial that removes RNG entirely, run on both samplers, scored with the test file
 trivially high type-token ratio and passes for the wrong reason. Recorded rather than
 dropped.
 
+**The greedy row is length-asymmetric, and that is recorded rather than left for a
+reader to find** (round 3 of `$stage-review` raised it). Both arms share the same
+186-word / 30-unique / `finish_reason: stop` baseline, but their penalised arms do
+not terminate the same way:
+
+| greedy penalised arm | words | unique | ratio | `finish_reason` |
+|---|---|---|---|---|
+| device | 255 | 40 | 0.1569 | **length** (hit the 1024-token cap) |
+| host (vLLM fp32) | 294 | 17 | 0.0578 | stop |
+
+A type-token ratio falls with length, so the device's 0.9725 is measured on a text
+the cap cut short and would likely have fallen somewhat had it run on. That
+weakens the *margin*, not the direction: the host arm produced **more** words with
+**fewer than half** the distinct ones (17 vs 40), which is the opposite of what a
+length confound would produce, and it fails by 0.3585 against a 0.90 bar — a gap
+no plausible continuation of the device arm closes. The aggregate (host 1 pass/4,
+device 2 pass/4) and H1–H3, which are token-level and not TTR-based at all, do not
+depend on this row.
+
 **Verdict: the assertion is not a property of the penalty — verified.** vLLM's own float32
 reference implementation fails the same assertion on the same model and the same prompt
 **more often and more severely than the device path does** (1/4 vs 2/4; 0.3585 vs 0.9725

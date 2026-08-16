@@ -149,9 +149,13 @@ instrumentation used above was removed before every proof run below.
 call (`SEED_LAST=1 doc/tti_release/seeding/rand_probe5.py`), `i32_to_bf16`, `u32_to_bf16` and
 `exp` all give 0 disagreements over 6 seeds each.
 
-`models/common/modules/sampling/sampling_1d.py` — the other production in-tree caller of
-`ttnn.manual_seed` — already seeds immediately before `ttnn.sampling` with no
-intervening compute, so it needs no change.
+The other three production in-tree callers of `ttnn.manual_seed` need no change:
+`models/common/modules/sampling/sampling_1d.py:406`,
+`models/experimental/llama32_1b_quasar/modules/sampling/sampling_1d.py:406` and
+`models/experimental/llama32_1b_quasar/sampling/tt_sampling.py:762` all seed
+immediately before `ttnn.sampling` with no intervening compute. (Round 2 of
+`$stage-review` corrected an earlier version of this line, which said there was
+only one other caller; the conclusion is unchanged.)
 
 ## Final Status
 

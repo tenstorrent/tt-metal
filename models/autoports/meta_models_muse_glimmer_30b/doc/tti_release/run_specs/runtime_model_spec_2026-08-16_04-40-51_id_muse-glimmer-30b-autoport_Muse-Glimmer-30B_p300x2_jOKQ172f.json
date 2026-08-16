@@ -84,7 +84,13 @@
       },
       "tensor_cache_timeout": 5400.0,
       "system_requirements": null,
-      "known_issues": [],
+      "known_issues": [
+        {
+          "workflow_type": "SPEC_TESTS",
+          "reason": "test_penalties[presence_penalty-1.2-repeat_trap] asserts unique_ratio(penalty) >= unique_ratio(base) * 0.90; this autoport measures 0.8207 deterministically (3/3 identical texts per arm). The row is not a property of the penalty implementation. Rebuilding vLLM's own rule argmax(raw_logprob - 1.2*[token already generated]) from raw logprobs reproduces the device's emitted tokens 160/160, while penalise-by-count, penalise-prompt-tokens-too and no-penalty first contradict it at steps 30, 88 and 9; and running this row's own comparison through vLLM's float32 host sampler - no Tenstorrent sampling code in the path at all - fails the same assertion more often and more severely than the device does (1 pass/4 vs 2 pass/4; 0.3585 vs 0.9725 on the greedy, RNG-free trial). presence_penalty is a flat one-shot offset that does not grow with repetition count, so on the \"Write a very repetitive story.\" trap prompt it cannot break a sentence-level loop, only move the model into a different one - which is why llm_module/test_vllm_chat_completions.py:313 already exempts presence_penalty from the stronger \"heavy repetition should decrease\" assertion on this exact prompt. Same waiver as the canonical Llama-3.3-70B-Instruct P300X2 entry, tracked in tenstorrent/tt-inference-server#3888. Full evidence: models/autoports/meta_models_muse_glimmer_30b/doc/tti_release/AUTOFIX_presence_penalty.md",
+          "task_name": "test_penalties"
+        }
+      ],
       "eval_max_retries": null,
       "image_benchmark_num_batches": 3
     },
@@ -252,6 +258,6 @@
     "tt_metal_python_venv_dir": null,
     "tt_metal_home": "/home/ttuser/dev/muse-glimmer/tt-metal",
     "vllm_dir": null,
-    "run_id": "2026-08-16_02-39-22_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_release_nfhTBr-o"
+    "run_id": "2026-08-16_04-40-51_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_release_xXE0Kfeo"
   }
 }

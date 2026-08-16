@@ -2,12 +2,12 @@
     "metadata": {
         "model_name": "meta-models/Muse-Glimmer-30B",
         "device": "P300X2",
-        "generated_at": "2026-08-16T07:35:08+00:00",
-        "report_id": "id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_2026-08-16_04-04-24",
+        "generated_at": "2026-08-16T09:36:35+00:00",
+        "report_id": "id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_2026-08-16_06-05-37",
         "workflow": "release",
         "server_mode": "API",
         "run_command": "python run.py --model Muse-Glimmer-30B --runtime-model-spec-json /home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/specs/muse_glimmer_30b_autoport_release.json --tt-device p300x2 --workflow release --service-port 8000 --no-auth --skip-system-sw-validation",
-        "runtime_model_spec_json": "/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-16_02-39-22_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_eqbjPKm1.json",
+        "runtime_model_spec_json": "/home/ttuser/dev/muse-glimmer/tti-release/muse-glimmer-30b/cache_root/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-16_04-40-51_id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2_jOKQ172f.json",
         "model_id": "id_muse-glimmer-30b-autoport_Muse-Glimmer-30B_p300x2",
         "model_repo": "meta-models/Muse-Glimmer-30B",
         "inference_engine": "vLLM",
@@ -71,47 +71,47 @@
                 "num_requests": 8,
                 "input_sequence_length": 127,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 72.1171,
-                "p50_ttft": 71.7358,
-                "p99_ttft": 74.9227,
-                "mean_tpot_ms": 23.0254,
-                "mean_e2el_ms": 2996.3404,
-                "tps_decode_throughput": 42.7154,
-                "request_throughput": 0.3337,
+                "mean_ttft_ms": 71.9731,
+                "p50_ttft": 72.5175,
+                "p99_ttft": 75.3545,
+                "mean_tpot_ms": 23.0394,
+                "mean_e2el_ms": 2997.9831,
+                "tps_decode_throughput": 42.6918,
+                "request_throughput": 0.3335,
                 "error_request_count": null,
                 "target_check": 3,
                 "target_checks": {
                     "functional": {
                         "ttft": 88.3,
-                        "ttft_ratio": 0.8167281993204982,
+                        "ttft_ratio": 0.8150973952434881,
                         "ttft_check": 2,
                         "tput_user": 11.33,
-                        "tput_user_ratio": 3.8332125960807195,
+                        "tput_user_ratio": 3.830883326379897,
                         "tput_user_check": 2,
                         "tput": 11.33,
-                        "tput_ratio": 3.770114739629303,
+                        "tput_ratio": 3.7680317740511917,
                         "tput_check": 2
                     },
                     "complete": {
                         "ttft": 17.66,
-                        "ttft_ratio": 4.083640996602491,
+                        "ttft_ratio": 4.075486976217441,
                         "ttft_check": 3,
                         "tput_user": 56.65,
-                        "tput_user_ratio": 0.7666425192161439,
+                        "tput_user_ratio": 0.7661766652759794,
                         "tput_user_check": 3,
                         "tput": 56.65,
-                        "tput_ratio": 0.7540229479258607,
+                        "tput_ratio": 0.7536063548102383,
                         "tput_check": 3
                     },
                     "target": {
                         "ttft": 8.83,
-                        "ttft_ratio": 8.167281993204982,
+                        "ttft_ratio": 8.150973952434882,
                         "ttft_check": 3,
                         "tput_user": 113.3,
-                        "tput_user_ratio": 0.38332125960807195,
+                        "tput_user_ratio": 0.3830883326379897,
                         "tput_user_check": 3,
                         "tput": 113.3,
-                        "tput_ratio": 0.37701147396293033,
+                        "tput_ratio": 0.37680317740511915,
                         "tput_check": 3
                     }
                 }
@@ -122,7 +122,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:35:43"
+                "timestamp": "2026-08-16 05:37:08"
             }
         },
         {
@@ -132,13 +132,13 @@
                 "num_requests": 256,
                 "input_sequence_length": 127,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 2052.3022,
-                "p50_ttft": 2045.7604,
-                "p99_ttft": 2114.1763,
-                "mean_tpot_ms": 23.0965,
-                "mean_e2el_ms": 4985.5551,
-                "tps_decode_throughput": 821.4029,
-                "request_throughput": 6.4172,
+                "mean_ttft_ms": 2017.8274,
+                "p50_ttft": 2014.0944,
+                "p99_ttft": 2060.1797,
+                "mean_tpot_ms": 23.0889,
+                "mean_e2el_ms": 4950.1169,
+                "tps_decode_throughput": 827.2705,
+                "request_throughput": 6.4631,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -149,7 +149,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:36:36"
+                "timestamp": "2026-08-16 05:37:59"
             }
         },
         {
@@ -159,12 +159,12 @@
                 "num_requests": 4,
                 "input_sequence_length": 127,
                 "output_sequence_length": 1024.0,
-                "mean_ttft_ms": 71.3603,
-                "p50_ttft": 71.2007,
-                "p99_ttft": 73.4997,
-                "mean_tpot_ms": 23.4796,
-                "mean_e2el_ms": 24090.9432,
-                "tps_decode_throughput": 42.5051,
+                "mean_ttft_ms": 77.5119,
+                "p50_ttft": 78.3342,
+                "p99_ttft": 80.0587,
+                "mean_tpot_ms": 23.4693,
+                "mean_e2el_ms": 24086.6363,
+                "tps_decode_throughput": 42.5127,
                 "request_throughput": 0.0415,
                 "error_request_count": null,
                 "status": "na",
@@ -176,7 +176,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:38:46"
+                "timestamp": "2026-08-16 05:40:08"
             }
         },
         {
@@ -186,13 +186,13 @@
                 "num_requests": 128,
                 "input_sequence_length": 127,
                 "output_sequence_length": 1024.0,
-                "mean_ttft_ms": 2050.0746,
-                "p50_ttft": 2046.091,
-                "p99_ttft": 2067.1003,
-                "mean_tpot_ms": 24.0356,
-                "mean_e2el_ms": 26638.4791,
-                "tps_decode_throughput": 1230.0342,
-                "request_throughput": 1.2012,
+                "mean_ttft_ms": 2023.9941,
+                "p50_ttft": 2036.855,
+                "p99_ttft": 2043.0973,
+                "mean_tpot_ms": 24.0339,
+                "mean_e2el_ms": 26610.6764,
+                "tps_decode_throughput": 1231.3192,
+                "request_throughput": 1.2025,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -203,7 +203,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:41:05"
+                "timestamp": "2026-08-16 05:42:27"
             }
         },
         {
@@ -213,13 +213,13 @@
                 "num_requests": 4,
                 "input_sequence_length": 1023,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 154.5043,
-                "p50_ttft": 153.9444,
-                "p99_ttft": 156.8497,
-                "mean_tpot_ms": 23.8851,
-                "mean_e2el_ms": 3187.9158,
-                "tps_decode_throughput": 40.1483,
-                "request_throughput": 0.3137,
+                "mean_ttft_ms": 154.1588,
+                "p50_ttft": 154.2487,
+                "p99_ttft": 155.5216,
+                "mean_tpot_ms": 23.8536,
+                "mean_e2el_ms": 3183.563,
+                "tps_decode_throughput": 40.2031,
+                "request_throughput": 0.3141,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -230,7 +230,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:41:31"
+                "timestamp": "2026-08-16 05:42:52"
             }
         },
         {
@@ -240,13 +240,13 @@
                 "num_requests": 128,
                 "input_sequence_length": 1023,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 4687.319,
-                "p50_ttft": 4686.2401,
-                "p99_ttft": 4719.3729,
-                "mean_tpot_ms": 24.6839,
-                "mean_e2el_ms": 7822.1788,
-                "tps_decode_throughput": 523.5297,
-                "request_throughput": 4.0901,
+                "mean_ttft_ms": 4695.5004,
+                "p50_ttft": 4693.6326,
+                "p99_ttft": 4736.2461,
+                "mean_tpot_ms": 24.7216,
+                "mean_e2el_ms": 7835.1398,
+                "tps_decode_throughput": 522.6634,
+                "request_throughput": 4.0833,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -257,7 +257,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:42:16"
+                "timestamp": "2026-08-16 05:43:35"
             }
         },
         {
@@ -267,13 +267,13 @@
                 "num_requests": 4,
                 "input_sequence_length": 2047,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 270.6703,
-                "p50_ttft": 271.5646,
-                "p99_ttft": 273.6471,
-                "mean_tpot_ms": 24.1923,
-                "mean_e2el_ms": 3343.0941,
-                "tps_decode_throughput": 38.2849,
-                "request_throughput": 0.2991,
+                "mean_ttft_ms": 267.4677,
+                "p50_ttft": 267.5972,
+                "p99_ttft": 269.71,
+                "mean_tpot_ms": 24.1937,
+                "mean_e2el_ms": 3340.0618,
+                "tps_decode_throughput": 38.3195,
+                "request_throughput": 0.2994,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -284,7 +284,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:42:41"
+                "timestamp": "2026-08-16 05:44:01"
             }
         },
         {
@@ -294,13 +294,13 @@
                 "num_requests": 128,
                 "input_sequence_length": 2047,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 8181.407,
-                "p50_ttft": 8177.6028,
-                "p99_ttft": 8200.0552,
-                "mean_tpot_ms": 25.6757,
-                "mean_e2el_ms": 11442.2214,
-                "tps_decode_throughput": 357.9148,
-                "request_throughput": 2.7962,
+                "mean_ttft_ms": 8191.7886,
+                "p50_ttft": 8199.3689,
+                "p99_ttft": 8209.6519,
+                "mean_tpot_ms": 25.6968,
+                "mean_e2el_ms": 11455.2835,
+                "tps_decode_throughput": 357.5115,
+                "request_throughput": 2.7931,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -311,7 +311,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:43:40"
+                "timestamp": "2026-08-16 05:44:59"
             }
         },
         {
@@ -321,13 +321,13 @@
                 "num_requests": 4,
                 "input_sequence_length": 4095,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 490.2096,
-                "p50_ttft": 489.088,
-                "p99_ttft": 495.1843,
-                "mean_tpot_ms": 24.4596,
-                "mean_e2el_ms": 3596.5822,
-                "tps_decode_throughput": 35.5867,
-                "request_throughput": 0.278,
+                "mean_ttft_ms": 489.6673,
+                "p50_ttft": 489.8,
+                "p99_ttft": 495.7179,
+                "mean_tpot_ms": 24.4836,
+                "mean_e2el_ms": 3599.0901,
+                "tps_decode_throughput": 35.5619,
+                "request_throughput": 0.2778,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -338,7 +338,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:44:08"
+                "timestamp": "2026-08-16 05:45:26"
             }
         },
         {
@@ -348,13 +348,13 @@
                 "num_requests": 128,
                 "input_sequence_length": 4095,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 15167.6217,
-                "p50_ttft": 15138.7663,
-                "p99_ttft": 15214.2531,
-                "mean_tpot_ms": 26.1615,
-                "mean_e2el_ms": 18490.1375,
-                "tps_decode_throughput": 221.4966,
-                "request_throughput": 1.7304,
+                "mean_ttft_ms": 15181.8166,
+                "p50_ttft": 15154.383,
+                "p99_ttft": 15262.8981,
+                "mean_tpot_ms": 26.1254,
+                "mean_e2el_ms": 18499.7375,
+                "tps_decode_throughput": 221.3829,
+                "request_throughput": 1.7296,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -365,7 +365,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:45:37"
+                "timestamp": "2026-08-16 05:46:53"
             }
         },
         {
@@ -375,13 +375,13 @@
                 "num_requests": 2,
                 "input_sequence_length": 8191,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 986.9955,
-                "p50_ttft": 986.9955,
-                "p99_ttft": 990.3798,
-                "mean_tpot_ms": 24.9063,
-                "mean_e2el_ms": 4150.101,
-                "tps_decode_throughput": 30.8404,
-                "request_throughput": 0.2409,
+                "mean_ttft_ms": 979.5043,
+                "p50_ttft": 979.5043,
+                "p99_ttft": 987.1753,
+                "mean_tpot_ms": 24.9115,
+                "mean_e2el_ms": 4143.2616,
+                "tps_decode_throughput": 30.8913,
+                "request_throughput": 0.2413,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -392,7 +392,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:45:58"
+                "timestamp": "2026-08-16 05:47:14"
             }
         },
         {
@@ -402,13 +402,13 @@
                 "num_requests": 64,
                 "input_sequence_length": 8191,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 30355.8247,
-                "p50_ttft": 30813.6083,
-                "p99_ttft": 30927.5992,
-                "mean_tpot_ms": 30.3652,
-                "mean_e2el_ms": 34212.2048,
-                "tps_decode_throughput": 119.7095,
-                "request_throughput": 0.9352,
+                "mean_ttft_ms": 30353.1075,
+                "p50_ttft": 30805.9855,
+                "p99_ttft": 30910.8643,
+                "mean_tpot_ms": 30.5517,
+                "mean_e2el_ms": 34233.1697,
+                "tps_decode_throughput": 119.6364,
+                "request_throughput": 0.9347,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -419,7 +419,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:47:21"
+                "timestamp": "2026-08-16 05:48:37"
             }
         },
         {
@@ -429,13 +429,13 @@
                 "num_requests": 2,
                 "input_sequence_length": 16383,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 2187.6467,
-                "p50_ttft": 2187.6467,
-                "p99_ttft": 2191.193,
-                "mean_tpot_ms": 25.8648,
-                "mean_e2el_ms": 5472.4717,
-                "tps_decode_throughput": 23.3885,
-                "request_throughput": 0.1827,
+                "mean_ttft_ms": 2188.0238,
+                "p50_ttft": 2188.0238,
+                "p99_ttft": 2195.3723,
+                "mean_tpot_ms": 25.8415,
+                "mean_e2el_ms": 5469.8936,
+                "tps_decode_throughput": 23.3995,
+                "request_throughput": 0.1828,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -446,7 +446,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:47:48"
+                "timestamp": "2026-08-16 05:49:02"
             }
         },
         {
@@ -456,13 +456,13 @@
                 "num_requests": 64,
                 "input_sequence_length": 16383,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 55698.8801,
-                "p50_ttft": 54101.2323,
-                "p99_ttft": 69299.7838,
-                "mean_tpot_ms": 135.3858,
-                "mean_e2el_ms": 72892.8765,
-                "tps_decode_throughput": 56.1875,
-                "request_throughput": 0.439,
+                "mean_ttft_ms": 55679.8332,
+                "p50_ttft": 53985.3469,
+                "p99_ttft": 69169.3223,
+                "mean_tpot_ms": 135.6141,
+                "mean_e2el_ms": 72902.8291,
+                "tps_decode_throughput": 56.1796,
+                "request_throughput": 0.4389,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -473,7 +473,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:50:33"
+                "timestamp": "2026-08-16 05:51:46"
             }
         },
         {
@@ -483,13 +483,13 @@
                 "num_requests": 1,
                 "input_sequence_length": 32767,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 4769.7217,
-                "p50_ttft": 4769.7217,
-                "p99_ttft": 4769.7217,
-                "mean_tpot_ms": 27.6308,
-                "mean_e2el_ms": 8278.8394,
-                "tps_decode_throughput": 15.4603,
-                "request_throughput": 0.1208,
+                "mean_ttft_ms": 4729.4464,
+                "p50_ttft": 4729.4464,
+                "p99_ttft": 4729.4464,
+                "mean_tpot_ms": 27.667,
+                "mean_e2el_ms": 8243.1581,
+                "tps_decode_throughput": 15.5273,
+                "request_throughput": 0.1213,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -500,7 +500,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:50:58"
+                "timestamp": "2026-08-16 05:52:13"
             }
         },
         {
@@ -510,13 +510,13 @@
                 "num_requests": 31,
                 "input_sequence_length": 32767,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 98419.1285,
-                "p50_ttft": 98312.6631,
-                "p99_ttft": 147453.4154,
-                "mean_tpot_ms": 420.3528,
-                "mean_e2el_ms": 151803.9373,
-                "tps_decode_throughput": 26.1371,
-                "request_throughput": 0.2042,
+                "mean_ttft_ms": 98363.7293,
+                "p50_ttft": 98151.0441,
+                "p99_ttft": 147361.2153,
+                "mean_tpot_ms": 419.9453,
+                "mean_e2el_ms": 151696.7847,
+                "tps_decode_throughput": 26.1556,
+                "request_throughput": 0.2043,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -527,7 +527,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:53:51"
+                "timestamp": "2026-08-16 05:55:06"
             }
         },
         {
@@ -537,13 +537,13 @@
                 "num_requests": 1,
                 "input_sequence_length": 65535,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 10835.9694,
-                "p50_ttft": 10835.9694,
-                "p99_ttft": 10835.9694,
-                "mean_tpot_ms": 31.5087,
-                "mean_e2el_ms": 14837.5805,
-                "tps_decode_throughput": 8.6265,
-                "request_throughput": 0.0674,
+                "mean_ttft_ms": 10768.0606,
+                "p50_ttft": 10768.0606,
+                "p99_ttft": 10768.0606,
+                "mean_tpot_ms": 31.4504,
+                "mean_e2el_ms": 14762.2551,
+                "tps_decode_throughput": 8.6705,
+                "request_throughput": 0.0677,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -554,7 +554,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:54:30"
+                "timestamp": "2026-08-16 05:55:45"
             }
         },
         {
@@ -564,13 +564,13 @@
                 "num_requests": 16,
                 "input_sequence_length": 65535,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 118210.2795,
-                "p50_ttft": 121337.6043,
-                "p99_ttft": 179302.6767,
-                "mean_tpot_ms": 521.5905,
-                "mean_e2el_ms": 184452.2781,
-                "tps_decode_throughput": 10.3812,
-                "request_throughput": 0.0811,
+                "mean_ttft_ms": 117927.7869,
+                "p50_ttft": 120947.7532,
+                "p99_ttft": 179000.6248,
+                "mean_tpot_ms": 521.0245,
+                "mean_e2el_ms": 184097.8929,
+                "tps_decode_throughput": 10.419,
+                "request_throughput": 0.0814,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -581,7 +581,7 @@
                 "tool": "vllm",
                 "model": "meta-models/Muse-Glimmer-30B",
                 "device": "P300X2",
-                "timestamp": "2026-08-16 03:58:16"
+                "timestamp": "2026-08-16 05:59:30"
             }
         },
         {
@@ -592,7 +592,7 @@
                 "status": "pass",
                 "attempts": 1,
                 "logs": [],
-                "elapsed_seconds": 0.0040146890096366405,
+                "elapsed_seconds": 0.004254519997630268,
                 "test_name": "LoggerForkSafetyTest",
                 "description": "Test for logging fork safety to prevent deadlocks"
             },
@@ -803,7 +803,7 @@
                     "\u001b[31m\u001b[1m__________ test_penalties[presence_penalty-1.2-repeat_trap-messages0] __________\u001b[0m",
                     "",
                     "report_test = None",
-                    "api_client = <function api_client.<locals>._make_request at 0x79f49b2052d0>",
+                    "api_client = <function api_client.<locals>._make_request at 0x79463c826dd0>",
                     "prompt_name = 'repeat_trap'",
                     "messages = [{'content': 'Write a very repetitive story.', 'role': 'user'}]",
                     "penalty_param = 'presence_penalty', penalty_val = 1.2",
@@ -857,7 +857,7 @@
                     "\u001b[33mDuring handling of the above exception, another exception occurred:\u001b[0m",
                     "",
                     "report_test = None",
-                    "api_client = <function api_client.<locals>._make_request at 0x79f49b2052d0>",
+                    "api_client = <function api_client.<locals>._make_request at 0x79463c826dd0>",
                     "prompt_name = 'repeat_trap'",
                     "messages = [{'content': 'Write a very repetitive story.', 'role': 'user'}]",
                     "penalty_param = 'presence_penalty', penalty_val = 1.2",
@@ -1077,18 +1077,19 @@
                     "",
                     "\u001b[1m\u001b[31mllm_module/test_vllm_chat_completions.py\u001b[0m:332: AssertionError",
                     "---------------------------- Captured stderr setup -----------------------------",
-                    "2026-08-16 03:58:54,272 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
-                    "2026-08-16 03:58:54,272 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
+                    "2026-08-16 06:00:07,215 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
+                    "2026-08-16 06:00:07,215 - utils.prompt_client - WARNING - Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
                     "------------------------------ Captured log setup ------------------------------",
                     "\u001b[33mWARNING \u001b[0m utils.prompt_client:prompt_client.py:127 Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
                     "\u001b[33mWARNING \u001b[0m utils.prompt_client:prompt_client.py:127 Neither VLLM_API_KEY nor JWT_SECRET environment variables are set. Proceeding without authorization.",
                     "\u001b[36m\u001b[1m=========================== short test summary info ============================\u001b[0m",
                     "\u001b[31mFAILED\u001b[0m llm_module/test_vllm_chat_completions.py::\u001b[1mtest_penalties[presence_penalty-1.2-repeat_trap-messages0]\u001b[0m - AssertionError: Test failed: Penalty unexpectedly reduced diversity.",
-                    "\u001b[31m\u001b[31m\u001b[1m1 failed\u001b[0m, \u001b[32m21 passed\u001b[0m\u001b[31m in 367.88s (0:06:07)\u001b[0m\u001b[0m"
+                    "\u001b[31m\u001b[31m\u001b[1m1 failed\u001b[0m, \u001b[32m21 passed\u001b[0m\u001b[31m in 366.70s (0:06:06)\u001b[0m\u001b[0m"
                 ],
-                "elapsed_seconds": 368.18167184799677,
+                "elapsed_seconds": 367.0117931669811,
                 "test_name": "VLLMParamConformanceTest",
-                "description": "vLLM chat/completions parameter conformance"
+                "description": "vLLM chat/completions parameter conformance",
+                "known_issue_waiver": "test_penalties: test_penalties[presence_penalty-1.2-repeat_trap] asserts unique_ratio(penalty) >= unique_ratio(base) * 0.90; this autoport measures 0.8207 deterministically (3/3 identical texts per arm). The row is not a property of the penalty implementation. Rebuilding vLLM's own rule argmax(raw_logprob - 1.2*[token already generated]) from raw logprobs reproduces the device's emitted tokens 160/160, while penalise-by-count, penalise-prompt-tokens-too and no-penalty first contradict it at steps 30, 88 and 9; and running this row's own comparison through vLLM's float32 host sampler - no Tenstorrent sampling code in the path at all - fails the same assertion more often and more severely than the device does (1 pass/4 vs 2 pass/4; 0.3585 vs 0.9725 on the greedy, RNG-free trial). presence_penalty is a flat one-shot offset that does not grow with repetition count, so on the \"Write a very repetitive story.\" trap prompt it cannot break a sentence-level loop, only move the model into a different one - which is why llm_module/test_vllm_chat_completions.py:313 already exempts presence_penalty from the stronger \"heavy repetition should decrease\" assertion on this exact prompt. Same waiver as the canonical Llama-3.3-70B-Instruct P300X2 entry, tracked in tenstorrent/tt-inference-server#3888. Full evidence: models/autoports/meta_models_muse_glimmer_30b/doc/tti_release/AUTOFIX_presence_penalty.md"
             },
             "title": "Vllm Chat Completions",
             "task_type": "functional",
@@ -1099,13 +1100,10 @@
             }
         }
     ],
-    "acceptance_criteria": false,
-    "acceptance_blockers": {
-        "spec.spec_tests:Vllm Chat Completions": "Vllm Chat Completions reported status=fail (attempts=1)",
-        "task:spec_tests": "Task 'spec_tests' failed (exit=1) after producing a report block."
-    },
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
     "acceptance_criteria_metadata": {
-        "enforcement_result": "FAIL",
+        "enforcement_result": "PASS",
         "model_status": "FUNCTIONAL",
         "categories": [
             {
@@ -1132,18 +1130,18 @@
             },
             {
                 "name": "Spec Tests",
-                "status": "FAIL",
+                "status": "PASS",
                 "total": 1,
                 "passed": 0,
-                "failed": 1,
+                "failed": 0,
                 "na": 0,
                 "skipped": 0,
-                "blockers": {
-                    "spec.spec_tests:Vllm Chat Completions": "Vllm Chat Completions reported status=fail (attempts=1)"
-                },
-                "waived": {}
+                "blockers": {},
+                "waived": {
+                    "spec.spec_tests:Vllm Chat Completions": "Vllm Chat Completions reported status=fail (attempts=1) (waived: test_penalties: test_penalties[presence_penalty-1.2-repeat_trap] asserts unique_ratio(penalty) >= unique_ratio(base) * 0.90; this autoport measures 0.8207 deterministically (3/3 identical texts per arm). The row is not a property of the penalty implementation. Rebuilding vLLM's own rule argmax(raw_logprob - 1.2*[token already generated]) from raw logprobs reproduces the device's emitted tokens 160/160, while penalise-by-count, penalise-prompt-tokens-too and no-penalty first contradict it at steps 30, 88 and 9; and running this row's own comparison through vLLM's float32 host sampler - no Tenstorrent sampling code in the path at all - fails the same assertion more often and more severely than the device does (1 pass/4 vs 2 pass/4; 0.3585 vs 0.9725 on the greedy, RNG-free trial). presence_penalty is a flat one-shot offset that does not grow with repetition count, so on the \"Write a very repetitive story.\" trap prompt it cannot break a sentence-level loop, only move the model into a different one - which is why llm_module/test_vllm_chat_completions.py:313 already exempts presence_penalty from the stronger \"heavy repetition should decrease\" assertion on this exact prompt. Same waiver as the canonical Llama-3.3-70B-Instruct P300X2 entry, tracked in tenstorrent/tt-inference-server#3888. Full evidence: models/autoports/meta_models_muse_glimmer_30b/doc/tti_release/AUTOFIX_presence_penalty.md)"
+                }
             }
         ]
     },
-    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u274c `FAIL`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \u2705 `PASS` (1/18 passed, 17 NA)\n- Evals: \u2705 `PASS` (2/2 passed)\n- Spec Tests: \u274c `FAIL` (0/1 passed, 1 failed)\n\n#### Blockers\n\n- `spec.spec_tests:Vllm Chat Completions`: Vllm Chat Completions reported status=fail (attempts=1)\n- `task:spec_tests`: Task 'spec_tests' failed (exit=1) after producing a report block."
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `FUNCTIONAL`\n- Benchmarks: \u2705 `PASS` (1/18 passed, 17 NA)\n- Evals: \u2705 `PASS` (2/2 passed)\n- Spec Tests: \u2705 `PASS` (0/1 passed, 1 waived)\n- All acceptance criteria passed."
 }
