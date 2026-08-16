@@ -4210,6 +4210,48 @@ Worth stating plainly so this is not over-read. `test_e2e_pcc` drives `run_tts` 
 and it measured **0.9999834 with exact code match and zero code flips**. The port is correct. What
 is not established is anything about its speed.
 
+### Why the demo does not simply call it — the capture is position-locked
+
+There are two reasons, and the second explains why this was not merely an oversight.
+
+**No gate links the two paths.** Correctness runs `run_tts` and passed at 0.9999834, so that path's
+cost never surfaced as a failure. Perf and the trace gate both run `trace_capture_selftest` →
+`decode_step`, so that path's speed never had to reach the product. Nothing asks whether the
+function measured for speed is the function measured for correctness.
+
+**And the captured decode trace is only valid at one position.** `decode_step` takes `pos` as a
+plain Python integer and uses it as a literal offset throughout:
+
+```python
+cos  = ttnn.slice(attn.tables.cos,  [0, 0, p, 0], [1, 1, p + 1, HEAD_DIM])
+ttnn.update_cache(kc, ttnn.typecast(k, ttnn.bfloat16), p)
+bias = ttnn.slice(attn.tables.bias, [0, 0, p, 0], [1, 1, p + 1, c])
+```
+
+Host-side integers are frozen into a recording at capture time. A trace captured at position 200
+would, on **every** replay, write the new key/value into cache slot 200, read the rotary tables at
+position 200, and apply position 200's causal mask row. Replayed across a 24-frame loop it would not
+merely be slow — it would be **numerically wrong**.
+
+*(Inferred from the code rather than tested: a replay at a different position was not attempted. The
+mechanism — Python ints baked into a captured command stream — is standard, and the docstring below
+describes exactly this constraint.)*
+
+The author states the gap explicitly:
+
+> *"`pos` is a fixed integer at capture time, which is what makes the traced shapes static **while a
+> real generation loop still advances it**."*
+
+Fixed at capture; must advance in a real loop. Reconciling those is the genuinely hard part of traced
+incremental decode — the position has to live on the device as an index tensor so one recording is
+valid at every step. **The builder stopped precisely where the gate stopped asking.** The gate asks
+"can this stage be captured?" — yes, at one position. It never asks "is the capture replayable at
+the next position?", which is the property that makes traced decode useful.
+
+So the fix in F45 ("wire the existing hooks into `run_tts`") is understated: wiring `decode_step` in
+*eagerly* is easy and wins the algorithmic factor, but winning the trace factor as well requires
+making the capture position-independent first.
+
 ### Why nothing caught it
 
 The trace gate (F45) asks whether each stage *can* be captured. `decode_trace_setup`/`decode_step`
