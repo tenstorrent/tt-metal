@@ -251,7 +251,10 @@ class Sweep:
 
     @staticmethod
     def _passed(log):
-        text = pathlib.Path(log).read_text(errors="replace")
+        log = pathlib.Path(log)
+        if not log.is_file():
+            return False
+        text = log.read_text(errors="replace")
         return bool(re.search(r"\b[1-9]\d* passed\b", text))
 
     def _hash_build(self, rt, out_file):
@@ -409,8 +412,12 @@ class Sweep:
         """One serialized device job under both flocks; CSVs copied in-lock."""
         node = row["nodes"][sel]
         work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
+        # Resume skips only GREEN jobs: a failed device job (e.g. downstream of
+        # a hung core) is re-run on the next invocation, never cached as done.
         if (work / "rc.txt").is_file() and not self.a.force:
-            return int((work / "rc.txt").read_text().strip() or 99)
+            prior_rc = int((work / "rc.txt").read_text().strip() or 99)
+            if prior_rc == 0 and self._passed(work / "log.txt"):
+                return prior_rc
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         rt = work / "rt"

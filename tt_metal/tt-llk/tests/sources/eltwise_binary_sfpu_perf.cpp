@@ -238,7 +238,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        run_selected_binary_sfpu(block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
+                        // The fresh semantic max/min contract requires physically adjacent
+                        // inputs (in1 == in0 + 1) and in-place output; the previous modulo
+                        // wrap produced (7, 0, 7) at the last dest tile and tripped the
+                        // wrapper's device-side LLK_ASSERT (math core ebreak). Clamp the
+                        // pair base instead: every iteration issues the same operation on a
+                        // valid adjacent pair. The isolate scenarios measure timing, not
+                        // payload placement, and the index is a runtime register for both
+                        // impls, so neither instruction stream changes.
+                        const std::uint32_t pair_base = std::min(block_tile, MAX_TILES_DEST - 2);
+                        run_selected_binary_sfpu(pair_base, pair_base + 1, pair_base);
                     }
                 }
             }
@@ -263,7 +272,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU binary operation
-                        run_selected_binary_sfpu(block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
+                        // The fresh semantic max/min contract requires physically adjacent
+                        // inputs (in1 == in0 + 1) and in-place output; the previous modulo
+                        // wrap produced (7, 0, 7) at the last dest tile and tripped the
+                        // wrapper's device-side LLK_ASSERT (math core ebreak). Clamp the
+                        // pair base instead: every iteration issues the same operation on a
+                        // valid adjacent pair. The isolate scenarios measure timing, not
+                        // payload placement, and the index is a runtime register for both
+                        // impls, so neither instruction stream changes.
+                        const std::uint32_t pair_base = std::min(block_tile, MAX_TILES_DEST - 2);
+                        run_selected_binary_sfpu(pair_base, pair_base + 1, pair_base);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
