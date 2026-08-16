@@ -9,7 +9,7 @@ This lane asks whether compiler-visible SFPI C++ can beat an existing hand sched
 | 1 | Binary max/min | Production is a 3-cycle/row SFPLOADMACRO schedule; semantic operation is one `max`/`min` expression | measured below |
 | 2 | Addcmul | Production manually interleaves two independent rows; semantic expression is `(scale * b) * c + a` | measured below |
 | 3 | Addcdiv | Existing correctness and isolated perf; semantic body, but reciprocal expansion adds numerical and scheduling risk | ready after Addcmul |
-| 4 | Lerp | Existing correctness and isolated perf | measured identical-source compiler A/B win; see `LERP_COMPILER_SILICON_AB.md` |
+| 4 | Lerp | Existing correctness and isolated perf | low upside: production is already simple semantic SFPI C++ |
 | 5 | Scalar add/sub/mul/rsub | Existing correctness and isolated perf | low upside: production is already one-row semantic SFPI C++ |
 | 6 | Reduce row max | Existing correctness and isolated perf | needs reduction/addressing audit before a fresh body |
 | 7 | Softmax-K | Correctness harness exists | numerical approximation work; no isolated perf fixture |
@@ -28,7 +28,6 @@ Only correctness-gated, scoped Blackhole device measurements appear here.
 | Reduce-SDPA body | 840 | 834 | -0.714% |
 | Binary broadcast body | 608 | 608 | parity |
 | Reciprocal body, accurate Float16_b | 467 | 459 | **-1.713%** |
-| Lerp isolate, compiler passes off/on | 580.984375 | 564.984375 | **-2.7539%** |
 | Addcmul body with P4 | 292.9296875 | 292.9921875 | parity (+0.02134%) |
 | Exp body, accurate Float16_b | 579.7421875 | 989.75 | +70.72% |
 | TTNN Where body | 159.25 | 312.50 | +96.23% |
@@ -99,50 +98,3 @@ Each cell is three fresh, serialized device processes. The metric is scoped `TIL
 Evidence is archived under `/localdev/nkapre/sigmoidappx-bh-silicon-20260815`; its aggregate SHA256 manifest is `b52cdbd14b8b89c62d37d289d5830a5a0c28324f13f55390e73d8a58f0305908`.
 
 The production body uses a replayed load, `SFPLUT`, add, and store. The fresh cubic instead materializes two FP32 constants inside every row (four `sfploadi` half-immediates), then emits square, MAD, multiply, add, and store without replay. This is negative evidence for three generic targets: loop-invariant SFPU constant hoisting, allocation of invariants to special registers, and replay extraction from counted typed loops. The compiler work must be driven by invariant dataflow and loop legality, not by recognizing SigmoidAppx or its coefficients.
-
-### Generic invariant-hoist and counted-replay follow-up
-
-The fresh helper is now kept as a separate `noinline` function so its loop is a
-clean compiler input: the function contains only typed Dst loads/stores and the
-cubic expression.  Setup, profiler ownership, and RWC setup remain outside the
-helper.  There are still no physical LREGs, raw instructions, replay commands,
-or copied issue schedules in the semantic body.  The call and return are inside
-the measured math scope.
-
-With the operation-agnostic invariant-load and counted-loop replay options, the
-linked Blackhole body hoists the four half-immediate loads once and captures a
-six-word `SFPLOAD; SFPMUL; SFPMAD; SFPMUL; SFPADDI; SFPSTORE` payload.  The
-trailing `TTINCRWC` remains explicit.  Wormhole and Blackhole compilation and
-paired CRAQ correctness pass; QSR conservatively refuses these transformations.
-
-The silicon result is an honest loss.  Each value below is a fresh serialized
-process, and the scoring field is `TILE_LOOP mean(MATH_ISOLATE)`:
-
-| implementation | three Blackhole samples | median | versus production |
-|---|---:|---:|---:|
-| production LUT body | 222.8828125 / 222.8828125 / 222.8828125 | 222.8828125 | baseline |
-| optimized fresh typed cubic | 361.796875 / 361.796875 / 361.796875 | 361.796875 | +138.9140625 (+62.3261%) |
-
-The two generic passes recover 85.0546875 cycles, or 19.0342%, from the prior
-fresh result of 446.8515625 cycles, but do not flip the production comparison.
-The six raw/post CSVs and their manifest are archived under
-`/localdev/nkapre/sigmoid-silicon-final/cycles`; the manifest hash is
-`79a308bdb0e29fce4a341ab315cd960c5354a2d41fcc4239a55498f25c3ae657`.
-An earlier run made with performance counters enabled is retained separately in
-`counter-only` and is explicitly non-scoring because it has no valid
-`mean(MATH_ISOLATE)` field.  Extracted `.text` is invariant across the three
-runs: production is 2220 bytes with SHA256
-`2b8ed1faa233791dca63ae24031e5a838a9284d1b6900bc14514acfcda65acae`,
-and optimized fresh is 2216 bytes with SHA256
-`d45c87b7ddc13595fae864e51ba6dd6b5b613605ae8d8f71e0f46a54d365ac8c`.
-
-The remaining mechanism is visible directly in those ELFs.  Production uses a
-four-word replay payload (`SFPLOAD; SFPLUT; SFPADDI; SFPSTORE`) and unrolls eight
-rows per scalar loop iteration.  The typed cubic uses six payload words and
-keeps a scalar branch for every row.  Across 32 rows that is exactly 128
-production SFPU payload operations versus 192 typed-cubic payload operations,
-plus 28 extra scalar loop backedges.  The fresh capture uses no-execute mode, so
-it does not add a redundant payload execution.  Constant placement and replay
-delivery are therefore no longer the dominant gap.  The next durable target is
-semantic cubic-to-LUT lowering under an explicit approximation/error contract
-(and generic replay-aware unrolling), not more replay special casing.
