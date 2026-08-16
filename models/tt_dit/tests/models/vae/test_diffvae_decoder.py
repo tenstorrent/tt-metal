@@ -150,6 +150,45 @@ def test_decode_stage5_wsp_matches_replicated(*, mesh_device, sp_axis):
     assert_quality(pixels_rep, pixels_sp, pcc=0.999)
 
 
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
+def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
+    """Full decode with BOTH the deterministic stages and stage 5 W-sharded matches the replicated
+    decode, on shipped weights. The det stages shard from stage 1 (stage 0 replicated) and gather
+    back to a replicated context; stage 5 then W-shards as before. Same latent and seed, so both
+    draw the same x0 noise. This is the end-to-end check of det-stage SP (Path B)."""
+    from models.tt_dit.parallel.manager import CCLManager
+
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    config = decoder_config(CHECKPOINT)
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 2, 8, 8)
+
+    replicated = DiffVAEDecoder(config, mesh_device=mesh_device)
+    replicated.load_checkpoint(CHECKPOINT)
+    pixels_rep = replicated.decode(latent, seed=0)
+
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    sharded = DiffVAEDecoder(
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        stage5_na3d_backend="op_sp_w_sharded",
+        stage5_sp_axis=sp_axis,
+        stages_na3d_backend="op_sp_w_sharded",
+        stages_sp_axis=sp_axis,
+    )
+    sharded.load_checkpoint(CHECKPOINT)
+    pixels_sp = sharded.decode(latent, seed=0)
+
+    assert tuple(pixels_sp.shape) == tuple(pixels_rep.shape), f"{tuple(pixels_sp.shape)} != {tuple(pixels_rep.shape)}"
+    assert_quality(pixels_rep, pixels_sp, pcc=0.999)
+
+
 @pytest.mark.diffvae_gate
 def test_decode_matches_upstream(*, decoder):
     """Latent to pixels through the whole decoder, against upstream's own pixels."""

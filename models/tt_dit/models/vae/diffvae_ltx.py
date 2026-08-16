@@ -558,6 +558,8 @@ class DeterministicStages(Module):
         head_dim: int = 64,
         mesh_device=None,
         ccl_manager=None,
+        na3d_backend: str | None = None,
+        sp_axis: int | None = None,
     ):
         super().__init__()
         assert len(upsamples) == len(stage_channels) - 1, "one upsample between consecutive stages"
@@ -565,7 +567,23 @@ class DeterministicStages(Module):
         self.head_dim = head_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        # Spatial-W SP for the deterministic stages: when the backend is "op_sp_w_sharded" the
+        # activation is W-sharded from stage 1 on (stage 0's W is not divisible by the mesh axis, so
+        # it stays replicated), then gathered back to a replicated context at the end -- so the
+        # handoff to stage 5 is unchanged. Defaults to the env override for the OOM diagnostic.
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        self.sp_axis = sp_axis
+        self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
+        self.sp = int(list(mesh_device.shape)[sp_axis]) if self._w_sharded else 1
+        if self._w_sharded:
+            assert sp_axis is not None and ccl_manager is not None, "op_sp_w_sharded needs sp_axis + ccl_manager"
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
+
+        def block_backend(stage: int) -> str:
+            # Stage 0 runs replicated (its W is not shardable); the rest shard over W.
+            if self._w_sharded:
+                return "op" if stage == 0 else "op_sp_w_sharded"
+            return self.na3d_backend
 
         self.det_stages = ModuleList(
             [
@@ -576,7 +594,9 @@ class DeterministicStages(Module):
                             stage_kernels[stage],
                             head_dim=head_dim,
                             mesh_device=mesh_device,
-                            na3d_backend=os.environ.get("DIFFVAE_NA3D_BACKEND", "gather"),
+                            na3d_backend=block_backend(stage),
+                            ccl_manager=ccl_manager if self._w_sharded and stage > 0 else None,
+                            sp_axis=sp_axis if self._w_sharded and stage > 0 else None,
                         )
                         for _ in range(stage_depths[stage])
                     ]
@@ -653,20 +673,78 @@ class DeterministicStages(Module):
     def load_checkpoint(self, path, *, statistics: bool = True) -> None:
         self.load_state_dict(self.state_from_checkpoint(path, statistics=statistics))
 
+    def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
+        """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``.
+
+        A W-band is not a contiguous slice of the T-outer sequence, so the flat rows are viewed as a
+        ``(T, H, W, ch)`` volume, ``mesh_partition``ed on W, and flattened back in (t, h, w_local)
+        order. **Consumes** ``x``.
+        """
+        t, h, w = dims
+        ch = int(x.shape[-1])
+        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(x)
+        vol = ttnn.reshape(rm, (t, h, w, ch))
+        band = ttnn.mesh_partition(vol, dim=2, cluster_axis=self.sp_axis)  # (T, H, W/sp, ch)
+        ttnn.deallocate(rm)
+        flat = ttnn.reshape(band, (t * h * (w // self.sp), ch))
+        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+
+    def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
+        """Gather a W-sharded ``(T*H*(W/sp), ch)`` band back to the replicated ``(T*H*W, ch)`` volume.
+
+        Chip order along ``sp_axis`` is W order, so the all-gather over the W dim rebuilds the full
+        volume with no reshuffle. **Consumes** ``x``.
+        """
+        t, h, w = dims
+        ch = int(x.shape[-1])
+        w_local = w // self.sp
+        vol = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (t, h, w_local, ch))
+        ttnn.deallocate(x)
+        full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)  # (T, H, W, ch)
+        return ttnn.to_layout(ttnn.reshape(full, (t * h * w, ch)), ttnn.TILE_LAYOUT)
+
     def forward(
         self, x: ttnn.Tensor, *, dims: tuple[int, int, int], drop_leading_frame: bool = True, stages: int | None = None
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
-        """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent."""
+        """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent.
+
+        Under spatial-W SP the activation is W-sharded from stage 1 on and gathered back to a
+        replicated volume before returning, so ``dims`` here is always the FULL ``(T, H, W)`` and the
+        return is the replicated context -- the stage-5 handoff is unchanged.
+        """
         x = self.conv_in(x)
         count = len(self.upsamples) if stages is None else stages
+        sharded = False
         for stage in range(count):
+            t, h, w = dims
+            stage_sharded = self._w_sharded and stage > 0
+            if stage_sharded:
+                assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
+                if not sharded:
+                    x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
+                    sharded = True
+            local_dims = (t, h, w // self.sp) if stage_sharded else dims
+
             cos, sin = self._rope(dims)
-            plan = self._plan(dims, self.stage_kernels[stage])
+            if stage_sharded:
+                cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
+                sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
+            plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
+
             for index, block in enumerate(self.det_stages[stage]):
-                x = block(x, dims=dims, cos=cos, sin=sin, device_plan=plan)
-                log_dram(self.mesh_device, f"det stage {stage} block {index} dims={dims}")
-            x, dims = self.upsamples[stage](x, dims=dims, drop_leading_frame=drop_leading_frame)
-            log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims}")
+                x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
+                log_dram(self.mesh_device, f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}")
+
+            x, out_dims = self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
+            if stage_sharded:
+                out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
+            dims = out_dims
+            log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
+
+        if sharded:
+            x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
+            log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
 
 
@@ -701,6 +779,8 @@ class DiffVAEDecoder(Module):
         ccl_manager=None,
         stage5_na3d_backend: str | None = None,
         stage5_sp_axis: int | None = None,
+        stages_na3d_backend: str | None = None,
+        stages_sp_axis: int | None = None,
     ):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
@@ -728,6 +808,8 @@ class DiffVAEDecoder(Module):
             head_dim=config["head_dim"],
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            na3d_backend=stages_na3d_backend,
+            sp_axis=stages_sp_axis,
         )
         self.stage5 = DiffVAEStage5(
             DiffVAEStage5Config(
