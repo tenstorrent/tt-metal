@@ -4,9 +4,14 @@
 
 """Qwen3 backward pass comparison: HuggingFace (PyTorch) vs ttml.
 
-Compares per-parameter gradients between HuggingFace (CPU/bfloat16) and
-ttml (Tenstorrent device/bfloat16) after a single forward+backward pass
-with cross-entropy loss.
+Compares per-parameter gradients between HuggingFace (CPU) and ttml
+(Tenstorrent device/bfloat16) after a single forward+backward pass with
+cross-entropy loss.
+
+The HF side runs in bfloat16 by default, matching ttml — which means a
+disagreement cannot be attributed to either side. ``--hf_dtype float32`` makes
+HF a true reference (weights round-tripped through bf16 so both start from
+identical values), so the residual is attributable to ttml's bf16 accumulation.
 
 Usage:
     # Single device:
@@ -33,6 +38,7 @@ Usage:
 import argparse
 import math
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -46,6 +52,7 @@ from utils.tensor_utils import (
     create_input_tensor_from_torch as create_input_tensor,
     create_input_tensor_dp,
 )
+from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.models.qwen3.weights import (
     repermute_proj_rows,
@@ -162,20 +169,24 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms, tp_size=1)
         hf_flat = hf_grad.flatten()
         ttml_flat = ttml_grad.flatten()
 
+        # Every reduction below accumulates in float64 while keeping float32
+        # temporaries. These tensors run to hundreds of millions of elements (the
+        # tied embed_tokens grad is vocab x hidden), and a float32 reduction over
+        # that many terms carries ~1e-3 relative error -- the same size as the
+        # bf16 differences being measured.
         abs_diff = (hf_flat - ttml_flat).abs()
-        ad_mean = abs_diff.mean().item()
+        ad_mean = abs_diff.mean(dtype=torch.float64).item()
         ad_max = abs_diff.max().item()
 
         rel_diff = abs_diff / (hf_flat.abs() + REL_EPS)
-        rd_mean = rel_diff.mean().item()
+        rd_mean = rel_diff.mean(dtype=torch.float64).item()
         rd_max = rel_diff.max().item()
 
-        hf_norm_t = hf_flat.norm()
-        ttml_norm_t = ttml_flat.norm()
-        cos_sim = (torch.dot(hf_flat, ttml_flat) / (hf_norm_t * ttml_norm_t + 1e-8)).item()
+        hf_norm_val = hf_flat.pow(2).sum(dtype=torch.float64).sqrt().item()
+        ttml_norm_val = ttml_flat.pow(2).sum(dtype=torch.float64).sqrt().item()
+        dot = (hf_flat * ttml_flat).sum(dtype=torch.float64).item()
+        cos_sim = dot / (hf_norm_val * ttml_norm_val + 1e-8)
         cos_dist = 1.0 - cos_sim
-        hf_norm_val = hf_norm_t.item()
-        ttml_norm_val = ttml_norm_t.item()
 
         abs_mean_sum += ad_mean
         abs_max_worst = max(abs_max_worst, ad_max)
@@ -350,7 +361,7 @@ def run_backward_comparison(
     assert max_seq_in_batch <= max_seq_len, f"Longest sequence ({max_seq_in_batch}) exceeds max_seq_len ({max_seq_len})"
 
     # ------------------------------------------------------------------
-    # 1. HuggingFace backward (CPU, float32)
+    # 1. HuggingFace backward (CPU, dtype per --hf_dtype)
     # ------------------------------------------------------------------
     print("\n[HF] Forward + backward ...")
     t0 = time.time()
@@ -402,13 +413,13 @@ def run_backward_comparison(
         for d in range(dp_size):
             padded_np[d, 0, 0, : seq_lens[d]] = np.array(sequences[d], dtype=np.int32)
         input_tensor = create_input_tensor_dp(padded_np, device)
-        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_np)
+        logits = ttml_model(input_tensor, causal_mask)
     else:
         padded_input = torch.zeros(effective_batch, 1, 1, max_seq_len, dtype=torch.int32)
         for b in range(effective_batch):
             padded_input[b, 0, 0, : seq_lens[b]] = torch.tensor(sequences[b], dtype=torch.int32)
         input_tensor = create_input_tensor(padded_input, device)
-        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_input.numpy())
+        logits = ttml_model(input_tensor, causal_mask)
     if track_memory:
         MemoryUsageTracker.snapshot("FORWARD_PASS")
     print("  Forward pass complete.")
@@ -523,6 +534,26 @@ def main():
     parser = argparse.ArgumentParser(description="Qwen3: backward gradient comparison (HF vs ttml)")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="Once upon a time")
+    parser.add_argument(
+        "--prompt_file",
+        type=str,
+        default=None,
+        help="Read the prompt from this file instead of --prompt. Use to fill a long "
+        "--max_seq_len with real text: with a short prompt almost every position is "
+        "padding (target id 0), and both sides average the loss over all of them, so "
+        "the comparison ends up dominated by padding rather than language modelling.",
+    )
+    parser.add_argument(
+        "--hf_dtype",
+        type=str,
+        default="bfloat16",
+        choices=["bfloat16", "float32"],
+        help="Precision of the HuggingFace reference. Default bfloat16 matches ttml, so "
+        "a disagreement cannot be attributed to either side. float32 makes HF a true "
+        "reference: the weights are still round-tripped through bfloat16 so both models "
+        "start from bit-identical values, and only the accumulation precision differs — "
+        "so the residual is attributable to ttml's bf16 compute.",
+    )
     parser.add_argument("--max_seq_len", type=int, default=128)
     parser.add_argument(
         "--mesh_shape",
@@ -565,9 +596,22 @@ def main():
     # ------------------------------------------------------------------
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    print(f"Loading HuggingFace model: {args.model_path}")
+    hf_dtype = torch.float32 if args.hf_dtype == "float32" else torch.bfloat16
+    print(f"Loading HuggingFace model: {args.model_path}  (reference dtype: {args.hf_dtype})")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=hf_dtype, trust_remote_code=True)
+
+    if hf_dtype == torch.float32:
+        # Round every weight through bfloat16 and back. The checkpoint is bf16 on disk,
+        # but loading it as float32 and *also* handing the float32 values to ttml would
+        # not match: ttml stores bf16, so ttml's weights would be the rounded ones while
+        # HF kept the unrounded. Round-tripping here makes both models start from
+        # bit-identical values, leaving accumulation precision as the only difference.
+        with torch.no_grad():
+            for p in hf_model.parameters():
+                p.copy_(p.bfloat16().float())
+        print("  Weights round-tripped through bfloat16 (identical starting values on both sides)")
+
     hf_model.eval()
     hf_config = hf_model.config
     hf_state_dict = hf_model.state_dict()
@@ -582,13 +626,29 @@ def main():
     else:
         count = 1
 
+    if args.prompt_file:
+        base_prompt = Path(args.prompt_file).read_text(errors="replace")
+        print(f"  Prompt from {args.prompt_file}: {len(base_prompt)} chars")
+    else:
+        base_prompt = args.prompt
+
     if count > 1:
         width = len(str(count))
-        prompts = [f"{str(i+1).zfill(width)}. {args.prompt}" for i in range(count)]
+        prompts = [f"{str(i+1).zfill(width)}. {base_prompt}" for i in range(count)]
     else:
-        prompts = [args.prompt]
+        prompts = [base_prompt]
 
-    all_prompt_tokens = [tokenizer.encode(p) for p in prompts]
+    # Trim to max_seq_len so a long prompt_file fills the window without overflowing it.
+    all_prompt_tokens = [tokenizer.encode(p)[: args.max_seq_len] for p in prompts]
+    fill = min(len(pt) for pt in all_prompt_tokens) / args.max_seq_len
+    if fill < 0.5:
+        print(
+            f"  NOTE: prompt fills only {fill:.1%} of max_seq_len={args.max_seq_len}. "
+            "The remaining positions are padding with target id 0, and both sides average "
+            "the loss over them, so most of the measured gradient is padding. Use "
+            "--prompt_file with enough text to fill the window for a language-modelling "
+            "comparison."
+        )
     token_lens = [len(pt) for pt in all_prompt_tokens]
     if len(set(token_lens)) > 1:
         print(f"  WARNING: prompt token lengths differ: {token_lens}")
@@ -598,7 +658,6 @@ def main():
     # ------------------------------------------------------------------
     # 3. Set up Tenstorrent device (single or mesh)
     # ------------------------------------------------------------------
-    from utils.device_setup import setup_device
     from utils.model_factory import create_ttml_model, load_hf_weights
 
     ctx, device = setup_device(dp_size, tp_size)
@@ -676,8 +735,14 @@ def main():
     if args.track_memory:
         finalize_memory(memory_guard)
 
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

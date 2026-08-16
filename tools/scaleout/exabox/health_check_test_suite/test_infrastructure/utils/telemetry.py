@@ -14,6 +14,15 @@ from prometheus_client.parser import text_string_to_metric_families
 log = logging.getLogger(__name__)
 
 
+SLURM_TELEMETRY_PORT = 8080
+ORCHESTRATION_TELEMETRY_PORT = 18080
+
+
+def telemetry_port_for_launch_mode(launch_mode: str) -> int:
+    """Return the Prometheus endpoint port for the given launch mode."""
+    return ORCHESTRATION_TELEMETRY_PORT if launch_mode == "orchestration" else SLURM_TELEMETRY_PORT
+
+
 TELEMETRY_METRICS = frozenset(
     {
         "tt_cable_present",
@@ -60,7 +69,7 @@ _VALUE_METRICS = frozenset(
 )
 
 
-def collect_prometheus_metrics(port: int = 8080) -> dict[str, list[dict]] | None:
+def collect_prometheus_metrics(port: int = SLURM_TELEMETRY_PORT) -> dict[str, list[dict]] | None:
     """Collect telemetry metrics from the local Prometheus endpoint.
 
     Returns a dict mapping metric name to a list of

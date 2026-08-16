@@ -341,6 +341,8 @@ class TtPrefillTransformer(LightweightModule):
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -371,11 +373,17 @@ class TtPrefillTransformer(LightweightModule):
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
-            on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
-                Called as on_layer_complete(layer_idx). Used for KV cache
-                migration in disaggregated prefill/decode. When set, MLA also zeros
-                the padding region of the cache before fill so migration sees valid KV
-                + zero padding. When None, no migration or zeroing.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                        each layer's KV cache has been populated on device. When set, each block zeros the
+                        cache pad window and enqueues the ack via the outbound_socket_service_sync device op
+                        on the same CQ (no host sync). When None, no ack or zeroing.
+            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+                        d2h_service is set.
+            on_layer_complete: the HOST-callback alternative to d2h_service (used by pipelined prefill's
+                        layer-completion router). Called as on_layer_complete(layer_idx) after the same
+                        pad-zero, but with a device sync first. Wire one or the other, never both.
+            on_layer_hidden: optional tap fired at the END of each block with (GLOBAL layer index, block
+                        output activation). Read-only — see tt_prefill_block.forward.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next
@@ -389,6 +397,14 @@ class TtPrefillTransformer(LightweightModule):
                             where "first_token" is a list of results for each temperature
                             (None if return_intermediates=False)
         """
+        # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
+        # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
+        # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.
+        assert d2h_service is None or on_layer_complete is None, (
+            "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
+            "d2h_service and would silently drop on_layer_complete"
+        )
+
         # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
         # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
         # path builds per-call rope for this seq_len. The norm/lm_head/sample tail still runs and a token
@@ -439,6 +455,8 @@ class TtPrefillTransformer(LightweightModule):
                 kvpe_cache,
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
+                d2h_service=d2h_service,
+                record_dev=record_dev,
                 on_layer_complete=on_layer_complete,
                 on_layer_hidden=on_layer_hidden,
                 actual_start=actual_start,
