@@ -856,6 +856,67 @@ one `SETRWC` is the obvious follow-on.
 in this build, so the fraction of device time in `topk_local_sort` is unmeasured. The
 -11.9% is MATH_ISOLATE for the local sort only.
 
+#### MEASURED: the packer exponent histogram WORKS on Blackhole, at exactly zero cost
+
+A hardware feature no file in the tree uses. 38/38 functional + 6/6 perf tests on silicon.
+`tests/sources/pack_exp_histogram_test.cpp`, `pack_exp_histogram_perf.cpp`.
+
+**Register surface, and an arch divergence that would silently misfire.**
+`ENABLE_ACC_STATS_Enable_ADDR32` is **45 on Blackhole**
+(`hw/inc/internal/tt-1xx/blackhole/cfg_defines.h:1154`) but **46 on Wormhole**
+(`.../wormhole/wormhole_b0_defines/cfg_defines.h:1455`). A third value, `62`, appears in
+`blackhole/tensix.h:459` inside a comment block explicitly marked out of date. `CLREXPHIST`
+(`0x21`, MATH resource) and `SETDMAREG` modes 6/7/9 are present on BH verbatim.
+
+**Cost: zero.** PACK_ISOLATE, 5 repeats, std ~ 0:
+
+| arm | cyc/tile | cyc / 32-elt vector |
+| :--- | ---: | ---: |
+| histogram off | 25.175 | 0.7867 |
+| **histogram on** | **25.104** | **0.7845** |
+| on + `CLREXPHIST` per tile | 26.183 | 0.8182 |
+
+Enabling it is **-0.071 cyc/tile (-0.28%), i.e. free**; `CLREXPHIST` costs exactly one
+cycle. Baseline agrees with the independent pack measurement above to 0.45%.
+
+**Five divergences from the Wormhole documentation, all measured:**
+
+1. **It samples 1 datum in 8.** Every tile yields exactly **128** increments, never 1024 —
+   format-independent (fp32 also gives 128), so the rate is per *datum*, not per 16-byte beat.
+2. **The sampled set is a fixed positional pattern, `p mod 64 < 8`** — proved by
+   construction: marking `(p%64)//8 == 0` gives `{31:128}`, blocks 1-7 give `{31:0}`, and a
+   mod-8 phase sweep is flat (so it is not a stride-8 pattern).
+3. **`WhichPackers` is ignored on modes 6/7.** All four reads return the identical array
+   while mode 0 shows packers 1-3 packed nothing. No four-way partial sum is needed — and
+   summing the four reads 4x-counts, which is the trap.
+4. **Max exponent (mode 9) is subsampled too.** WH documents it as updating for every datum;
+   on BH a single outlier at exp 132 among 1023 at exp 127 is **missed**.
+5. **`CLREXPHIST` from the PACK thread does not fence in-flight PACRs** — a reproducible
+   ~39-count leak (168 instead of 128). Issuing it from the math thread, ordered by the dest
+   semaphore, gives exactly 128.
+
+Confirmed caveats: `Exponent & 31` aliasing is real (exp 127 and 159 collide; fp16 is
+clean); 8-bit counters **saturate** at 255 rather than wrapping; `CLREXPHIST` is required
+between tiles; `ENABLE_ACC_STATS_Enable` is OR'd across all three threads; and it is
+**sign-blind** — it ranks |x|, so signed top-K needs the sign handled first.
+
+**The threshold search becomes nearly free.** N=32768, K=32: 32 tiles x (`CLREXPHIST` +
+modes 6/7/9) = **128 cycles**, on THCON/MATH, consuming zero SFPU issue slots.
+
+| scheme | search | + filter | + finish | total |
+| :--- | ---: | ---: | ---: | ---: |
+| **packer histogram** | **128** | 1027 | 112 | **1,267** |
+| `HistMacro` (3.000 cyc/vec) | 3,072 | 1027 | 112 | 4,211 |
+| 12-bit binary search | 24,876 | 1027 | — | 25,903 |
+| floor (threshold free) | 0 | 1027 | 112 | 1,139 |
+
+**194x cheaper than binary search on the search alone**, 3.3x better end to end than the
+software histogram, and only 11% above the floor where the threshold costs nothing at all.
+
+Two conditions: a pack must be happening anyway (a dedicated pack pass costs 806 cycles,
+dropping the win to 2,073 — still 2x/12.5x), and the 12.5% sample yields a bracketing power
+of two rather than an exact K-th value, so one refinement pass is needed.
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working

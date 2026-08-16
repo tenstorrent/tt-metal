@@ -161,7 +161,7 @@ def run_and_decode(configuration):
     tile_bytes = stim.buf_res_tile_size
     off = DIAG_TILE * tile_bytes
     d = [
-        int.from_bytes(raw[off + 4 * i : off + 4 * i + 4], "little") for i in range(48)
+        int.from_bytes(raw[off + 4 * i : off + 4 * i + 4], "little") for i in range(52)
     ]
 
     per_packer = []
@@ -174,9 +174,18 @@ def run_and_decode(configuration):
 
     total = [sum(per_packer[p][b] for p in range(NUM_PACKERS)) for b in range(NUM_BINS)]
 
+    # Measured on BH: all four `WhichPackers` reads return the same array, and the
+    # SETDMAREG mode-0 control shows only packer 0 ever packs in this config. So
+    # packer 0's array IS the histogram; summing all four would count it 4x.
+    hist = per_packer[0]
+
     return {
+        "hist": hist,
+        "all_packers_identical": all(per_packer[p] == hist for p in range(NUM_PACKERS)),
+        "sampled_total": sum(hist),
+        "sample_ratio": sum(hist) / TILE_DATUMS,
         "sentinel_ok": d[0] == 0xC0DEBA5E and d[44] == 0xC0DEE0D1,
-        "raw_words": [f"0x{w:08X}" for w in d[:45]],
+        "raw_words": [f"0x{w:08X}" for w in d[:49]],
         "per_packer": per_packer,
         "total": total,
         "packer_totals": [sum(h) for h in per_packer],
@@ -191,6 +200,10 @@ def run_and_decode(configuration):
         "clr_mode": d[40],
         "num_packs": d[41],
         "num_faces": d[42],
+        # SETDMAREG SetSignals mode 0: per-packer (AccTileSize<<16 | LastTileSize).
+        # Non-zero here proves the readback path works even if modes 6/7 are dead.
+        "sigsel_mode0_control": [f"0x{w:08X}" for w in d[45:49]],
+        "sigsel_mode0_live": any(w not in (POISON, 0) for w in d[45:49]),
     }
 
 
@@ -208,6 +221,9 @@ def _report(info, name):
     )
     print(f"  any_poison_in_hist     {info['any_poison_in_hist']}")
     print(
+        f"  sigsel_mode0_control   {info['sigsel_mode0_control']} live={info['sigsel_mode0_live']}"
+    )
+    print(
         f"  hist_en/clr/num_packs  {info['hist_en']}/{info['clr_mode']}/{info['num_packs']}"
     )
     print(f"  packed_size_t2_units   {info['packed_size_t2_units']}")
@@ -219,7 +235,11 @@ def _report(info, name):
     )
     for p in range(NUM_PACKERS):
         print(f"  packer{p} nonzero bins   {nz(info['per_packer'][p])}")
-    print(f"  SUM nonzero bins       {nz(info['total'])}")
+    print(f"  4x-SUM nonzero bins    {nz(info['total'])}")
+    print(
+        f"  HIST (packer0)         {nz(info['hist'])}  total={info['sampled_total']} "
+        f"ratio={info['sample_ratio']:.4f} identical={info['all_packers_identical']}"
+    )
     if "expected" in info:
         print(f"  EXPECTED nonzero bins  {nz(info['expected'])}")
         print(f"  exact_match            {info['exact_match']}")
@@ -349,6 +369,145 @@ def test_hist_enable_thread(which):
     info["exact_match"] = info["total"] == info["expected"]
     _report(info, f"enable_{which}")
     assert info["sentinel_ok"]
+
+
+def tile_phase(phase, dtype, mark=1.0, base=16.0):
+    """Datums at positions p with p % 8 == phase carry `mark`; the rest carry `base`.
+    The flat tensor is written to L1 in datum order, and the A2D datacopy preserves that
+    order into Dst, so index here == the packer's Dst fetch order."""
+    vals = [base] * TILE_DATUMS
+    for p in range(phase, TILE_DATUMS, 8):
+        vals[p] = mark
+    return torch.tensor(vals, dtype=dtype)
+
+
+@pytest.mark.parametrize("phase", list(range(8)))
+def test_hist_sample_phase(phase):
+    """Measured: a 1024-datum bf16 tile produces exactly 128 histogram increments, i.e.
+    one per 8 datums. This pins down WHICH datum of each group of 8 is counted.
+
+    bf16 1.0 -> exponent 127 -> bin 31 (the 'mark'), 16.0 -> exponent 131 -> bin 3.
+      * fixed phase phi   : bin 31 == 128 for exactly one phase, bin 3 == 128 for the rest
+      * max of each group : bin 3 == 128 for every phase
+      * min of each group : bin 31 == 128 for every phase
+    """
+    src = tile_phase(phase, torch.bfloat16)
+    cfg = build_config(src, _BF16, HIST_PARAMS(clr_mode=2))
+    info = run_and_decode(cfg)
+    info["phase"] = phase
+    _report(info, f"phase{phase}")
+    assert info["sentinel_ok"]
+
+
+@pytest.mark.parametrize("blk", list(range(8)))
+def test_hist_sample_block64(blk):
+    """The mod-8 phase sweep came back flat (16 marks counted at every phase), so the
+    128 sampled positions are spread evenly over all eight mod-8 residues. This probes a
+    coarser alignment: mark the 8 contiguous datums (p mod 64) // 8 == blk.
+
+      * one contiguous run of 8 per 64 sampled : one blk gives bin 31 == 128
+      * evenly spread again                    : every blk gives bin 31 == 16
+    """
+    vals = [16.0] * TILE_DATUMS
+    for p in range(TILE_DATUMS):
+        if (p % 64) // 8 == blk:
+            vals[p] = 1.0
+    src = torch.tensor(vals, dtype=torch.bfloat16)
+    cfg = build_config(src, _BF16, HIST_PARAMS(clr_mode=2))
+    info = run_and_decode(cfg)
+    info["blk"] = blk
+    _report(info, f"blk64_{blk}")
+    assert info["sentinel_ok"]
+
+
+def test_hist_first_half():
+    """Mark the first 512 datums. Tells whether the 128 samples are spread over the whole
+    tile (64 marks) or concentrated in part of it."""
+    vals = [16.0] * TILE_DATUMS
+    for p in range(512):
+        vals[p] = 1.0
+    src = torch.tensor(vals, dtype=torch.bfloat16)
+    cfg = build_config(src, _BF16, HIST_PARAMS(clr_mode=2))
+    info = run_and_decode(cfg)
+    _report(info, "firsthalf")
+    assert info["sentinel_ok"]
+
+
+def test_hist_first_face():
+    """Mark face 0 only (the first 256 datums in L1/Dst order). If the sample is uniform
+    across the tile this is 32 marks; if the histogram only covers one face it is 128.
+    """
+    vals = [16.0] * TILE_DATUMS
+    for p in range(256):
+        vals[p] = 1.0
+    src = torch.tensor(vals, dtype=torch.bfloat16)
+    cfg = build_config(src, _BF16, HIST_PARAMS(clr_mode=2))
+    info = run_and_decode(cfg)
+    _report(info, "firstface")
+    assert info["sentinel_ok"]
+
+
+def test_hist_sign_blind():
+    """For a top-K threshold search this is the make-or-break property: the histogram
+    bins the raw exponent FIELD, so -x and +x of equal magnitude should collide. If they
+    do, the histogram ranks |x|, not x, and signed top-K needs the sign handled
+    separately (e.g. packer MIN_THRESHOLD_RELU zeroing negatives first)."""
+    # +1.0 and -1.0 both have bf16 biased exponent 127 -> bin 31; 16.0 -> bin 3.
+    vals = [16.0] * TILE_DATUMS
+    for p in range(TILE_DATUMS):
+        if (p % 64) < 4:
+            vals[p] = 1.0
+        elif (p % 64) < 8:
+            vals[p] = -1.0
+    src = torch.tensor(vals, dtype=torch.bfloat16)
+    cfg = build_config(src, _BF16, HIST_PARAMS(clr_mode=2))
+    info = run_and_decode(cfg)
+    _report(info, "signblind")
+    print("  sign-blind if bin31 == 128 (both +1.0 and -1.0 counted in the same bin)")
+    assert info["sentinel_ok"]
+
+
+def test_hist_rate_fp32():
+    """Is the 1:8 rate per-datum or per-16-bytes-of-Dst-fetch? bf16 gives 8 datums per
+    16 B, fp32 gives 4. 128 increments here => per-datum; 256 => per-16-byte beat."""
+    src = tile_from_counts(_BF16_THREE, torch.float32)
+    fmt = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    cfg = TestConfig(
+        "sources/pack_exp_histogram_test.cpp",
+        fmt,
+        templates=[
+            generate_input_dim([32, 32], [32, 32]),
+            TILIZE(Tilize.No),
+            DEST_SYNC(DestSync.Half),
+            HIST_PARAMS(clr_mode=2),
+        ],
+        runtimes=[RELU_CONFIG(0), NUM_FACES(num_faces=4)],
+        variant_stimuli=StimuliConfig(
+            src,
+            DataFormat.Float32,
+            torch.zeros(TILE_DATUMS, dtype=torch.float32),
+            DataFormat.Float32,
+            DataFormat.Float32,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=RES_TILES,
+        ),
+        dest_acc=DestAccumulation.Yes,
+        unpack_to_dest=True,
+    )
+    info = run_and_decode(cfg)
+    info["expected_full"] = golden_bins_fp32(src)
+    info["exact_match"] = info["hist"] == info["expected_full"]
+    _report(info, "rate_fp32")
+    assert info["sentinel_ok"]
+
+
+def golden_bins_fp32(t):
+    bits = t.view(torch.int32).tolist()
+    hist = [0] * NUM_BINS
+    for b in bits:
+        hist[((b >> 23) & 0xFF) & 31] += 1
+    return hist
 
 
 @pytest.mark.parametrize("top_exp_k", [0, 5, 20])

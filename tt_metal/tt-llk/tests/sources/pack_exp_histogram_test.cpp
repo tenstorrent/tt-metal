@@ -54,9 +54,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // ENABLE_ACC_STATS_Enable is per-thread ThreadConfig and survives an ELF reload, so
+    // every thread writes its own copy explicitly -- otherwise a previous variant that
+    // enabled it from this thread contaminates the "off" arm.
     if constexpr (HIST_EN_UNPACK)
     {
         TTI_SETC16(ENABLE_ACC_STATS_Enable_ADDR32, 1);
+    }
+    else
+    {
+        TTI_SETC16(ENABLE_ACC_STATS_Enable_ADDR32, 0);
     }
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -86,9 +93,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // Explicit both ways: ThreadConfig is per-thread and survives an ELF reload.
     if constexpr (HIST_EN_MATH)
     {
         TTI_SETC16(ENABLE_ACC_STATS_Enable_ADDR32, 1);
+    }
+    else
+    {
+        TTI_SETC16(ENABLE_ACC_STATS_Enable_ADDR32, 0);
     }
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
@@ -261,5 +273,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     diag[42] = params.num_faces;
     diag[43] = params.buffer_Res[0];
     diag[44] = 0xC0DEE0D1;
+
+    // Positive control for SETDMAREG SetSignals mode itself: InputSource 0 returns the
+    // four packers' AccTileSize/LastTileSize, which are non-zero after a real pack. If
+    // this comes back live but modes 6/7 come back all zero, the histogram specifically
+    // is missing -- not the readback path.
+    poison_gprs();
+    TTI_SETDMAREG(p_setdmareg::PAYLOAD_128BIT, sigsel(0, 0, 0), p_setdmareg::MODE_SIGNAL, 2 * HIST_GPR);
+    drain_gprs(&diag[45]);
 }
 #endif
