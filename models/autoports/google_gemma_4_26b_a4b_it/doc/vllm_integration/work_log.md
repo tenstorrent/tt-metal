@@ -18,4 +18,9 @@ Started from datatype-sweep commit `a60cab960bc02bba4b9f5c846a7819ee25a42c41`.
 - Final sampling rerun exposed and fixed padded token slicing plus unsupported arbitrary multi-user shard shapes. Batch one executes logically as one; multi-user requests retain the canonical 32 sampling lanes with inactive rows gated by `current_pos=-1`. Final full profile: 72 passed, 1 skipped in 732.98 s.
 - Focused async overlap command: `python models/autoports/google_gemma_4_26b_a4b_it/tests/run_vllm_async_overlap.py --model google/gemma-4-26B-A4B-it --output models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/async_overlap_state_test.json`. The final chat-templated controls are nondegenerate: the coherent long response produces 96 tokens and crosses the 64-token page boundary, the exact two-word response reaches EOS after 3 tokens while the long request remains active, and both staggered outputs byte-match isolated controls. The retained artifact records empty degeneracy findings for isolated and overlapped text; the runner explicitly fails doubled tokens, adjacent repeated phrases, and dominant-token collapse.
 
-Stage review and local commit SHAs are appended after the independent clean-pass.
+Independent stage review verdict: `clean-pass`.
+
+Local checkpoint commits (never pushed):
+
+- tt-metal implementation and evidence: `a871e282fbfee748cb07c12750eed42c6b45e7a7`
+- vLLM TT plugin registration/test: `938c45ed71f3f669ffd38e4c9a033c3391cec961`
