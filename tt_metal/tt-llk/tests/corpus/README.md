@@ -114,12 +114,18 @@ functional gate and scoped silicon cycles remain the performance authority.
 ```bash
 python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
   --mode compile --arch bh --execute \
-  --row legacy__ckernel_sfpu_welfords \
-  --compiler-ab-off-options=-mno-tt-tensix-optimize-lp \
-  --compiler-ab-on-options=-mtt-tensix-optimize-lp \
+  --row metal__ckernel_sfpu_signbit \
+  --compiler-ab-off-options="-mno-tt-tensix-optimize-latency-schedule -mno-tt-tensix-optimize-dst-iteration-fusion -mno-tt-tensix-optimize-replay-hoist -mno-tt-tensix-optimize-invariant-loadi -mno-tt-tensix-optimize-dst-autoincr" \
+  --compiler-ab-on-options="-mtt-tensix-optimize-latency-schedule -mtt-tensix-optimize-dst-iteration-fusion -mtt-tensix-optimize-replay-hoist -mtt-tensix-optimize-invariant-loadi -mtt-tensix-optimize-dst-autoincr -mtt-tensix-macro-planner" \
   --require-changed-binary --require-compiler-pin \
-  --run-root /tmp/sfpu-welford-compiler-ab
+  --run-root /tmp/sfpu-signbit-compiler-ab
 ```
+
+Those are the canonical post-WP8 flag sets. The pre-WP8
+`-mtt-tensix-{analyze,emit}-loadmacro` flags were **removed** with the
+quarantined exact-calendar pass and now error on use; the planner ON leg is
+`-mtt-tensix-macro-planner`. Any doc or script still naming the loadmacro
+flags is stale.
 
 Use `--require-changed-binary` only for a row expected to exercise the pass.
 Byte identity is the correct result for ineligible fallback fixtures and can
@@ -161,6 +167,70 @@ python3 tt_metal/tt-llk/tests/corpus/sfpu_corpus.py \
 Repeated baseline samples with the same operation, architecture, metric, scope,
 and selector use their minimum, matching the established three-process device
 profiling convention.  Missing or non-device-cycle values are explicit skips.
+
+Device baselines are keyed by **chip class** and never compared across
+classes: `sfpu_device_baseline_v1.tsv` is the immutable p100a-era migration
+source; `sfpu_device_baseline_p150_v1.tsv` carries the p150 cells seeded from
+the post-WP8 sweep (its Reduce-SDPA `generated` row is an explicitly flagged
+`measured_known_regression` — the profitability-gate fix lane owns that
+update).  `--chip-class {p100a,p150}` selects the matching checked-in file
+when `--baseline` is not given explicitly.
+
+**Baseline update procedure (reviewed, manual):** sweeps only *report* drift
+and never modify checked-in baselines.  To update: take the candidate cycles
+from a green sweep evidence dir (`scoreboard.tsv`), verify the run's
+`preflight.json` compiler sha and CRAQ verdicts, edit the chip-class baseline
+TSV with provenance pointing at the evidence dir, and land it through normal
+review.  A win→loss flip is never "updated over": it is a STOP event that
+must be bisected first.
+
+## One-command 2x2 sweep (HANDOFF §1/§3 protocol as code)
+
+`sweep_2x2.py` regenerates the full `{semantic, hand} × {passes OFF, ON}`
+silicon matrix from `sweep_2x2_ops.tsv` (exact pytest node ids, marker
+discipline, CRAQ arch legs; absent rows are machine-readable SKIPs).  It
+encodes the silicon protocol: pinned-compiler preflight (sha + removed-flag
+probe), changed-binary classification **before** any device job
+(byte-identical OFF/ON pair ⇒ recorded refusal, no device run), paired CRAQ
+through the generic-path simulator, every device job under both exclusive
+flocks (`/tmp/tt-device.lock` outer, `/tmp/tt-llk-sfpu-silicon.lock` inner),
+3 fresh profiler processes per selector per leg alternating OFF/ON with
+unique `RUNNER_TEMP`s, raw+post CSVs copied in-lock, hand OFF==ON
+byte-identity filling both hand cells from one physical run, and per-op
+evidence (ELFs, `.text` hashes, `build.h`, logs, CSVs, compiler sha,
+`SHA256SUMS`).  Markers: `KERNEL` for fire-and-forget replay-launch shapes
+(SDPA — BODY is invalid there), `TILE_LOOP`/body markers otherwise; metric is
+post-CSV `mean(MATH_ISOLATE)`/`tile_cnt` = cycles/tile.
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
+  --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
+  --compiler-sha 4633999c \
+  --sim-bh ~/sfpi-uplift/craq-sim/src/_out/release_bh/libttsim.so \
+  --sim-wh ~/sfpi-uplift/craq-sim/src/_out/release_wh/libttsim.so \
+  --allow-hardware \
+  --baseline tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
+```
+
+The run is idempotent and resumable per row/job (`--force` re-runs), supports
+`--ops`, `--phases classify,craq,silicon,report`, `--dry-run`, and exits
+nonzero on any RED (correctness failure, CRAQ gate, win→loss flip vs the
+baseline).  `REPORT.md`, `SCOREBOARD.md`, `scoreboard.{json,tsv}` and
+`SHA256SUMS` land in the evidence root.
+
+### Scheduled sweeps
+
+`nightly_bh_sweep.sh` (02:00) runs validate → classify → CRAQ → BH silicon →
+report against the chip-class baseline and the previous nightly run.
+`weekly_bh_sweep.sh` (Sun 04:00) adds per-knob attribution (each optimization
+flag toggled individually; per-knob silicon legs for the `HEADLINE_ROWS`
+only), the WH CRAQ matrix for macro rows, and the DejaGnu byte-parity suites
+(`loadmacro*`, `macro-planner*`) against the pinned toolchain build tree
+(SKIP if absent).  All knobs/rows/paths live in `sweep_2x2.conf`
+(env-overridable), not in script bodies.  Install the cron entries with
+`install_sweep_cron.sh` (prints by default; `--install` writes the crontab —
+an orchestrator/owner step, both entries flock-guarded and logging to
+`~/sfpi-uplift/sweep-logs/`).
 
 ## Reproduce a baseline
 
@@ -211,8 +281,12 @@ Track-D gap measurement, but is not evidence for an F1 scheduler change.
 ## Current constraints
 
 - The generated `vFloat` Welford body is the only existing paired SFPI body.
-- `TTREPLAY`, `TTI_MOP`, and `SFPLOADMACRO` are not emitted by the compiler,
-  so TopK/MoE rows are ranking targets rather than immediately convertible A/Bs.
+- Post-WP8, the compiler DOES form `TTREPLAY` (replay-hoist under the
+  profitability gate) and derives `SFPLOADMACRO` generically under
+  `-mtt-tensix-macro-planner` (fires on the fresh Min/Max, Signbit, and
+  UInt16→Float16_b Typecast shapes; refuses byte-identically elsewhere).
+  `TTI_MOP` is still never compiler-emitted, so TopK/MoE rows remain ranking
+  targets rather than immediately convertible A/Bs.
 - The simulator runner needs a tt-llk `.venv` in the selected checkout.  It
   fails before execution if that environment or the requested `libttsim.so`
   is absent; no host wall-clock fallback is permitted.
