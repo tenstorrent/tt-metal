@@ -118,4 +118,6 @@ no vLLM/EngineCore process remained, and `tt-smi -ls --local` showed four chips.
 - `after/async_trace_state_test.json`
 - `readiness_vllm/server.log` and benchmark logs
 
-Stage review and final commit SHA are appended after independent closure.
+Independent stage review: `clean-pass`.
+
+Local stage implementation/evidence commit: `ed931cd4ec4`. No push was made.
