@@ -50,6 +50,9 @@ def mcp(tmp_path, monkeypatch):
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(_sd))
     monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(_sd))
     monkeypatch.delenv("PERF_MCP_THERMAL_GATE", raising=False)
+    # The suite disables the start gate for every other test (conftest, PERF_MCP_MAX_START_TEMP_C).
+    # These tests ARE the gate, so they take the stated threshold and drive a mocked thermometer.
+    monkeypatch.delenv("PERF_MCP_MAX_START_TEMP_C", raising=False)
     monkeypatch.setenv("PERF_MCP_THERMAL_POLL_S", "0")
     import models.experimental.perf_automation.cc_optimize.perf_mcp as m
 
@@ -148,20 +151,18 @@ def test_the_gate_can_be_switched_off(mcp, monkeypatch):
 
 
 def test_it_waits_while_the_board_is_too_hot(mcp, monkeypatch):
-    mcp._record_thermal_observation(78.3, clamped=True)
-    temps = iter([85.0, 80.0, 68.0])
-    monkeypatch.setattr(mcp, "_read_die_temp_c", lambda: next(temps, 68.0))
+    temps = iter([85.0, 80.0, 58.0])
+    monkeypatch.setattr(mcp, "_read_die_temp_c", lambda: next(temps, 58.0))
     ok, temp = mcp._wait_for_thermal_headroom()
-    assert ok is True and temp == 68.0
+    assert ok is True and temp == 58.0
 
 
 def test_a_cool_board_does_not_wait(mcp, monkeypatch):
-    mcp._record_thermal_observation(78.3, clamped=True)
     calls = {"n": 0}
 
     def temp():
         calls["n"] += 1
-        return 65.0
+        return 55.0
 
     monkeypatch.setattr(mcp, "_read_die_temp_c", temp)
     mcp._wait_for_thermal_headroom()
@@ -185,50 +186,67 @@ def test_the_wait_gives_up_rather_than_hanging(mcp, monkeypatch):
     assert ok is False
 
 
-# ---------------------------------------------------------------- the threshold is LEARNED, not fixed
+# ---------------------------------------------------------------- the threshold is STATED, not learned
+#
+# IT WAS LEARNED, AND ON 2026-08-16 THE LEARNING PUT IT BELOW THE BOARD'S IDLE TEMPERATURE. The rule
+# was min(clamped_at) - 3, where clamped_at holds the temperature a run STARTED at, written down
+# whenever that run clamped at some later point. A run that began at 56.75C, heated for twenty
+# minutes and clamped at 85C therefore recorded 56.75 -- and min() handed that one sample, out of
+# 39, authority over all of them:
+#
+#     min(clamped) - 3  =  53.8C        this board idles at 53.9C
+#
+# The gate could never pass. It waited its full 900s at every measurement and then measured hot,
+# which is the outcome it exists to prevent, reached by way of a quarter-hour delay. And min() only
+# moves down, so no later evidence could undo it.
+#
+# THE SIGNAL DOES NOT PREDICT. Across 177 recorded runs the clamped starts (n=39) have median 72.5C
+# and the clean ones (n=138) median 70.8C, on ranges that almost entirely overlap. Starting below
+# 68C moves the clamp rate from 22% to 10%; starting below 60C measured WORSE than average. There is
+# no threshold through those two distributions, so no statistic computed from them was going to
+# work -- which is why this is stated rather than fixed with a better formula.
 
 
-def test_an_unseen_board_does_not_wait_at_all(mcp, monkeypatch):
-    """No hardcoded default. A fixed 70C would be wrong on any board that clamps below it, and
-    would pass clamped readings through -- the exact failure this gate exists to stop. With no
-    evidence the gate measures, and the clamp check teaches it."""
-    assert mcp._clamp_threshold_c() is None
+def test_the_threshold_is_the_stated_number(mcp):
+    assert mcp._clamp_threshold_c() == 65.0
+
+
+def test_it_sits_above_the_temperature_the_cooldown_holds_to(mcp):
+    """So a board that has just completed a post-clamp cooldown is always clear to start again. The
+    other way round -- a gate stricter than the cooldown -- would cool to 60C, be refused, and wait
+    on a board already as cold as the tool knows how to make it."""
+    assert mcp._clamp_threshold_c() > mcp._COOLDOWN_TO_C
+
+
+def test_evidence_does_not_move_it(mcp):
+    """THE RATCHET, GONE. This is the regression: one cold-start-then-clamp sample used to drag the
+    threshold below the board's idle temperature, permanently, because min() only moves down."""
+    assert mcp._clamp_threshold_c() == 65.0
+    mcp._record_thermal_observation(56.75, clamped=True)
+    mcp._record_thermal_observation(87.2, clamped=True)
+    mcp._record_thermal_observation(70.5, clamped=False)
+    assert mcp._clamp_threshold_c() == 65.0
+
+
+def test_nothing_in_the_threshold_reads_the_profile(mcp):
+    """Any rule that consults the samples is a rule the samples can move, which is the whole defect.
+    Asserted on the code, because a value test cannot tell a constant from a statistic that happens
+    to agree with it today."""
+    import inspect
+
+    src = inspect.getsource(mcp._clamp_threshold_c)
+    body = src.split('"""', 2)[-1]
+    for name in ("clamped_at", "clean_at", "_load_thermal_profile", "min(", "sorted("):
+        assert name not in body, "the threshold reads the profile again via %s" % name
+
+
+def test_an_unseen_board_uses_the_stated_number(mcp, monkeypatch):
+    """No history is not a reason to skip the gate. The old bootstrap returned None -- 'measure, and
+    the clamp check will teach us' -- which was the right answer only while the number was learned."""
     calls = {"n": 0}
-    monkeypatch.setattr(mcp, "_read_die_temp_c", lambda: (calls.__setitem__("n", calls["n"] + 1), 95.0)[1])
+    monkeypatch.setattr(mcp, "_read_die_temp_c", lambda: (calls.__setitem__("n", calls["n"] + 1), 55.0)[1])
     ok, _t = mcp._wait_for_thermal_headroom()
     assert ok is True and calls["n"] == 1, calls
-
-
-def test_one_clamp_establishes_a_threshold(mcp):
-    """Backs off by the margin when only clamped starts are known."""
-    mcp._record_thermal_observation(78.3, clamped=True)
-    assert mcp._clamp_threshold_c() == round(78.3 - mcp._THERMAL_MARGIN_C, 2)
-
-
-def test_the_threshold_lands_between_clean_and_clamped(mcp):
-    """The real gemma3 observations: 69.8 and 73.5 held 1350; 78.3 and 79.9 clamped."""
-    for t in (69.8, 73.5):
-        mcp._record_thermal_observation(t, clamped=False)
-    for t in (78.3, 79.9):
-        mcp._record_thermal_observation(t, clamped=True)
-    limit = mcp._clamp_threshold_c()
-    assert 73.5 < limit < 78.3, limit
-
-
-def test_a_cooler_clamp_lowers_the_threshold(mcp):
-    """Different hardware clamps at a different point; the profile must follow the evidence down."""
-    mcp._record_thermal_observation(78.3, clamped=True)
-    first = mcp._clamp_threshold_c()
-    mcp._record_thermal_observation(61.0, clamped=True)
-    assert mcp._clamp_threshold_c() < first
-
-
-def test_clean_starts_above_the_clamp_point_do_not_raise_it(mcp):
-    """A lucky clean run at 80C must not license measuring at 80C -- clamping is probabilistic near
-    the edge, and one success is not evidence of headroom."""
-    mcp._record_thermal_observation(78.3, clamped=True)
-    mcp._record_thermal_observation(80.0, clamped=False)
-    assert mcp._clamp_threshold_c() <= 78.3
 
 
 def test_the_env_override_still_wins(mcp, monkeypatch):
@@ -244,9 +262,14 @@ def test_the_profile_survives_a_corrupt_file(mcp):
 
 
 def test_an_unknown_start_temperature_is_not_recorded(mcp):
-    """Unreadable telemetry must not poison the profile with a fabricated number."""
+    """Unreadable telemetry must not poison the profile with a fabricated number.
+
+    Asserted on the profile itself. It used to be asserted through the threshold coming back None,
+    which stopped meaning anything once the threshold was stated -- the test would have passed on a
+    profile full of invented readings."""
     mcp._record_thermal_observation(None, clamped=True)
-    assert mcp._clamp_threshold_c() is None
+    doc = mcp._load_thermal_profile()
+    assert not (doc.get("clamped_at") or doc.get("clean_at")), doc
 
 
 # ---------------------------------------------------------------- mesh scoping

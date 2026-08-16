@@ -58,6 +58,15 @@ def _private_temp_state(tmp_path_factory, monkeypatch):
     # shared pytest root, where tests inherit each other's clamp observations: a fully mocked test
     # then finds a threshold, reads the real die temperature, and waits 900 s for a hot board to cool.
     monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))
+    # AND THE START GATE IS OFF FOR THE SUITE, because it is a hardware behaviour and a unit test has
+    # no hardware to gate on. An empty box used to switch it off by accident -- no observations meant
+    # no learned threshold meant no wait -- so the isolation above was doing double duty. The moment
+    # the threshold became a stated 65C that accident stopped working, and any test reaching the gate
+    # polled the REAL thermometer for 900 s: test_fullpipe_2cq_gate hung the suite at 12%.
+    #
+    # Stated off, so it cannot depend on what the box happens to contain. The tests that exercise the
+    # gate itself unset this in their own fixture and drive a mocked thermometer.
+    monkeypatch.setenv("PERF_MCP_MAX_START_TEMP_C", "200")
     # Belt and braces: anything still reaching gettempdir() directly (the containment check in
     # _reap_measurement_dir deliberately does) lands in the box too.
     monkeypatch.setattr(_tempfile, "tempdir", str(box))

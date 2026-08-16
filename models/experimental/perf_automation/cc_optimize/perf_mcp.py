@@ -2849,7 +2849,10 @@ _THERMAL_GATE = str(os.environ.get("PERF_MCP_THERMAL_GATE", "1")).lower() not in
 _THERMAL_WAIT_S = float(os.environ.get("PERF_MCP_THERMAL_WAIT_S", "900"))
 _THERMAL_POLL_S = float(os.environ.get("PERF_MCP_THERMAL_POLL_S", "15"))
 _THERMAL_RETRIES = int(os.environ.get("PERF_MCP_THERMAL_RETRIES", "3"))
-_THERMAL_MARGIN_C = float(os.environ.get("PERF_MCP_THERMAL_MARGIN_C", "3"))
+# THE TEMPERATURE A MEASUREMENT MAY START AT. Stated, not learned -- see _clamp_threshold_c for the
+# 177 samples showing that a start temperature does not predict a clamp. Above the 60C the
+# post-clamp cooldown holds to, so a board cooled after a clamp is always clear to start again.
+_START_TEMP_C = 65.0
 # AFTER A CLAMPED READING, COOL PROPERLY BEFORE TRYING AGAIN. The headroom wait is bounded and
 # GIVES UP -- it runs anyway -- so on a board that cannot reach the threshold in 900 s every retry
 # starts hotter than the last: measured on Voxtral 2026-08-14, the board went 79C -> 96C across a
@@ -3076,15 +3079,41 @@ def _record_thermal_observation(start_temp_c, clamped):
 
 
 def _clamp_threshold_c():
-    """The die temperature above which THIS board has been seen to clamp, or None if unknown.
+    """The die temperature a measurement may start at: 60C, stated, the same figure the cooldown uses.
 
-    None means "no evidence yet, do not wait" -- the gate then measures, and the clamp check
-    teaches it. That bootstrap is deliberate: a fixed default would be wrong on any board whose
-    clamp point sits below it, and would silently pass clamped readings through, which is the exact
-    failure this gate exists to stop.
+    IT USED TO BE LEARNED, AND THE LEARNING WAS UNSOUND. `clamped_at` holds the temperature a run
+    STARTED at, recorded whenever that run clamped at some later point -- so a run beginning at
+    56.75C, heating for twenty minutes and clamping at 85C wrote down 56.75. The threshold then took
+    min() of that list and subtracted a 3C margin:
 
-    Once both kinds of observation exist the threshold sits between the hottest clean start and the
-    coolest clamped one; with only clamped starts it backs off by PERF_MCP_THERMAL_MARGIN_C.
+        min(clamped) - 3  =  56.75 - 3  =  53.8C      board idles at 53.9C
+
+    Three defects in one line. It attributed a clamp at 85C to a start at 56.75C. It let ONE sample
+    out of 39 speak for all of them -- the other 36 were 68C or higher. And min() only ever moves
+    down, so no quantity of later evidence could raise it again: the board was pinned below its own
+    idle temperature permanently. The gate could never pass, so it timed out at 900s every time and
+    measured hot -- the precise outcome it exists to prevent, reached by way of a 15-minute wait.
+
+    THE SIGNAL DOES NOT PREDICT ANYWAY, which is what settles it. Across 177 recorded runs:
+
+        clamped starts   n=39   median 72.5C   range 56.8 - 87.2
+        clean starts     n=138  median 70.8C   range 57.9 - 75.3
+
+    Medians 1.7C apart on ranges that almost entirely overlap. Starting below 68C takes the clamp
+    rate from 22% to 10%; starting below 60C measured WORSE than average. No threshold drawn through
+    those two distributions separates them, so no amount of arithmetic on them was going to work.
+
+    60C, stated. It is the figure _cooldown_after_clamp already holds to after a discarded reading,
+    and having one number for "cool enough to measure" instead of two removes the case where the
+    gate admits a board the cooldown would have refused. A stated number is also inspectable: it can
+    be read here, argued with, and changed -- which the learned one could not be.
+
+    65C, AND NOTHING READS THE PROFILE TO GET THERE. Not a percentile of it, not a reachability
+    check against it -- any rule that consults the samples is a rule that can be moved by them, and
+    being moved by them is what broke it. One number, in one place, that a reader can find by looking.
+
+    The profile keeps recording. The samples are the evidence behind this docstring and behind any
+    future revision of it; what stopped is a threshold deriving itself from them unsupervised.
     """
     env = os.environ.get("PERF_MCP_MAX_START_TEMP_C")
     if env:
@@ -3092,15 +3121,7 @@ def _clamp_threshold_c():
             return float(env)
         except ValueError:
             pass
-    doc = _load_thermal_profile()
-    clamped = [float(v) for v in (doc.get("clamped_at") or [])]
-    if not clamped:
-        return None
-    lo = min(clamped)
-    clean_below = [float(v) for v in (doc.get("clean_at") or []) if float(v) < lo]
-    if clean_below:
-        return round((lo + max(clean_below)) / 2.0, 2)
-    return round(lo - _THERMAL_MARGIN_C, 2)
+    return _START_TEMP_C
 
 
 _LAST_KNOWN_TEMP_C = None

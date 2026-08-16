@@ -126,16 +126,26 @@ def test_the_suite_sandbox_pins_the_board_dir():
     assert 'monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))' in src
 
 
-def test_a_mocked_test_finds_no_threshold_and_never_waits(tmp_path, monkeypatch):
-    """The hang, reproduced at its root: an isolated box has no observations, so there is no learned
-    threshold, so _wait_for_thermal_headroom returns at once instead of polling a real thermometer."""
+def test_a_mocked_test_never_waits_on_a_real_thermometer(tmp_path, monkeypatch):
+    """The hang, at its root -- and it is no longer an empty box that prevents it.
+
+    This used to assert the threshold was None: an isolated box has no observations, so nothing was
+    learned, so the gate returned at once. That made suite speed a SIDE EFFECT of the profile being
+    empty, and the moment the threshold became a stated 65C the side effect vanished and the suite
+    hung on a real thermometer. The suite now states the gate off (conftest), which is what it always
+    meant, and this asserts the property that matters: no wait, whatever the threshold is."""
+    import time as _time
+
     from cc_optimize import perf_mcp
 
     box = tmp_path / "box"
     box.mkdir()
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(box))
     monkeypatch.setenv("PERF_MCP_BOARD_STATE_DIR", str(box))
-    assert perf_mcp._clamp_threshold_c() is None, "an empty box still produced a threshold"
+    monkeypatch.setattr(perf_mcp, "_read_die_temp_c", lambda: 95.0)
+    t0 = _time.time()
+    ok, _t = perf_mcp._wait_for_thermal_headroom()
+    assert ok is True and _time.time() - t0 < 1.0, "a mocked test polled a thermometer"
 
 
 def test_fresh_no_longer_deletes_it():
