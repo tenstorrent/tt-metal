@@ -210,16 +210,18 @@ class TtMoEGateConfig:
             )
         # Resolve mm_configs against the depth actually in use, so _device_matmul's lookup
         # (sp_dim, per_device_emb_dim, n_routed_experts) hits a tuned entry instead of silently
-        # falling back to TTNN's default tiling. Two passes, because the any-depth entries must be
-        # laid down first for the depth-specific ones to override them:
+        # falling back to TTNN's default tiling:
         #   sp_dim None -> applies at whatever depth is in use (the old placeholder behaviour)
         #   sp_dim int  -> applies only at that depth, and wins there over the any-depth entry
-        resolved = {key: value for key, value in self.mm_configs.items() if not isinstance(key, tuple)}
+        # setdefault is what enforces that precedence: a re-keyed any-depth entry never displaces a
+        # depth-specific one, whichever order the two were authored in.
+        resolved = {}
         for key, value in self.mm_configs.items():
-            if isinstance(key, tuple) and key[0] is None:
-                resolved[(self.sp_dim, *key[1:])] = value
-        for key, value in self.mm_configs.items():
-            if isinstance(key, tuple) and key[0] == self.sp_dim:
+            if not isinstance(key, tuple):
+                resolved[key] = value
+            elif key[0] is None:
+                resolved.setdefault((self.sp_dim, *key[1:]), value)
+            elif key[0] == self.sp_dim:
                 resolved[key] = value
         self.mm_configs = resolved
 
