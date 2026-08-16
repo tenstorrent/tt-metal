@@ -1,0 +1,19 @@
+{
+  "measured_path": "real vLLM TT plugin through tt/generator_vllm.py",
+  "sample_on_device_mode": "all",
+  "force_argmax_enabled": false,
+  "host_greedy_argmax_in_measured_path": false,
+  "full_logits_readback_in_measured_path": false,
+  "eager_sampling_in_measured_decode": false,
+  "model_trace_replay_blocking": false,
+  "sampling_trace_replay_blocking": false,
+  "async_decode_exercised": true,
+  "device_token_feedback": true,
+  "device_position_and_rope_advance": true,
+  "page_table_refresh": "changed only",
+  "fallback_exception_mode": true,
+  "runtime_fallback": false,
+  "live_vllm_or_enginecore_after_shutdown": false,
+  "visible_devices_after_shutdown": 4,
+  "profilers_collected": false
+}

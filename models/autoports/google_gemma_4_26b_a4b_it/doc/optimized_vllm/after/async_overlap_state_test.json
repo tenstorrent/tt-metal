@@ -8,7 +8,7 @@
     "short_request_reaches_eos_before_long_request": true,
     "no_repeated_or_doubled_token_degeneracy": true
   },
-  "state_evidence": "Direct persistent-input, changed/unchanged page-table, and deferred-read counters are recorded separately in doc/optimized_vllm/after/async_trace_state_test.json.",
+  "state_evidence": "Direct persistent-input, changed/unchanged page-table, and deferred-read counters are recorded separately in async_trace_state_test.json.",
   "cases": [
     {
       "name": "cross_page_boundary",

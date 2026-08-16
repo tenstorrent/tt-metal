@@ -252,5 +252,26 @@
     },
     "calculation": "The BFP8_B candidate halves only the 2.548828125 GiB/device BF16 KV term; all other conservative full-model terms are unchanged. Both candidates retain the 262144-token contract, so no advertised capability is reduced."
   },
-  "notes": "No context reduction: batch 1 retains 262144 tokens and the public generator passed an all-30-layer non-aligned 262111-token prefill plus first traced decode. The batch-32 serving profile divides the same 262144-token global full-attention cache budget into 8192 tokens per equal slot. The conservative worst validated profile is 22.285305300727487 GiB/device, leaving 9.714694699272513 GiB/device. The optimized full-model stage freshly passed mixed non-aligned 33/47-token prompt handling with fixed slots, an inactive row, changed-only page tables, and full-stack batch 32."
+  "optimized_vllm": {
+    "validated_at_utc": "2026-08-16",
+    "mesh": [1, 4],
+    "current_supported_context": 262144,
+    "capability_reduction": null,
+    "max_num_seqs": 32,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "non_aligned_serving_lengths_retained": [47, 2051],
+    "near_max_context_input_retained": 262143,
+    "semantic_split_sampling": true,
+    "force_argmax": false,
+    "async_decode_overlap_tested": true,
+    "changed_and_unchanged_page_tables_tested": true,
+    "artifacts": {
+      "report": "optimized_vllm/README.md",
+      "before": "optimized_vllm/before",
+      "after": "optimized_vllm/after",
+      "async_overlap": "optimized_vllm/after/async_overlap_state_test.json",
+      "runtime_audit": "optimized_vllm/after/runtime_audit.json"
+    }
+  },
+  "notes": "No context reduction: batch 1 retains 262144 tokens and the public generator passed an all-30-layer non-aligned 262111-token prefill plus first traced decode. The batch-32 serving profile divides the same 262144-token global full-attention cache budget into 8192 tokens per equal slot. The conservative worst validated profile is 22.285305300727487 GiB/device, leaving 9.714694699272513 GiB/device. Optimized vLLM changes only the sampler graph and adds no KV/cache capability reduction; existing 47, 2051, and 262143-token serving evidence remains applicable."
 }

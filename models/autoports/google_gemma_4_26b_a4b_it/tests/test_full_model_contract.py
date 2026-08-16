@@ -18,6 +18,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.autoports.google_gemma_4_26b_a4b_it.tt.generator import Gemma4Generator
+from models.autoports.google_gemma_4_26b_a4b_it.tt.generator_vllm import Gemma4ForCausalLM
 from models.autoports.google_gemma_4_26b_a4b_it.tt.model import (
     DEFAULT_MAX_CONTEXT,
     FULL_KIND,
@@ -26,6 +27,7 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.model import (
     PagedCacheSpec,
 )
 from models.common.readiness_check.contract import Generator
+from models.common.sampling import SamplingParams
 
 
 def _config():
@@ -98,10 +100,12 @@ def test_sampling_specs_are_validated_and_trace_distinct(expect_error):
 
 def test_sampler_choice_is_semantically_greedy_split_topk():
     source = inspect.getsource(Gemma4Generator._sampling_params)
-    assert "return None, None, None" in source
-    assert "exactly greedy" in source
-    assert "max_top_k=32" in inspect.getsource(Gemma4Generator.__init__)
-    assert "Sampling1D" in inspect.getsource(Gemma4Generator.__init__)
+    init = inspect.getsource(Gemma4Generator.__init__)
+    assert "return None, None, None" not in source
+    assert "allow_force_argmax=False" in init
+    assert "local_topk_num_chunks=2" in init
+    assert "max_top_k=32" in init
+    assert "Sampling1D" in init
 
 
 def test_cache_spec_rounding():
@@ -359,66 +363,131 @@ def test_reduced_mixed_prompt_and_inactive_slot_probe(mesh_device):
     assert len(outputs) == 2
     assert all(tuple(output.shape) == (1, 1, 1, 65_536) for output in outputs)
     table_addresses = [table.buffer_address() for table in model.state.page_tables]
-    alternate_tables = []
-    for table in model.state.page_tables:
-        host_table = ttnn.to_torch(ttnn.get_device_tensors(table)[0]).clone()
-        host_table[0, 0], host_table[1, 0] = host_table[1, 0].clone(), host_table[0, 0].clone()
-        alternate_tables.append(
-            ttnn.from_torch(
-                host_table,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-        )
-    sampled = generator.decode_forward(
+    scheduler_tables = [ttnn.to_torch(ttnn.get_device_tensors(table)[0]).clone() for table in model.state.page_tables]
+    changed_scheduler_tables = [table.clone() for table in scheduler_tables]
+    for table in changed_scheduler_tables:
+        table[0, 0], table[1, 0] = table[1, 0].clone(), table[0, 0].clone()
+
+    adapter = Gemma4ForCausalLM(generator=generator)
+    adapter._serving_state = model.state
+    sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0, seed=0)
+    sampled = adapter.decode_forward(
         torch.ones((2, 1), dtype=torch.long),
-        torch.tensor([33, 47], dtype=torch.int32),
-        page_table=model.state.page_tables,
-        kv_cache=model.state,
-        active_mask=torch.tensor([True, False]),
-        enable_trace=True,
+        torch.tensor([33, -1], dtype=torch.int32),
+        scheduler_tables[0],
+        model.state.kv_cache,
+        page_tables_per_layer=scheduler_tables,
+        sampling_params=sampling_params,
+        read_from_device=False,
+        reset_batch=True,
     )
     assert tuple(sampled.shape) == (1, 1, 1, 32)
+    assert adapter._page_table_refreshes == 1
     trace = next(iter(generator._trace_cache.values()))
+    sampled_after_first = int(ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]).reshape(-1)[0])
+    token_input_address = trace.token_input.buffer_address()
+    sampled_output_address = trace.sampled_tokens.buffer_address()
     current = ttnn.to_torch(ttnn.get_device_tensors(trace.current_pos)[0]).reshape(-1)
     assert current[:3].tolist() == [34, -1, -1]
-    generator.decode_forward(
+    adapter.decode_forward(
         torch.zeros((2, 1), dtype=torch.long),
-        torch.tensor([999, 999], dtype=torch.int32),
-        page_table=model.state.page_tables,
-        kv_cache=model.state,
-        active_mask=torch.tensor([True, False]),
-        enable_trace=True,
+        torch.tensor([999, -1], dtype=torch.int32),
+        scheduler_tables[0],
+        model.state.kv_cache,
+        page_tables_per_layer=scheduler_tables,
+        sampling_params=sampling_params,
+        read_from_device=False,
     )
     current = ttnn.to_torch(ttnn.get_device_tensors(trace.current_pos)[0]).reshape(-1)
     assert current[:3].tolist() == [35, -1, -1]
     assert [table.buffer_address() for table in model.state.page_tables] == table_addresses
     assert generator.trace_counters.token_refreshes == 0
     assert generator.trace_counters.page_table_refreshes == 0
+    assert adapter._page_table_refreshes == 1
 
-    # A scheduler-boundary mapping change invalidates and recaptures once;
-    # subsequent tokens reuse the new mapping without copying tables per token.
-    model.state.page_tables = alternate_tables
-    generator.decode_forward(
+    # A scheduler-boundary mapping change is copied exactly once into the same
+    # stable device tensors; subsequent tokens reuse those contents and trace.
+    changed_output = adapter.decode_forward(
         torch.zeros((2, 1), dtype=torch.long),
-        torch.tensor([35, 47], dtype=torch.int32),
-        page_table=model.state.page_tables,
-        kv_cache=model.state,
-        active_mask=torch.tensor([True, False]),
-        enable_trace=True,
+        torch.tensor([35, -1], dtype=torch.int32),
+        changed_scheduler_tables[0],
+        model.state.kv_cache,
+        page_tables_per_layer=changed_scheduler_tables,
+        sampling_params=sampling_params,
+        read_from_device=False,
     )
     changed_trace = next(iter(generator._trace_cache.values()))
-    assert changed_trace.page_table_ids == tuple(id(table) for table in alternate_tables)
-    assert generator.trace_counters.page_table_refreshes == 1
-    generator.decode_forward(
+    assert [table.buffer_address() for table in model.state.page_tables] == table_addresses
+    copied_tables = [ttnn.to_torch(ttnn.get_device_tensors(table)[0]) for table in model.state.page_tables]
+    assert all(torch.equal(actual, expected) for actual, expected in zip(copied_tables, changed_scheduler_tables))
+    assert adapter._page_table_refreshes == 2
+    assert generator.trace_counters.page_table_refreshes == 0
+    final_output = adapter.decode_forward(
         torch.zeros((2, 1), dtype=torch.long),
-        torch.tensor([999, 999], dtype=torch.int32),
-        page_table=model.state.page_tables,
-        kv_cache=model.state,
-        active_mask=torch.tensor([True, False]),
-        enable_trace=True,
+        torch.tensor([999, -1], dtype=torch.int32),
+        changed_scheduler_tables[0],
+        model.state.kv_cache,
+        page_tables_per_layer=changed_scheduler_tables,
+        sampling_params=sampling_params,
+        read_from_device=False,
     )
-    assert generator.trace_counters.page_table_refreshes == 1
+    assert adapter._page_table_refreshes == 2
+    assert tuple(changed_output.shape) == tuple(final_output.shape) == (1, 1, 1, 32)
+
+    # Exercise the exact adapter method used by vLLM's async split: submit a
+    # nonblocking device-to-host read, wait the returned completion event, and
+    # only then format the token tensor for the scheduler.
+    deferred_host, events = adapter.read_decode_output(final_output, async_read=True)
+    assert len(events) == 1
+    ttnn.event_synchronize(events[0])
+    formatted, _ = adapter.process_decode_output_host(deferred_host, is_tokens=True)
+    assert formatted.dtype == torch.int32
+
+    output_path = os.environ.get("GEMMA4_ASYNC_STATE_OUTPUT")
+    if output_path:
+        final_position = int(ttnn.to_torch(ttnn.get_device_tensors(changed_trace.current_pos)[0]).reshape(-1)[0])
+        report = {
+            "verdict": "pass",
+            "path": "Gemma4ForCausalLM async split over traced Gemma4Generator decode",
+            "stale_host_inputs": {
+                "token_supplied_on_replay": 0,
+                "position_supplied_on_replay": 999,
+                "prior_sampled_device_token": sampled_after_first,
+                "token_refreshes": generator.trace_counters.token_refreshes,
+                "persistent_token_input_address": token_input_address,
+                "persistent_sampled_output_address": sampled_output_address,
+                "device_feedback_aliases_trace_input": token_input_address == sampled_output_address,
+            },
+            "positions": {
+                "initial_active_position": 33,
+                "after_first_replay": 34,
+                "after_stale_position_replay": 35,
+                "final_after_four_replays": final_position,
+                "position_refreshes": generator.trace_counters.position_refreshes,
+            },
+            "page_tables": {
+                "initial_bind_refresh_count": 1,
+                "unchanged_replay_refresh_count": 1,
+                "after_mutated_scheduler_table_refresh_count": 2,
+                "stable_refresh_count_after_reuse": adapter._page_table_refreshes,
+                "stable_device_addresses_before": table_addresses,
+                "stable_device_addresses_after": [table.buffer_address() for table in model.state.page_tables],
+                "scheduler_first_entries_before": [int(table[0, 0]) for table in scheduler_tables],
+                "scheduler_first_entries_after": [int(table[0, 0]) for table in changed_scheduler_tables],
+                "device_first_entries_after": [int(table[0, 0]) for table in copied_tables],
+                "device_contents_match_mutated_scheduler_tables": all(
+                    torch.equal(actual, expected) for actual, expected in zip(copied_tables, changed_scheduler_tables)
+                ),
+                "generator_recaptures_from_table_identity": generator.trace_counters.page_table_refreshes,
+                "changed_and_reused_output_shapes": [list(changed_output.shape), list(final_output.shape)],
+            },
+            "async_read": {
+                "read_submitted_with_blocking_false": True,
+                "completion_event_count": len(events),
+                "event_synchronized_before_host_format": True,
+                "formatted_dtype": str(formatted.dtype),
+                "formatted_token_count": int(formatted.numel()),
+            },
+            "trace_counters": vars(generator.trace_counters),
+        }
+        Path(output_path).write_text(json.dumps(report, indent=2) + "\n")

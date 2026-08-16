@@ -1,0 +1,78 @@
+{
+  "verdict": "pass",
+  "path": "Gemma4ForCausalLM async split over traced Gemma4Generator decode",
+  "stale_host_inputs": {
+    "token_supplied_on_replay": 0,
+    "position_supplied_on_replay": 999,
+    "prior_sampled_device_token": 1,
+    "token_refreshes": 0,
+    "persistent_token_input_address": 128677248,
+    "persistent_sampled_output_address": 128677248,
+    "device_feedback_aliases_trace_input": true
+  },
+  "positions": {
+    "initial_active_position": 33,
+    "after_first_replay": 34,
+    "after_stale_position_replay": 35,
+    "final_after_four_replays": 37,
+    "position_refreshes": 0
+  },
+  "page_tables": {
+    "initial_bind_refresh_count": 1,
+    "unchanged_replay_refresh_count": 1,
+    "after_mutated_scheduler_table_refresh_count": 2,
+    "stable_refresh_count_after_reuse": 2,
+    "stable_device_addresses_before": [
+      128676736,
+      128676992
+    ],
+    "stable_device_addresses_after": [
+      128676736,
+      128676992
+    ],
+    "scheduler_first_entries_before": [
+      0,
+      0
+    ],
+    "scheduler_first_entries_after": [
+      16,
+      1
+    ],
+    "device_first_entries_after": [
+      16,
+      1
+    ],
+    "device_contents_match_mutated_scheduler_tables": true,
+    "generator_recaptures_from_table_identity": 0,
+    "changed_and_reused_output_shapes": [
+      [
+        1,
+        1,
+        1,
+        32
+      ],
+      [
+        1,
+        1,
+        1,
+        32
+      ]
+    ]
+  },
+  "async_read": {
+    "read_submitted_with_blocking_false": true,
+    "completion_event_count": 1,
+    "event_synchronized_before_host_format": true,
+    "formatted_dtype": "torch.int32",
+    "formatted_token_count": 2
+  },
+  "trace_counters": {
+    "replays": 4,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 0
+  }
+}

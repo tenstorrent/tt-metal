@@ -57,6 +57,7 @@ class Gemma4ForCausalLM(nn.Module):
         self.max_seq_len = 0 if generator is None else generator.model.max_seq_len
         self._serving_state: FullModelState | None = None
         self._last_page_tables: list[torch.Tensor] | None = None
+        self._page_table_refreshes = 0
         self._decode_ready = False
         self._unseeded_epoch = 0
 
@@ -251,6 +252,7 @@ class Gemma4ForCausalLM(nn.Module):
             )
             ttnn.copy_host_to_device_tensor(host, target)
         self._last_page_tables = [table.clone() for table in host_tables]
+        self._page_table_refreshes += 1
 
     def _chunk_page_tables(
         self, host_tables: Sequence[torch.Tensor], start_pos: torch.Tensor, prompt_lens: Sequence[int]

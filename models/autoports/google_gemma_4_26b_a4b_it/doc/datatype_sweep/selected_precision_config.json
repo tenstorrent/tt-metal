@@ -28,7 +28,7 @@
     "logits_dtype": "BF16",
     "sampling_parameter_dtype": "BF16",
     "token_dtype": "UINT32",
-    "greedy": "force_argmax_on_sharded_logits"
+    "greedy": "chunked_local_topk32_then_semantic_k1_on_sharded_logits"
   },
   "loader": {
     "default_path": "doc/datatype_sweep/selected_precision_config.json",

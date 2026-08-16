@@ -1,0 +1,21 @@
+{
+  "verdict": "pass",
+  "prompt_mode": "chat",
+  "vllm_artifact": "vllm_qualitative_outputs.json",
+  "hf_and_full_model_control_artifact": "../../optimized_full_model/shared_qualitative_suite.json",
+  "comparison_scope": "All six shared prompts; both greedy and sampled vLLM completions were inspected against the prompt-correct HF/full-model controls.",
+  "rows": [
+    {"id": 0, "name": "haiku", "verdict": "coherent haiku; same task and clean termination"},
+    {"id": 1, "name": "explanation", "verdict": "correct simple supervised/unsupervised distinction"},
+    {"id": 2, "name": "story", "verdict": "coherent creative continuation without prompt echo"},
+    {"id": 3, "name": "thermodynamics", "verdict": "on-topic scientific answer covering the three laws"},
+    {"id": 4, "name": "french", "verdict": "correct French translation without wrong-language drift"},
+    {"id": 5, "name": "python", "verdict": "coherent executable Fibonacci guidance"}
+  ],
+  "checks": {
+    "wrong_language_drift": false,
+    "prompt_echo": false,
+    "control_token_leakage": false,
+    "mechanical_degeneracy": false
+  }
+}

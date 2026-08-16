@@ -59,6 +59,7 @@ def test_async_split_is_implemented():
     decode = inspect.getsource(Gemma4ForCausalLM.decode_forward)
     assert "read_from_device" in decode
     assert "enable_trace=True" in decode
+    assert "self._page_table_refreshes" in inspect.getsource(Gemma4ForCausalLM._refresh_page_tables)
 
 
 def test_unseeded_greedy_request_uses_deterministic_device_seed_default():

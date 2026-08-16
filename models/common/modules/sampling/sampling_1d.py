@@ -70,6 +70,11 @@ class Sampling1DConfig:
     # Strict TTTv1 parity: only the multi-device path is padded — the 1×1 multi_step split path
     # is left unpadded.
     pad_to_power_of_2: bool = False
+    # Split very wide per-device vocabularies into equal power-of-two chunks,
+    # reduce each chunk with the multi-core TopK factory, then merge the small
+    # candidate sets locally. This avoids the slow single-core path used for
+    # widths >= uint16 while preserving original local vocabulary indices.
+    local_topk_num_chunks: int = 1
 
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
     # Static index buffers (computed from vocab_size + num_devices, never mutated)
@@ -457,13 +462,57 @@ class Sampling1D(LightweightModule):
                 sub_core_grids=cfg.sub_core_grids,
             )
 
-        topk_values, topk_indices = ttnn.topk(
-            x_bf16,
-            k=cfg.max_top_k,
-            dim=-1,
-            sub_core_grids=cfg.sub_core_grid_topk,
-            indices_tensor=self._local_indices,
-        )
+        if cfg.local_topk_num_chunks > 1:
+            split_width = x_bf16.shape[-1] // cfg.local_topk_num_chunks
+            x_parts = ttnn.split(x_bf16, split_width, dim=3)
+            value_parts = []
+            index_parts = []
+            for chunk, x_part in enumerate(x_parts):
+                values, indices = ttnn.topk(
+                    x_part,
+                    k=cfg.max_top_k,
+                    dim=-1,
+                    sub_core_grids=cfg.sub_core_grid_topk,
+                )
+                if chunk:
+                    relative_indices = indices
+                    indices = ttnn.add(
+                        relative_indices,
+                        chunk * split_width,
+                        dtype=ttnn.uint16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(relative_indices)
+                value_parts.append(values)
+                index_parts.append(indices)
+                ttnn.deallocate(x_part)
+
+            chunk_values = ttnn.concat(value_parts, dim=3)
+            chunk_indices = ttnn.concat(index_parts, dim=3)
+            for values, indices in zip(value_parts, index_parts):
+                ttnn.deallocate(values)
+                ttnn.deallocate(indices)
+
+            topk_values, merge_positions = ttnn.topk(
+                chunk_values,
+                k=cfg.max_top_k,
+                dim=-1,
+                sub_core_grids=cfg.sub_core_grid_topk,
+            )
+            # The small merge TopK returns positions in the concatenated
+            # candidate tensor. Resolve them against the original local IDs.
+            topk_indices = ttnn.gather(chunk_indices, dim=3, index=merge_positions)
+            ttnn.deallocate(chunk_values)
+            ttnn.deallocate(chunk_indices)
+            ttnn.deallocate(merge_positions)
+        else:
+            topk_values, topk_indices = ttnn.topk(
+                x_bf16,
+                k=cfg.max_top_k,
+                dim=-1,
+                sub_core_grids=cfg.sub_core_grid_topk,
+                indices_tensor=self._local_indices,
+            )
 
         # For 1D meshes use cluster_axis=None
         sampling_cluster_axis = None if 1 in cluster_shape else 0
@@ -570,6 +619,7 @@ class Sampling1D(LightweightModule):
             num_argmax_gather_links=num_argmax_gather_links,
             ag_topology=ag_topology,
             pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
+            local_topk_num_chunks=getattr(args, "local_topk_num_chunks", 1),
         )
         return cls.from_config(config)
 
@@ -618,6 +668,20 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
     else:
         num_devices_in_mesh = max(cluster_shape[0], cluster_shape[1])
     per_device_vocab = V // num_devices_in_mesh
+    chunks = config.local_topk_num_chunks
+    if chunks < 1 or not _is_power_of_2(chunks):
+        raise ValueError(f"local_topk_num_chunks must be a positive power of two, got {chunks}")
+    if chunks > 1:
+        if multi_step_reduction:
+            raise ValueError("local_topk_num_chunks is only supported on the multi-device path")
+        if not config.pad_to_power_of_2:
+            raise ValueError("local_topk_num_chunks > 1 requires pad_to_power_of_2=True")
+        padded_width = _upper_power_of_2(per_device_vocab)
+        if padded_width % chunks:
+            raise ValueError(f"padded local vocabulary width {padded_width} is not divisible by {chunks}")
+        chunk_width = padded_width // chunks
+        if not _is_power_of_2(chunk_width) or chunk_width >= 2**16 - 1:
+            raise ValueError(f"local TopK chunk width must be a power of two below uint16 max, got {chunk_width}")
 
     def _resolve_buf(field_val, defaults, source_factory):
         if field_val is None:

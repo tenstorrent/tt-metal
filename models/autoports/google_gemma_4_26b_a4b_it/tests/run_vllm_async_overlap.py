@@ -94,14 +94,15 @@ def main() -> None:
         "server_mode": "async scheduling + trace + sample_on_device=all",
         "prompt_mode": "OpenAI chat completions (Gemma instruct chat template)",
         "invariants": {
-            "stale_host_token_is_ignored_in_favor_of_device_feedback": all(matches),
-            "current_position_advances_exactly_once": all(matches),
-            "unchanged_and_changed_page_tables_preserve_output": all(matches),
-            "deferred_async_read_is_fenced_before_host_use": all(matches),
+            "overlapped_outputs_match_isolated_controls": all(matches),
             "decode_crosses_64_token_page_boundary": crossed_page,
             "short_request_reaches_eos_before_long_request": finished_early,
             "no_repeated_or_doubled_token_degeneracy": not any(degeneracy),
         },
+        "state_evidence": (
+            "Direct persistent-input, changed/unchanged page-table, and deferred-read counters are recorded "
+            "separately by test_reduced_mixed_prompt_and_inactive_slot_probe."
+        ),
         "cases": [
             {
                 **case,

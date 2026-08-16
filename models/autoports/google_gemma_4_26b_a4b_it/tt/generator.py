@@ -102,8 +102,9 @@ class Gemma4Generator(Generator):
             # when model compute is sliced to a smaller logical batch.
             max_batch_size=DECODE_SLOT_COUNT,
             max_top_k=32,
-            allow_force_argmax=True,
+            allow_force_argmax=False,
             pad_to_power_of_2=True,
+            local_topk_num_chunks=2,
             num_gather_links=2,
         )
         self._trace_cache: dict[tuple[int, str, tuple[Any, ...], int, tuple[int, ...]], DecodeTrace] = {}
@@ -227,21 +228,16 @@ class Gemma4Generator(Generator):
     def _sampling_params(
         self, spec: SamplingSpec
     ) -> tuple[ttnn.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None]:
-        if spec.greedy:
-            # Native force-argmax is exactly greedy and supports direct output
-            # into the device feedback tensor. On faithful TP4 [1,1,32,262144]
-            # logits it measured 2.343 ms versus 10.736 ms for the semantically
-            # equivalent k=1/p=0/temp=1 path (sampler_comparison.json).
-            return None, None, None, None
         padded_k = torch.ones(DECODE_SLOT_COUNT, dtype=torch.int32)
         padded_p = torch.zeros(DECODE_SLOT_COUNT, dtype=torch.bfloat16)
         padded_temp = torch.ones(DECODE_SLOT_COUNT, dtype=torch.bfloat16)
         padded_seeds = torch.zeros(DECODE_SLOT_COUNT, dtype=torch.int32)
-        active = len(spec.top_k)
-        padded_k[:active] = torch.tensor(spec.top_k, dtype=torch.int32)
-        padded_p[:active] = torch.tensor(spec.top_p, dtype=torch.bfloat16)
-        padded_temp[:active] = torch.tensor(spec.temperature, dtype=torch.bfloat16)
-        padded_seeds[:active] = torch.tensor(spec.seeds, dtype=torch.int32)
+        active = DECODE_SLOT_COUNT if spec.greedy else len(spec.top_k)
+        if not spec.greedy:
+            padded_k[:active] = torch.tensor(spec.top_k, dtype=torch.int32)
+            padded_p[:active] = torch.tensor(spec.top_p, dtype=torch.bfloat16)
+            padded_temp[:active] = torch.tensor(spec.temperature, dtype=torch.bfloat16)
+            padded_seeds[:active] = torch.tensor(spec.seeds, dtype=torch.int32)
 
         def make(values: torch.Tensor, dtype: Any) -> ttnn.Tensor:
             return ttnn.from_torch(

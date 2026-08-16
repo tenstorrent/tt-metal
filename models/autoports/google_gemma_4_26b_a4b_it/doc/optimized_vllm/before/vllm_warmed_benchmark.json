@@ -2,7 +2,7 @@
   "source": "vllm bench serve",
   "profile": "single_user_decode",
   "comparison_scope": "Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.",
-  "raw_result_file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json",
+  "raw_result_file": "/tmp/gemma4-vllm-baseline/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json",
   "command": [
     "/home/mvasiljevic/tt-metal/python_env/bin/vllm",
     "bench",
@@ -28,13 +28,13 @@
     "ttft,tpot,itl,e2el",
     "--save-result",
     "--result-filename",
-    "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json",
+    "/tmp/gemma4-vllm-baseline/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json",
     "--max-concurrency",
     "1",
     "--temperature",
     "0.0"
   ],
-  "command_string": "/home/mvasiljevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model google/gemma-4-26B-A4B-it --base-url http://127.0.0.1:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0",
+  "command_string": "/home/mvasiljevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model google/gemma-4-26B-A4B-it --base-url http://127.0.0.1:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /tmp/gemma4-vllm-baseline/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0",
   "config": {
     "prompt_len": 128,
     "output_len": 128,
@@ -45,38 +45,38 @@
     "dataset_name": "random",
     "ignore_eos": true
   },
-  "elapsed_s": 4.7317603919655085,
+  "elapsed_s": 6.117898620665073,
   "completed_requests": 1,
   "total_input_tokens": 128.0,
   "total_output_tokens": 128.0,
   "requested_output_tokens": 128,
   "missing_output_tokens": 0,
   "ttft_ms": {
-    "p50": 201.59425865858793,
-    "p99": 201.59425865858793,
-    "mean": 201.59425865858793
+    "p50": 214.3494449555874,
+    "p99": 214.3494449555874,
+    "mean": 214.3494449555874
   },
   "tpot_ms": {
-    "p50": 35.66785629721373,
-    "p99": 35.66785629721373,
-    "mean": 35.66785629721373
+    "p50": 46.48237756094125,
+    "p99": 46.48237756094125,
+    "mean": 46.48237756094125
   },
   "itl_ms": {
-    "p50": 33.90536271035671,
-    "p99": 34.68763859942555,
-    "mean": 35.66785771253071
+    "p50": 44.07058749347925,
+    "p99": 49.87564695999026,
+    "mean": 46.482380010246295
   },
   "e2el_ms": {
-    "p50": 4731.412008404732,
-    "p99": 4731.412008404732,
-    "mean": 4731.412008404732
+    "p50": 6117.6113951951265,
+    "p99": 6117.6113951951265,
+    "mean": 6117.6113951951265
   },
-  "itl_p50_decode_tps": 29.493859379788926,
-  "itl_mean_decode_tps": 28.036446933808513,
-  "vllm_mean_tpot_decode_tps": 28.03644804630765,
-  "mean_per_request_decode_tps": 28.03644804630765,
+  "itl_p50_decode_tps": 22.690870643554764,
+  "itl_mean_decode_tps": 21.513528347291295,
+  "vllm_mean_tpot_decode_tps": 21.513529480907867,
+  "mean_per_request_decode_tps": 21.513529480907867,
   "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
-  "output_throughput_tok_per_s": 27.051242961782886,
-  "request_throughput_per_s": 0.2113378356389288,
-  "total_token_throughput_tok_per_s": 54.10248592356577
+  "output_throughput_tok_per_s": 20.92221658718581,
+  "request_throughput_per_s": 0.16345481708738915,
+  "total_token_throughput_tok_per_s": 41.84443317437162
 }

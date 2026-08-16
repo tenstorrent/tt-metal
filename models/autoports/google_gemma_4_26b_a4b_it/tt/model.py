@@ -159,7 +159,7 @@ class Gemma4FullModel:
         supported_sampling = {
             "sampling_parameter_dtype": "BF16",
             "token_dtype": "UINT32",
-            "greedy": "force_argmax_on_sharded_logits",
+            "greedy": "chunked_local_topk32_then_semantic_k1_on_sharded_logits",
         }
         for field, expected in supported_sampling.items():
             if sampling_policy.get(field, expected) != expected:

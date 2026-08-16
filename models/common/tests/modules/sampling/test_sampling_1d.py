@@ -92,16 +92,18 @@ class TestConfigUnit:
         assert cfg.max_batch_size == 32
         assert cfg.max_top_k == 32
         assert cfg.allow_force_argmax is False
+        assert cfg.local_topk_num_chunks == 1
         assert cfg.num_gather_links == 1
         assert cfg.mesh_device is None
         assert cfg.index_offsets is None
         assert cfg.seeds is None
 
     def test_config_custom(self):
-        cfg = Sampling1DConfig(vocab_size=128256, max_top_k=64, allow_force_argmax=True)
+        cfg = Sampling1DConfig(vocab_size=128256, max_top_k=64, allow_force_argmax=True, local_topk_num_chunks=2)
         assert cfg.vocab_size == 128256
         assert cfg.max_top_k == 64
         assert cfg.allow_force_argmax is True
+        assert cfg.local_topk_num_chunks == 2
 
     def test_config_not_resolved_without_device(self):
         cfg = Sampling1DConfig(vocab_size=1024)
