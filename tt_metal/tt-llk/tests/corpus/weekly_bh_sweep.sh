@@ -42,32 +42,14 @@ python3 "$HERE/sweep_2x2.py" \
 RC=$?
 
 # (c) DejaGnu byte-parity suites against the pinned toolchain build tree.
-# Never clobber a build tree's evidentiary .sum: run from a scratch site dir.
-DEJ="$EV/dejagnu"
-mkdir -p "$DEJ"
-if [ -x "$DEJAGNU_BUILD_TREE/gcc/xg++" ] && [ -d "$SFPI_GCC_SRC/gcc/testsuite" ] \
-    && command -v runtest >/dev/null 2>&1; then
-  if [ -s "$DEJ/summary.txt" ] && [ "${1:-}" != "--force" ]; then
-    echo "dejagnu: resume — $DEJ/summary.txt exists"
-  else
-    cp "$DEJAGNU_BUILD_TREE/gcc/testsuite/g++/site.exp" "$DEJ/site.exp"
-    echo "set GXX_UNDER_TEST \"$DEJAGNU_BUILD_TREE/gcc/xg++ -B$DEJAGNU_BUILD_TREE/gcc/\"" >> "$DEJ/site.exp"
-    : > "$DEJ/summary.txt"
-    for SUITE in $DEJAGNU_SUITES; do
-      ( cd "$DEJ" && runtest --tool g++ --srcdir "$SFPI_GCC_SRC/gcc/testsuite" \
-          "rvtt.exp=$SUITE" > "run-$SUITE.log" 2>&1 )
-      PASS=$(grep -c '^PASS' "$DEJ/g++.sum" 2>/dev/null || echo 0)
-      FAIL=$(grep -c '^FAIL' "$DEJ/g++.sum" 2>/dev/null || echo 0)
-      cp "$DEJ/g++.sum" "$DEJ/g++-$SUITE.sum" 2>/dev/null
-      echo -e "$SUITE\tPASS:$PASS\tFAIL:$FAIL" >> "$DEJ/summary.txt"
-      # Byte-parity suites must be zero-FAIL (loadmacro*/macro-planner* carry
-      # the minmax 19+6 parities and the refusal oracles).
-      [ "$FAIL" -eq 0 ] || { echo "RED: dejagnu $SUITE has $FAIL FAILs"; RC=1; }
-    done
-  fi
-else
-  echo -e "dejagnu\tSKIP_NO_BUILD_TREE\t$DEJAGNU_BUILD_TREE" | tee "$DEJ/summary.txt"
-fi
+# The counting/gating logic lives in dejagnu_gate.sh (self-tested by
+# selftest_dejagnu_gate.sh: clean->GREEN, failing->RED, no-sum->RED); the
+# self-test runs first so a broken gate can never bless tonight's suites.
+mkdir -p "$EV"
+bash "$HERE/selftest_dejagnu_gate.sh" > "$EV/selftest-dejagnu-gate.txt" 2>&1 \
+  || { echo "RED: dejagnu gate self-test failed (see $EV/selftest-dejagnu-gate.txt)"; RC=1; }
+DEJAGNU_BUILD_TREE="$DEJAGNU_BUILD_TREE" SFPI_GCC_SRC="$SFPI_GCC_SRC" \
+  DEJAGNU_SUITES="$DEJAGNU_SUITES" bash "$HERE/dejagnu_gate.sh" "$EV" "${1:-}" || RC=1
 
-echo "== weekly sweep $DATE done rc=$RC; report: $EV/REPORT.md; dejagnu: $DEJ/summary.txt =="
+echo "== weekly sweep $DATE done rc=$RC; report: $EV/REPORT.md; dejagnu: $EV/dejagnu/summary.txt =="
 exit $RC
