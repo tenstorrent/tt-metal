@@ -32,7 +32,8 @@ Status: **release workflow passed; Stage 11 readiness blocked**. The definitive 
 - TTI conformance repair: `61473555`
 - Definitive TTI measured-timeout repair: `daa1fe6f`
 - tt-metal artifact checkpoint: `a08f7ac8f33`
-- Final tt-metal notes/review commit: pending
+- tt-metal notes/review checkpoint: `ee55f892bee`
+- A final notes-only commit follows this checkpoint; use the repository log as the authoritative SHA to avoid a self-referential commit field.
 
 ## Commands and key environment
 
