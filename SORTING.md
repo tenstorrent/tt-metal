@@ -767,6 +767,29 @@ pass, an architectural disadvantage the cycle counts alone hide.
 ZERO `SFPGT`/`SFPLE`.** The compare-only instruction Blackhole added is used by none of
 them.
 
+#### MEASURED: compressed pack cost — the packer path is viable
+
+`PACK_ISOLATE`, per 32-element vector (tile cycles / 32), 48 variants on silicon:
+
+| arm | uncompressed | compressed | delta |
+| :--- | ---: | ---: | ---: |
+| plain bf16 | 0.783 | 1.189 | +0.406 |
+| **fused int32 `[value\|index]`** | 1.241 | **1.648** | +0.408 |
+| relu bf16 | 0.784 | 0.786 | +0.002 (suspect — see below) |
+
+**Compression costs a flat ~0.41 cyc/vector regardless of density.** 0 survivors and
+1024 survivors cost the same, so it is fixed overhead, not data-dependent — which means
+the sparser the data, the better the deal.
+
+**This makes the pipeline competitive with `topk_xl`.** The SFPU filter (1.003) and the
+compressed pack (1.648) run on *separate backend ports* off the same frontend mux, so
+steady state should be `max(1.003, 1.648) = 1.648` rather than the sum — **1.7x under
+`_topk_xl_merge_`'s 2.844.** Pipelining is measured separately; this is the per-stage cost.
+
+The `relu` arm's ~0 delta is suspicious: a config write that silently fails measures
+identically to baseline and reads as "compression is free". Every arm must be confirmed
+against the `PackerTileSize` readback before being believed.
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working
