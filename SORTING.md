@@ -201,6 +201,92 @@ handshake; the stock SrcA-path bracket costs 7.6 cyc/tile, so a per-4-tile-block
 should land the realistic floor at **~1.26-1.5 cyc/vector**. The 4 `ZEROACC`/tile are still
 needed for correctness and fit in the SFPU budget.
 
+## 0a-ter. The negative-threshold gap is CLOSED — and it shrinks the win to 6.7%
+
+The last open hole in the design. `MIN_THRESHOLD_RELU` cannot express a negative
+threshold, and signed logits are exactly what MoE routing and vocab sampling produce. Built
+and measured: `tests/sources/topk_negfilter_common.h`, `topk_negfilter_test.cpp`,
+`topk_negfilter_perf.cpp`.
+
+**The filter: `SFPGT`(SET_VD) + `SFPAND`, 2 issues/vector, packed into 2 `SFPLOADMACRO`s.**
+`SFPGT`'s SET_VD form writes `-1/0` = `0xFFFFFFFF/0x00000000`, a perfect AND mask. No
+`LaneFlags` anywhere, so nothing is sticky.
+
+**2 issues/vector is provably the floor**, not a tuning result: applying the mask needs a
+bitwise AND, which exists only on the Simple sub-unit; producing the mask needs a compare,
+also Simple. Two Simple ops per vector, and *any* issue — macro or software — contributes
+at most one Simple.
+
+Three alternatives were priced and rejected before building:
+- **Predicated-MAD with `SFPSETCC`/`SFPLE`**: `SFPLE`'s `LaneFlags` write is itself inside
+  `if (LaneEnabled)`, so it is sticky, and the only unconditional restore (`SFPENCC`) is a
+  Simple — which the macro's single Simple slot has already spent. The restore would have
+  to execute strictly between vector *i*'s MAD and vector *i+1*'s compare, and a
+  1-Simple-per-cycle sub-unit has no such gap.
+- **Bias the data so the threshold goes non-negative**: impossible, not merely lossy. The
+  packer's relu compares *and emits* the same datum, so any remap that lifts T >= 0 also
+  changes the emitted bits — a negative survivor would have to be simultaneously
+  `> Threshold >= 0` and equal to its original negative value. Separately, fp32 addition
+  destroys the `u16` index field.
+- **`SFPLUTFP32` in the free MAD slot**: keys on `Abs(LReg[3])` with fixed breakpoints, so
+  it is symmetric-only.
+
+| MATH_ISOLATE | raw | env-subtracted | previously published |
+| :--- | ---: | ---: | ---: |
+| ctrlload (`SFPLOAD`) | 1.314 | **1.001** | 1.000 |
+| ctrlswap (`SFPSWAP`) | 2.283 | **1.969** | 2.000 |
+| mask1 (`MaskStore`) | 1.315 | **1.002** | 1.003 |
+| **negfilter** | 2.344 | **2.031** | predicted 2.000 |
+
+Note the **per-tile SFPU envelope of 0.313 cyc/vector** (`_llk_math_eltwise_sfpu_start_`/
+`_done_` plus drain) that every SFPU arm pays and that the earlier isolate numbers in this
+document did not separate out.
+
+| L1_TO_L1 | cyc/vector |
+| :--- | ---: |
+| UNPACK_ISOLATE floor | 3.855 |
+| stream + compressed pack | 4.132 |
+| **relucomp (packer filter, zero SFPU)** | **4.034** |
+| mask1 (1 issue/vec, destructive probe) | 5.411 |
+| **negfilter (2 issues/vec, value-preserving)** | **6.415** |
+| `_topk_xl_merge_` | 6.879 |
+
+The pipeline is **perfectly linear in math-thread issues**:
+`L1_TO_L1 = 4.132 + 0.275 + 1.004 x issues/vector`. Each SFPU issue costs a full ~1.00
+cyc/vector end to end — on the stock path the SFPU hides under the unpacker **not at all**.
+(Section 0a-bis shows this is a same-Dest-region artifact, not hardware; with Dest split
+these numbers should improve, which is unmeasured for this filter.)
+
+**Correctness 6/6 bit-exact**, decoded from the compressed stream against a torch golden,
+independently re-run (**9 passed** on device): all-negative data, mixed sign,
+**`negallabove` asserting 1024/1024 survivors *and* `total_augmented_datums == 1024`** (the
+silent-discard tripwire), ties exactly on a negative threshold, ±0/±Inf/±NaN/denormals, and
+a positive-threshold cross-check. Being purely bitwise it preserves denormals and NaN
+payloads exactly and emits exactly `0x00000000`, so zero-compression still elides the
+losers (640 B for the 32-survivor case).
+
+**Note the tie rule inverts for negative thresholds.** The index field only ever adds
+magnitude, so datums exactly on a negative threshold are correctly *zeroed* rather than
+kept. Asserted, not avoided.
+
+**Verdict: the win survives for signed data, but collapses from a rout to an edge.**
+
+| data | our filter | `_topk_xl_merge_` | |
+| :--- | ---: | ---: | ---: |
+| unsigned (packer-resident, zero SFPU) | 4.034 | 6.879 | **41.4% faster** |
+| **signed (SFPU fallback)** | **6.415** | 6.879 | **6.7% faster** |
+
+6.415 is the analytical floor for a bit-exact value-preserving filter on this ISA. The only
+remaining headroom is the 0.275 cyc/vector envelope, worth at most another 4%. **A
+deployment that can guarantee a non-negative threshold keeps the 41%; otherwise expect ~7%.**
+
+**Bonus hardware finding — what a negative packer threshold actually does.** `ReLU.md:41`
+declares it `UndefinedBehavior`. Measured across three cases: it does **not** implement
+`x > T`, and it is **not** simply `+|T|`. With the sign bit set, **the threshold's mantissa
+is ignored and the comparison rounds |T| up to the next power of two** — T=-1.5 behaves as
+2.0, T=-1.25 as 2.0, T=-16.0 as 32.0 — with all negative data zeroed as usual. So the
+packer path is genuinely unusable for signed thresholds, and the SFPU fallback is required.
+
 ## 0b. Architectural Discoveries
 
 Everything in this section was established on Blackhole silicon during this work and is
