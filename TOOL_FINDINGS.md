@@ -3803,12 +3803,28 @@ what makes this dangerous rather than merely broken — it is right often enough
 4. **Report `pcc_verified: false` when the value is not in range**, rather than asserting
    verification of a number the tool cannot have measured.
 
+### No harm done on this run — the severity is potential, not realised
+
+Stated plainly, because it matters for how urgently this is read: **nothing was banked during the
+false-green window.** The commit count on the isolation branch was 6 before the `33.612` reading and
+6 after it; the best full-pipeline time was 1481.57 ms on both sides. The agent happened to be
+mid-experiment rather than at a decision point, and the very next gate reading caught the same edit
+honestly:
+
+```
+pcc gate: ok (33.612)  ->  pcc_low (0.0536)
+```
+
+So this run's six commits were each measured against a real PCC. The defect is that the guarantee
+does not hold *in general*, not that it failed here — the window in which a wrong answer is accepted
+exists, is silent, and opens in the unsafe direction. It was found only because a human read an
+impossible number; nothing in the system objected to it.
+
 ### Still to establish
 
-Whether the underlying pytest run actually passed at the moment of this reading is **not** settled
-here — the raw output was not retained in the transcript, only the parsed verdict. The port's real
-correctness will be re-measured directly (`pytest …::test_e2e_pcc`) once the device is free, and
-recorded. What is settled is that the gate's answer carried no information either way.
+Whether the underlying pytest run actually passed at the moment of that reading is not settled — the
+raw output was not retained in the transcript, only the parsed verdict. The port's real correctness
+will be re-measured directly (`pytest …::test_e2e_pcc`) once the device is free, and recorded here.
 
 ---
 
