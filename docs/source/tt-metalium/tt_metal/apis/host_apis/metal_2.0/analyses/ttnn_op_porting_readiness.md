@@ -4,7 +4,7 @@
 
 **Purpose:** Give an auditing Claude the live, per-factory porting-readiness data — Diego's "Operations analysis" sheet — plus how to fetch a fresh copy and how to read it. The [audit recipe](../ai/audit/metal2_audit.md) references this doc when it needs the data.
 
-> **Fetch this data yourself, in your main session, every run.** It is deliberately **not** checked into the repo — the sheet is edited continuously, so a committed copy goes stale fast. Re-download it **even if a `.csv` is already sitting in this folder**; a stale local copy is worse than none.
+> **Fetch this data yourself, in your main session, once per session.** It is deliberately **not** checked into the repo — the sheet is edited continuously, so a committed copy goes stale fast. Re-download it **even if a `.csv` is already sitting in this folder**; a stale local copy is worse than none. What you must never do is reuse a checked-in copy or one from an earlier session — but a copy you pulled yourself an hour ago is fine, so a session auditing several ops fetches once and reuses it.
 
 ## Source (live)
 
@@ -14,7 +14,7 @@ https://docs.google.com/spreadsheets/d/1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy
 - **File ID:** `1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy8jw`
 - Access is through the **claude.ai Google Drive MCP connector**. The human authorizes it once — see [`../human/READ_ME_FIRST.md`](../human/READ_ME_FIRST.md) → *Google Drive MCP setup*. You **cannot** authorize it from inside a session.
 
-## Fetch it (do this every run)
+## Fetch it (once per session)
 
 Run from your checkout root. Target the CSV at the folder this doc lives in:
 
