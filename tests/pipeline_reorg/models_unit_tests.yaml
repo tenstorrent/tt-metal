@@ -1171,12 +1171,12 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1500 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
-    pytest --timeout 1800 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
+    pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
   model: qwenimage
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 65
+      timeout: 45
       tier: 2
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
