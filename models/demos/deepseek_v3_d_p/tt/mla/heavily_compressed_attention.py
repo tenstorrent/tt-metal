@@ -490,13 +490,12 @@ class TtHCA(_TtHCABase):
         the compressed columns, always at the same offset, so nothing recompiles.
 
         The carry columns come in two versions because the first chunk has no history: its carry holds
-        zeros for positions that do not exist yet, so those columns must be -inf, while every later
-        chunk's carry is real. In ``allowed = (j >= 0) & (j <= i) & (i - j < sw)`` the global offset
-        kv_actual cancels out of the last two conditions, so the first chunk differs in nothing else.
+        zeros for positions that do not exist yet, so those columns must be -inf. Nothing else differs --
+        in ``allowed = (j >= 0) & (j <= i) & (i - j < sw)`` the offset kv_actual cancels out of the last
+        two conditions.
 
-        Everything is built from four small index vectors, so no large host tensor is ever created. They
-        are float32 and not bfloat16 because the comparisons are on whole numbers past 256, where
-        bfloat16 stops being exact."""
+        Built from four small index vectors, so no large host tensor is created. They are float32 for the
+        reason ``_build_mask_consts`` gives."""
         carry, sw = self.sliding_window, self.sliding_window
         raw = carry + seq_global
         sk_pad = -(-(raw + cap) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -543,8 +542,8 @@ class TtHCA(_TtHCABase):
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
-        every chunk. ``max_seq_len`` is the same serving-capacity knob the runner resolves for the KV
-        cache, ``chunk_tokens`` the slab width forward will be called with (defaults to one chunk).
+        every chunk. ``max_seq_len`` is the longest context to serve, ``chunk_tokens`` the slab width
+        forward will be called with (defaults to one chunk).
         Contents start zeroed and nothing is read before it is written -- the mask -infs everything past
         ``entry_count`` / ``kv_actual``, including chunk 0's empty carry.
 
@@ -738,13 +737,12 @@ class TtHCA(_TtHCABase):
 
         # The next chunk's sliding window reaches back into this one, so the carry has to be this chunk's
         # last REAL keys -- rows [real_len - sliding_window, real_len) -- not the last rows of the padded
-        # slab, which differ as soon as real_len < seq_len. A plain slice cannot do it: the start value is
-        # part of the program (slice_device_operation.cpp), so each new real_len would compile a new one.
-        # The overload that reads the start from a device tensor keeps only its shape in the program, so
-        # one program serves every offset. Verified on 8x4: +1 program on the first call, +0 after.
+        # slab, which differ as soon as real_len < seq_len. A plain slice cannot do it: its start value is
+        # part of the program, so every new real_len would compile another
+        # one. Taking the start from a device tensor keeps only its shape in the program, so one program
+        # serves every offset -- measured on 8x4 as +1 program on the first call and +0 after.
         #
-        # Taken on every chunk including the last, whose carry nobody reads: skipping it would save one op
-        # out of ~100 and cost a branch through forward.
+        # Taken on the last chunk too, whose carry nobody reads: skipping it saves one op out of ~100.
         start, end = self._carry_index[self._carry_key(real_len)]
         next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
 
@@ -803,8 +801,7 @@ class TtHCA(_TtHCABase):
 
         One entry is one row, so the offset advances by ``chunk/compress_rate`` per chunk -- a multiple of
         TILE_SIZE only for chunks of 4096 tokens. ``fill_cache_for_user_`` needs that alignment
-        (update_cache_device_operation.cpp), which the runner's chunk size of 5120 does not give it, so the
-        write goes through ``_write_tail_tile`` instead.
+        which a 5120-token chunk does not give it, so the write goes through ``_write_tail_tile`` instead.
 
         The whole padded width is written, not just the real entries, so the width is the same for every
         chunk; the mask -infs everything past ``total_entries`` anyway."""

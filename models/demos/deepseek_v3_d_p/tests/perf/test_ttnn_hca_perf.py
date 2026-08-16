@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-perf for the HCA block over a chunked prefill at the runner's chunk width (5120) on 8x4.
+"""Device-perf for the HCA block over a chunked prefill at 5120 tokens a chunk, on 8x4.
 
-Chunked and not one shot, because the per-chunk work is what the runner does and the only thing a gate on
-this block can defend. The state is allocated before HCA_START, so the region does not measure it."""
+Chunked and not one shot, because the per-chunk work is what a long prefill repeats, and the only thing a
+gate on this block can defend. 5120 is what the prefill runtime defaults to, and the width where the
+cache append offset is not tile-aligned. The state is allocated before HCA_START,
+so the region does not measure it."""
 
 import pytest
 

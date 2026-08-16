@@ -37,7 +37,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 # exercise the pad + trim + mask path.
 _SEED = 42
 # One shape per behaviour, not one per number: everything under 1024 pads to the same slab. 128 is the
-# shortest legal prompt, 130 and 4095 are the padding cases, 1024 needs none, 5120 is the runner's width.
+# shortest legal prompt, 130 and 4095 are the padding cases, 1024 needs none, 5120 is the chunk width.
 _SHAPES = [128, 130, 1024, 4095, 5120]
 _COMPRESSOR_SHAPES = [900, 2048, 5120]
 # Single-shot floors. Higher than the chunked ones: one pass accumulates nothing.
@@ -79,7 +79,7 @@ def _config(model_config, num_hidden_layers=4):
 #
 # TODO: move to a V4 prefill adapter once V4 has a block and a runtime, so build_runtime and
 # allocate_kv_cache become writable. The adapter would own the config, these floors and the golden-trace
-# dir, and serve both the `variant` fixture and the runner (tests/conftest.py:33).
+# dir, and serve both the `variant` fixture and whatever runtime is built.
 _VARIANTS = [
     ("flash", DeepSeekV4FlashConfig, 0.997, 0.99),
     ("pro", DeepSeekV4ProConfig, 0.994, 0.98),
@@ -131,11 +131,11 @@ def _report_chunk_pccs(pccs, floor):
 
 
 # The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
-# program hash (update_cache_device_operation.cpp:160) and the shift carries its offset as matrix data.
+# program hash, and the shift carries its offset as matrix data.
 _WRITE_COMPILES_PER_CHUNK = 0
-# (chunk_size, real lengths). chunk_size only has to carry whole compression windows on every SP shard,
-# so 5120 is as legal as 4096 -- it is the runner's default and the one the append offset does not land
-# tile-aligned on, which is why it belongs here.
+# (chunk_size, real lengths). chunk_size only has to carry whole compression windows on every SP shard, so
+# 5120 is as legal as 4096. It is what the prefill runtime defaults to, and the width where the append
+# offset does not land tile-aligned, which is why it belongs here.
 _CHUNKED_SCENARIOS = [
     ("2chunk-ragged", 4096, [4096, 3000]),  # the other chunk width, where the append offset is tile-aligned
     ("chunk5120-full", 5120, [5120, 5120]),  # what the perf gate measures
