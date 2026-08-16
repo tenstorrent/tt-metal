@@ -1,0 +1,1302 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// CORRECTNESS HARNESS FOR THE SFPLOADMACRO MERGE.
+//
+// A verbatim clone of `sources/topk_xl_test.cpp` with exactly one thing changed:
+// when MERGE_USE_MACRO is 1, the FUSED merge step dispatches to
+// `macro_merge_<K>` (defined below) instead of
+// `ckernel::sfpu::_topk_xl_merge_<K, APPROX, true>`. Everything else -- the
+// unpack path, copy_sort, add_lsb_indices, local_sort, rebuild, the index split,
+// the pack path, and the torch golden in test_topk_merge_macro.py -- is
+// untouched, so a PASS is end-to-end evidence that the macro-scheduled
+// compare-exchange is functionally identical to the shipping SFPSWAP body
+// inside the real K=512/1024/2048 pipeline.
+//
+// WHY THIS TEST IS NOT OPTIONAL. The perf arm alone cannot prove the macro
+// works. A misconfigured (or all-zero, i.e. "schedule nothing")
+// LoadMacroConfig.Sequence degenerates an SFPLOADMACRO into a plain SFPLOAD --
+// which measures the SAME 1.000 cyc/vector as a correctly configured macro,
+// because the scheduled SFPSWAP and SFPSTORE ride free sub-units either way.
+// The issue rate is therefore blind to whether any compare-exchange happened at
+// all. Only a golden comparison distinguishes them.
+//
+// MERGE_USE_MACRO = 0 rebuilds this file as a plain copy of topk_xl_test.cpp and
+// is the control: it establishes that the clone itself did not break anything.
+//
+// ---------------------------------------------------------------------------
+//
+// SFPU topk_xl test: bitonic sort / merge / rebuild top-K for K = 512, 1024, 2048.
+// Blackhole-only.
+//
+// This test covers every LLK referenced by the Metal topk_xl headers
+// (llk_api/experimental/llk_{unpack_A,math}_topk_xl_copy_api.h and
+// llk_math_eltwise_unary_sfpu_topk_xl.h), which wrap the llk_lib entry points:
+//   * ckernel::_llk_unpack_topk_xl_copy_init_ / _llk_unpack_topk_xl_copy_
+//   * ckernel::_llk_math_topk_xl_copy_init_ / _llk_math_topk_xl_copy_
+//   * ckernel::sfpu::_topk_xl_init_ / _topk_xl_local_sort_ / _topk_xl_merge_ /
+//     _topk_xl_rebuild_ / _topk_xl_add_lsb_indices_(_init_) /
+//     _topk_xl_separate_indices_row_major_(_init_static_ / _reinit_ /
+//     _advance_chunk_base_) / _topk_xl_separate_indices_(_init_) /
+//     _topk_xl_remove_msb_values_(_init_)
+//
+// The shared core is copy_sort (copy -> add_lsb_indices -> init(fused) ->
+// local_sort); TOPK_XL_INDEX_OP picks the terminal index step. Op 0 mirrors the
+// topk_large_indices compute kernel
+// (ttnn/.../topk_large_indices/device/kernels/compute.cpp); ops 1 and 2 cover the
+// two LLKs that the op does not use.
+//
+// Fused word: bf16 value (bits 31:16) | u16 index (bits 15:0). Dest is fp32,
+// full sync; K=2048 fills tiles 0-7.
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "llk_defs.h"
+#include "params.h"
+
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
+
+// Shared compile-time derived constants:
+//   TOPK_XL_K:             512 | 1024 | 2048
+//   TOPK_XL_NUM_CHUNKS:    number of K-element windows per row (row-major only)
+//   TOPK_XL_TAIL_ELEMENTS: valid element count of the last chunk (1 .. K)
+//   TOPK_XL_NUM_ROWS:      number of independent top-K problems
+//   TOPK_XL_INDEX_OP:      terminal index step:
+//     0 row-major   separate_indices_row_major per chunk, then merge/rebuild the
+//                   chunks into slot0 -> value region + row-major u32 index region
+//     1 separate    generic separate_indices<group_id> -> value region [value|0]
+//                   plus index region [group_id<<shift | raw], raw being the
+//                   add_lsb tile coordinate, undecoded. Single chunk.
+//     2 remove_msb  zero the bf16 value half in place -> [0|raw], the fused region
+//                   only. Issued from PACK, where the compute API puts it. Single
+//                   chunk.
+//   TOPK_XL_GROUP_ID / TOPK_XL_GROUP_SHIFT : generic separate_indices params
+//   TOPK_XL_CORE_ID:         add_lsb_indices core_id, index bits [15:11] (0 .. 31)
+//   TOPK_XL_ASCENDING:       rebuild direction (false descending, true ascending)
+//   TOPK_XL_FUSED_REDUCE:    false unfused merge/rebuild (op path), true fused
+//   TOPK_XL_CHUNK_BASE_MODE: three ways to init chunk_base:
+//                            0 init_static<hi,lo> | 1 init_upper<hi>(lo) | 2 init(runtime)
+//   TOPK_XL_CHUNK_BASE:      starting chunk_base (must be a multiple of K)
+
+constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
+constexpr std::uint32_t TILES_PER_SEQ     = (TOPK_XL_K + ELEMENTS_PER_TILE - 1) / ELEMENTS_PER_TILE;
+constexpr std::uint32_t SLOT0             = 0;
+constexpr bool APPROX                     = false; // The wrappers take this param but never use it.
+
+constexpr bool INDEX_OP_ROW_MAJOR  = (TOPK_XL_INDEX_OP == 0);
+constexpr bool INDEX_OP_SEPARATE   = (TOPK_XL_INDEX_OP == 1);
+constexpr bool INDEX_OP_REMOVE_MSB = (TOPK_XL_INDEX_OP == 2);
+
+constexpr bool FUSED_REDUCE = TOPK_XL_FUSED_REDUCE;
+
+// Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
+// first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
+// index region) when unfused, so the slot stride follows the mode.
+constexpr std::uint32_t SLOT1 = FUSED_REDUCE ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+
+// A lone chunk has nothing to merge with, but the row-major path still rebuilds it;
+// the fused path merges/rebuilds only when there is a second operand.
+// Both TRISCs use this: MATH issues the rebuild, UNPACK the SrcB dummy valid feeding it.
+// Fused variants leave TOPK_XL_INDEX_OP at its 0 default and ignore it, hence the !FUSED_REDUCE.
+constexpr bool REBUILD_LONE_CHUNK = !FUSED_REDUCE && INDEX_OP_ROW_MAJOR && TOPK_XL_NUM_CHUNKS == 1;
+
+constexpr std::uint32_t CHUNK_BASE_HI16 = (TOPK_XL_CHUNK_BASE >> 16) & 0xFFFF;
+constexpr std::uint32_t CHUNK_BASE_LO16 = TOPK_XL_CHUNK_BASE & 0xFFFF;
+
+// Active element count of chunk `c` (last chunk is the tail).
+inline constexpr std::uint32_t chunk_active_elements(std::uint32_t c)
+{
+    return (c == TOPK_XL_NUM_CHUNKS - 1) ? TOPK_XL_TAIL_ELEMENTS : TOPK_XL_K;
+}
+
+inline constexpr std::uint32_t tile_active_elements(std::uint32_t active, std::uint32_t t)
+{
+    return (t == 0) ? ((active < ELEMENTS_PER_TILE) ? active : ELEMENTS_PER_TILE) : ((active > ELEMENTS_PER_TILE) ? (active - ELEMENTS_PER_TILE) : 0);
+}
+
+// Global index of input tile `t` of chunk `c` in row `r`.
+inline constexpr std::uint32_t input_tile_index(std::uint32_t r, std::uint32_t c, std::uint32_t t)
+{
+    return ((r * TOPK_XL_NUM_CHUNKS + c) * TILES_PER_SEQ) + t;
+}
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "ckernel_template.h" // ckernel_template used by the topk_xl copy MOP below
+#include "experimental/llk_unpack_A_topk_xl_copy.h"
+#include "llk_unpack_common.h"
+
+// Replicates llk_unpack_topk_xl_copy_one_tile_unpack() from the metal API wrapper:
+// program the partial-tile element count then run the TopK-XL copy MOP for one tile.
+inline void unpack_copy_one_tile(std::uint32_t l1_tile_address, std::uint32_t src_format, std::uint32_t dst_format, std::uint32_t elements_this_tile)
+{
+    const std::uint32_t adc_count = (elements_this_tile == 0) ? (ELEMENTS_PER_TILE - 1) : (elements_this_tile - 1);
+    TT_SETADCXX(p_setadc::UNP_A, adc_count, 0x0);
+    ckernel::_llk_unpack_topk_xl_copy_(l1_tile_address, src_format, dst_format, elements_this_tile);
+}
+
+// Replicates topk_xl_copy_tile<K>() unpack half: 1 tile for K<=1024, 2 tiles for K=2048.
+// Marked noinline to ensure K=2048 stays under the TRISC code budget. Emitting one body
+// per call site becomes problematic because of loop unrolling.
+__attribute__((noinline)) void unpack_copy_tile(RUNTIME_PARAMETERS params, std::uint32_t r, std::uint32_t c, std::uint32_t src_format, std::uint32_t dst_format)
+{
+    const std::uint32_t active = chunk_active_elements(c);
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        unpack_copy_one_tile(L1_ADDRESS(params.buffer_A[input_tile_index(r, c, t)]), src_format, dst_format, tile_active_elements(active, t));
+    }
+    // Restore the unpacker element count to a full face row (mirrors the trailing
+    // TTI_SETADCXX in topk_xl_copy_tile()).
+    TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    const std::uint32_t src_format = formats.unpack_A_src;
+    const std::uint32_t dst_format = formats.unpack_A_dst;
+
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES /* unpA_num_faces */, TILE_NUM_FACES /* unpB_num_faces */);
+    ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
+    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+    {
+        for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+        {
+            unpack_copy_tile(params, r, c, src_format, dst_format); // chunk 0 -> slot0, the rest -> slot1
+            _llk_unpack_set_srcb_dummy_valid_();                    // local_sort
+            if (c > 0)
+            {
+                _llk_unpack_set_srcb_dummy_valid_(); // rebuild(slot0)
+            }
+        }
+        if constexpr (REBUILD_LONE_CHUNK)
+        {
+            _llk_unpack_set_srcb_dummy_valid_();
+        }
+    }
+}
+
+#endif // LLK_TRISC_UNPACK
+
+#ifdef LLK_TRISC_MATH
+
+// TRISC1 code region overflows by well over 4K under the default -O3.
+#pragma GCC optimize("O2")
+
+#include "experimental/llk_math_eltwise_unary_datacopy_topk_xl_copy.h"
+#include "llk_lib_math_wrappers.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+
+using namespace ckernel;
+
+// ===========================================================================
+//  SFPLOADMACRO merge -- the thing under test
+// ===========================================================================
+//
+// Replaces `_topk_xl_merge_`'s 16-instruction fused body
+//
+//     8 SFPLOAD + 4 SFPSWAP (2 cyc each) + 4 SFPSTORE  = 20 cycles / 8 vectors
+//
+// with an 8-instruction one that produces bit-identical output:
+//
+//     SFPLOAD      L_B[m] <- B[i]
+//     SFPLOADMACRO L_A[m] <- A[i]  + Simple(SFPSWAP) + MAD(SFPNOP) + Store
+//                                                     = 8 cycles / 8 vectors
+//
+// Full derivation, operand plumbing and the cycle-by-cycle collision analysis
+// live in sources/topk_merge_macro_perf.cpp's header; the load-bearing points
+// are repeated inline below. Kept in this test file rather than in
+// ckernel_sfpu_topk_xl.h so the header stays untouched while the idea is being
+// evaluated.
+#ifndef MERGE_USE_MACRO
+// 0 here, unlike topk_merge_macro_test.cpp: this file's subject is the REBUILD,
+// so the merge stays on the shipping body and any failure is attributable.
+#define MERGE_USE_MACRO 0
+#endif
+
+#if MERGE_USE_MACRO
+
+namespace macro_merge
+{
+// LREG0..3 = the A rotation (macroVD targets, receive the max);
+// LREG4..7 = the B holders, one per macro index, baked into the four
+// InstructionTemplates as SFPSWAP's VC. VD is u3 (SFPLOADMACRO.md:45), so all
+// eight rotation slots must be LREG0..LREG7 -- which leaves no LReg for
+// constants, and the merge needs none.
+constexpr std::uint32_t L_A0 = ckernel::p_sfpu::LREG0;
+constexpr std::uint32_t L_B0 = ckernel::p_sfpu::LREG4;
+
+// SFPSWAP Mod1 = 9: "In all lanes, VD = max and VC = min" (SFPSWAP.md:31).
+// NOT p_sfpswap::ALL_ROWS_MAX (= 1 = SFPSWAP_MOD1_VEC_MIN_MAX), which is the
+// opposite assignment. The direction is forced, not chosen: SFPLOADMACRO always
+// overrides Insn.VD (SFPLOADMACRO.md:111-115), so macroVD -- the only register
+// the Store slot can reach -- must be the one that receives the max.
+// `p_sfpswap` defines no enum for 9 because no shipping kernel wants the max in
+// VD; the value is architectural, its own `case 9:` in SFPSWAP.md's functional
+// model rather than the `default:` NonContractualBehavior branch.
+constexpr std::uint32_t SFPSWAP_MOD1_VD_GETS_MAX = 9;
+
+constexpr std::uint32_t SFPCFG_IMM16_IS_VALUE = 1; // SFPCONFIG.md:108
+
+// Simple byte: selector 4+m -> InstructionTemplate[m].
+//   0x80 SET   -> Insn.VB = macroVD, leaving Insn.VC at the template's
+//                 LREG(4+m). MANDATORY: with it clear the macro assigns
+//                 Insn.VC = macroVD and the SFPSWAP degenerates to comparing
+//                 the loaded value against itself.
+//   0x40 CLEAR -> Insn.VD = macroVD, where the max lands under Mod1 = 9.
+//   delay 0    -> executes the cycle after the SFPLOADMACRO, consuming the
+//                 value that same macro just loaded.
+constexpr std::uint32_t seq_simple(std::uint32_t m)
+{
+    return 0x80u | (0u << 3) | (4u + m);
+}
+
+// MAD byte: SFPNOP at the same delay. Required by SFPLOADMACRO.md:11 footnote
+// (‡): "If SFPSWAP is scheduled to the Simple sub-unit, then SFPNOP needs to be
+// scheduled to the MAD sub-unit for the same time".
+constexpr std::uint32_t SEQ_MAD = (0u << 3) | 2u;
+
+// Round byte: schedule nothing. Also discharges the second half of (‡) (Simple
+// and Round idle on the next cycle) and sidesteps the (†) Simple/Round VD == 16
+// exclusivity rule entirely.
+constexpr std::uint32_t SEQ_ROUND = 0u;
+
+// Store byte: selector 3 = built-in SFPSTORE, 0x40/0x80 clear -> Insn.VD =
+// macroVD, i.e. store the max the SFPSWAP just wrote. Delay 2: the SFPSWAP
+// writes on its second cycle (macro+2), so the store fires at macro+3.
+constexpr std::uint32_t SEQ_STORE = (2u << 3) | 3u;
+
+constexpr std::uint32_t sequence_word(std::uint32_t m)
+{
+    return (SEQ_STORE << 24) | (SEQ_ROUND << 16) | (SEQ_MAD << 8) | seq_simple(m);
+}
+
+// Misc (SFPLOADMACRO.md:53-57): UsesLoadMod0ForStore bits 4..7 all SET so every
+// macro's store inherits the load's INT32 mode -- the fused
+// [bf16 value | u16 index] word is an opaque sort key and a format-converting
+// store would destroy the index in its low half. UnitDelayKind bits 8/9/11 SET
+// puts Simple, MAD and Store on WaitForElapsedInstructions so the delay-2
+// producer chain cannot slide if the frontend bubbles at a MOP boundary.
+constexpr std::uint32_t MISC_WORD = 0xB00u | 0xF0u;
+
+// SFPLOADMACRO field packing (ckernel_ops.h:689, SFPLOADMACRO.md:20-26,45):
+//   lreg_ind = (MacroIndex << 2) | (VD & 3), dest_reg_addr = (Imm9 << 1) | (VD >> 2).
+// VD >> 2 lands in bit 0 of the 10-bit Dst address, which SFPLOAD.md:83 states
+// "goes unused" -- so rotating VD across 0..7 does not perturb the address.
+#define MACRO_MERGE_LOADMACRO(macro_idx, vd, addr_mod, off) \
+    TTI_SFPLOADMACRO(((macro_idx) << 2) | ((vd) & 3u), ckernel::InstrModLoadStore::INT32, (addr_mod), (off) | ((vd) >> 2))
+
+// Program the four templates + four Sequence words + Misc. Idempotent.
+//
+// MUST run after `_init_sfpu_config_reg()` (which `topk_xl_init` issues via
+// `_llk_math_eltwise_unary_sfpu_init_`): that clears LaneConfig, and the
+// VD >= 12 backdoor -- an instruction with VD >= 12 is STORED into
+// InstructionTemplate[VD - 12] rather than executed -- is gated on
+// LaneConfig.DISABLE_BACKDOOR_LOAD being false (SFPCONFIG.md:45-46, :120).
+inline void configure()
+{
+    // InstructionTemplate[m] = SFPSWAP whose VC is the m-th B register. The
+    // 12..15 in the VD field is the backdoor slot selector, not an operand: the
+    // macro overrides Insn.VD with macroVD at issue time.
+    TTI_SFPSWAP(0, L_B0 + 0, 12, SFPSWAP_MOD1_VD_GETS_MAX);
+    TTI_SFPSWAP(0, L_B0 + 1, 13, SFPSWAP_MOD1_VD_GETS_MAX);
+    TTI_SFPSWAP(0, L_B0 + 2, 14, SFPSWAP_MOD1_VD_GETS_MAX);
+    TTI_SFPSWAP(0, L_B0 + 3, 15, SFPSWAP_MOD1_VD_GETS_MAX);
+
+    // The Store byte lives in bits 24..31, so Sequence[] does not fit the
+    // 16-bit immediate path -- stage the 32-bit word through LReg[0] and write
+    // with Mod1 = 0, the idiom of ckernel_sfpu_mul_int.h's _init_mul_int_.
+    // Clobbering LReg[0] is harmless: the A rotation is seeded by its own loads.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(0) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(0) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 0, 0);
+
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(1) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(1) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 1, 0);
+
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(2) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(2) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(3) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(3) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 3, 0);
+
+    TTI_SFPCONFIG(MISC_WORD, 8, SFPCFG_IMM16_IS_VALUE);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// The body: 8 instructions, 8 input vectors, 4 output vectors. Address layout
+// is byte-for-byte `_topk_xl_merge_`'s fused body -- run A at Dst + {0,4,8,12},
+// run B at Dst + distance + {0,4,8,12}, merged max written back over run A, Dst
+// advanced +16 at the end.
+//
+// The +16 rides the LAST SFPLOADMACRO's own load, not a store: a
+// macro-scheduled SFPSTORE skips ApplyPartialAddrMod entirely
+// (SFPLOADMACRO.md:139) and its address was already resolved at SFPLOADMACRO
+// time (:140), so the store still lands at +12 rather than at +28.
+template <int distance>
+inline void body()
+{
+    TTI_SFPLOAD(L_B0 + 0, ckernel::InstrModLoadStore::INT32, ckernel::ADDR_MOD_7, distance + 0);
+    MACRO_MERGE_LOADMACRO(0u, L_A0 + 0, ckernel::ADDR_MOD_7, 0);
+    TTI_SFPLOAD(L_B0 + 1, ckernel::InstrModLoadStore::INT32, ckernel::ADDR_MOD_7, distance + 4);
+    MACRO_MERGE_LOADMACRO(1u, L_A0 + 1, ckernel::ADDR_MOD_7, 4);
+    TTI_SFPLOAD(L_B0 + 2, ckernel::InstrModLoadStore::INT32, ckernel::ADDR_MOD_7, distance + 8);
+    MACRO_MERGE_LOADMACRO(2u, L_A0 + 2, ckernel::ADDR_MOD_7, 8);
+    TTI_SFPLOAD(L_B0 + 3, ckernel::InstrModLoadStore::INT32, ckernel::ADDR_MOD_7, distance + 12);
+    MACRO_MERGE_LOADMACRO(3u, L_A0 + 3, ckernel::ADDR_MOD_5, 12);
+}
+} // namespace macro_merge
+
+// Drop-in replacement for `ckernel::sfpu::_topk_xl_merge_<K, APPROX, true>`.
+// Same signature, same Dst window, same two-column split, same per-column MOP
+// trip counts -- see ckernel_sfpu_topk_xl.h:1683-1739, which this mirrors line
+// for line. Only the recorded body differs (8 instructions vs 16).
+template <std::uint32_t K>
+inline void macro_merge_(const std::uint32_t dst_index)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    constexpr int num_tiles_per_sequence = (K == 2048) ? 2 : 1;
+    constexpr int row_scale_factor       = (K == 512) ? 1 : (K == 1024) ? 2 : 4;
+    constexpr int distance               = 64 * num_tiles_per_sequence;
+    constexpr std::uint32_t n_iters      = row_scale_factor * 2;
+
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+
+    // The body is 8 instructions, not the 16 `_topk_xl_init_`'s
+    // `topk_mop_config<true>()` programmed. Reprogrammed here rather than at
+    // init because `_topk_xl_rebuild_<2048>` also owns the MOP template and
+    // restores it to REPLAY(0, 16) when it is done.
+    ckernel_unpack_template::lA(lltt::replay_insn(0, 8), TT_OP_NOP).program();
+
+    // Recording IS iter 0 of col=0 (Exec), so col=0 fires n_iters - 1 more.
+    load_replay_buf<Exec>(0, 8, [] { macro_merge::body<distance>(); });
+
+    ckernel_unpack_template::run(n_iters - 1);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    ckernel::sfpu::set_dst_write_addr_offset(tile_offset + 2);
+
+    ckernel_unpack_template::run(n_iters);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    ckernel::sfpu::set_dst_write_addr_offset(tile_offset + 0);
+
+    // Retire the last two scheduled SFPSTOREs. Their delay counters are
+    // WaitForElapsedInstructions, so they only move when this thread issues an
+    // SFPU instruction -- and TTI_SETRWC / TT_SETC16 are not SFPU instructions.
+    // Without this the final two output vectors of the merge would not be
+    // written until the NEXT SFPU op (the rebuild) happened to issue two
+    // instructions, which is well after the rebuild has already read them.
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+#endif // MERGE_USE_MACRO
+
+// ===========================================================================
+//  SFPLOADMACRO rebuild -- the thing under test
+// ===========================================================================
+//
+// `_topk_xl_rebuild_` is levels 2..log2(2K) of a bitonic merge, run on the K
+// survivors of `_topk_xl_merge_` (which is level 1). At K = 512 that is NINE
+// levels on 16 vectors = 72 SFPSWAP, and it costs 374 cycles measured
+// (perf_topk_rebuild.py) -- 81% of the whole reduction step.
+//
+// Its lattice bodies have their FIRST level replaced by SFPSWAPs scheduled into
+// the loads' SFPLOADMACRO Simple slots:
+//
+//   build phase  `bitonic_sort_len_16_alt_swaps` Step 4  (4 of 16 swaps/iter)
+//   sub-block C  `bitonic_sort_len_32`           Step 5  (4 of 20 swaps/body)
+//   sub-blocks A and B (rsf >= 4 / rsf >= 2, i.e. K = 2048 / K >= 1024)
+//                `bitonic_sort_len_k`, which is the WHOLE lattice -- one level
+//                -- so those bodies additionally put their STORES on the
+//                macros. See `macro_ce_body` below.
+//
+// Only the first level of a lattice can be macro-scheduled: the macro always
+// overrides Insn.VD with macroVD (SFPLOADMACRO.md:111-115), and macroVD is the
+// register that macro's own load just wrote, so the compare-exchange's
+// destination must be a freshly loaded register whose partner is also loaded
+// and not yet modified. Level 2 reads level 1's outputs and has no load left to
+// attach to. That caps the win at one level per load-pass, measured at
+// 374 -> 342 cyc/call (1.094x). Derivation and every measured arm are in
+// sources/topk_rebuild_perf.cpp.
+//
+// UNLIKE the merge's macro, Mod1 stays at `p_sfpswap::ALL_ROWS_MAX` (= 1,
+// "VD = min and VC = max"). The merge needed the undocumented Mod1 = 9 because
+// it keeps only the max and had to get it into macroVD. Here BOTH halves of
+// every compare-exchange are kept, and the shipping lattice's own operand order
+// already puts the macro-reachable half where the macro can reach it -- so every
+// macro-scheduled instruction is bit-identical in semantics to the TTI_SFPSWAP
+// (and, in sub-blocks A and B, the TTI_SFPSTORE) it replaces, which is exactly
+// what makes the golden comparison below a meaningful check.
+//
+// The four InstructionTemplates differ between the two phases (and between sort
+// directions), so they are rewritten once per phase. Those writes are FREE:
+// they ride the 3-cycle Matrix-Unit shadow that every `MOVD2B` block casts over
+// the `TRNSPSRCB` that follows it (MOVD2B.md:148 -- the restriction is scoped
+// to the Matrix Unit, and `perf_topk_rebuild.py`'s RbXposeNFill arm measured
+// 24 extra SFPNOPs at exactly zero cost). Sweep 1, which precedes the build
+// phase, installs the build's templates; sweep 2, which precedes the block
+// phase, installs the block's.
+#ifndef REBUILD_USE_MACRO
+#define REBUILD_USE_MACRO 1
+#endif
+
+// Mutation control. With REBUILD_MUTATE = 1 the Simple sequence byte's 0x80 bit
+// is cleared, which makes the macro assign Insn.VC = macroVD instead of
+// Insn.VB = macroVD (SFPLOADMACRO.md:100). SFPSWAP then compares the
+// freshly-loaded register against ITSELF -- a no-op compare-exchange that drops
+// one whole bitonic level. The pipeline still runs and still produces K values;
+// they are just the wrong ones. A green run under REBUILD_MUTATE = 1 would mean
+// the golden is not sensitive to the level this change touches, i.e. that the
+// PASS under REBUILD_MUTATE = 0 proves nothing.
+#ifndef REBUILD_MUTATE
+#define REBUILD_MUTATE 0
+#endif
+
+#if REBUILD_USE_MACRO
+
+namespace macro_rebuild
+{
+constexpr std::uint32_t SFPCFG_IMM16_IS_VALUE = 1; // SFPCONFIG.md:108
+
+// Simple byte: selector 4+m -> InstructionTemplate[m], delay 0.
+//   0x80 SET   -> Insn.VB = macroVD, leaving Insn.VC at the template's value.
+//                 This is the only way to get a software-loaded register in as
+//                 the compare's second operand. THE MUTATION CLEARS THIS BIT.
+//   0x40 CLEAR -> Insn.VD = macroVD.
+// REBUILD_MUTATE == 1 clears it; 2 leaves it alone and kills the Store slot
+// instead (see SEQ_STORE below).
+constexpr std::uint32_t SIMPLE_VB_BIT = (REBUILD_MUTATE == 1 ? 0x00u : 0x80u);
+
+constexpr std::uint32_t seq_simple(std::uint32_t m)
+{
+    return SIMPLE_VB_BIT | (0u << 3) | (4u + m);
+}
+
+// MAD byte: SFPNOP at the same delay. Required by SFPLOADMACRO.md:11 (‡).
+constexpr std::uint32_t SEQ_MAD = (0u << 3) | 2u;
+// Round byte: schedule nothing -- also discharges the second half of (‡).
+constexpr std::uint32_t SEQ_ROUND = 0u;
+// Store byte: selector 3 = the built-in SFPSTORE, delay 2.
+//   0x40 and 0x80 both CLEAR -> Insn.VD = macroVD, i.e. store the register the
+//        scheduled SFPSWAP just wrote. 0x40 would store LReg[16].
+//   delay 2 -> the SFPSWAP writes on its second cycle (macro+2), so the store
+//        fires at macro+3, one cycle behind its producer -- the merge's timing.
+//
+// ONE Sequence word serves all three phases, with the Store slot always on.
+// Sub-blocks A and B need it (their lattice is ONE level, so the loaded register
+// IS the result and its store address IS its load address). The build phase and
+// sub-block C do not -- but they are harmless under it, because
+// `load16_rows_x2<g>` and `store16_rows_x2<g, inc>` are mirrors: the macro store
+// writes a mid-lattice value to a Dst word that the body's own closing
+// `store16_rows_x2` overwrites unconditionally a dozen instructions later. That
+// is a wasted write on an otherwise idle sub-unit, not a corruption -- and it
+// avoids reprogramming Sequence[0..3] (12 instructions) four times per rebuild,
+// which would cost more than the whole K=1024 saving.
+//
+// REBUILD_MUTATE == 2 sets this byte to 0 ("schedule nothing"). That is the
+// mutation control for the STORE half of the trick specifically: with it, in
+// sub-blocks A and B the macroVD half of every compare-exchange is never written
+// back to Dst, so half the rebuild's output is stale. REBUILD_MUTATE == 1 (the
+// 0x80 bit) only proves the scheduled SFPSWAP does work; this proves the
+// scheduled SFPSTORE does.
+constexpr std::uint32_t SEQ_STORE = (REBUILD_MUTATE == 2 ? 0u : ((2u << 3) | 3u));
+
+constexpr std::uint32_t sequence_word(std::uint32_t m)
+{
+    return (SEQ_STORE << 24) | (SEQ_ROUND << 16) | (SEQ_MAD << 8) | seq_simple(m);
+}
+
+// Misc (SFPLOADMACRO.md:53-57). 0xF0: all four macros' stores inherit the LOAD's
+// Mod0 (INT32) -- the fused [bf16 value | u16 index] word is an opaque sort key
+// and a StoreMod0 format conversion would destroy the index in the low half.
+// 0xB00: Simple (bit 8), MAD (bit 9) and Store (bit 11) on
+// WaitForElapsedInstructions, so neither the delay-0 Simple nor the delay-2
+// Store can slide if the frontend bubbles at a MOP boundary.
+constexpr std::uint32_t MISC_WORD = 0xB00u | 0xF0u;
+
+// MUST run after LaneConfig has been cleared -- the VD >= 12 backdoor that
+// stores an instruction into InstructionTemplate[] rather than executing it is
+// gated on LaneConfig.DISABLE_BACKDOOR_LOAD being false (SFPCONFIG.md:45-46).
+inline void configure()
+{
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(0) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(0) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 0, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(1) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(1) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 1, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(2) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(2) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, sequence_word(3) & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(3) >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 3, 0);
+    TTI_SFPCONFIG(MISC_WORD, 8, SFPCFG_IMM16_IS_VALUE);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// SFPLOADMACRO field packing (ckernel_ops.h:689, SFPLOADMACRO.md:20-26,45):
+//   lreg_ind = (MacroIndex << 2) | (VD & 3), dest_reg_addr = (Imm9 << 1) | (VD >> 2).
+// VD is u3 so the split is exact, and SFPLOAD.md:83 -- the address low bit is
+// unused -- so rotating VD across 0..7 does not perturb the address.
+#define MACRO_REBUILD_LOADMACRO(macro_idx, vd, addr_mod, off) \
+    TTI_SFPLOADMACRO(((macro_idx) << 2) | ((vd) & 3u), ckernel::InstrModLoadStore::INT32, (addr_mod), (off) | ((vd) >> 2))
+
+// `transpose_dest_face_32b<dst_offset>` with two instruction words injected into
+// the two MOVD2B->TRNSPSRCB shadows. Byte-for-byte the shipping helper
+// otherwise (ckernel_sfpu_topk_xl.h:889-930).
+template <int dst_offset>
+inline void face_inject(const std::uint32_t w1, const std::uint32_t w2)
+{
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float16_b));
+    TTI_MOVD2B(1, 16, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 0);
+    TTI_MOVD2B(1, 20, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 4);
+    TTI_MOVD2B(1, 24, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 8);
+    TTI_MOVD2B(1, 28, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 12);
+    ckernel::instrn_buffer[0] = w1;
+    TTI_TRNSPSRCB;
+    TTI_MOVB2A(0, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 16);
+    TTI_MOVB2A(4, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 20);
+    TTI_MOVB2A(8, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 24);
+    TTI_MOVB2A(12, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 28);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+    TTI_MOVD2B(0, 16, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 0);
+    TTI_MOVD2B(0, 20, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 4);
+    TTI_MOVD2B(0, 24, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 8);
+    TTI_MOVD2B(0, 28, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, dst_offset + 12);
+    ckernel::instrn_buffer[0] = w2;
+    TTI_TRNSPSRCB;
+    TTI_MOVB2D(0, 16, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, dst_offset + 0);
+    TTI_MOVB2D(0, 20, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, dst_offset + 4);
+    TTI_MOVB2D(0, 24, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, dst_offset + 8);
+    TTI_MOVB2D(0, 28, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, dst_offset + 12);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+    TTI_MOVA2D(1, 0, ADDR_MOD_7, p_mova2d::MOV_8_ROWS, dst_offset + 0);
+    TTI_MOVA2D(1, 8, ADDR_MOD_7, p_mova2d::MOV_8_ROWS, dst_offset + 8);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+}
+
+// One `transpose_N_faces<NF>` sweep that also installs the four
+// InstructionTemplates, in the first two faces' four free shadow slots.
+template <int NF>
+inline void sweep_with_templates(const std::uint32_t vc0, const std::uint32_t vc1, const std::uint32_t vc2, const std::uint32_t vc3)
+{
+    static_assert(NF == 2 || NF == 4 || NF == 8, "NF must match row_scale_factor * 2");
+    face_inject<0>(TT_OP_SFPSWAP(0, vc0, 12, p_sfpswap::ALL_ROWS_MAX), TT_OP_SFPSWAP(0, vc1, 13, p_sfpswap::ALL_ROWS_MAX));
+    face_inject<16>(TT_OP_SFPSWAP(0, vc2, 14, p_sfpswap::ALL_ROWS_MAX), TT_OP_SFPSWAP(0, vc3, 15, p_sfpswap::ALL_ROWS_MAX));
+    if constexpr (NF > 2)
+    {
+        face_inject<32>(TT_OP_SFPNOP, TT_OP_SFPNOP);
+        face_inject<48>(TT_OP_SFPNOP, TT_OP_SFPNOP);
+    }
+    if constexpr (NF > 4)
+    {
+        face_inject<64>(TT_OP_SFPNOP, TT_OP_SFPNOP);
+        face_inject<80>(TT_OP_SFPNOP, TT_OP_SFPNOP);
+        face_inject<96>(TT_OP_SFPNOP, TT_OP_SFPNOP);
+        face_inject<112>(TT_OP_SFPNOP, TT_OP_SFPNOP);
+    }
+}
+
+// --- build phase (stride-2 + sort_16_alt) ---------------------------------
+//
+// `load16_rows_x2<2>` puts LREG0..3 at {0,4,8,12} and LREG4..7 at {2,6,10,14}.
+// Step 4 (the first level) is, per direction:
+//   ascending  SWAP(VC=2,VD=0) (3,1) (6,4) (7,5)  -> templates VC = 2,3,6,7
+//   descending SWAP(VC=0,VD=2) (1,3) (4,6) (5,7)  -> templates VC = 0,1,4,5
+// The eight loads are INTERLEAVED plain/macro rather than grouped, for the
+// reason topk_merge_macro_perf.cpp's timing table spells out: a macro-scheduled
+// SFPSWAP owns the Simple sub-unit for TWO cycles, so consecutive
+// SFPLOADMACROs must be two issue slots apart or their scheduled swaps overlap
+// and silently corrupt each other. Each macro's VC operand is loaded by the
+// plain SFPLOAD immediately preceding it. Only the ORDER of the eight loads
+// changes; the eight addresses are identical to the shipping helper's, and
+// SFPLOAD has no inter-load ordering constraint.
+template <bool ASC>
+inline void build_loads()
+{
+    if constexpr (ASC)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG2, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+        MACRO_REBUILD_LOADMACRO(0u, p_sfpu::LREG0, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+        MACRO_REBUILD_LOADMACRO(1u, p_sfpu::LREG1, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 10);
+        MACRO_REBUILD_LOADMACRO(2u, p_sfpu::LREG4, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG7, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 14);
+        MACRO_REBUILD_LOADMACRO(3u, p_sfpu::LREG5, ADDR_MOD_7, 6);
+    }
+    else
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        MACRO_REBUILD_LOADMACRO(0u, p_sfpu::LREG2, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG1, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        MACRO_REBUILD_LOADMACRO(1u, p_sfpu::LREG3, ADDR_MOD_7, 12);
+        TTI_SFPLOAD(p_sfpu::LREG4, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        MACRO_REBUILD_LOADMACRO(2u, p_sfpu::LREG6, ADDR_MOD_7, 10);
+        TTI_SFPLOAD(p_sfpu::LREG5, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+        MACRO_REBUILD_LOADMACRO(3u, p_sfpu::LREG7, ADDR_MOD_7, 14);
+    }
+    // Two-instruction drain before the next Simple-sub-unit instruction. The
+    // last macro's SFPSWAP occupies Simple for the two cycles after its issue
+    // (SFPSWAP.md:113), and macro-scheduled SFPSWAPs are exempt from the
+    // automatic one-cycle stall (SFPSWAP.md CAUTION) -- so nothing stops the
+    // following software SFPSWAP from being issued straight into a busy
+    // sub-unit. WITHOUT THESE THE LATTICE IS SILENTLY WRONG: the answer is
+    // still K plausible values in the right ballpark, and a single
+    // merge+rebuild cannot see it at all (the rebuild only PERMUTES its K
+    // survivors, so the returned SET is unchanged). It takes >= 2 chained
+    // merge+rebuild pairs -- test_topk_xl_fused_reduce with num_chunks=4 -- for
+    // the mis-ordered run to reach the next merge and corrupt the SET.
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// Step 3 of the first half -- reads Step 4's outputs, so it cannot ride a load.
+template <bool ASC>
+inline void build_step3()
+{
+    if constexpr (ASC)
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+    }
+    else
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+    }
+}
+
+// --- sub-blocks A and B: the FULL trick (swap AND store on the macro) ------
+//
+// `canonical_big_block_with_replay`'s sub-block A (rsf >= 4) and sub-block B
+// (rsf >= 2) are each
+//
+//     load16_rows_x2<D> + bitonic_sort_len_k(dir) + store16_rows_x2<D, inc>
+//
+// and `bitonic_sort_len_k` is exactly 4 SFPSWAP -- a SINGLE level, with BOTH
+// operands freshly loaded and the results written back to the ADDRESSES THEY
+// WERE LOADED FROM. That is structurally `_topk_xl_merge_`'s body, so the
+// merge's full trick applies: the SFPSWAP rides the macro's Simple slot AND an
+// SFPSTORE rides its Store slot, whose address SFPLOADMACRO.md:140 forces to
+// equal its load's. 20 instructions / 24 cycles become 14 / 14.
+//
+// Unlike the merge, Mod1 stays at `p_sfpswap::ALL_ROWS_MAX` (= 1, "VD = min and
+// VC = max"). The merge needed the undocumented Mod1 = 9 because it keeps only
+// the max and had to get it into macroVD. Here BOTH halves are kept, and the
+// shipping lattice's own operand order already puts the macro-reachable half
+// where the macro can store it:
+//
+//   descending  SWAP(VC = LREG0..3, VD = LREG4..7) -> macroVD = LREG4..7 holds
+//               the min, and the min belongs at the HIGH addresses, which is
+//               exactly where those macros' own loads read from.
+//   ascending   SWAP(VC = LREG4..7, VD = LREG0..3) -> the mirror.
+//
+// So the macro-scheduled store is bit-identical to the SFPSTORE it replaces,
+// which is what makes the golden comparison meaningful.
+//
+// The other four stores stay in software. They are placed on the issue slots the
+// four macro-scheduled stores do NOT use: the macros sit at i2/i4/i6/i8 and
+// their delay-2 stores fire at i5/i7/i9/i11, so the two SFPNOPs at i9 and i11
+// keep those cycles store-free (and double as the Simple-sub-unit drain the last
+// macro needs -- see build_loads()).
+//
+// `INC` is the Dst advance `store16_rows_x2<D, INC>` folds into its LREG7 store.
+// That store now rides a macro, and a macro store inherits the LOAD's ADDR_MOD,
+// so the advance moves to the LAST SOFTWARE store. Safe: macro store addresses
+// are latched at SFPLOADMACRO time (SFPLOADMACRO.md:140), and all four have
+// fired by i11.
+template <int INC>
+inline void ce_last_store(const std::uint32_t lreg, const int off)
+{
+    static_assert(INC == 16 || INC == 48, "INC must be 16 or 48");
+    if constexpr (INC == 48)
+    {
+        TT_SFPSTORE(lreg, ckernel::InstrModLoadStore::INT32, ADDR_MOD_1, off);
+    }
+    else
+    {
+        TT_SFPSTORE(lreg, ckernel::InstrModLoadStore::INT32, ADDR_MOD_5, off);
+    }
+}
+
+template <int D, int INC, bool ASC>
+inline void macro_ce_body()
+{
+    if constexpr (ASC)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG4, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 0);
+        MACRO_REBUILD_LOADMACRO(0u, p_sfpu::LREG0, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 4);
+        MACRO_REBUILD_LOADMACRO(1u, p_sfpu::LREG1, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 8);
+        MACRO_REBUILD_LOADMACRO(2u, p_sfpu::LREG2, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 12);
+        MACRO_REBUILD_LOADMACRO(3u, p_sfpu::LREG3, ADDR_MOD_7, 12);
+        TTI_SFPNOP; // macro store 2 fires here -- keep the cycle store-free
+        TTI_SFPSTORE(p_sfpu::LREG4, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 0);
+        TTI_SFPNOP; // macro store 3 fires here
+        TTI_SFPSTORE(p_sfpu::LREG5, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 4);
+        TTI_SFPSTORE(p_sfpu::LREG6, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, D + 8);
+        ce_last_store<INC>(p_sfpu::LREG7, D + 12);
+    }
+    else
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        MACRO_REBUILD_LOADMACRO(0u, p_sfpu::LREG4, ADDR_MOD_7, D + 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        MACRO_REBUILD_LOADMACRO(1u, p_sfpu::LREG5, ADDR_MOD_7, D + 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+        MACRO_REBUILD_LOADMACRO(2u, p_sfpu::LREG6, ADDR_MOD_7, D + 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+        MACRO_REBUILD_LOADMACRO(3u, p_sfpu::LREG7, ADDR_MOD_7, D + 12);
+        TTI_SFPNOP; // macro store 2 fires here -- keep the cycle store-free
+        TTI_SFPSTORE(p_sfpu::LREG0, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPNOP; // macro store 3 fires here
+        TTI_SFPSTORE(p_sfpu::LREG1, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG2, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+        ce_last_store<INC>(p_sfpu::LREG3, 12);
+    }
+}
+
+// --- block phase (sub-block C of canonical_big_block) ----------------------
+//
+// `load16_rows_x2<16>` puts LREG0..3 at {0,4,8,12} and LREG4..7 at {16,20,24,28}.
+// `bitonic_sort_len_32`'s Step 5 (the first level) is:
+//   ascending  SWAP(VC=4,VD=0) (5,1) (6,2) (7,3)  -> templates VC = 4,5,6,7
+//   descending SWAP(VC=0,VD=4) (1,5) (2,6) (3,7)  -> templates VC = 0,1,2,3
+// Descending needs no reordering at all: LREG0..3 already load first.
+template <bool ASC>
+inline void block_loads()
+{
+    if constexpr (ASC)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG4, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 16);
+        MACRO_REBUILD_LOADMACRO(0u, p_sfpu::LREG0, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 20);
+        MACRO_REBUILD_LOADMACRO(1u, p_sfpu::LREG1, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 24);
+        MACRO_REBUILD_LOADMACRO(2u, p_sfpu::LREG2, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 28);
+        MACRO_REBUILD_LOADMACRO(3u, p_sfpu::LREG3, ADDR_MOD_7, 12);
+    }
+    else
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        MACRO_REBUILD_LOADMACRO(0u, p_sfpu::LREG4, ADDR_MOD_7, 16);
+        TTI_SFPLOAD(p_sfpu::LREG1, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        MACRO_REBUILD_LOADMACRO(1u, p_sfpu::LREG5, ADDR_MOD_7, 20);
+        TTI_SFPLOAD(p_sfpu::LREG2, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+        MACRO_REBUILD_LOADMACRO(2u, p_sfpu::LREG6, ADDR_MOD_7, 24);
+        TTI_SFPLOAD(p_sfpu::LREG3, ckernel::InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+        MACRO_REBUILD_LOADMACRO(3u, p_sfpu::LREG7, ADDR_MOD_7, 28);
+    }
+    TTI_SFPNOP; // drain -- see build_loads()
+    TTI_SFPNOP;
+}
+
+// `canonical_big_block_with_replay<rsf>` with ALL THREE sub-blocks on macros:
+//   * sub-block C: first level (Step 5 of `bitonic_sort_len_32`) only, because
+//     the four levels after it read its outputs and have no load to attach to.
+//   * sub-blocks A and B: the FULL trick -- their lattice is a SINGLE level and
+//     stores back to its own load addresses, so the SFPSWAP rides the macro's
+//     Simple slot and the SFPSTORE rides its Store slot. 24 -> 14 cycles/body.
+// All three want the SAME four InstructionTemplates (VC = LREG0..3 descending,
+// LREG4..7 ascending), so sweep 2's single programming covers the whole block
+// and nothing is reprogrammed mid-column.
+//
+// The tail of sub-block C after Step 5 -- Step 4, Step 3, SFPTRANSP, Step 4,
+// Step 3, SFPTRANSP -- is instruction-for-instruction
+// `bitonic_sort_len_16_alt<true>(ascending)`, so the shipping helper is reused
+// rather than re-spelled.
+template <int rsf, bool ASC>
+inline void big_block([[maybe_unused]] const bool dir)
+{
+    if constexpr (rsf >= 4)
+    {
+        // Sub-block A. The whole 14-instruction body fits one replay range, so
+        // the shipping split into a load range and a store range disappears.
+        ckernel::load_replay_buf<ckernel::Exec>(0, 14, [] { macro_ce_body<64, 16, ASC>(); });
+        for (int i = 1; i < rsf; i++)
+        {
+            lltt::replay(0, 14);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+
+    if constexpr (rsf >= 2)
+    {
+        // Sub-block B, inline exactly as the shipping helper leaves it. The
+        // paired +16 / +48 Dst advances now ride the LAST SOFTWARE store of each
+        // body rather than the LREG7 store, which has moved onto a macro.
+        for (int i = 0; i < (rsf >> 1); i++)
+        {
+            macro_ce_body<32, 16, ASC>();
+            macro_ce_body<32, 48, ASC>();
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        ckernel::load_replay_buf<ckernel::Exec>(0, 10, [] { block_loads<ASC>(); });
+        ckernel::sfpu::bitonic_sort_len_16_alt<true>(ASC);
+        ckernel::load_replay_buf<ckernel::Exec>(10, 8, [] { ckernel::sfpu::store16_rows_x2<16, 32>(); });
+        for (int i = 1; i < rsf; i++)
+        {
+            lltt::replay(0, 10);
+            ckernel::sfpu::bitonic_sort_len_16_alt<true>(ASC);
+            lltt::replay(10, 8);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+    else
+    {
+        block_loads<ASC>();
+        ckernel::sfpu::bitonic_sort_len_16_alt<true>(ASC);
+        ckernel::sfpu::store16_rows_x2<16, 32>();
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+}
+} // namespace macro_rebuild
+
+// Drop-in replacement for `ckernel::sfpu::_topk_xl_rebuild_<K, APPROX, true>`.
+// Structurally line-for-line ckernel_sfpu_topk_xl.h:1997-2054 (the fused
+// generic body, which at rsf = 4 is bit-identical to the K=2048 fast path).
+// Only the two lattice bodies differ, plus the template writes now riding the
+// transposes' free shadow slots.
+template <std::uint32_t K, bool ASC>
+inline void macro_rebuild_(const std::uint32_t dst_index, bool /*ascending*/)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    constexpr int rsf               = (K == 512) ? 1 : (K == 1024) ? 2 : 4;
+    constexpr int n_iters_stride2   = rsf * 2;
+    constexpr int NF                = rsf * 2;
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    ckernel::sfpu::enter_transpose_cfg_block();
+
+    // Sweep 1 (canonical -> transposed) installs the BUILD phase's templates.
+    if constexpr (ASC)
+    {
+        macro_rebuild::sweep_with_templates<NF>(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG6, p_sfpu::LREG7);
+    }
+    else
+    {
+        macro_rebuild::sweep_with_templates<NF>(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5);
+    }
+
+    // Build phase. The recorded body is 30 instructions, not 34 (Step 4 rides
+    // the loads), so the 5-slot MOP template's REPLAY ranges shift to
+    // [0..11] / [12..19] / [20..27].
+    {
+        constexpr std::uint32_t replay_a  = lltt::replay_insn(0, 14);
+        constexpr std::uint32_t replay_b  = lltt::replay_insn(14, 8);
+        constexpr std::uint32_t replay_st = lltt::replay_insn(22, 8);
+        constexpr std::uint32_t transp_op = TT_OP_SFPTRANSP(0, 0, 0, 0);
+        ckernel_unpack_template tmpl(true, true, replay_a, transp_op, replay_b, transp_op, TT_OP_NOP, replay_st, TT_OP_NOP);
+        tmpl.program();
+    }
+    ckernel::load_replay_buf<ckernel::Exec>(
+        0,
+        14,
+        []
+        {
+            macro_rebuild::build_loads<ASC>(); // 8 loads/macros + 2 drain SFPNOPs
+            macro_rebuild::build_step3<ASC>();
+        });
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    ckernel::load_replay_buf<ckernel::Exec>(14, 8, [] { ckernel::sfpu::bitonic_sort_len_16_alt_swaps<true>(ASC); });
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    ckernel::load_replay_buf<ckernel::Exec>(22, 8, [] { ckernel::sfpu::store16_rows_x2<2, 16>(); });
+    ckernel_unpack_template::run(n_iters_stride2 - 1);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // Sweep 2 (transposed -> canonical) installs the BLOCK phase's templates.
+    if constexpr (ASC)
+    {
+        macro_rebuild::sweep_with_templates<NF>(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG7);
+    }
+    else
+    {
+        macro_rebuild::sweep_with_templates<NF>(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3);
+    }
+    ckernel::sfpu::leave_transpose_cfg_block();
+
+    for (int col = 0; col < 2; col++)
+    {
+        macro_rebuild::big_block<rsf, ASC>(ASC);
+        ckernel::sfpu::set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
+
+    // The build phase clobbered the MOP Expander config; restore the merge
+    // programming, exactly as the shipping rebuild does.
+    ckernel::sfpu::topk_mop_config<true>();
+
+    // Clear SrcA / SrcB valids -- the next caller might issue a Dst transpose.
+    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+}
+
+#endif // REBUILD_USE_MACRO
+
+template <std::uint32_t K, bool fused>
+inline void topk_xl_init()
+{
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    ckernel::sfpu::_topk_xl_init_<K, fused>();
+#if MERGE_USE_MACRO
+    if constexpr (fused)
+    {
+        // After _init_sfpu_config_reg() cleared LaneConfig, so the VD >= 12
+        // template backdoor is open.
+        macro_merge::configure();
+    }
+#endif
+#if REBUILD_USE_MACRO
+    if constexpr (fused)
+    {
+        // Sequence + Misc only. The four InstructionTemplates are installed per
+        // phase from inside the rebuild's transposes.
+        macro_rebuild::configure();
+    }
+#endif
+}
+
+template <std::uint32_t K>
+inline void topk_xl_local_sort(std::uint32_t dst_index, bool ascending)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_local_sort_<K, APPROX>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+}
+
+template <std::uint32_t K, bool fused>
+inline void topk_xl_merge(std::uint32_t dst_index)
+{
+#if MERGE_USE_MACRO
+    // Only the FUSED merge is swapped. The unfused path keeps values and
+    // indices in two separate Dst regions and stores all 8 LREGs, so it has no
+    // dead half to exploit and the macro rewrite does not apply to it; leaving
+    // it on the shipping body also keeps the unfused variants of this test as a
+    // second control.
+    if constexpr (fused)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(macro_merge_<K>, dst_index, VectorMode::RC_custom, dst_index);
+        return;
+    }
+#endif
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_merge_<K, APPROX, fused>, dst_index, VectorMode::RC_custom, dst_index);
+}
+
+template <std::uint32_t K, bool fused>
+inline void topk_xl_rebuild(std::uint32_t dst_index, bool ascending)
+{
+#if REBUILD_USE_MACRO
+    // Only the FUSED rebuild is swapped. The unfused path keeps values and
+    // indices in two separate Dst regions, so `bitonic_sort_len_16_alt<false>`
+    // emits half the swaps and the register map differs; leaving it on the
+    // shipping body also keeps every unfused variant of this test as a control
+    // that the clone itself did not break anything.
+    if constexpr (fused)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(macro_rebuild_<K, TOPK_XL_ASCENDING>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+        return;
+    }
+#endif
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_rebuild_<K, APPROX, fused>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+}
+
+inline void topk_xl_add_lsb_indices_init()
+{
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    ckernel::sfpu::_topk_xl_add_lsb_indices_init_();
+}
+
+template <std::uint32_t K, std::uint32_t core_id>
+inline void topk_xl_add_lsb_indices(std::uint32_t dst_index)
+{
+    static_assert(core_id < 32, "core_id occupies index bits [15:11]");
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_add_lsb_indices_<K, APPROX, core_id>, dst_index, VectorMode::RC_custom);
+}
+
+// --- Row-major index split (topk_large_indices op path) ---
+template <std::uint32_t chunk_base_upper16, std::uint32_t chunk_base_lower16>
+inline void topk_xl_separate_indices_row_major_init_static()
+{
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_init_static_<chunk_base_upper16, chunk_base_lower16>();
+}
+
+// Same chunk_base latch, runtime value. The flavor a caller uses when the base
+// is only known at runtime.
+inline void topk_xl_separate_indices_row_major_init(std::uint32_t chunk_base)
+{
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_init_(chunk_base);
+}
+
+// Hybrid flavor: high half static, low half runtime.
+template <std::uint32_t chunk_base_upper16>
+inline void topk_xl_separate_indices_row_major_init_upper(std::uint32_t chunk_base_low16)
+{
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_init_upper_<chunk_base_upper16>(chunk_base_low16);
+}
+
+inline void topk_xl_separate_indices_row_major_reinit()
+{
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_reinit_();
+}
+
+template <std::uint32_t K>
+inline void topk_xl_separate_indices_row_major(std::uint32_t dst_index)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_row_major_<K, APPROX>, dst_index, VectorMode::RC_custom);
+}
+
+template <std::uint32_t K>
+inline void topk_xl_separate_indices_row_major_advance_chunk_base()
+{
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_advance_chunk_base_<K>();
+}
+
+// Generic separate_indices (keeps the tile coordinate and prepends group_id).
+inline void topk_xl_separate_indices_init(std::uint32_t group_id_bit_shift)
+{
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    ckernel::sfpu::_topk_xl_separate_indices_init_(group_id_bit_shift);
+}
+
+template <std::uint32_t K, std::uint32_t group_id>
+inline void topk_xl_separate_indices(std::uint32_t dst_index)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_<K, APPROX, group_id>, dst_index, VectorMode::RC_custom);
+}
+
+// Shared core: copy the chunk into `slot`, stamp indices, fused local-sort.
+// Marked noinline to avoid overflowing the code region.
+template <std::uint32_t K>
+__attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t active_elements, bool ascending, std::uint32_t dst_format)
+{
+    ckernel::_llk_math_topk_xl_copy_init_(dst_format);
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        ckernel::_llk_math_topk_xl_copy_(slot + t, dst_format, tile_active_elements(active_elements, t));
+    }
+
+    topk_xl_add_lsb_indices_init();
+    topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID>(slot);
+
+    topk_xl_init<K, true>();
+    topk_xl_local_sort<K>(slot, ascending);
+}
+
+// Row-major process_chunk: copy_sort then split into unfused values + row-major
+// uint32 indices, ready for the merge tree.
+template <std::uint32_t K>
+__attribute__((noinline)) void process_chunk_math(std::uint32_t slot, std::uint32_t active_elements, bool ascending, std::uint32_t dst_format)
+{
+    copy_sort<K>(slot, active_elements, ascending, dst_format);
+    topk_xl_separate_indices_row_major_reinit();
+    topk_xl_separate_indices_row_major<K>(slot);
+    topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+}
+
+// Init + (optional) merge of slot1 into slot0 + rebuild, in either fused mode.
+// `fused` selects the whole merge/rebuild code family: operand distance, MOP body
+// length and iteration count all differ (see topk_mop_config / _topk_xl_merge_).
+// `_topk_xl_merge_` always keeps the max half, so TOPK_XL_ASCENDING changes only
+// the order the surviving top-K is rebuilt into, not which elements survive.
+template <std::uint32_t K, bool fused>
+__attribute__((noinline)) void merge_and_rebuild(bool do_merge)
+{
+    topk_xl_init<K, fused>();
+    if (do_merge)
+    {
+        topk_xl_merge<K, fused>(SLOT0);
+    }
+    topk_xl_rebuild<K, fused>(SLOT0, TOPK_XL_ASCENDING);
+}
+
+// Save the starting chunk_base through the requested init flavor.
+// All three save into LREG12, but the value is split differently.
+inline void topk_xl_chunk_base_init()
+{
+    if constexpr (TOPK_XL_CHUNK_BASE_MODE == 0)
+    {
+        topk_xl_separate_indices_row_major_init_static<CHUNK_BASE_HI16, CHUNK_BASE_LO16>();
+    }
+    else if constexpr (TOPK_XL_CHUNK_BASE_MODE == 1)
+    {
+        topk_xl_separate_indices_row_major_init_upper<CHUNK_BASE_HI16>(CHUNK_BASE_LO16);
+    }
+    else
+    {
+        topk_xl_separate_indices_row_major_init(TOPK_XL_CHUNK_BASE);
+    }
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    const std::uint32_t math_format = formats.math;
+
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+
+    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+    {
+        _llk_math_wait_for_dest_available_<dest_sync>();
+
+        if constexpr (FUSED_REDUCE)
+        {
+            // Fused reduction: chunks stay in the fused [value|index] form all the
+            // way through merge/rebuild, and the index split happens once at the end.
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
+
+            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+            {
+                copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */);
+            }
+
+            topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
+            topk_xl_separate_indices<TOPK_XL_K, TOPK_XL_GROUP_ID>(SLOT0);
+        }
+        else if constexpr (INDEX_OP_ROW_MAJOR)
+        {
+            topk_xl_chunk_base_init();
+
+            // chunk 0 -> slot0, local-sort descending.
+            process_chunk_math<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
+
+            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+            {
+                // chunk c -> slot1, local-sort ascending, then merge into slot0.
+                process_chunk_math<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                merge_and_rebuild<TOPK_XL_K, false /* fused */>(true /* do_merge */);
+            }
+            if constexpr (REBUILD_LONE_CHUNK)
+            {
+                merge_and_rebuild<TOPK_XL_K, false /* fused */>(false /* do_merge */);
+            }
+        }
+        else
+        {
+            // Single-chunk terminal ops: copy_sort, then the index step. For separate
+            // the split is here (MATH). For remove_msb the value-half zero runs on
+            // PACK (as the op does), so MATH just leaves the fused [value|index] in slot0.
+            static_assert(INDEX_OP_ROW_MAJOR || TOPK_XL_NUM_CHUNKS == 1, "terminal index ops (INDEX_OP 1/2) are single-chunk only");
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* fused */, math_format);
+
+            if constexpr (INDEX_OP_SEPARATE)
+            {
+                topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
+                topk_xl_separate_indices<TOPK_XL_K, TOPK_XL_GROUP_ID>(SLOT0);
+            }
+        }
+
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
+}
+
+#endif // LLK_TRISC_MATH
+
+#ifdef LLK_TRISC_PACK
+
+#include "llk_lib_pack_wrappers.h"
+#include "llk_pack_common.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+
+// remove_msb_values on PACK: verbatim reproduction of the Metal wrapper
+// llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values, which Compute API invokes through
+// PACK(...). Zeros the bf16 value half of the fused Dest words in place: [0 | index].
+template <std::uint32_t K>
+inline void pack_remove_msb_values(std::uint32_t dst_index)
+{
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH | p_stall::PACK);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // The SFPU drain on the way in and the pack drain on the way out both live
+    // inside `_topk_xl_remove_msb_values_`. The LLK static_asserts SyncFull.
+    ckernel::sfpu::_topk_xl_remove_msb_values_<K, dest_sync>();
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+    const std::uint32_t pack_src_format = formats.pack_src;
+    const std::uint32_t pack_dst_format = formats.pack_dst; // UInt32: raw 32-bit words.
+
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+        pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+
+    if constexpr (INDEX_OP_REMOVE_MSB)
+    {
+        ckernel::sfpu::_topk_xl_remove_msb_values_init_();
+    }
+
+    // remove_msb: the in-place fused region [0|index] (TILES_PER_SEQ). Otherwise the
+    // value region then the index region (2*TILES_PER_SEQ).
+    constexpr std::uint32_t RESULT_TILES_PER_ROW = INDEX_OP_REMOVE_MSB ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+
+    for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+    {
+        _llk_packer_wait_for_math_done_();
+
+        if constexpr (INDEX_OP_REMOVE_MSB)
+        {
+            // Zero the value half on PACK, then pack the fused region as [0|index].
+            // Includes the trailing SFPU drain before the pack below.
+            pack_remove_msb_values<TOPK_XL_K>(SLOT0);
+        }
+
+        std::uint32_t res = r * RESULT_TILES_PER_ROW;
+        // Value / fused region of slot0: Dest tiles [SLOT0 .. SLOT0 + TILES_PER_SEQ - 1].
+        for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+        {
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[res++]));
+        }
+        if constexpr (!INDEX_OP_REMOVE_MSB)
+        {
+            // Index region of slot0: Dest tiles [SLOT0 + TILES_PER_SEQ .. +2*TILES_PER_SEQ - 1].
+            for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+            {
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + TILES_PER_SEQ + t, L1_ADDRESS(params.buffer_Res[res++]));
+            }
+        }
+
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
+}
+
+#endif // LLK_TRISC_PACK

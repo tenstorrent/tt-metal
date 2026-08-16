@@ -359,6 +359,69 @@ load addresses — so the merge's full trick (swap **and** store on the macro) a
 wholesale, unlike the multi-level bodies measured here. That is dead weight at K=512
 (rsf=1 skips both) but a large share of the K=2048 rebuild.
 
+## 0a-quinquies. K=1024/2048: the full macro trick lands, step reaches 1.255x
+
+The K=512 rebuild only got 1.069x because its lattice bodies are multi-level — only the
+first level has both operands freshly loaded, so only it can ride a macro. At K>=1024 the
+`canonical_big_block` sub-blocks A and B are **single-level** bodies whose store address
+equals their load address, so the merge's *full* trick (swap **and** store on the macro)
+applies wholesale. Verified structurally before building: `bitonic_sort_len_k` is exactly
+4 `SFPSWAP` (`ckernel_sfpu_topk_xl.h:830`), and the header's own comment (`:1064-1066`)
+confirms rsf=1 at K=512 compiles both sub-blocks away.
+
+| rebuild, cyc/call | K=512 | K=1024 | K=2048 |
+| :--- | ---: | ---: | ---: |
+| shipping | 374 | 822 | 1810 |
+| Dst transposes | 143 (38.2%) | 275 (33.5%) | 539 (29.8%) |
+| big block | 120 (32.1%) | 336 (40.9%) | 860 (47.5%) |
+| **sub-A + sub-B share** | **0.0%** | **12.2%** | **21.8%** |
+
+The `RbSubABMacro` arm measures **4 cycles at K=512** — the bracket around an empty body —
+which is direct measured confirmation that both sub-blocks are `if constexpr`'d away there.
+
+**Body 20 instr / 24 cyc -> 14 instr / 14 cyc, predicted and measured exactly:**
+
+| arm | K=1024 pred/meas | K=2048 pred/meas |
+| :--- | ---: | ---: |
+| RbCallSched (first-level only) | 774 / **774** | 1714 / **1714** |
+| **RbCallFull** | **734 / 734** | **1554 / 1554** |
+
+**Rebuild 822 -> 734 (1.120x) and 1810 -> 1554 (1.165x).**
+
+**Key enabler, and it is what makes this profitable:** no `Mod1 = 9` and no mid-block
+template reprogramming are needed. `bitonic_sort_len_k`'s own operand order already puts
+the macro-reachable half (`macroVD`) where the macro's store belongs, and sub-A/B share
+sub-C's template VC set. One Sequence word with the Store slot **always on** serves all
+three phases — in the build phase and sub-C the extra macro store is a redundant write to
+an address the body's own closing `store16_rows_x2` overwrites anyway. Reprogramming
+`Sequence[0..3]` four times per rebuild would have cost 48 cycles and made **K=1024 a net
+loss**.
+
+**Reduction step (merge + rebuild), the number that matters:**
+
+| K | shipping | ours | speedup |
+| ---: | ---: | ---: | ---: |
+| 512 | 459 | 404 | 1.136x |
+| 1024 | 987 | 817 | **1.208x** |
+| 2048 | 2135 | 1701 | **1.255x** |
+
+The macro merge also scales *better* at higher K — 171->78 (2.19x) and 331->142 (2.33x)
+versus 1.978x at K=512 — because its fixed ~11-cycle envelope amortizes.
+
+**Correctness 76/76 on silicon**, independently re-run, including
+`num_chunks=4` at every K (three chained merge+rebuild pairs — the only configuration that
+catches a mis-ordered run, per the bug recorded above), with **two** mutation controls: one
+clearing the Simple byte's `0x80` (proves the swap works) and a new one zeroing the **Store**
+byte (proves the macro-scheduled `SFPSTORE` is load-bearing — the half that is new here).
+
+**Sub-block C has nothing left:** 60 cyc shipping, 54 with its first level on macros,
+against an SFPU floor of 50. Levels 2-5 read level 1's outputs so no load remains to attach
+them to, and its stores cannot ride a macro (the register is rewritten four more times and
+the Store delay field is 2 bits). ~1% of the call.
+
+At K=2048 the residual 1554 cycles are 539 Dst transpose (35%, proven irreducible), 354
+build, ~650 big block, 9 envelope.
+
 ## 0b. Architectural Discoveries
 
 Everything in this section was established on Blackhole silicon during this work and is
