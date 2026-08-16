@@ -324,9 +324,10 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
 // ---------------------------------------------------------------------------
 
 // Slice-count cap: the in-place merge tree needs only one 2-sequence recv CB
-// per core (16 KB at K=2048), so L1 no longer binds P; 64 is kept as the
-// documented num_slices envelope (6 tree levels) and the tested range.
-constexpr uint32_t max_column_slices = 64;
+// per core (16 KB at K=2048), so L1 does not bind P; the envelope is 7 tree
+// levels (128 slices). In practice P is bound first by the worker-grid
+// rectangle capacity (e.g. 13x10 = 130 on P150) and the chunk count.
+constexpr uint32_t max_column_slices = 128;
 
 namespace {
 
@@ -381,22 +382,38 @@ ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint
     // Cost model in merge units: processing one chunk locally
     // (copy + lsb + fused sort + index split + merge + rebuild) ~ 2 units,
     // one tree merge+rebuild ~ 1 unit. With the log-tree the serial term is
-    // ceil(log2 P), so leaf work dominates: take P as large as the chunk
-    // count allows (every slice must own >= 1 chunk).
-    const auto rect_capacity = static_cast<uint32_t>(grid.x * grid.y);
-    uint32_t num_slices = std::min({num_chunks, max_slices, rect_capacity});
-
-    // Tree cores must form a rectangle.
+    // ceil(log2 P), so cost(P) = 2*ceil(chunks/P) + ceil(log2 P). Tree cores
+    // must form a rectangle, so search every a x b rectangle that fits the
+    // grid (a <= grid.x, b <= grid.y, a*b <= min(chunks, max_slices)) and
+    // take the cheapest P; ties prefer fewer cores. This beats the previous
+    // full-rows-only fit (e.g. 32 chunks on a 13x10 grid: 8x4 = 32 slices vs
+    // 13x2 = 26; 128+ chunks: 8x8 = 64 vs 13x4 = 52).
+    const uint32_t slice_ceiling = std::min(num_chunks, max_slices);
+    uint32_t num_slices = 0;
     uint32_t local_grid_x = 0;
     uint32_t local_grid_y = 0;
-    fit_slices_to_grid(grid, num_slices, local_grid_x, local_grid_y);
+    uint32_t best_cost = std::numeric_limits<uint32_t>::max();
+    for (uint32_t a = 1; a <= static_cast<uint32_t>(grid.x); ++a) {
+        for (uint32_t b = 1; b <= static_cast<uint32_t>(grid.y); ++b) {
+            const uint32_t p = a * b;
+            if (p < 2 || p > slice_ceiling) {
+                continue;
+            }
+            const uint32_t cost = 2 * tt::div_up(num_chunks, p) + tree_levels(p);
+            if (cost < best_cost || (cost == best_cost && p < num_slices)) {
+                best_cost = cost;
+                num_slices = p;
+                local_grid_x = a;
+                local_grid_y = b;
+            }
+        }
+    }
     if (num_slices < 2) {
         return config;
     }
 
-    const uint32_t cost_column = 2 * tt::div_up(num_chunks, num_slices) + tree_levels(num_slices);
     const uint32_t cost_row = 2 * num_chunks;  // single row -> single core on the row-parallel path
-    if (cost_column >= cost_row) {
+    if (best_cost >= cost_row) {
         return config;
     }
 
@@ -530,7 +547,7 @@ void set_runtime_args_multi_core(
     const uint32_t num_slices = static_cast<uint32_t>(shared.cores.size());
     const uint32_t num_levels = tree_levels(num_slices);
     TT_FATAL(
-        num_levels <= 6, "topk_large_indices merge tree supports at most 6 levels (64 slices), got {}", num_levels);
+        num_levels <= 7, "topk_large_indices merge tree supports at most 7 levels (128 slices), got {}", num_levels);
 
     const auto slices = compute_slice_runtime(n, llk_k, num_slices, valid_length);
     auto* device = input.device();
@@ -563,7 +580,9 @@ void set_runtime_args_multi_core(
             }
         }
         uint32_t num_merges = 0;
-        std::vector<uint32_t> partner_coords(12, 0);
+        // 7 (x, y) pairs — must match the writer kernels' partner_x/y[7] and
+        // the positional offsets of the args that follow (do_ship at 16).
+        std::vector<uint32_t> partner_coords(14, 0);
         for (uint32_t level = 0; level < winning_levels; ++level) {
             const uint32_t partner = i + (1u << level);
             if (partner < num_slices) {

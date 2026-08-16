@@ -105,19 +105,20 @@ FORCE_INLINE void issue_contiguous_row_write(
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t num_recv = get_arg_val<uint32_t>(1);
-    // Up to 6 (x, y) physical-coordinate pairs of the partners this core
-    // receives from, in level order (P <= 64 -> <= 6 levels).
-    uint32_t partner_x[6];
-    uint32_t partner_y[6];
-    for (uint32_t m = 0; m < 6; ++m) {
+    // Up to 7 (x, y) physical-coordinate pairs of the partners this core
+    // receives from, in level order (P <= 128 -> <= 7 levels). Offsets must
+    // match the factory's partner_coords(14) writer-args block.
+    uint32_t partner_x[7];
+    uint32_t partner_y[7];
+    for (uint32_t m = 0; m < 7; ++m) {
         partner_x[m] = get_arg_val<uint32_t>(2 + 2 * m);
         partner_y[m] = get_arg_val<uint32_t>(3 + 2 * m);
     }
-    const uint32_t do_ship = get_arg_val<uint32_t>(14);
-    const uint32_t winner_x = get_arg_val<uint32_t>(15);
-    const uint32_t winner_y = get_arg_val<uint32_t>(16);
-    const uint32_t is_empty_ship = get_arg_val<uint32_t>(17);
-    const uint32_t indices_addr = get_arg_val<uint32_t>(18);
+    const uint32_t do_ship = get_arg_val<uint32_t>(16);
+    const uint32_t winner_x = get_arg_val<uint32_t>(17);
+    const uint32_t winner_y = get_arg_val<uint32_t>(18);
+    const uint32_t is_empty_ship = get_arg_val<uint32_t>(19);
+    const uint32_t indices_addr = get_arg_val<uint32_t>(20);
 
     constexpr uint32_t cb_ship_values = get_compile_time_arg_val(0);
     constexpr uint32_t cb_ship_indices = get_compile_time_arg_val(1);

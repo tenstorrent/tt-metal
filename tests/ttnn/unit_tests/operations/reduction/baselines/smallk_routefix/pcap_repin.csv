@@ -1,0 +1,7 @@
+k,W,op_us,op_cores,opstock_us,opstock_cores,routed_us,routed_cores,stocknow_us,stocknow_cores,prebranch_us,prebranch_cores,roofline_us,gap_op_vs_roofline,gap_routed_vs_roofline,speedup_prebranch_over_routed,speedup_prebranch_over_op,speedup_opstock_over_op,status
+512,32768,11.01,64,,,86.31,64,,,,,0.876,12.57,98.48,,,,op=MEASURED routed=MEASURED
+512,65536,13.14,64,,,91.46,64,,,,,1.125,11.67,81.26,,,,op=MEASURED routed=MEASURED
+512,262144,23.31,104,,,137.12,104,,,,,2.387,9.76,57.44,,,,op=MEASURED routed=MEASURED
+2048,32768,30.28,16,,,55.84,16,,,,,1.432,21.15,38.99,,,,op=MEASURED routed=MEASURED
+2048,65536,34.41,32,,,63.46,32,,,,,1.839,18.71,34.51,,,,op=MEASURED routed=MEASURED
+2048,262144,49.64,64,,,114.03,64,,,,,3.901,12.73,29.23,,,,op=MEASURED routed=MEASURED

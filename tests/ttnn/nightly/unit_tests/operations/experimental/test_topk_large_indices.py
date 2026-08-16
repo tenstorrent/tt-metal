@@ -935,8 +935,8 @@ def test_topk_large_indices_num_slices_rejected_on_row_parallel(device, expect_e
 @pytest.mark.parametrize(
     "num_slices,match",
     [
-        (1, "num_slices must be in"),  # below [2, 64]
-        (65, "num_slices must be in"),  # above [2, 64]
+        (1, "num_slices must be in"),  # below [2, 128]
+        (129, "num_slices must be in"),  # above [2, 128]
         (48, "exceeds the row's chunk count"),  # > num_chunks (65536/2048 = 32 chunks)
     ],
 )
