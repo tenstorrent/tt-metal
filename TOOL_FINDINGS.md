@@ -98,6 +98,7 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
+| **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
 | **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` against threshold 0.99 — no range check anywhere, and the pytest exit code is deliberately ignored, so the regex scrape is the only signal | **YES — first, one line** | trivial |
 | **F6** | `mcp` is **declared nowhere** → all 10 agent tools silently absent → 11 h stall | **YES — first** | trivial |
 | **F2** | the READY verdict can never fire (`lambda _: []`); best compat report = surest failure | **YES** | one line |
@@ -3854,6 +3855,58 @@ impossible number; nothing in the system objected to it.
 Whether the underlying pytest run actually passed at the moment of that reading is not settled — the
 raw output was not retained in the transcript, only the parsed verdict. The port's real correctness
 will be re-measured directly (`pytest …::test_e2e_pcc`) once the device is free, and recorded here.
+
+---
+
+## ★★★ F43 — `TRACE_PER_TOKEN_MS` is not per token: it is per call, so throughput is wrong by the output length
+
+**Status: live in this checkout** · severity: the headline throughput metric is off by a factor of
+`OSL`, silently · reported: not yet
+
+The generated perf test times a whole forward and prints the same number twice
+(`tests/e2e/test_main_perf.py:209-228`):
+
+```python
+_iters = int(os.environ.get("TT_PERF_REPLAY_ITERS", "8"))
+for _i in range(_iters):
+    out = _forward()                       # prefill(ISL) + OSL audio frames
+    ttnn.synchronize_device(device)
+    ...
+_ms = (time.monotonic() - _t0) * 1000.0 / max(_done, 1)   # ms per CALL
+
+print("FORWARD_WALL_MS=%.4f" % _ms)
+print("TRACE_PER_TOKEN_MS=%.4f" % _ms)     # <- the SAME value, not divided by tokens
+```
+
+One call is **`PERF_ISL_TOKENS=32` prompt rows plus `PERF_OSL_TOKENS=4` audio frames**. The per-call
+wall time is published as the per-token time, so:
+
+- `TRACE_PER_TOKEN_MS` is too large by roughly `OSL` (4× here), plus the whole one-off prefill;
+- the ledger inherits it — `perf_mcp_baseline…json` records `forward_wall_ms: 598.94` and
+  `per_token_ms: 598.94`, **identical**, which is the signature of the bug;
+- `tokens_per_sec: 1.6696` is wrong by the same factor, and it is the number a reader would quote.
+
+It scales with a knob, which is what makes it dangerous: raise `TT_PERF_OSL_TOKENS` to amortise
+prefill — normally the right instinct — and the reported "per token" cost rises proportionally,
+making a *better* measurement look like a regression.
+
+### Why it matters beyond cosmetics
+
+This is the metric a port is judged and compared by. A hand-written implementation of this model
+reports **26.9 ms/frame** (RTF 0.357). Comparing that against the tool's `per_token_ms` of 598.94
+implies a ~22× gap; the true per-frame gap cannot be read off these numbers at all, because one side
+is per frame and the other is per (prefill + 4 frames). Any comparison table built from the tool's
+own output is wrong by construction, in the direction that flatters the hand-written port.
+
+### Fixes
+
+1. **Divide.** `per_token = _ms / max(PERF_OSL_TOKENS, 1)`, and keep `FORWARD_WALL_MS` as the
+   undivided call time — both are useful, they are just not the same number.
+2. **Subtract prefill, or report it separately.** A per-token metric that includes a one-off prefill
+   is not a decode rate; `TTFT_ms` already exists in the scorecard for that half and is currently
+   `NA`.
+3. **Assert the invariant.** `per_token_ms <= forward_wall_ms` whenever `OSL > 1`; equality is only
+   valid at `OSL == 1`, and the two being equal is exactly what this bug looks like.
 
 ---
 
