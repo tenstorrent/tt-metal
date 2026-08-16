@@ -56,15 +56,16 @@ compile-and-structure check on two different kernels rather than as a numeric on
 import pytest
 import torch
 from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     TILE_DIM,
     SoftmaxKGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
@@ -79,6 +80,38 @@ MAX_ROW_BASE = 8  # the caller-supplied maxima live at DEST rows 8-11
 
 # Every supported k. Odd values exercise `_zero_paired_odd_tail_lane_` -- see docstring.
 ALL_K = list(range(2, FACE_DIM + 1))
+
+
+@pytest.mark.parametrize("k", [3, 7, 15])
+def test_sfpu_softmax_k_device_profile(perf_report, k):
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch.manual_seed(0)
+    input_tile, _ = _build_input_tile(k, torch.bfloat16)
+    source = tilize_block(input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format).flatten()
+    config = PerfConfig(
+        "sources/sfpu_softmax_k_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[SOFTMAX_K(softmax_k=k)],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            source,
+            formats.input_format,
+            torch.zeros_like(source),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    config.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "SOFTMAX_K_BODY"]
+    assert len(rows) == 1, perf_report.frame().to_string(index=False)
+    print(f"SOFTMAX_K_DEVICE_PROFILE k={k} math_cycles={int(rows.iloc[0]['mean(MATH_ISOLATE)'])}")
 
 
 def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]:
