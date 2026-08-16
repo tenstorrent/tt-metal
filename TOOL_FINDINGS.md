@@ -98,6 +98,7 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
+| **F45** | `E2E_REQUIRE_TRACE` is satisfied by proving each stage CAN be captured; `run_tts` — the shipped generation path — never calls `execute_trace`, so an eager pipeline (~500 ms/frame per its own README) ships while perf is quoted from trace replay | **YES — first, with F42** | medium |
 | **F44** | the optimize objective times a capture-and-verify harness (eager pass + trace capture + 2 readbacks + release + host PCC, ONE decode step) rather than inference — so capture cost is weighted 4×/iteration and the 24-frame decode that dominates deployment enters once | **YES — with F42/F43** | medium |
 | **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
 | **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` against threshold 0.99 — no range check anywhere, and the pytest exit code is deliberately ignored, so the regex scrape is the only signal | **YES — first, one line** | trivial |
@@ -4140,6 +4141,84 @@ entirely.
    already exist as the knobs).
 4. **Report the shape next to the number.** `1466.79 ms (prefill 1 + decode 1 + flow 1 + vocode 4,
    capture+verify included)` is honest; `FULL-model end-to-end` is not.
+
+---
+
+## ★★★★ F45 — the trace gate is satisfied by proving traces are POSSIBLE; the delivered pipeline never uses them
+
+**Status: live** · severity: a model can pass "host-free / trace-capturable" and ship an eager
+pipeline ~18× slower than a traced one, with perf numbers quoted from trace replay · reported: not
+yet
+
+`E2E_REQUIRE_TRACE=1` was set for this run, and the e2e gate passed it. What that gate verifies is
+that each stage **can** be captured into a trace. It does not verify that the pipeline **does**
+capture one.
+
+`tt/pipeline.py` defines the full trace apparatus — `prefill_trace_setup/step`,
+`decode_trace_setup/step`, `flow_…`, `vocode_…` — and `trace_capture_selftest` exercises all four.
+But `execute_trace` appears **exactly once in the entire file**, at line 621, inside that selftest.
+
+`run_tts`, documented as *"THE pipeline. Real prompt -> real 24 kHz waveform, through all seven
+graduated stubs"* — the function the demo calls to make audio — contains no trace call at all. Its
+decode loop is eager, frame by frame:
+
+```python
+for i in range(n_max):
+    codes = self._run_flow(h)
+    ...
+    embeds = ttnn.concat([embeds, emb], dim=1)
+    h = self._row(self._run_backbone(self._pin(embeds, length, cap)), length - 1)
+```
+
+Every frame re-dispatches the whole 26-layer backbone from the host.
+
+### The cost, from the port's own README
+
+```
+Timings for the 8-frame gate: build ~30 s, prefill 2.2 s, decode 0.5 s/frame, codec 1.9 s
+```
+
+**~500 ms per frame, eager.** A hand-written TTNN port of this same model on the same board reports
+**26.9 ms/frame** with trace+1cq (RTF 0.357). Real time is 80 ms/frame, so the tool's port runs at
+roughly **6× slower than real time** while the hand port runs ~3× faster than it.
+
+Trace replay is not a marginal optimisation on this hardware — removing per-op host dispatch is most
+of the difference between those two numbers. The gap is not solely eager-vs-traced (implementation
+quality differs too), but eager-vs-traced is the dominant term and it is a structural choice the
+generated pipeline never made.
+
+### Why this compounds F44
+
+F44 established that the perf metric times `trace_capture_selftest`. Put together:
+
+- the number the optimizer minimises is measured **on trace replay**,
+- the pipeline that ships **does not use trace replay**,
+- so every optimisation was ranked in an execution mode the product never enters.
+
+An edit that helps traced replay and hurts eager dispatch would be banked as a win and would slow
+the delivered model down. Nothing in the loop would notice.
+
+### Why the gate let this through
+
+The requirement is phrased as capturability, and capturability is what was demonstrated. A stage
+that can be captured, executed and compared once is genuinely host-free *in that window* — the gate
+is not lying. It simply never asks the question that matters: **does the generation path replay a
+captured trace?** That question is answerable statically (`execute_trace` reachable from `run_tts`)
+and dynamically (count trace replays during a real generation).
+
+### Fixes
+
+1. **Gate on use, not on capability.** Require that the generation entry point replay a trace —
+   statically, by reachability from the demo's entry, or dynamically, by counting `execute_trace`
+   calls during a real run and failing at zero.
+2. **Wire the apparatus that already exists.** The pipeline has per-stage setup/step hooks and a
+   proven capture for each; what is missing is a decode loop that captures once and replays per
+   frame. The parts are built and unused.
+3. **Measure the mode you ship.** Either report eager numbers for an eager pipeline, or make the
+   pipeline traced and report traced numbers. Reporting trace-replay timings for an eager product is
+   the specific error, and it is what makes the perf story unfalsifiable from the outside.
+4. **State the execution mode in the report.** `RUN_REPORT.md` says nothing about whether the
+   delivered pipeline is traced or eager.
 
 ---
 
