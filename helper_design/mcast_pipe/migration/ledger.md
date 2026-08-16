@@ -1,11 +1,11 @@
-# `mcast_pipe` migration ledger — reconciled after rebase 2026-08-14
+# `mcast_pipe` migration ledger — inventory reconciled 2026-08-16
 
 Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
 `log/`. The current static audit is archived at
-`../archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md`; autonomous conflict choices are in
-`../archive/reconciliation/rebase_decisions_2026-08-14-dc9282.md`.
+`../archive/reconciliation/reconcile_2026-08-16-plan-inventory.md`; the preceding rebase audit is
+`../archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md`.
 
-- Branch: `sjovic/mcast-migration` at `91bf3957362` after replaying 58 commits.
+- Branch: `sjovic/mcast-migration`; approved rollout plan materialized at `830190c9721`.
 - Baseline: `origin/llk_helper_library` at `dc9282be7d5`.
 - Ledger API: v10.
 - Materialized helper API: v11.
@@ -20,14 +20,16 @@ owned by `apply-dm-helper`.
 |---|---:|---:|
 | migrated at ledger API v10 | 17 | 14 |
 | pending | 3 | 9 |
-| deferred | 71 | 0 |
+| deferred | 84 | 0 |
 | quarantined | 0 | 0 |
 
-All 91 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. Twelve
+All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. Twelve
 migrated kernels changed across the baseline move or conflict-composed rebase and carry
-`needs_recheck`. The recognition-family delta produced nine new raw-hit paths, but source inspection
-showed that they are generic unicast/fabric synchronization, a shared flush helper, or a generated
-example barrier rather than new intra-chip multicast-pipe candidates.
+`needs_recheck`. The approved plan audit added 13 previously omitted call-site/receiver companions: two
+Matmul Decode two-hub readers, three programming/lab example receivers, four Quasar Matmul receivers,
+and four Quasar Conv receivers. The production and Quasar `conv_reader_common.hpp` files are recorded as
+atomic-scope support dependencies, not false call-site rows. Deferred factories are mapped in the reconcile
+report; `host_bindings` retains its convention of migrated or source-integrated pending bindings only.
 
 ## Migrated units awaiting API-v11 re-entry
 
@@ -71,7 +73,7 @@ design gap and continues to use the established raw primitive path.
 
 ## Deferred backlog
 
-Seventy-one entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+Eighty-four entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
 The major classes are:
 
 - genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;

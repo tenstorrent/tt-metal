@@ -42,11 +42,28 @@ Claude independently read the plan, ledger, and reconciliation skill. Recommenda
 - Preserve the dirty submodule; use no rebase/push/reset/worktree; stop a unit on API, LOC,
   correctness, coverage, or performance gate failure and leave no half-migrated production edits.
 
+### C2 — Appendix-B reconciliation schema and classifications
+
+The first broad Claude invocation was terminated after ten minutes without output. A bounded retry with
+the same required command returned `REVISE`; all corrections were incorporated:
+
+- Use exact controlled-vocabulary family names.
+- Classify the programming Matmul receiver as `matmul / receiver / clean`, not an example `ref`.
+- Classify the two Matmul Decode readers as `refactor-high` pending their prototype-first Tier-3 gate,
+  rather than prejudging them `defer`.
+- Classify Quasar in0 receiver twins `refactor-high` to match current production truth; keep Quasar in1
+  and Conv weight receivers `clean`.
+- Reuse/extend existing family annotations; create only the genuinely new Matmul Decode protocol document.
+- Keep deferred factories out of `host_bindings` and document their complete companion map in the report.
+
+Claude confirmed the 13 paths exactly match Appendix B, both support headers are correctly excluded from
+ledger rows, no 14th candidate exists, and there is no integrity blocker.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | in progress | Auditing current tree against plan Appendices A/B before pre-approved write-back |
+| Reconciliation | complete | 104 unique entries: 17 migrated, 3 pending, 84 deferred; no removal/rename/clobber |
 | Tier 0.1 Matmul in0 interleaved | pending | Historical matched performance checkout is not authorized; verification can proceed |
 | Tier 0.2 Matmul in0 block-sharded | pending | Matched performance evidence exists in archived 2026-08-07 plan |
 | Tier 1.6 DeepSeek sampling | pending | Required behavior and test collection not started |
@@ -61,3 +78,6 @@ Claude independently read the plan, ledger, and reconciliation skill. Recommenda
    is authorized or planned.
 3. Confirmed `helper_design/mcast_pipe/plan.md` already records user approval dated 2026-08-16,
    including D4/D5 deferrals.
+4. Reconciliation matched the approved boundary exactly. Added 13 kernel/receiver rows, kept two
+   `conv_reader_common.hpp` headers support-only, regenerated the deferred factory map in
+   `archive/reconciliation/reconcile_2026-08-16-plan-inventory.md`, and preserved all existing rollout state.

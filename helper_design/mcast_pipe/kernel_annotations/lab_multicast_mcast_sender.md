@@ -44,3 +44,12 @@ not production. Like all didactic examples → **ref**, not a migration target.
 **REF / DEFER** — didactic example, double-buffered single-sender star, raw API. Closest sibling to the
 `ref` `coordinator_kernel.cpp`; a clean reference of the flag-style sender (flush-then-barrier, CB-pointer
 sync) but not a fleet migration target. Useful as a Pipe-shape reference, not migrated.
+
+## Receiver companion: `mcast_receiver.cpp`
+
+Added to the ledger by reconciliation on 2026-08-16. For every tile, the receiver reserves one CB slot,
+clears its local `tile_sent` flag, increments the sender's ready counter, waits for `VALID`, and publishes
+the tile. This exactly mirrors the sender's repeated pre-handshake and flag broadcast.
+
+Role: **receiver**. Tag/status: **ref / deferred (D5 example scope)**. The host binding is
+`ttnn/examples/lab_multicast/lab_multicast.cpp`; `write_tiles.cpp` remains helper-neutral.

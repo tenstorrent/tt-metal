@@ -25,3 +25,13 @@ Role: SENDER (didactic, single-shot). The cleanest reference block in the group.
 ## HOLE flags
 - Data mcast and sem mcast use **separate `get_noc_multicast_addr` calls** for the same rectangle (lines 57 vs 63) — Pipe should build the rectangle once and reuse.
 - No NOC1 coordinate swap here (assumes noc 0). Receiver-grid coord-swap (seen in other kernels) is a HOLE the helper must own.
+
+## Receiver companion: `inbound_kernel.cpp`
+
+Added to the ledger by reconciliation on 2026-08-16. The same example host binds this receiver on every
+inbound core. It reserves the destination CB, clears its local receiver flag, increments the coordinator's
+ready counter, waits for `VALID`, and publishes the received tile. The later local CB-to-CB copy and store
+drain are operation-owned and outside the multicast pipe.
+
+Role: **receiver**. Tag/status: **ref / deferred (D5 example scope)**. This is the textbook receiver half of
+the coordinator protocol, not a separate migration unit.

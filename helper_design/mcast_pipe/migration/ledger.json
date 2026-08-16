@@ -2347,9 +2347,230 @@
         "quasar-metal2-port"
       ],
       "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Tier 3 unit 18: full-width two-hub gather/broadcast. Two hubs multicast disjoint regions into the same destination CB and each increments one shared count-of-two completion semaphore. Prototype composition of two no-pre-handshake Counter pipes before deciding whether the helper single-sender-per-receiver invariant requires deferral.",
+      "flags": [
+        "two-hub-shared-destination",
+        "prototype-required"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_partial_width_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Tier 3 unit 18: partial-width byte-identical twin of the full-width two-hub gather/broadcast. Two hubs multicast disjoint regions into the same destination CB and each increments one shared count-of-two completion semaphore. Prototype composition before a final disposition.",
+      "flags": [
+        "two-hub-shared-destination",
+        "prototype-required"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
+      "op_family": "matmul",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D5 programming-example scope deferral. Textbook receiver back-halves for both operands; atomic companion of the already-inventoried reuse-mcast example sender/mixed kernels.",
+      "flags": [],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "receiver",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D5 didactic receiver companion of coordinator_kernel.cpp: clear local flag, increment coordinator readiness counter, wait for VALID, then publish the received CB tile.",
+      "flags": [],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "receiver",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D5 didactic receiver companion of lab mcast_sender.cpp; repeated clear/ready-increment/VALID-wait receive loop.",
+      "flags": [],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Receiver twin mirrors the current production in0 receiver's refactor-high verdict, including the batch-valid wait_min/mailbox branch.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 receiver replacement for the Quasar in0 path; mirrors the current production in0 receiver's refactor-high verdict and retains the Quasar mailbox caveat.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Canonical in1 receiver back-half paired with the inventoried sender/writer kernel; output writer logic remains operation-owned.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 replacement for the canonical in1 receiver/writer path; multicast receive protocol matches the non-Metal2 twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Canonical 1D Conv weights/bias receiver companion of the inventoried sender twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 replacement for the canonical 1D Conv weights/bias receiver; protocol matches the non-Metal2 twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Canonical 2D Conv weights/bias receiver companion of the inventoried sender twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 replacement for the canonical 2D Conv weights/bias receiver; protocol matches the non-Metal2 twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
     }
   ],
-  "reconciled": "2026-08-14",
+  "reconciled": "2026-08-16",
   "current_api_version": 10,
   "baseline_ref": "origin/llk_helper_library @ dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
   "reconcile_history": [
@@ -2541,6 +2762,44 @@
       "approval": "The user explicitly requested a fully automated rebase and authorized autonomous conflict and reconciliation decisions, replacing the normal human mutation gates; decisions are archived in rebase_decisions_2026-08-14-dc9282.md.",
       "validation": "Reconciliation itself was static. The enclosing rebase workflow completed ./build_metal.sh, Sort focused/expanded tests, mcast_pipe helper and source-audit suites, McastHostFixture, and focused Matmul, TopK, GroupNorm Welford, and LayerNorm pre-allgather probes successfully.",
       "follow_up": "Run apply-dm-helper verify-only against the 12 needs_recheck kernels with their complete mapped inventories; retain the three existing pending and 71 deferred rows unchanged."
+    },
+    {
+      "date": "2026-08-16",
+      "report": "archive/reconciliation/reconcile_2026-08-16-plan-inventory.md",
+      "base_from": "db246d49b89978d436d944d57f0ba326ef698416 (approved plan head)",
+      "base_to": "830190c9721 (plan/tracker materialized; production source unchanged)",
+      "api_version": "ledger 10; helper header 11 (unchanged)",
+      "buckets": {
+        "unchanged": 91,
+        "added": 13,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 0
+      },
+      "added_entries": [
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_partial_width_sharded.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
+        "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
+        "ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp"
+      ],
+      "support_only": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/conv_reader_common.hpp"
+      ],
+      "host_bindings": "Regenerated factory companion map is archived in the report. Deferred factories were not added to host_bindings, whose established schema contains only migrated or source-integrated pending bindings.",
+      "approval": "The user approved helper_design/mcast_pipe/plan.md and requested unattended execution. The audit exactly matched Appendix B, with no unapproved removed, renamed, clobbered, or additional candidate row.",
+      "claude_review": "REVISE then incorporated: controlled-vocabulary family names, prototype-gated refactor-high tags, production-twin truth for Quasar in0 receivers, existing annotation-family reuse, and report-only deferred host mappings.",
+      "follow_up": "Run the approved Tier 0, Tier 1 unit 6, and Tier 2 units 7-9 apply scope. Verify-only the 12 needs_recheck kernels before Tier-0 write-back."
     }
   ]
 }

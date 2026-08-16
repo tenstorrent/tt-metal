@@ -1,15 +1,16 @@
 # quasar/matmul mcast call sites — annotation (added by reconcile 2026-06-27)
 
-**Group decision (recorded in ledger):** all 8 files → `status=deferred`, flag `quasar-metal2-port`
+**Group decision (recorded in ledger):** all 12 files → `status=deferred`, flag `quasar-metal2-port`
 (the `..._block_sharded_metal2.cpp` file additionally carries flag `hang:#47797`). The subtree is an
 **actively-churning Metal-2.0 API port** of the production matmul readers already censused as P1–P4;
 migrating it now would triple the surface for the same four patterns with **zero new hazard coverage**.
 Each file keeps its **intrinsic eventual target tag** below (clean ×those / refactor ×those /
 defer for in1_ring_all_gather) so the durable record points at the right migration when the port stabilizes.
 
-All 8 live under `ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/`.
+All 12 live under `ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/`.
 **All use the modern OBJECT API** (`Noc`, `Semaphore<>`, `MulticastEndpoint`, `NocOptions::MCAST_INCL_SRC`,
-`CoreLocalMem`) — no raw free functions. `op_family: matmul` for every entry.
+`CoreLocalMem`) — no raw free functions. Ledger family:
+`quasar (experimental metal 2.0 port)` for every entry.
 
 ## `_metal2` relationship (host-binding-only fork; COEXISTS, not a replacement)
 Each `_metal2` file is a fork of its non-metal2 sibling whose **algorithm body is byte-for-byte identical**
@@ -136,3 +137,21 @@ L127-128, L178-181) → flag `hang:#47797`.
 
 When the port stabilizes and the DEBUG scaffolding is stripped, the metal2 forks become the single live
 target; the clean P1 senders (#3, #8) are the safest entry points.
+
+## Receiver companions added 2026-08-16
+
+Four factory-bound receiver paths were missing from the ledger:
+
+- `reader_bmm_tile_layout_in0_receiver.cpp`
+- `reader_bmm_tile_layout_in0_receiver_metal2.cpp`
+- `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp`
+- `reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp`
+
+The in0 pair clears its receiver semaphore, increments the current sender, waits for data readiness, then
+publishes the CB. Its batch-sparsity branch also observes a `wait_min` result and forwards validity through
+an operation-owned mailbox, so it inherits the production receiver's **refactor-high** verdict rather than
+the stale clean verdict of the Quasar sender twin. The in1 pair is the canonical receiver back-half and is
+**clean**; output writer behavior in the same files remains operation-owned.
+
+The 1D/2D and sparse Quasar factories bind the original paths where applicable, while the Metal2 create
+paths bind the `_metal2` replacements. All four remain deferred by the user-directed D4 scope decision.

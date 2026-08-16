@@ -1,6 +1,6 @@
 # quasar/conv2d mcast call sites — annotation (added by reconcile 2026-06-27)
 
-**Ledger state:** all 8 kernels below are recorded `status=deferred` with flag `quasar-metal2-port`. The three
+**Ledger state:** all 12 kernels below are recorded `status=deferred` with flag `quasar-metal2-port`. The three
 `_metal2` forks that carry active debug instrumentation —
 `reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2_metal2.cpp`,
 `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp`,
@@ -9,12 +9,12 @@
 refactor activation hybrids / defer for the deadlocking v2_metal2), *not* a green-light — the whole group is
 gated behind "quasar metal-2.0 port lands + #47797 act-mcast/weights-mcast hang closed".
 
-All 8 are Metal-2.0-port copies of EXISTING census conv twins (same basenames under
+All 12 are Metal-2.0-port copies of EXISTING census conv twins (same basenames under
 `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/`). The mcast+handshake block — the part `mcast_pipe`
 cares about — is **byte-for-byte identical** between each non-metal2 / `_metal2` pair; the `_metal2` file is a
 **host-binding-only fork that REPLACES** the legacy kernel for the quasar factory, never a coexisting runtime
 variant. All 8 use the OBJECT API (`Noc::`, `Semaphore<>::`, `MulticastEndpoint`/`McastDst`) — no raw free
-functions. `op_family: conv` for every entry.
+functions. Ledger family: `quasar (experimental metal 2.0 port)` for every entry.
 
 The `_metal2` delta in every pair (does NOT touch the handshake protocol):
 - CB-index CTAs → `dfb::` tokens; sem-id CTAs → `sem::`; remaining positional CTAs → `get_arg(args::name)`
@@ -162,3 +162,18 @@ ACT is single-producer; FUSE_BIAS / SPLIT_READER `#ifdef`-gated.
 localization scheme — `rb_wcnt` load counter `L33`, `WATCHER_RING_BUFFER_PUSH` markers `0xE1` pre-reserve `L216`,
 `0xE2` pre-wait-bumps `L243`, `0xE3` mcast-done `L272` (marker layout comment `L30`). Pattern is clean, but the
 file is mid-bringup for the #47797 weights-mcast hang — defer-while-debugging.
+
+## Weight receiver companions added 2026-08-16
+
+The factory-bound receiver halves were missing from the ledger:
+
+- 1D weights receiver, original and `_metal2`.
+- 2D weights receiver, original and `_metal2`.
+
+Each is a canonical **clean receiver**: reserve the weights or bias CB, clear the local readiness flag,
+increment the sender's consumer counter, wait for `VALID`, then publish the CB block. The original and
+Metal2 bodies express the same protocol with different host-binding surfaces. The Quasar sharded Conv
+factory selects these companions alongside the already-inventoried sender paths.
+
+All four remain deferred by D4. They add no new helper behavior and do not change the unresolved debug
+status of the sender/activation files.
