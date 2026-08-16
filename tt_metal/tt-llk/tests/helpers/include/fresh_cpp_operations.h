@@ -45,6 +45,31 @@ __attribute__((noinline)) void calculate_signbit_fresh_cpp() {
     }
 }
 
+template <int ITERATIONS>
+inline void calculate_sigmoid_appx_pwl_fresh_cpp() {
+    // The same piecewise-linear function the production kernel computes,
+    // stated as ordinary typed C++: six disjoint |x| ranges select an
+    // (A, B) pair, one fused multiply-add, sign restore, +0.5.  Every
+    // coefficient below is exactly representable in the fp16 LUT entry
+    // format (they are the decoded production table values); the range
+    // breakpoints are {0.5, 1, 1.5, 2, 4}.
+    for (int row = 0; row < ITERATIONS; ++row) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat ax = sfpi::abs(x);
+        sfpi::vFloat a = 0.0f;
+        sfpi::vFloat b = 0.499755859375f;
+        v_if (ax < 0.5f)                { a = 0.2452392578125f;   b = -0.000499725341796875f; } v_endif;
+        v_if (ax >= 0.5f && ax < 1.0f)  { a = 0.21728515625f;     b = 0.01519775390625f; }      v_endif;
+        v_if (ax >= 1.0f && ax < 1.5f)  { a = 0.173095703125f;    b = 0.05987548828125f; }      v_endif;
+        v_if (ax >= 1.5f && ax < 2.0f)  { a = 0.126220703125f;    b = 0.1297607421875f; }       v_endif;
+        v_if (ax >= 2.0f && ax < 4.0f)  { a = 0.048492431640625f; b = 0.2998046875f; }          v_endif;
+        sfpi::vFloat r = a * ax + b;
+        r = sfpi::copysgn(r, x);
+        sfpi::dst_reg[0] = r + 0.5f;
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool IS_MAX, int ITERATIONS>
 inline void calculate_binary_max_min_fresh_cpp(
     const std::uint32_t dst_index_in0,
