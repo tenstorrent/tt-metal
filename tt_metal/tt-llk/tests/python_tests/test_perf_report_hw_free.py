@@ -5,7 +5,7 @@
 """Hardware-free test of PerfConfig report generation (#51244).
 
 Runs the real report code with no chip and checks the produced columns against
-perf_wide_schema.OUTPUT_SCHEMA. Two levels:
+helpers.perf.wide_schema.OUTPUT_SCHEMA. Two levels:
   - build_report_frame directly, with synthetic per-run-type stat frames;
   - the full PerfConfig.run(), with the device/build seams stubbed and
     Profiler.get_data returning synthetic events (so the real stat aggregation
@@ -21,9 +21,14 @@ from types import SimpleNamespace
 
 import pandas as pd
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
-from helpers.perf import PerfConfig, PerfReport
-from helpers.perf_schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
-from helpers.perf_wide_schema import DROPPED_COLUMNS, OUTPUT_SCHEMA
+from helpers.perf.core import (
+    PerfConfig,
+    PerfReport,
+    combine_perf_reports,
+    postprocess_tile_loop,
+)
+from helpers.perf.schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
+from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import APPROX_MODE, LOOP_FACTOR, TILE_COUNT
@@ -81,7 +86,7 @@ def test_report_columns_conform_to_output_schema():
     # Every produced column must be a known output-schema column.
     unknown = sorted(set(combined.columns) - _SCHEMA_NAMES - DROPPED_COLUMNS)
     assert not unknown, (
-        f"PerfConfig produced columns not in perf_wide_schema.OUTPUT_SCHEMA: "
+        f"PerfConfig produced columns not in helpers.perf.wide_schema.OUTPUT_SCHEMA: "
         f"{unknown}. Either the report changed (add them to OUTPUT_SCHEMA as "
         f"nullable) or a column is malformed."
     )
@@ -237,3 +242,69 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     frame = _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
     assert stat_column("MATH_ISOLATE", MEAN) in frame.columns
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
+
+
+def test_postprocess_tile_loop_derives_per_tile_from_raw():
+    # Public per-tile derivation used downstream on the RAW (Parquet/CSV) table.
+    raw = pd.DataFrame(
+        {
+            MARKER: ["INIT", "TILE_LOOP"],
+            "loop_factor": [1, 2],
+            "tile_cnt": [4, 4],
+            stat_column("MATH_ISOLATE", MEAN): [100.0, 80.0],  # TILE_LOOP total = 80
+            # a run-type-prefixed bounded %-metric — must NOT be divided
+            "L1_TO_L1_mean(fpu_utilization_pct)": [50.0, 60.0],
+        }
+    )
+
+    out = postprocess_tile_loop(raw.copy())
+
+    tl = out[out[MARKER] == "TILE_LOOP"].iloc[0]
+    init = out[out[MARKER] == "INIT"].iloc[0]
+    # TILE_LOOP wall-clock divided by loop_factor(2) * tile_cnt(4): 80 / 8 = 10
+    assert tl[stat_column("MATH_ISOLATE", MEAN)] == 10.0
+    # non-TILE_LOOP row untouched
+    assert init[stat_column("MATH_ISOLATE", MEAN)] == 100.0
+    # the prefixed %-metric column is left alone even on the TILE_LOOP row
+    assert tl["L1_TO_L1_mean(fpu_utilization_pct)"] == 60.0
+
+
+def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch):
+    # A run publishes both CSV and a run-level Parquet batch (raw frames), with
+    # provenance stamped from the CI environment.
+    import pyarrow.parquet as pq
+
+    workers = tmp_path / "workers"
+    workers.mkdir()
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("GITHUB_SHA", "testsha")
+    monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)  # -> pipeline "nightly"
+
+    # one raw per-worker CSV (the .gw* pattern combine globs for)
+    pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "loop_factor": [1, 1],
+            stat_column("MATH_ISOLATE", MEAN): [10.0, 20.0],
+        }
+    ).to_csv(workers / "perf_x.gw0.csv", index=False)
+
+    combine_perf_reports()
+
+    # CSV still produced...
+    assert (root / "perf_data" / "perf_x" / "perf_x.csv").exists()
+    # ...and a run-level Parquet batch alongside it.
+    parquet = root / "perf_data" / "testrun.parquet"
+    assert parquet.exists()
+    table = pq.read_table(parquet)
+    assert table.schema.names == [c.name for c in DB_SCHEMA]
+    df = table.to_pandas()
+    assert set(df["test_name"]) == {"perf_x"}
+    assert set(df["arch"]) == {"wormhole"}
+    assert set(df["commit_sha"]) == {"testsha"}
+    assert set(df["pipeline"]) == {"nightly"}
