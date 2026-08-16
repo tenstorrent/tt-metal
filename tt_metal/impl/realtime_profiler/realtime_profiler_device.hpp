@@ -65,8 +65,6 @@ struct RealtimeProfilerDevice {
     // past-watermark records — a probe outage longer than a FIFO fill — where the evicted records
     // earn fallback pricing anyway. Ends are monotone (dispatch_s stamps serially).
     RingBuffer<PendingRealtimeRecord> pending_records{RealtimeProfilerRuntimeSizes::fifo_pages};
-    // Pages consumed but not yet acked to the device (see the receiver's kAckBatchPages).
-    uint32_t unacked_pages = 0;
     bool fifo_capacity_warned = false;
 
     RealtimeProfilerDevice();

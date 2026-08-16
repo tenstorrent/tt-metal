@@ -54,12 +54,6 @@ constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 // kMaxPendingFlushPerPass + kMaxSocketPagesPerRead records per device.
 constexpr size_t kMaxPendingFlushPerPass = 4096;
 
-// The ack is a posted-class store through the per-worker-core static TLB window — the
-// receiver's only chip MMIO, ~0.3 us each. Batching trades apparent FIFO headroom (the device
-// sees up to this many consumed-but-unacked pages) against ack traffic; 512 keeps the headroom
-// loss at 1.6% for well under 1% of receiver time at the stress ceiling.
-constexpr uint32_t kAckBatchPages = 512;
-
 // Floor on how often a repeating fault is logged.
 constexpr auto kWarnInterval = std::chrono::seconds(30);
 
@@ -309,12 +303,7 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
     {
         TTZoneScopedDN(RT_PROFILER, "SocketRead");
         TTZoneValueD(RT_PROFILER, num_pages_to_read);
-        dev_state.socket->read(page_buf.data(), num_pages_to_read, /*notify_sender=*/false);
-    }
-    dev_state.unacked_pages += num_pages_to_read;
-    if (dev_state.unacked_pages >= kAckBatchPages) {
-        dev_state.socket->notify_sender();
-        dev_state.unacked_pages = 0;
+        dev_state.socket->read(page_buf.data(), num_pages_to_read, /*notify_sender=*/true);
     }
 
     dev_state.clock_view->ingest_queued_probes();
@@ -357,10 +346,6 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
                 probe_demand_.reset();
                 for (RealtimeProfilerDevice& dev_state : devices_) {
                     dev_state.pending_records.clear();
-                    if (dev_state.unacked_pages != 0) {
-                        dev_state.socket->notify_sender();
-                        dev_state.unacked_pages = 0;
-                    }
                 }
             }
         }
@@ -411,10 +396,6 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(std::vector<uint32_t>& page
             dev_state.clock_view->ingest_queued_probes();
             if (!dev_state.pending_records.empty()) {
                 published_on_idle |= publish_pages(dev_state, {}, publish_batch_) != 0;
-            }
-            if (dev_state.unacked_pages != 0) {
-                dev_state.socket->notify_sender();
-                dev_state.unacked_pages = 0;
             }
         }
     }

@@ -235,10 +235,7 @@ def compute_math_utilization(
         core_count: Number of compute cores used.
         is_causal: Whether causal masking is used.
         arch: Architecture name ("blackhole" or "wormhole_b0").
-        duration_cycles: Measured duration in device clock cycles. When given, it is used
-            directly instead of duration_ns x nominal clock, which makes the metric
-            per-cycle math efficiency — independent of DVFS throttling and of how the
-            profiler's clock sync converts cycles to wall time.
+        duration_cycles: Measured duration in device clock cycles.
     """
     constants = ARCH_CONSTANTS[arch]
     mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)

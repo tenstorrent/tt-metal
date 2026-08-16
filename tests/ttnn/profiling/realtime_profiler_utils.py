@@ -32,19 +32,19 @@ def profile_realtime_program(
     dropped = [0]
 
     def collect_records(batch):
-        dropped[0] += int(batch.dropped)
+        dropped[0] += batch.dropped
         for record in batch.records:
             if profile_records and not collect_all:
                 return
 
             profile_records.append(
                 {
-                    "runtime_id": int(record.runtime_id),
-                    "chip_id": int(record.chip_id),
+                    "runtime_id": record.runtime_id,
+                    "chip_id": record.chip_id,
                     "duration_ns": record.duration_ns,
-                    "duration_cycles": int(record.end_timestamp) - int(record.start_timestamp),
-                    "frequency_ghz": float(record.frequency),
-                    "sync_error_ns": int(record.clock_sync.error_ns),
+                    "duration_cycles": record.end_timestamp - record.start_timestamp,
+                    "frequency_ghz": record.frequency,
+                    "sync_error_ns": record.clock_sync.error_ns,
                     "kernel_sources": tuple(record.kernel_sources),
                 }
             )

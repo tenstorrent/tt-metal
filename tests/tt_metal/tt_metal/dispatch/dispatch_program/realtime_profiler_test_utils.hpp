@@ -24,10 +24,6 @@
 
 namespace tt::tt_metal {
 
-// A ~40k-NOP kernel body for any RISC: long enough that a record's window is unambiguous, short
-// enough to enqueue by the hundreds. `marker_comment` embeds a distinct line for tests that
-// assert on a record's kernel_sources; leaving it empty keeps one shared source so every program
-// reuses a single JIT build instead of compiling per runtime_id.
 inline std::string rt_profiler_nop_kernel_source(const std::string& marker_comment = {}) {
     return "#include <cstdint>\n" + (marker_comment.empty() ? std::string{} : "// " + marker_comment + "\n") +
            "void kernel_main() {\n"
