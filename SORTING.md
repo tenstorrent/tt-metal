@@ -790,6 +790,72 @@ The `relu` arm's ~0 delta is suspicious: a config write that silently fails meas
 identically to baseline and reads as "compression is free". Every arm must be confirmed
 against the `PackerTileSize` readback before being believed.
 
+#### MEASURED: my own optimization hypothesis was WRONG, and the real fix is 11.9%
+
+I proposed that `topk_local_sort`'s cost was RISC-V branch overhead in the phase 0/1/2
+inner loop, and had two flags built to fix it. **Both fail. Neither should be upstreamed.**
+
+| flag | delta at end_phase 5 (what `ttnn.topk` uses) | text size |
+| :--- | ---: | :--- |
+| `TOPK_HOIST_INIT_GUARDS` | **+0.057 cyc/vec** (nothing) | identical (3907 B) |
+| `TOPK_MOP_INNER_LOOP` | **+0.698 cyc/vec (0.92% SLOWER)** | +244 B |
+| **`TOPK_REPLAY_STEP_LOAD`** | **-5.866 (-7.70%)** | +4 B |
+| **`TOPK_REPLAY_STEP_STORE`** | **-9.062 (-11.90%)** | +76 B |
+
+**Why the hypothesis was wrong.** Disassembling the *default* math ELF shows GCC had
+**already fully unrolled the d-loop and unswitched all three init guards**. The phase-0
+steady state is one out-of-line cold branch followed by twelve straight `ttreplay`
+instructions — no loop, no per-iteration test, nothing to hoist. Text size is
+byte-for-byte identical with and without the flag. Twelve RISC-V instructions drive ~96
+backend cycles there, so the frontend has **~8x slack**, and phase 0 measures 376.3
+cyc/call against a hand-count of ~384: **it was already at the SFPU backend floor.**
+`TOPK_MOP_INNER_LOOP` compresses nine already-free issues into one while paying a
+`ckernel_unpack_template::program()` per phase per (face,col), so it can only lose.
+
+**Where the cycles actually are.** Phases 4+5 are **60.6%** of the end_phase-5 cost
+(2956.8 of 4876.5 cyc/call). That loop takes a *different* code path: `dist` is a runtime
+value, so it uses `TT_SFPLOAD`/`TT_SFPSTORE` — **MMIO `sw` pushes, not `.ttinsn`** — 25
+RISC-V instructions to issue 19 Tensix instructions worth ~21 backend cycles.
+
+**Causal proof, both directions, via an injected-NOP probe:**
+
+| experiment | RISC-V instrs | delta cycles | cyc per instr |
+| :--- | ---: | ---: | ---: |
+| +8 NOPs/iter at ep0-ep3 | 0 | **+0.0** | — (self-control) |
+| +8 NOPs/iter at ep5 | +384 | +303.7 | **0.791** |
+| load16 -> 1 `ttreplay` | -336 | -375.4 | **1.117** |
+| + store16 | -672 | -580.0 | 0.863 |
+
+An injected RISC-V NOP costs **0.79 cycles of real runtime** at ep5 and **exactly 0.000**
+at ep0-ep3 — the probe is its own control. A removed MMIO push saves *more* than one
+cycle (1.117), because an instruction-FIFO push is dearer than a plain instruction.
+
+**And the fix demonstrably removes the bottleneck rather than moving it:** re-running the
+probe on the patched build drops RV sensitivity from **0.791 to 0.263** cyc/injected
+instruction — the loop converts from RISC-V-issue-bound to backend-bound.
+
+So "RISC-V-issue-bound" was **true of the phase >= 4 step loop** and "branches are the
+cost" was **false everywhere** — there are no branches in the phase 0-2 steady state at
+all. Both flags I had built targeted the one region already at the floor.
+
+**Correctness, all four flags:** `test_topk.py` 6 passed / 10 skipped, and ttnn
+`test_topk.py` **191 passed, 8 skipped, 80 xfailed** — with a positive control proving the
+header is actually reached by the ttnn JIT (an injected `#error` aborts the trisc1 build).
+
+Caveats before upstreaming the replay knobs: the STORE variant's replay window (slots
+16-31) overlaps the phase-3 lattice and is safe only because every consumer re-records
+before replaying — a fragile unstated invariant needing a comment and ideally a
+non-overlapping partition; it is Blackhole-only as written; and end_phase <= 3 callers
+pay +0.02 cyc/vec, so gate on `end_phase >= 4`.
+
+**Next target, unmeasured:** 232 of the ~1,100 Tensix instructions in phases 4+5 are
+`TTI_INCRWC` from `bitonic_topk_inc_x8_dest`, up to 16 back-to-back. Collapsing that into
+one `SETRWC` is the obvious follow-on.
+
+**Do not quote an end-to-end `ttnn.topk` number from this.** No profiler instrumentation
+in this build, so the fraction of device time in `topk_local_sort` is unmeasured. The
+-11.9% is MATH_ISOLATE for the local sort only.
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working
