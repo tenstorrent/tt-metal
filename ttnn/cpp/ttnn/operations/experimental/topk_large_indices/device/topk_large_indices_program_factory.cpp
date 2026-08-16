@@ -345,20 +345,6 @@ uint32_t tree_levels(uint32_t p) {
     return levels;
 }
 
-// Fits the slice count to the tree-core rectangle: a single row of cores when
-// it fits in grid.x, otherwise full rows. The tree root is rectangle core
-// (0, 0) — there is no separate merge core.
-void fit_slices_to_grid(const CoreCoord& grid, uint32_t& num_slices, uint32_t& local_grid_x, uint32_t& local_grid_y) {
-    if (num_slices <= grid.x) {
-        local_grid_x = num_slices;
-        local_grid_y = 1;
-    } else {
-        local_grid_x = grid.x;
-        local_grid_y = std::min<uint32_t>(num_slices / grid.x, grid.y);
-        num_slices = local_grid_x * local_grid_y;
-    }
-}
-
 // The built-in cost-model pick (no user override).
 ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid) {
     constexpr uint32_t max_slices = max_column_slices;
@@ -467,10 +453,23 @@ ColumnSplitConfig compute_column_split_config(
         llk_k);
 
     // Clamp only against the physical grid (rectangle capacity), with a warning.
-    uint32_t num_slices = requested;
+    // Honor the requested count with an exact a x b rectangle when one fits
+    // the grid (e.g. 32 = 8x4 on 13x10); otherwise fall back to the largest
+    // achievable product <= requested, with a warning. The old full-rows-only
+    // fit silently clamped 16->13, 24->13, 32->26, mislabeling P-sweeps.
+    uint32_t num_slices = 0;
     uint32_t local_grid_x = 0;
     uint32_t local_grid_y = 0;
-    fit_slices_to_grid(grid, num_slices, local_grid_x, local_grid_y);
+    for (uint32_t a = 1; a <= static_cast<uint32_t>(grid.x); ++a) {
+        for (uint32_t b = 1; b <= static_cast<uint32_t>(grid.y); ++b) {
+            const uint32_t p = a * b;
+            if (p <= requested && p > num_slices) {
+                num_slices = p;
+                local_grid_x = a;
+                local_grid_y = b;
+            }
+        }
+    }
     if (num_slices != requested) {
         log_warning(
             tt::LogOp,
