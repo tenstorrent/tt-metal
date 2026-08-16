@@ -155,6 +155,16 @@ instruction to check this.
   and it is implicit in the two side-by-side signatures rather than called out. One sentence — *"the `Program&`
   parameter goes away; the method describes rather than mutates"* — would land it faster.
 
+- **The repo's pre-commit hooks include three Metal-2.0-aware checks, and no port doc mentions them.**
+  `Detect legacy device operation classes in newly added files`, `Detect smuggled buffer-address runtime args in
+  descriptor factories`, and `Detect ProgramDescriptor rebuilds inside override_runtime_arguments` all run on
+  `git commit` and all passed here. Two of those overlap directly with
+  [anti-pattern self-audit](../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#anti-pattern-self-audit)
+  items, so they are a free second opinion on the port — a porter would benefit from knowing they exist (and
+  that a *failing* one is a real finding, not a lint nit). Also worth a heads-up that `clang-format` rejects the
+  first commit and rewrites files, so the commit has to be re-staged and re-run; that surprised me mid-verify
+  and meant re-confirming the build/tests against the reformatted tree.
+
 - **`TT_KERNEL` exists and no port doc mentions it.** `tt_metal/hw/inc/experimental/kernel_args.h:44-47` defines
   a `TT_KERNEL` marker whose signature the JIT parses to generate `kernel_main()`
   (`tt_metal/jit_build/kernel_signature_parser.hpp`). The recipe and migration guide both show plain
@@ -246,7 +256,8 @@ instruction to check this.
   `ttnn/cpp/ttnn/operations/uniform/CMakeLists.txt`; **no build-file edit was needed**, as the caution predicts.
 - **Tests:** `pytest tests/ttnn/nightly/unit_tests/operations/rand/test_uniform.py -v` (the invoker-confirmed
   no-regression baseline) — **101 passed, 0 failed** (exit 0). Every parametrisation of all four test functions,
-  across both dtypes, both `fp32_dest_acc_en` settings, and the seed/range sweep.
+  across both dtypes, both `fp32_dest_acc_en` settings, and the seed/range sweep. Run twice: once before the
+  `clang-format` pre-commit pass and once after, so the numbers above are for the tree as committed.
 
   The two that matter most for this concept both pass:
   - `test_uniform_callback` — asserts a changed `seed` does **not** grow the program cache, i.e. the cache-hit
