@@ -4529,6 +4529,66 @@ Worth stating plainly so this is not over-read. `test_e2e_pcc` drives `run_tts` 
 and it measured **0.9999834 with exact code match and zero code flips**. The port is correct. What
 is not established is anything about its speed.
 
+### WHY TWO PATHS EXIST — the stub contract and the trace contract are incompatible
+
+Established from the tool's own plan and the reference implementation, not inferred.
+
+**The HF reference is the efficient one.** `modeling_voxtral_tts.py:198 prefill_then_step` prefills
+once into a cache and then advances one position at a time:
+
+```python
+def prefill_then_step(self, inputs_embeds, step_embeds):
+    cache, P = {}, inputs_embeds.shape[1]
+    for layer in self.layers:
+        x = layer(x, cis, common.causal_bias(P, x.dtype), cache)   # prefill INTO the cache
+    for t in range(step_embeds.shape[1]):
+        x = step_embeds[:, t: t + 1]                               # ONE position
+        for layer in self.layers:
+            x = layer(x, cis_t, None, cache)                       # reuse it; no mask needed
+```
+
+So `decode_step` is the **faithful** mirror of the reference, and `run_tts` is the divergence — it
+reaches the same numbers by recomputation instead of caching.
+
+**The demo path cannot cache, structurally.** Gates 1 and 2 require it to route through the
+graduated stubs, and those stubs have no cache implementation:
+
+```python
+_stubs/attention.py:44
+    def __call__(self, h, cis=None, bias=None, cache=None, cache_key=None):
+        return self.attn(h, causal=bias is not None)     # `cache` accepted and DISCARDED
+
+tt_backbone.py:103
+    def __call__(self, h, causal=True):                  # no cache parameter at all
+```
+
+A path obliged to call those stubs has exactly one way to get the right answer: hand them the whole
+prefix again, every frame. Which is what `run_tts` does — and what the plan then **codified as the
+specification**:
+
+```json
+"gate_2_invoked": { "how": "... tts_backbone == 1 + n_frames ..." }
+```
+
+The recomputation is not an oversight the builder made; it is the invocation count the plan
+required.
+
+**The trace gate demanded the opposite.** A host-free, static-shape, single-position step is only
+possible with a resident cache — so `decode_step` had to **bypass the stubs** and inline the
+`tc.*` helpers to build one.
+
+**Root cause, and it traces back to F27.** The attention capture contained a real 208-deep KV cache;
+the harness discarded it rather than `deepcopy` it, so the component was generated *and PCC-verified*
+with no cache plumbing. Every downstream consequence follows from that single dropped argument: a
+cacheless stub → a demo path that must recompute → a plan that codifies the recomputation → a trace
+gate that cannot be met through the stubs → a second, unreachable implementation carrying all the
+performance work.
+
+**This also reframes the fix.** "Wire `decode_step` into `run_tts`" would break Gate 1 (the stubs
+would no longer be the routed bodies) and Gate 2 (`tts_backbone` would drop to 1). The real fix is
+further upstream: give the stubs the cache contract their captures already contained, so one
+implementation can satisfy correctness, invocation and trace gates at once.
+
 ### Why the demo does not simply call it — the capture is position-locked
 
 There are two reasons, and the second explains why this was not merely an oversight.
