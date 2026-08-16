@@ -6,48 +6,33 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    const auto param_addr = get_arg_val<uint32_t>(i++);
-    const auto exp_avg_addr = get_arg_val<uint32_t>(i++);
-    const auto exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
-    const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
+    const auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
+    const auto start_id = get_arg(args::start_id);
 
-    const auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto start_id = get_arg_val<uint32_t>(i++);
-
-    constexpr uint32_t cb_id_param = tt::CBIndex::c_16;
-    constexpr uint32_t cb_id_exp_avg = tt::CBIndex::c_17;
-    constexpr uint32_t cb_id_exp_avg_sq = tt::CBIndex::c_18;
-
-    constexpr auto param_args = TensorAccessorArgs<0>();
-    constexpr auto exp_avg_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
-    constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
-
-    const auto param_addrg = TensorAccessor(param_args, param_addr);
-    const auto exp_avg_addrg = TensorAccessor(exp_avg_args, exp_avg_addr);
-    const auto exp_avg_sq_addrg = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr);
+    const auto param_addrg = TensorAccessor(tensor::param_out);
+    const auto exp_avg_addrg = TensorAccessor(tensor::exp_avg_out);
+    const auto exp_avg_sq_addrg = TensorAccessor(tensor::exp_avg_sq_out);
 
 #ifdef AMSGRAD
-    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_19;
-    constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
-    const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
+    const auto max_exp_avg_sq_addrg = TensorAccessor(tensor::max_exp_avg_sq_out);
 #endif
 
     Noc noc;
-    DataflowBuffer dfb_param(cb_id_param);
-    DataflowBuffer dfb_exp_avg(cb_id_exp_avg);
-    DataflowBuffer dfb_exp_avg_sq(cb_id_exp_avg_sq);
+    DataflowBuffer dfb_param(dfb::param_out);
+    DataflowBuffer dfb_exp_avg(dfb::exp_avg_out);
+    DataflowBuffer dfb_exp_avg_sq(dfb::exp_avg_sq_out);
 #ifdef AMSGRAD
-    DataflowBuffer dfb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
+    DataflowBuffer dfb_max_exp_avg_sq(dfb::max_exp_avg_sq_out);
 #endif
 
-    const auto param_tile_bytes = get_tile_size(cb_id_param);
-    const auto exp_avg_tile_bytes = get_tile_size(cb_id_exp_avg);
-    const auto exp_avg_sq_tile_bytes = get_tile_size(cb_id_exp_avg_sq);
+    const auto param_tile_bytes = dfb_param.get_tile_size();
+    const auto exp_avg_tile_bytes = dfb_exp_avg.get_tile_size();
+    const auto exp_avg_sq_tile_bytes = dfb_exp_avg_sq.get_tile_size();
 #ifdef AMSGRAD
-    const auto max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
+    const auto max_exp_avg_sq_tile_bytes = dfb_max_exp_avg_sq.get_tile_size();
 #endif
 
     constexpr uint32_t onetile = 1;

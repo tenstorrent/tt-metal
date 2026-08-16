@@ -9,60 +9,36 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    const auto param_addr = get_arg_val<uint32_t>(i++);
-    const auto grad_addr = get_arg_val<uint32_t>(i++);
-    const auto exp_avg_addr = get_arg_val<uint32_t>(i++);
-    const auto exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
-    const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
+    const auto lr = get_arg(args::lr);
+    const auto beta1 = get_arg(args::beta1);
+    const auto beta2 = get_arg(args::beta2);
+    const auto eps = get_arg(args::eps);
+    const auto weight_decay = get_arg(args::weight_decay);
+    const auto beta1_exponent = get_arg(args::beta1_exponent);
+    const auto beta2_exponent = get_arg(args::beta2_exponent);
 
-    const auto lr = get_arg_val<uint32_t>(i++);
-    const auto beta1 = get_arg_val<uint32_t>(i++);
-    const auto beta2 = get_arg_val<uint32_t>(i++);
-    const auto eps = get_arg_val<uint32_t>(i++);
-    const auto weight_decay = get_arg_val<uint32_t>(i++);
-    const auto beta1_exponent = get_arg_val<uint32_t>(i++);
-    const auto beta2_exponent = get_arg_val<uint32_t>(i++);
+    const auto step = get_arg(args::step);
+    const auto amsgrad = get_arg(args::amsgrad) == 1;
+    const auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
+    const auto start_id = get_arg(args::start_id);
 
-    const auto step = get_arg_val<uint32_t>(i++);
-    const auto amsgrad = get_arg_val<uint32_t>(i++) == 1;
-    const auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto start_id = get_arg_val<uint32_t>(i++);
-
-    constexpr uint32_t cb_id_param = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_grad = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_exp_avg = tt::CBIndex::c_2;
-    constexpr uint32_t cb_id_exp_avg_sq = tt::CBIndex::c_3;
-
-    // lr, beta1, beta2, eps, weight_decay
-    constexpr uint32_t cb_scalar_args = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_one = tt::CBIndex::c_6;
-
-    constexpr uint32_t cb_beta1_exponent = tt::CBIndex::c_28;
-    constexpr uint32_t cb_beta2_exponent = tt::CBIndex::c_29;
-
-    constexpr auto param_args = TensorAccessorArgs<0>();
-    constexpr auto grad_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
-    constexpr auto exp_avg_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
-    constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
-
-    const auto param_addrg = TensorAccessor(param_args, param_addr);
-    const auto grad_addrg = TensorAccessor(grad_args, grad_addr);
-    const auto exp_avg_addrg = TensorAccessor(exp_avg_args, exp_avg_addr);
-    const auto exp_avg_sq_addrg = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr);
+    const auto param_addrg = TensorAccessor(tensor::param_in);
+    const auto grad_addrg = TensorAccessor(tensor::grad);
+    const auto exp_avg_addrg = TensorAccessor(tensor::exp_avg_in);
+    const auto exp_avg_sq_addrg = TensorAccessor(tensor::exp_avg_sq_in);
 
 #ifdef AMSGRAD
-    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_4;
-    constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
-    const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
+    const auto max_exp_avg_sq_addrg = TensorAccessor(tensor::max_exp_avg_sq_in);
 #endif
 
-    DataflowBuffer dfb_scalar(cb_scalar_args);
-    DataflowBuffer dfb_beta1_exp(cb_beta1_exponent);
-    DataflowBuffer dfb_beta2_exp(cb_beta2_exponent);
-    DataflowBuffer dfb_one(cb_id_one);
+    // scalar_args holds lr, beta1, beta2, eps, weight_decay — one entry each, in that order.
+    DataflowBuffer dfb_scalar(dfb::scalar_args);
+    DataflowBuffer dfb_beta1_exp(dfb::beta1_exponent);
+    DataflowBuffer dfb_beta2_exp(dfb::beta2_exponent);
+    DataflowBuffer dfb_one(dfb::one);
     fill_cb_with_value(dfb_scalar, lr);
     fill_cb_with_value(dfb_scalar, beta1);
     fill_cb_with_value(dfb_scalar, beta2);
@@ -78,20 +54,20 @@ void kernel_main() {
     fill_cb_with_value(dfb_one, scaler.u);
 
     Noc noc;
-    DataflowBuffer dfb_param(cb_id_param);
-    DataflowBuffer dfb_grad(cb_id_grad);
-    DataflowBuffer dfb_exp_avg(cb_id_exp_avg);
-    DataflowBuffer dfb_exp_avg_sq(cb_id_exp_avg_sq);
+    DataflowBuffer dfb_param(dfb::param_in);
+    DataflowBuffer dfb_grad(dfb::grad);
+    DataflowBuffer dfb_exp_avg(dfb::exp_avg_in);
+    DataflowBuffer dfb_exp_avg_sq(dfb::exp_avg_sq_in);
 #ifdef AMSGRAD
-    DataflowBuffer dfb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
+    DataflowBuffer dfb_max_exp_avg_sq(dfb::max_exp_avg_sq_in);
 #endif
 
-    const auto param_tile_bytes = get_tile_size(cb_id_param);
-    const auto grad_tile_bytes = get_tile_size(cb_id_grad);
-    const auto exp_avg_tile_bytes = get_tile_size(cb_id_exp_avg);
-    const auto exp_avg_sq_tile_bytes = get_tile_size(cb_id_exp_avg_sq);
+    const auto param_tile_bytes = dfb_param.get_tile_size();
+    const auto grad_tile_bytes = dfb_grad.get_tile_size();
+    const auto exp_avg_tile_bytes = dfb_exp_avg.get_tile_size();
+    const auto exp_avg_sq_tile_bytes = dfb_exp_avg_sq.get_tile_size();
 #ifdef AMSGRAD
-    const auto max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
+    const auto max_exp_avg_sq_tile_bytes = dfb_max_exp_avg_sq.get_tile_size();
 #endif
 
     constexpr uint32_t onetile = 1;
