@@ -725,6 +725,30 @@ class PerfRunType(Enum):
     L1_CONGESTION = 5
 
 
+class CountArm(Enum):
+    """
+    Enum for the arm of the Blackhole threshold-count issue-rate benchmark.
+
+    Selects which body ``sources/sfpu_count_above_perf.cpp`` compiles into its
+    timed region. The value IS the integer the kernel's ``COUNT_ARM``
+    preprocessor comparison expects, so it is emitted verbatim.
+
+    ReplayLoad: control -- replay-fed SFPLOADMACRO stream, expected ~1.0 cycles
+                per 32-element vector (the frontend issue-rate floor). If this
+                arm does not reach ~1.0, the feed path is still the limiter and
+                no other arm is interpretable.
+    ReplaySwap: control -- replay-fed SFPSWAP stream, expected ~2.0x ReplayLoad
+                (SFPSWAP is 2 backend cycles with a hardware-inserted,
+                non-fillable bubble).
+    CountD1:    the real threshold-count inner loop -- macro-scheduled SFPGT
+                plus a software SFPIADD accumulate.
+    """
+
+    ReplayLoad = 0
+    ReplaySwap = 1
+    CountD1 = 2
+
+
 # Single pytest case runs every PerfRunType so the module CSV has one
 # homogeneous schema (mean/TEXT_SIZE columns for all modes in each row).
 # Pass as a nested list so @parametrize yields one value: the full mode list.

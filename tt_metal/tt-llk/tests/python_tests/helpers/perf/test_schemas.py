@@ -436,6 +436,26 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
     },
+    "perf_sfpu_count_above": {
+        "version": 1,
+        "columns": [
+            "count_arm",
+            "count_iter_count",
+            "count_thr_bits",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_math",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+    },
     "perf_sfpu_div_wh": {
         "version": 2,
         "columns": [

@@ -16,6 +16,7 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
+    CountArm,
     DataCopyType,
     DestSync,
     DstRoundingMode,
@@ -280,6 +281,80 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t SFPU_UNARY_SCALAR = {self.value_bits}u;"
+
+
+# --- sources/sfpu_count_above_perf.cpp (Blackhole issue-rate benchmark) -------
+#
+# All three parameters below MUST be emitted as `#define`, never `constexpr`.
+# The kernel guards each one with `#ifndef` and supplies its own fallback:
+#
+#     #ifndef COUNT_ARM
+#     #define COUNT_ARM 2
+#     #endif
+#
+# A `constexpr` declaration does not satisfy a preprocessor guard, so the
+# `#ifndef` would still be true and the kernel's fallback would fire. Every
+# swept variant would then compile to the SAME body (arm 2, ITER_COUNT 512)
+# while still hashing to a distinct variant id -- the sweep would report three
+# identical "arms" with no error anywhere. The `#define` form is what makes the
+# sweep mean anything.
+
+
+@dataclass
+class COUNT_ARM(TemplateParameter):
+    """Select the arm of the threshold-count issue-rate benchmark.
+
+    Emits ``#define COUNT_ARM <n>``, consumed by
+    ``sources/sfpu_count_above_perf.cpp``. It is a ``#define`` and NOT a
+    ``constexpr`` because the kernel guards the symbol with ``#ifndef
+    COUNT_ARM`` and falls back to ``2`` (ARM_COUNT_D1); a ``constexpr`` leaves
+    the guard unsatisfied, so all three arms would silently compile as arm 2.
+    """
+
+    count_arm: CountArm = CountArm.CountD1
+
+    def convert_to_cpp(self) -> str:
+        return f"#define COUNT_ARM {self.count_arm.value}"
+
+
+@dataclass
+class COUNT_ITER_COUNT(TemplateParameter):
+    """Number of 32-element vectors inside the benchmark's timed region.
+
+    Emits ``#define ITER_COUNT <n>``. It is a ``#define`` and NOT a
+    ``constexpr`` because the kernel guards the symbol with ``#ifndef
+    ITER_COUNT`` and falls back to ``512``; a ``constexpr`` leaves the guard
+    unsatisfied, so every swept value would compile as 512 and the two-point
+    slope used to cancel the profiler-marker overhead would be meaningless.
+
+    Must be even -- the kernel's ping-pong body covers two vectors per replay
+    pass and ``static_assert``s on it.
+    """
+
+    count_iter_count: int = 512
+
+    def convert_to_cpp(self) -> str:
+        return f"#define ITER_COUNT {self.count_iter_count}"
+
+
+@dataclass
+class COUNT_THR_BITS(TemplateParameter):
+    """Threshold for the count loop, as a raw 32-bit pattern.
+
+    Emits ``#define THR_BITS 0x<8 hex digits>``. It is a ``#define`` and NOT a
+    ``constexpr`` because the kernel guards the symbol with ``#ifndef
+    THR_BITS`` and falls back to ``0x3F800000`` (1.0f); a ``constexpr`` leaves
+    the guard unsatisfied and the swept threshold would be silently ignored.
+
+    Passed as bits rather than a float so ``-0.0`` / ``+-Inf`` / ``NaN``
+    thresholds are expressible exactly: SFPGT orders by the sign-magnitude
+    total order, which disagrees with IEEE on precisely those values.
+    """
+
+    count_thr_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"#define THR_BITS 0x{self.count_thr_bits:08X}"
 
 
 @dataclass

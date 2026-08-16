@@ -5076,3 +5076,83 @@ class SamplingGolden:
         if op in self.ROUND_TO_NEAREST_OPS:
             return values.to(torch.bfloat16).to(torch.float32)
         return truncate_to_bfloat16(values)
+
+
+# --- SFPGT sign-magnitude total order -------------------------------------
+#
+# SFPGT orders operands with the total order
+#     -NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN
+# (tt-isa BlackholeA0 SFPGT.md:3). That is NOT IEEE `>`: it disagrees on
+# signed zero (IEEE says -0.0 == +0.0, SFPGT says -0.0 < +0.0) and on every
+# NaN (IEEE says every comparison against NaN is false, SFPGT ranks -NaN below
+# everything and +NaN above everything). A golden written with numpy/torch `>`
+# is therefore WRONG for exactly the inputs a threshold-count kernel is most
+# likely to be fed by a real reduction.
+#
+# The ordering is defined by SignMagIsSmaller (SFPGT.md:55-66):
+#
+#     bool SignMagIsSmaller(uint32_t C, uint32_t D) {
+#       C ^= (uint32_t)((int32_t)C >> 30) >> 1;
+#       D ^= (uint32_t)((int32_t)D >> 30) >> 1;
+#       return (int32_t)C < (int32_t)D;
+#     }
+#
+# `(uint32_t)((int32_t)x >> 30) >> 1` is 0x7FFFFFFF when bit 31 of x is set and
+# 0 otherwise, so the transform is "flip the low 31 bits of negatives, then
+# compare as signed 32-bit". That is a strictly monotone map from the
+# sign-magnitude total order onto two's-complement int32, which is what makes
+# it usable as a sort key.
+SIGN_MAGNITUDE_KEY_MASK = 0x7FFFFFFF
+
+# Anchors, checked by test_sfpu_count_above.py rather than asserted here:
+#   key(0x00000000) ==  0            (+0.0)
+#   key(0x80000000) == -1            (-0.0, ranked immediately below +0.0)
+#   key(0xFFFFFFFF) == INT32_MIN     (the most negative -NaN, ranked lowest)
+#   key(0x7FFFFFFF) == INT32_MAX     (the largest +NaN, ranked highest)
+
+
+def sign_magnitude_order_key(bits: torch.Tensor) -> torch.Tensor:
+    """Map raw 32-bit patterns onto SFPGT's total order as signed int64 keys.
+
+    Transcription of SignMagIsSmaller (see the comment above). Takes an
+    integer tensor whose values are uint32 bit patterns (torch has no ergonomic
+    unsigned 32-bit arithmetic, so this works in int64 and reinterprets at the
+    end) and returns keys that compare with the same result SFPGT would give.
+
+    Args:
+        bits: integer tensor of uint32 bit patterns (values in [0, 2**32)).
+    Returns:
+        int64 tensor of monotone keys in the int32 range.
+    """
+    b = bits.to(torch.int64) & 0xFFFFFFFF
+    flipped = torch.where((b & 0x80000000) != 0, b ^ SIGN_MAGNITUDE_KEY_MASK, b)
+    # Reinterpret the 32-bit result as two's-complement signed.
+    return flipped - ((flipped >= 0x80000000).to(torch.int64) << 32)
+
+
+@register_golden
+class CountAboveGolden:
+    """Golden for the SFPGT threshold-count kernel (sfpu_count_above_test.cpp).
+
+    Counts, over every element of every input tile, how many are strictly
+    greater than the threshold *in SFPGT's sign-magnitude total order* — never
+    in IEEE order. The count is a single scalar because the kernel's 32 SFPU
+    lanes each carry a partial and the host sums the whole packed output tile,
+    which is permutation-invariant and so does not need the SFPLOAD lane map
+    modelled here.
+
+    Args:
+        values_bits:    integer tensor of uint32 bit patterns for the input.
+        threshold_bits: the threshold as a raw uint32 bit pattern.
+        repeat:         how many times the kernel re-walks the resident tiles
+                        (LOOP_FACTOR); every pass counts the same data again.
+    Returns:
+        int: the expected sum over the whole packed output tile.
+    """
+
+    def __call__(self, values_bits, threshold_bits: int, repeat: int = 1) -> int:
+        keys = sign_magnitude_order_key(torch.as_tensor(values_bits).flatten())
+        threshold_key = sign_magnitude_order_key(
+            torch.tensor([threshold_bits], dtype=torch.int64)
+        ).item()
+        return int((keys > threshold_key).sum().item()) * repeat
