@@ -3871,7 +3871,8 @@ what makes this dangerous rather than merely broken — it is right often enough
    exceed unity by floating-point rounding (this port's own trace selftest prints `pcc=1.000017`),
    so a strict `-1.0 <= pcc <= 1.0` test would fail valid runs. Use
    `not (-1.0 - 1e-3 <= pcc <= 1.0 + 1e-3)` → `status: crash`, `pcc_verified: False`. The observed
-   bogus values (33.612, 47.779) are four orders of magnitude outside that band.
+   bogus values span 1.525 to 47.779 — all outside that band, while this port's legitimate
+   overshoot (1.000017) sits inside it. Tight matters: a `±0.1` tolerance would admit 1.525.
 2. **Tighten the regex.** `pcc[^\n]*?[:=]` should not span arbitrary text; require the delimiter to
    follow `pcc` closely (`pcc\s*[:=]` or `\bpcc\b[^,\n]{0,12}[:=]`).
 3. **Cross-check the exit code when the parse is implausible.** Ignoring the return code is
@@ -3889,10 +3890,23 @@ what makes this dangerous rather than merely broken — it is right often enough
  "pcc":           {"status": "ok", "pcc": 47.779}}
 ```
 
-**`pcc: 47.779`, accepted as ok.** Two instances now — `33.612` and `47.779` — so this is
-reproducible, not a one-off. Both land in the tens, consistent with a duration in seconds being
-scraped. (Nothing was banked here either: still 9 commits, and the perf side was `regressed`
-independently.)
+**`pcc: 47.779`, accepted as ok.** And half an hour later, a third:
+
+```json
+{"pcc": {"status": "ok", "pcc": 1.525}}
+```
+
+**Three instances in roughly ten hours of optimisation — `33.612`, `47.779`, `1.525` — all
+`status: ok`.** This is not rare. Nothing was banked during any of the three windows (the commit
+count held at 9 throughout), but that is luck rather than design: the gate was open each time and
+happened not to be asked for a verdict that mattered.
+
+**The third value is the dangerous one.** `33.612` is self-evidently not a correlation; anyone
+glancing at it would stop. `1.525` looks almost plausible — close enough to unity that a reader
+might file it under rounding, and close enough that a *loose* tolerance would admit it. The observed
+range of bogus values therefore runs from 1.525 to 47.779, while legitimate overshoot in this port
+is `1.000017`. The margin is wide, but only if the tolerance is tight: a careless `±0.1` or `±0.5`
+would pass 1.525 straight through.
 
 **The mechanism, established by running the tool's own regex over a real passing e2e log:**
 
