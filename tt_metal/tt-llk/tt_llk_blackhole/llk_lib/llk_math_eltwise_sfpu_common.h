@@ -28,10 +28,13 @@ inline void _llk_math_eltwise_sfpu_done_()
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
     // Typed architectural Dst face advance (two CR-mode Dst += 8 counter
-    // steps).  The typed builtin assembles byte-identically to the raw
-    // SETRWC words it replaces, but stays compiler-visible as a pure
-    // Dst/RWC run separator instead of an opaque instruction word.
-    sfpi::dst_face_advance();
+    // steps).  The typed builtin assembles byte-identically to the two raw
+    // SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D) words it replaces, but stays
+    // compiler-visible as a pure Dst/RWC run separator instead of an opaque
+    // instruction word (migration idiom of df504b3b2; the builtin is called
+    // directly because this toolchain's sfpi include snapshot predates the
+    // sfpi::dst_face_advance() wrapper, which lowers to this same builtin).
+    __builtin_rvtt_ttdstface();
 }
 
 inline void _llk_math_eltwise_sfpu_uninit_()
