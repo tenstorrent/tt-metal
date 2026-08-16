@@ -3996,6 +3996,34 @@ It learned that the right core count depends on the shape, and learned it at the
 concern is not merely that the *proportions* are off (below) — it is that a config tuned here has no
 guarantee of being the right config there, and may be a regression at the real size.
 
+**Why token count changes a matmul at all, and why it changes the STRATEGY.** A matmul here is
+activations × weights. The weights are fixed; the activations carry one row per token, so the token
+count sets M. The device computes in 32×32 tiles, so 32 tokens is **one tile row** and 224 tokens is
+**seven**. At one tile row the entire weight matrix is streamed in and each weight is used once —
+bandwidth-bound. At seven, the same weights are reused across seven rows of work for the same
+traffic — seven times the arithmetic intensity, a materially different regime with different levers.
+
+Every matmul the optimizer profiled sits at the extreme end of that scale. From its own ledger:
+
+```
+MatmulDeviceOperation 32 x 9216 x 3072
+MatmulDeviceOperation 32 x 4096 x 3072
+MatmulDeviceOperation 32 x 3072 x 1024
+MatmulDeviceOperation 32 x 128  x 32
+```
+
+**Every one begins with 32** — a single tile row. And the strategy it derived says so explicitly:
+
+> *"these projections are DRAM-bandwidth-bound (M is a single tile, so the whole cost is streaming
+> the weight in), and the profile puts them at 329–512 GB/s — already ON this board's roofline.
+> Cores cannot help; only BYTES can"*
+
+That is sound reasoning **at M=32**. At M=224 there is 7× the reuse and the op may not be at the
+bandwidth roof at all, so "cores cannot help" is exactly the claim that could invert. The custom
+hi/lo kernel built on that premise (streaming one weight instead of two) is likely still a win at
+any shape — but its *justification*, and the decision to stop pursuing core-level levers, were
+established in a regime the production workload may never enter.
+
 **This also disposes of the obvious cheap fix.** "Keep the small job for profiling, run the real job
 for timing" is not sufficient: per-op attribution gathered at C=64 mis-ranks the ops that dominate
 at C=224, so the ladder would still aim at the wrong targets. Three further distortions compound it:
