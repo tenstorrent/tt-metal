@@ -115,6 +115,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define FRESH_CPP_IMPL 0
 #endif
 
+// Fixed dispatch scalar for the fresh unary max/min selector, mirroring the
+// production dispatch in sfpu_operations.h (0u = 0.0f) so both perf legs
+// compute the identical operation.
+constexpr std::uint32_t FRESH_UNARY_MAX_MIN_FLOAT_VALUE = 0u; // 0.0f
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -226,7 +231,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                         if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
                         {
-                            static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                            // Guarded: run_kernel is not a template, so a discarded if-constexpr
+                            // branch is still fully checked (see eltwise_unary_sfpu_test.cpp).
+                            static_assert(
+                                !(FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential) || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh exp supports only approx-off, 16-bit dest");
                             SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
                                 is_fp32_dest_acc_en,
@@ -254,6 +263,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 (ITERATIONS),
                                 block_tile,
                                 VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::unary_max || SFPU_UNARY_OPERATION == SfpuType::unary_min))
+                        {
+                            constexpr bool is_max = SFPU_UNARY_OPERATION == SfpuType::unary_max;
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_unary_max_min_fresh_cpp,
+                                (is_max, ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                FRESH_UNARY_MAX_MIN_FLOAT_VALUE);
                         }
                         else
                         {
@@ -295,7 +316,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Start SFPU operation
                         if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
                         {
-                            static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                            // Guarded: run_kernel is not a template, so a discarded if-constexpr
+                            // branch is still fully checked (see eltwise_unary_sfpu_test.cpp).
+                            static_assert(
+                                !(FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential) || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh exp supports only approx-off, 16-bit dest");
                             SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
                                 is_fp32_dest_acc_en,
@@ -323,6 +348,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 (ITERATIONS),
                                 block_tile,
                                 VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::unary_max || SFPU_UNARY_OPERATION == SfpuType::unary_min))
+                        {
+                            constexpr bool is_max = SFPU_UNARY_OPERATION == SfpuType::unary_max;
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_unary_max_min_fresh_cpp,
+                                (is_max, ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                FRESH_UNARY_MAX_MIN_FLOAT_VALUE);
                         }
                         else
                         {

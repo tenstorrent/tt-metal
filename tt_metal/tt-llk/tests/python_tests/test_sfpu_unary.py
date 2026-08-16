@@ -28,6 +28,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import PerfConfig
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SPECIALS_READY_OPS,
@@ -41,7 +42,6 @@ from helpers.sfpu_domains import (
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.perf.core import PerfConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
@@ -71,6 +71,7 @@ class ReciprocalImpl(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int RECIPROCAL_IMPL = {self.value};"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The unary op sweep: two coverage profiles, one test
@@ -1012,6 +1013,57 @@ def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
     )
 
 
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "mathop",
+    [MathOperation.UnaryMax, MathOperation.UnaryMin],
+    ids=["unary_max", "unary_min"],
+)
+def test_unary_max_min_fresh_cpp(mathop, fresh_cpp_impl):
+    """A/B the fresh semantic unary max/min against the production SFPLOADMACRO
+    kernel with identical inputs (float contract: element tolerance + PCC)."""
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "mathop",
+    [
+        MathOperation.UnaryMaxInt32,
+        MathOperation.UnaryMinInt32,
+        MathOperation.UnaryMaxUint32,
+        MathOperation.UnaryMinUint32,
+    ],
+    ids=["unary_max_int32", "unary_min_int32", "unary_max_uint32", "unary_min_uint32"],
+)
+def test_unary_max_min_int_fresh_cpp(mathop, fresh_cpp_impl):
+    """A/B the fresh semantic integer unary max/min against the production
+    SFPLOADMACRO kernel with identical inputs (integer contract: exact)."""
+    int_format = (
+        DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
+    )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(int_format, int_format),
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=_int_unary_stimuli_spec(mathop),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @pytest.mark.parametrize("reciprocal_impl", [0, 1], ids=["production", "semantic"])
 @pytest.mark.parametrize(
     "formats,dest_acc",
@@ -1027,12 +1079,8 @@ def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
     ],
     ids=["bf16-dst16", "fp32-dst32"],
 )
-@pytest.mark.parametrize(
-    "approx_mode", [ApproximationMode.No, ApproximationMode.Yes]
-)
-def test_reciprocal_semantic(
-    formats, dest_acc, approx_mode, reciprocal_impl: int
-):
+@pytest.mark.parametrize("approx_mode", [ApproximationMode.No, ApproximationMode.Yes])
+def test_reciprocal_semantic(formats, dest_acc, approx_mode, reciprocal_impl: int):
     """A/B the typed reciprocal across its BH format and accuracy paths."""
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -1072,12 +1120,8 @@ def test_reciprocal_semantic_edges(reciprocal_impl: int):
     )
 
 
-@pytest.mark.parametrize(
-    "reciprocal_impl,label", [(0, "production"), (1, "semantic")]
-)
-def test_reciprocal_device_profile(
-    perf_report, reciprocal_impl: int, label: str
-):
+@pytest.mark.parametrize("reciprocal_impl,label", [(0, "production"), (1, "semantic")])
+def test_reciprocal_device_profile(perf_report, reciprocal_impl: int, label: str):
     """Profile one accurate BF16 reciprocal body, excluding datacopy."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     input_dimensions = [32, 32]

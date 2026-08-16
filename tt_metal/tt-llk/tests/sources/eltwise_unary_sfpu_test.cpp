@@ -66,6 +66,14 @@ using namespace ckernel::sfpu;
 
 const int iterations = 32;
 
+// Fixed dispatch scalars for the fresh unary max/min selectors, mirroring the
+// production dispatch in sfpu_operations.h (0u = 0.0f for the float ops,
+// MAXMIN_SCALAR = 1000 for the integer ops) and shared with the golden
+// (golden_generators.py: _UNARY_MAX_MIN_VALUE / _int_maxmin_scalar). The
+// production and fresh legs must always receive identical inputs.
+constexpr std::uint32_t FRESH_UNARY_MAX_MIN_FLOAT_VALUE = 0u; // 0.0f
+constexpr std::uint32_t FRESH_UNARY_MAX_MIN_INT_SCALAR  = 1000u;
+
 // Fresh semantic-C++ reciprocal.  The body names only typed Dst values and
 // reciprocal arithmetic; physical LREGs, macro templates, replay ranges, and
 // instruction scheduling remain compiler responsibilities.
@@ -139,7 +147,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 START_PERF_MEASURE("RECIPROCAL_BODY")
             if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
             {
-                static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                // run_kernel is not a template, so a discarded if-constexpr branch is
+                // still fully checked: the assert must repeat the branch condition or
+                // it fails every dest_acc build of every other op in this file.
+                static_assert(
+                    !(FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential) || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh exp supports only approx-off, 16-bit dest");
                 SFPU_UNARY_CALL(
                     DST_SYNC,
                     is_fp32_dest_acc_en,
@@ -167,6 +180,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     (iterations),
                     block_tile,
                     VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::unary_max || SFPU_UNARY_OPERATION == SfpuType::unary_min))
+            {
+                constexpr bool is_max = SFPU_UNARY_OPERATION == SfpuType::unary_max;
+                SFPU_UNARY_CALL(
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    calculate_unary_max_min_fresh_cpp,
+                    (is_max, iterations),
+                    block_tile,
+                    VectorMode::None,
+                    FRESH_UNARY_MAX_MIN_FLOAT_VALUE);
+            }
+            else if constexpr (
+                FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::unary_max_int32 || SFPU_UNARY_OPERATION == SfpuType::unary_min_int32 ||
+                                        SFPU_UNARY_OPERATION == SfpuType::unary_max_uint32 || SFPU_UNARY_OPERATION == SfpuType::unary_min_uint32))
+            {
+                constexpr bool is_max      = SFPU_UNARY_OPERATION == SfpuType::unary_max_int32 || SFPU_UNARY_OPERATION == SfpuType::unary_max_uint32;
+                constexpr bool is_unsigned = SFPU_UNARY_OPERATION == SfpuType::unary_max_uint32 || SFPU_UNARY_OPERATION == SfpuType::unary_min_uint32;
+                SFPU_UNARY_CALL(
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    calculate_unary_max_min_int_fresh_cpp,
+                    (is_max, is_unsigned, iterations),
+                    block_tile,
+                    VectorMode::None,
+                    FRESH_UNARY_MAX_MIN_INT_SCALAR);
             }
             else if constexpr (RECIPROCAL_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
             {

@@ -6,6 +6,7 @@
 // Test-only semantic implementations used by the corpus A/Bs.  These deliberately
 // state the math one row at a time: no fixed LREGs, raw instructions, replay slots,
 // SFPLOADMACRO templates, or hand-interleaved software schedule.
+#include <cstdint>
 namespace ckernel::sfpu {
 
 template <int ITERATIONS>
@@ -86,6 +87,69 @@ inline void call_binary_max_min_fresh_cpp(
     ::_llk_math_eltwise_sfpu_start_(dst_index_in0);
     calculate_binary_max_min_fresh_cpp<IS_MAX, ITERATIONS>();
     ::_llk_math_eltwise_sfpu_done_();
+}
+
+template <bool IS_MAX, int ITERATIONS>
+__attribute__((noinline)) void calculate_unary_max_min_fresh_cpp(const std::uint32_t value)
+{
+    // The scalar operand arrives as raw float bits, exactly as the production
+    // kernel receives it; the typed body only names the semantic comparison.
+    const sfpi::vFloat operand = Converter::as_float(value);
+
+#pragma GCC unroll 8
+    for (int row = 0; row < ITERATIONS; ++row)
+    {
+        // Keep the all-lane predicate boundary typed and local.  Compiler
+        // macro formation may hoist the identical enables with its owned
+        // descriptor configuration after proving that this body has no
+        // CC effects.
+        __builtin_rvtt_sfppushc(0);
+        __builtin_rvtt_sfppopc(0);
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        sfpi::dst_reg[0]         = IS_MAX ? sfpi::max(input, operand) : sfpi::min(input, operand);
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool IS_MAX, bool IS_UNSIGNED, int ITERATIONS>
+__attribute__((noinline)) void calculate_unary_max_min_int_fresh_cpp(const std::uint32_t value)
+{
+#pragma GCC unroll 8
+    for (int row = 0; row < ITERATIONS; ++row)
+    {
+        __builtin_rvtt_sfppushc(0);
+        __builtin_rvtt_sfppopc(0);
+        if constexpr (IS_UNSIGNED)
+        {
+            // Typed unsigned min/max; the SFPI library owns the MSB-safe
+            // sign-magnitude lowering, the body only states the comparison.
+            const sfpi::vUInt input = sfpi::dst_reg[0];
+            sfpi::dst_reg[0]        = IS_MAX ? sfpi::max(input, value) : sfpi::min(input, value);
+        }
+        else
+        {
+            sfpi::vInt input         = sfpi::dst_reg[0];
+            const sfpi::vInt operand = static_cast<int>(value);
+            if constexpr (IS_MAX)
+            {
+                v_if (input < operand)
+                {
+                    input = operand;
+                }
+                v_endif;
+            }
+            else
+            {
+                v_if (input > operand)
+                {
+                    input = operand;
+                }
+                v_endif;
+            }
+            sfpi::dst_reg[0] = input;
+        }
+        sfpi::dst_reg++;
+    }
 }
 
 template <bool DST_ACCUM_MODE, DataFormat FORMAT, int ITERATIONS>
