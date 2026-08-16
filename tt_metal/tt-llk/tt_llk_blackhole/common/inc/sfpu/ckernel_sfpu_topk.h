@@ -14,6 +14,89 @@
 #include "lltt.h"
 #include "sfpi.h"
 
+// ---------------------------------------------------------------------------
+// EXPERIMENTAL issue-rate knobs for _bitonic_topk_phases_steps (Blackhole).
+//
+// All three are OFF by default and every use site is #if-guarded, so the
+// default build is byte-identical to the unflagged kernel. They exist to
+// answer one question with measurements instead of assertion: is the local
+// sort limited by the SFPU backend or by the rate at which the math RISC-V
+// can issue into it?
+//
+//   TOPK_HOIST_INIT_GUARDS  Peel d == 0 out of the phase 0/1/2 replay loop so
+//                           the `init_load`/`init_phase`/`init_store` branches
+//                           leave the loop body. Behaviour-preserving: those
+//                           flags can only be true on the first pass.
+//
+//   TOPK_MOP_INNER_LOOP     Drive the phase 0/1/2 d-loop from the math MOP
+//                           expander (one TTI_MOP issue for d = 1..3) instead
+//                           of 3 lltt::replay issues per d, using the
+//                           ckernel_unpack_template 5-slot form the way
+//                           ckernel_sfpu_topk_xl.h does. Implies
+//                           TOPK_HOIST_INIT_GUARDS (the recording pass has to
+//                           happen before the template can be programmed).
+//                           NOTE: this claims the math thread's MOP expander;
+//                           any other math-thread MOP user in the same kernel
+//                           would have to reprogram after the sort.
+//
+//   TOPK_REPLAY_STEP_LOAD   Record the phase >= 4 compare/exchange loop's
+//                           load16 into the replay buffer once per step and
+//                           replay it, so that iteration costs the math RISC-V
+//                           1 issue instead of 8. Same instruction stream to
+//                           the SFPU; only the number of RISC-V issues changes.
+//
+//   TOPK_PROBE_RV_NOPS      DIAGNOSTIC ONLY, never ship. Injects exactly N
+//                           RISC-V-only instructions (no Tensix issue, no
+//                           register pressure) into each iteration of the
+//                           phase >= 4 compare/exchange loop. If the kernel is
+//                           RISC-V-issue-bound there, runtime grows ~1 cycle
+//                           per injected instruction; if it is SFPU-backend
+//                           bound, they are free.
+// ---------------------------------------------------------------------------
+#if defined(TOPK_MOP_INNER_LOOP) && !defined(TOPK_HOIST_INIT_GUARDS)
+#define TOPK_HOIST_INIT_GUARDS 1
+#endif
+
+#if defined(TOPK_MOP_INNER_LOOP)
+#include "ckernel_template.h"
+#endif
+
+#if defined(TOPK_REPLAY_STEP_STORE) && !defined(TOPK_REPLAY_STEP_LOAD)
+#define TOPK_REPLAY_STEP_LOAD 1
+#endif
+
+#if defined(TOPK_REPLAY_STEP_LOAD)
+#if defined(TOPK_REPLAY_STEP_STORE)
+// Load AND store recorded: 16 slots are needed, so the window starts at 16 and
+// runs to the end of the 32-deep buffer. That overlaps the phase-3 lattice
+// (slots 16-20, or 16-24 under STABLE_SORT), which is safe in one direction
+// only and for one reason: every consumer of slots >= 16 re-records before it
+// replays. The step loop re-records at the top of EVERY step (`init_step_load`
+// is step-scoped), and the phase >= 4 "steps 4 to 1" tail that follows the step
+// loop re-records the lattice itself, because `init_phase` is still true when
+// it is reached. Slots 0-15 (load16(4, 8) / store16(4, 8)) are NOT touched:
+// those are recorded once per kernel and replayed for the rest of it.
+#define TOPK_STEP_LOAD_REPLAY_START  16
+#define TOPK_STEP_STORE_REPLAY_START 24
+#else
+// Load only: 0-7 hold load16(4, 8), 8-15 store16(4, 8), 16-20 the phase-3
+// compare lattice; the buffer is REPLAY_BUF_SIZE = 32 deep, so [21, 29) is
+// unclaimed and needs no coordination with any other recording at all.
+#define TOPK_STEP_LOAD_REPLAY_START 21
+#endif
+#endif
+
+#if defined(TOPK_PROBE_RV_NOPS) && (TOPK_PROBE_RV_NOPS > 0)
+#define TOPK_PROBE_RV_NOPS_STR1(x) #x
+#define TOPK_PROBE_RV_NOPS_STR(x)  TOPK_PROBE_RV_NOPS_STR1(x)
+// `.rept` guarantees exactly N instructions survive to the ELF; `addi x0,x0,0`
+// writes the zero register, so it needs no scratch and cannot alias anything
+// the surrounding code holds live.
+#define TOPK_PROBE_RV_NOP_BLOCK() asm volatile(".rept " TOPK_PROBE_RV_NOPS_STR(TOPK_PROBE_RV_NOPS) "\n\taddi x0, x0, 0\n\t.endr\n")
+#else
+#define TOPK_PROBE_RV_NOP_BLOCK() ((void)0)
+#endif
+
 namespace ckernel
 {
 namespace sfpu
@@ -510,6 +593,38 @@ inline void bitonic_topk_inc_x4_dest(std::uint32_t inc, bool cr)
     }
 }
 
+#if defined(TOPK_MOP_INNER_LOOP)
+// Program the math MOP expander so ONE TTI_MOP issue drives the
+// (load16 | phase-body | store16) triple that the phase 0/1/2 d-loop repeats.
+// The four halo slots hold the whole body with nothing wasted:
+//   A0 = REPLAY(0, 8)        load16(4, 8)
+//   A1 = REPLAY(16, len)     the phase's compare lattice
+//   A2 = REPLAY(8, 7)        the first 7 stores of store16
+//   A3 = SFPSTORE LREG7 ...  store16's last store, which rides ADDR_MOD_6
+// Splitting store16 across A2/A3 is what makes the body fit the four halo
+// slots exactly; replay slots 8..15 still hold the complete store16 for the
+// phase 3 / phase >= 4 paths that replay it directly.
+template <bool is_fp32_dest_acc_en>
+inline void topk_local_sort_mop_config(const std::uint32_t phase_replay_len)
+{
+    constexpr std::uint32_t dst_indices_offset  = 128;
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr std::uint32_t store_last = TT_OP_SFPSTORE(p_sfpu::LREG7, static_cast<std::uint32_t>(instr_mod_index), ADDR_MOD_6, dst_indices_offset + 12);
+
+    const ckernel_unpack_template tmpl(
+        /*unpackB=*/false,
+        /*unpackHalo=*/true,
+        /*A0_instr=*/lltt::replay_insn(0, 8),
+        /*A1_instr=*/lltt::replay_insn(16, phase_replay_len),
+        /*A2_instr=*/lltt::replay_insn(8, 7),
+        /*A3_instr=*/store_last,
+        /*skipA_instr=*/TT_OP_NOP,
+        /*B_instr=*/TT_OP_NOP,
+        /*skipB_instr=*/TT_OP_NOP);
+    tmpl.program();
+}
+#endif
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
@@ -538,6 +653,51 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                 switch (ph)
                 {
                     case 0:
+                    {
+                        constexpr int replay_count = STABLE_SORT ? 6 : 4;
+#if defined(TOPK_HOIST_INIT_GUARDS)
+                        // d == 0 peeled out: the three init flags can only be
+                        // true on the first pass, so their branches do not
+                        // belong in the loop body. Instruction stream unchanged.
+                        if (init_load)
+                        {
+                            load_replay_buf<Exec>(0, 8, [] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
+                            init_load = false;
+                        }
+                        else
+                        {
+                            lltt::replay(0, 8);
+                        }
+                        if (init_phase)
+                        {
+                            load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph0_st1_to_1<STABLE_SORT>(); });
+                            init_phase = false;
+                        }
+                        else
+                        {
+                            lltt::replay(16, replay_count);
+                        }
+                        if (init_store)
+                        {
+                            load_replay_buf<Exec>(8, 8, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8); });
+                            init_store = false;
+                        }
+                        else
+                        {
+                            lltt::replay(8, 8);
+                        }
+#if defined(TOPK_MOP_INNER_LOOP)
+                        topk_local_sort_mop_config<is_fp32_dest_acc_en>(replay_count);
+                        ckernel_unpack_template::run(3);
+#else
+                        for (int d = 1; d < 4; d++)
+                        {
+                            lltt::replay(0, 8);
+                            lltt::replay(16, replay_count);
+                            lltt::replay(8, 8);
+                        }
+#endif
+#else
                         for (int d = 0; d < 4; d++)
                         {
                             // Groups of 16 datums being sorted at the same time
@@ -550,7 +710,6 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             {
                                 lltt::replay(0, 8);
                             }
-                            constexpr int replay_count = STABLE_SORT ? 6 : 4;
                             if (init_phase)
                             {
                                 load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph0_st1_to_1<STABLE_SORT>(); });
@@ -570,13 +729,40 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 lltt::replay(8, 8);
                             }
                         }
+#endif
                         break;
+                    }
                     case 1:
+                    {
+                        constexpr int replay_count = STABLE_SORT ? 10 : 6;
+#if defined(TOPK_HOIST_INIT_GUARDS)
+                        lltt::replay(0, 8);
+                        if (init_phase)
+                        {
+                            load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph1_st2_to_1<STABLE_SORT>(); });
+                            init_phase = false;
+                        }
+                        else
+                        {
+                            lltt::replay(16, replay_count);
+                        }
+                        lltt::replay(8, 8);
+#if defined(TOPK_MOP_INNER_LOOP)
+                        topk_local_sort_mop_config<is_fp32_dest_acc_en>(replay_count);
+                        ckernel_unpack_template::run(3);
+#else
+                        for (int d = 1; d < 4; d++)
+                        {
+                            lltt::replay(0, 8);
+                            lltt::replay(16, replay_count);
+                            lltt::replay(8, 8);
+                        }
+#endif
+#else
                         // Groups of 16 datums being sorted at the same time
                         for (int d = 0; d < 4; d++)
                         {
                             lltt::replay(0, 8);
-                            constexpr int replay_count = STABLE_SORT ? 10 : 6;
                             if (init_phase)
                             {
                                 load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph1_st2_to_1<STABLE_SORT>(); });
@@ -588,12 +774,39 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             lltt::replay(8, 8);
                         }
+#endif
                         break;
+                    }
                     case 2:
+                    {
+                        constexpr int replay_count = STABLE_SORT ? 14 : 9;
+#if defined(TOPK_HOIST_INIT_GUARDS)
+                        lltt::replay(0, 8);
+                        if (init_phase)
+                        {
+                            load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT>(); });
+                            init_phase = false;
+                        }
+                        else
+                        {
+                            lltt::replay(16, replay_count);
+                        }
+                        lltt::replay(8, 8);
+#if defined(TOPK_MOP_INNER_LOOP)
+                        topk_local_sort_mop_config<is_fp32_dest_acc_en>(replay_count);
+                        ckernel_unpack_template::run(3);
+#else
+                        for (int d = 1; d < 4; d++)
+                        {
+                            lltt::replay(0, 8);
+                            lltt::replay(16, replay_count);
+                            lltt::replay(8, 8);
+                        }
+#endif
+#else
                         for (int d = 0; d < 4; d++)
                         {
                             lltt::replay(0, 8);
-                            constexpr int replay_count = STABLE_SORT ? 14 : 9;
                             if (init_phase)
                             {
                                 load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT>(); });
@@ -605,7 +818,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             lltt::replay(8, 8);
                         }
+#endif
                         break;
+                    }
                     case 3:
                         for (int d = 0; d < 4; d++)
                         {
@@ -631,14 +846,57 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             std::uint32_t inner_d    = dist >> 3; // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
                             datums_compared          = 0;
                             std::uint32_t dst_offset = 0;
+#if defined(TOPK_REPLAY_STEP_LOAD)
+                            // `dist` is fixed for the whole step, so this step's
+                            // load16 is one fixed 8-instruction sequence. Record
+                            // it on the first iteration (which executes it) and
+                            // replay it afterwards: 1 RISC-V issue per iteration
+                            // instead of 8, with the SFPU seeing the identical
+                            // stream. Slots [21, 29) are outside everything the
+                            // rest of the kernel uses (0-7 load16(4,8), 8-15
+                            // store16, 16-20 the phase-3 lattice), so nothing
+                            // this step records has to be re-recorded later.
+                            bool init_step_load = true;
+#endif
+#if defined(TOPK_REPLAY_STEP_STORE)
+                            bool init_step_store = true;
+#endif
                             while (datums_compared < total_datums_to_compare)
                             {
                                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                                 {
+                                    // Diagnostic only; expands to nothing unless TOPK_PROBE_RV_NOPS is set.
+                                    TOPK_PROBE_RV_NOP_BLOCK();
+#if defined(TOPK_REPLAY_STEP_LOAD)
+                                    if (init_step_load)
+                                    {
+                                        load_replay_buf<Exec>(
+                                            TOPK_STEP_LOAD_REPLAY_START, 8, [dist] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); });
+                                        init_step_load = false;
+                                    }
+                                    else
+                                    {
+                                        lltt::replay(TOPK_STEP_LOAD_REPLAY_START, 8);
+                                    }
+#else
                                     bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+#endif
                                     bitonic_topk_step_N<STABLE_SORT>(dir);
+#if defined(TOPK_REPLAY_STEP_STORE)
+                                    if (init_step_store)
+                                    {
+                                        load_replay_buf<Exec>(
+                                            TOPK_STEP_STORE_REPLAY_START, 8, [dist] { bitonic_topk_store16<is_fp32_dest_acc_en, false>(4, 2 * dist); });
+                                        init_step_store = false;
+                                    }
+                                    else
+                                    {
+                                        lltt::replay(TOPK_STEP_STORE_REPLAY_START, 8);
+                                    }
+#else
                                     bitonic_topk_store16<is_fp32_dest_acc_en, false>(
                                         4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+#endif
                                     std::uint32_t dst_inc = 8;
                                     dst_offset += dst_inc;
                                     bool dst_cr = false;
