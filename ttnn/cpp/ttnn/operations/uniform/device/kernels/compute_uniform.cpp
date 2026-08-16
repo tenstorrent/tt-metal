@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// compute_uniform_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
