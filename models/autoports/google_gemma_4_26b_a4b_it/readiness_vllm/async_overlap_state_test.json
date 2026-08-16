@@ -1,0 +1,48 @@
+{
+  "verdict": "pass",
+  "server_mode": "async scheduling + trace + sample_on_device=all",
+  "prompt_mode": "OpenAI chat completions (Gemma instruct chat template)",
+  "invariants": {
+    "stale_host_token_is_ignored_in_favor_of_device_feedback": true,
+    "current_position_advances_exactly_once": true,
+    "unchanged_and_changed_page_tables_preserve_output": true,
+    "deferred_async_read_is_fenced_before_host_use": true,
+    "decode_crosses_64_token_page_boundary": true,
+    "short_request_reaches_eos_before_long_request": true,
+    "no_repeated_or_doubled_token_degeneracy": true
+  },
+  "cases": [
+    {
+      "name": "cross_page_boundary",
+      "prompt": "Explain, in a connected short essay of at least 140 words, how a brass telescope helps an astronomer observe the Moon. Discuss its lenses, focusing, mounting, and careful observation.",
+      "max_tokens": 96,
+      "ignore_eos": true,
+      "matches_isolated_control": true,
+      "isolated_sha256": "f68824238020ab0496d1174c659a0ff99f30d1a813762410c12fbccf2f6e8bd7",
+      "overlapped_sha256": "f68824238020ab0496d1174c659a0ff99f30d1a813762410c12fbccf2f6e8bd7",
+      "isolated_completion_tokens": 96,
+      "overlapped_completion_tokens": 96,
+      "isolated_finish_reason": "length",
+      "overlapped_finish_reason": "length",
+      "isolated_degeneracy_reasons": [],
+      "overlapped_degeneracy_reasons": [],
+      "completion": "A brass telescope serves as a vital bridge between the human eye and the celestial wonders of the Moon. At its core, the instrument relies on a series of precision-ground glass lenses housed within its polished brass tube. As light reflects off the lunar surface, the objective lens gathers these faint photons and directs them toward the eyepiece. Through the process of focusing, the astronomer adjusts the distance between these lenses to converge the light rays into a sharp, singular point, transforming a blurry white orb"
+    },
+    {
+      "name": "early_completion",
+      "prompt": "Reply with exactly these two words and nothing else: Brass telescope",
+      "max_tokens": 32,
+      "ignore_eos": false,
+      "matches_isolated_control": true,
+      "isolated_sha256": "cc7342f922432d9adc3699dc3352b45452a1994c2859c9f787c2dd0f7d1a3025",
+      "overlapped_sha256": "cc7342f922432d9adc3699dc3352b45452a1994c2859c9f787c2dd0f7d1a3025",
+      "isolated_completion_tokens": 3,
+      "overlapped_completion_tokens": 3,
+      "isolated_finish_reason": "stop",
+      "overlapped_finish_reason": "stop",
+      "isolated_degeneracy_reasons": [],
+      "overlapped_degeneracy_reasons": [],
+      "completion": "Brass telescope"
+    }
+  ]
+}

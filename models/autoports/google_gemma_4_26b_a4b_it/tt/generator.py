@@ -267,6 +267,36 @@ class Gemma4Generator(Generator):
         self.trace_counters.token_readbacks += 1
         return ttnn.to_torch(shard).reshape(-1)[:batch_size].to(torch.long)
 
+    def sample_device_logits(
+        self,
+        logits: ttnn.Tensor,
+        *,
+        batch_size: int,
+        top_k: Any = 1,
+        top_p: Any = 0.0,
+        temperature: Any = 0.0,
+        seeds: Any = 0,
+        tt_out_tok: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Canonical on-device sampler boundary shared by standalone and vLLM.
+
+        This deliberately returns the device token tensor.  Callers that need
+        host-visible request state perform only the minimal token read after
+        sampling; no caller reconstructs logits or implements another sampler.
+        """
+        spec = self._sampling_spec(batch_size, top_k=top_k, top_p=top_p, temperature=temperature, seeds=seeds)
+        sampling_logits = self._pad_sampling_logits(logits)
+        k, p, temp, seed_tensor = self._sampling_params(spec)
+        sampled, _ = self.sampler.decode_forward(
+            sampling_logits,
+            k=k,
+            p=p,
+            temp=temp,
+            seeds=seed_tensor,
+            tt_out_tok=tt_out_tok,
+        )
+        return sampled
+
     @staticmethod
     def _pad_sampling_logits(logits: ttnn.Tensor) -> ttnn.Tensor:
         if logits.shape[-2] == DECODE_SLOT_COUNT:
@@ -295,6 +325,8 @@ class Gemma4Generator(Generator):
         page_table: Any,
         kv_cache: Any,
         prompt_lens: List[int],
+        start_pos: torch.Tensor | None = None,
+        chunk_page_tables: Sequence[ttnn.Tensor | None] | None = None,
         return_all_logits: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor | ttnn.Tensor:
@@ -313,21 +345,39 @@ class Gemma4Generator(Generator):
         state.active_mask.zero_()
         state.active_mask[: len(prompt_lens)] = True
         state.positions.fill_(-1)
-        state.positions[: len(prompt_lens)] = torch.tensor(prompt_lens, dtype=torch.int32)
+        if start_pos is None:
+            position_rows = [torch.arange(n, dtype=torch.int32) for n in prompt_lens]
+        else:
+            positions = torch.as_tensor(start_pos, dtype=torch.int32)
+            if positions.ndim == 1:
+                positions = positions.reshape(len(prompt_lens), -1)
+            position_rows = [positions[row, :n].contiguous() for row, n in enumerate(prompt_lens)]
+        state.positions[: len(prompt_lens)] = torch.tensor(
+            [int(row[-1]) + 1 for row in position_rows], dtype=torch.int32
+        )
         for row, logical_len in enumerate(prompt_lens):
             if logical_len > state.slot_context_lengths[row]:
                 raise ValueError(
                     f"prompt row {row} length {logical_len} exceeds allocated slot capacity "
                     f"{state.slot_context_lengths[row]}"
                 )
-        if len(set(prompt_lens)) != 1:
-            # Preserve mixed prompts through the same explicit state contract;
-            # each logical row owns its slot and cache/page-table row.
+        if len(prompt_lens) > 1:
+            # The decoder prefill kernel is single-user: batching equal-length
+            # prompts would place the user count in the kernel's sequence axis.
+            # Execute every request through that canonical path; each logical
+            # row still owns its cache/page-table row and outputs stay ordered.
             outputs = []
             for row, logical_len in enumerate(prompt_lens):
-                row_tokens = tokens[row : row + 1, :logical_len]
+                physical_len = _padded_prefill_len(logical_len)
+                row_tokens = tokens[row : row + 1, :physical_len]
+                if row_tokens.shape[1] < physical_len:
+                    row_tokens = torch.nn.functional.pad(row_tokens, (0, physical_len - row_tokens.shape[1]))
                 tt_tokens = self._host_tokens_to_device(row_tokens)
-                tt_pos = self._positions_to_device(torch.arange(logical_len).reshape(1, logical_len), dtype=ttnn.uint32)
+                first_position = int(position_rows[row][0])
+                physical_positions = torch.arange(
+                    first_position, first_position + physical_len, dtype=torch.int32
+                ).reshape(1, physical_len)
+                tt_pos = self._positions_to_device(physical_positions, dtype=ttnn.uint32)
                 outputs.append(
                     self.model.prefill_forward(
                         tt_tokens,
@@ -335,20 +385,28 @@ class Gemma4Generator(Generator):
                         prompt_lens=[logical_len],
                         position_ids=tt_pos,
                         user_id=row,
+                        chunk_page_tables=chunk_page_tables,
                         return_all_logits=return_all_logits,
                     )
                 )
             return outputs
 
         logical_len = int(prompt_lens[0])
-        tt_tokens = self._host_tokens_to_device(tokens[:, :logical_len])
-        positions = torch.arange(logical_len).reshape(1, logical_len).repeat(tokens.shape[0], 1)
+        physical_len = _padded_prefill_len(logical_len)
+        physical_tokens = tokens[:, :physical_len]
+        if physical_tokens.shape[1] < physical_len:
+            physical_tokens = torch.nn.functional.pad(physical_tokens, (0, physical_len - physical_tokens.shape[1]))
+        tt_tokens = self._host_tokens_to_device(physical_tokens)
+        positions = torch.stack(
+            [torch.arange(int(row[0]), int(row[0]) + physical_len, dtype=torch.int32) for row in position_rows]
+        )
         tt_pos = self._positions_to_device(positions, dtype=ttnn.uint32)
         logits = self.model.prefill_forward(
             tt_tokens,
             state=state,
             prompt_lens=prompt_lens,
             position_ids=tt_pos,
+            chunk_page_tables=chunk_page_tables,
             return_all_logits=return_all_logits,
         )
         if return_all_logits:
@@ -652,6 +710,7 @@ def build_generator(model_dir: str | Path, mesh_device: Any, **kwargs: Any) -> G
     layer_indices = kwargs.pop("layer_indices", None)
     sampling_mode = kwargs.pop("sampling_mode", "device")
     precision_config_path = kwargs.pop("precision_config_path", None)
+    create_kv_cache = bool(kwargs.pop("create_kv_cache", True))
     tensor_cache_path = Path(
         kwargs.pop("tensor_cache_path", os.environ.get("GEMMA4_TENSOR_CACHE_PATH", "/tmp/gemma4_full_model_cache"))
     )
@@ -673,6 +732,7 @@ def build_generator(model_dir: str | Path, mesh_device: Any, **kwargs: Any) -> G
         layer_indices=layer_indices,
         tensor_cache_path=tensor_cache_path,
         precision_config_path=precision_config_path,
+        create_kv_cache=create_kv_cache,
     )
     return Gemma4Generator(model, tokenizer, sampling_mode=sampling_mode)
 

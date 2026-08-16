@@ -435,6 +435,7 @@ class Gemma4FullModel:
         prompt_lens: Sequence[int],
         position_ids: ttnn.Tensor,
         user_id: int = 0,
+        chunk_page_tables: Sequence[ttnn.Tensor | None] | None = None,
         return_all_logits: bool = False,
     ) -> ttnn.Tensor:
         """Device-only prefill over explicit externally owned state.
@@ -453,6 +454,7 @@ class Gemma4FullModel:
                 page_table=state.page_tables[state_idx],
                 kv_cache=state.kv_cache[state_idx],
                 user_id=user_id,
+                chunk_page_table=(None if chunk_page_tables is None else chunk_page_tables[state_idx]),
                 cache_position_modulo=(SLIDING_CACHE_TOKENS if _layer_kind(layer_type) is SLIDING_KIND else None),
             )
         if not return_all_logits:

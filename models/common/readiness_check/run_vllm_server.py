@@ -160,6 +160,7 @@ _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N300": (1, 2),
     "T3K": (1, 8),
     "TG": (8, 4),
+    "P300x2": (1, 4),
 }
 
 
@@ -235,7 +236,7 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {
@@ -408,32 +409,48 @@ def _run_qualitative_prompts(
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):
         print(f"\n  Prompt {i}/{len(prompts)}: {prompt[:60]}...")
-
-        greedy_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.0,
+        prompt_format = "openai_chat_user_message"
+        try:
+            greedy_text = (
+                client.chat.completions.create(
+                    model=hf_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=256,
+                    temperature=0.0,
+                )
+                .choices[0]
+                .message.content
             )
-            .choices[0]
-            .text
-        )
-        sampled_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.7,
-                top_p=0.9,
+            sampled_text = (
+                client.chat.completions.create(
+                    model=hf_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=256,
+                    temperature=0.7,
+                    top_p=0.9,
+                )
+                .choices[0]
+                .message.content
             )
-            .choices[0]
-            .text
-        )
+        except openai.BadRequestError as exc:
+            if "chat template" not in str(exc).lower():
+                raise
+            prompt_format = "raw_completion_no_chat_template"
+            greedy_text = (
+                client.completions.create(model=hf_model, prompt=prompt, max_tokens=256, temperature=0.0)
+                .choices[0]
+                .text
+            )
+            sampled_text = (
+                client.completions.create(model=hf_model, prompt=prompt, max_tokens=256, temperature=0.7, top_p=0.9)
+                .choices[0]
+                .text
+            )
 
         results.append(
             {
                 "prompt": prompt,
+                "prompt_format": prompt_format,
                 "greedy_completion": greedy_text,
                 "sampled_completion": sampled_text,
             }

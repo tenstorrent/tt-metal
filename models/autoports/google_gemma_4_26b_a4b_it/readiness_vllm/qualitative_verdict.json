@@ -1,0 +1,13 @@
+{
+  "verdict": "pass",
+  "prompt_format": "openai_chat_user_message",
+  "prompts": 6,
+  "profiles": ["greedy", "temperature_0.7_top_p_0.9"],
+  "coherent_and_on_topic": true,
+  "repetition_collapse": false,
+  "gibberish": false,
+  "wrong_language_drift": false,
+  "request_contamination": false,
+  "reference_check": "Haiku matches the accepted full-model TT completion exactly",
+  "degeneracy_check": "No degenerate output detected"
+}

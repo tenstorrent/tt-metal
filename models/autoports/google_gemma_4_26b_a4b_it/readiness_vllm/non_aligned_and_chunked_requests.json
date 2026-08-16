@@ -1,0 +1,30 @@
+{
+  "server": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "max_model_len": 262144,
+    "max_num_seqs": 32,
+    "block_size": 64,
+    "sample_on_device_mode": "all",
+    "trace_region_size": 220000000,
+    "fabric_config": "FABRIC_1D_RING",
+    "chunked_prefill_max_num_batched_tokens": 2048
+  },
+  "requests": [
+    {
+      "requested_prompt_tokens": 47,
+      "server_prompt_tokens": 47,
+      "completion_tokens": 4,
+      "text": " model inference. Ten",
+      "finish_reason": "length",
+      "verdict": "pass: non-aligned logical prompt length accepted"
+    },
+    {
+      "requested_prompt_tokens": 2051,
+      "server_prompt_tokens": 2051,
+      "completion_tokens": 4,
+      "text": "storrent hardware accelerates",
+      "finish_reason": "length",
+      "verdict": "pass: request crossed the 2048-token chunked-prefill boundary"
+    }
+  ]
+}

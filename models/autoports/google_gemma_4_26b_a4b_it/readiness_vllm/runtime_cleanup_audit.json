@@ -1,0 +1,13 @@
+{
+  "audited_at_utc": "2026-08-16T02:33:49Z",
+  "final_runner_exit": 0,
+  "server_shutdown": "SIGTERM clean",
+  "engine_fatal": false,
+  "unsafe_active_trace_allocation_warning": false,
+  "runtime_fallback_in_measured_path": false,
+  "fallback_exception_mode": true,
+  "fallback_evidence": "Final sampling and async-overlap servers ran with throw_exception_on_fallback=true",
+  "live_vllm_or_enginecore_processes_holding_devices": false,
+  "visible_devices_after_final_run": 4,
+  "note": "Only historical defunct vllm zombies owned by the outer environment were visible; defunct processes hold no device resources."
+}
