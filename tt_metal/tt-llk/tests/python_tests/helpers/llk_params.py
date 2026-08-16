@@ -747,6 +747,8 @@ class CountArm(Enum):
     ReplayLoad = 0
     ReplaySwap = 1
     CountD1 = 2
+    MacroTriple = 3
+    MaskStore = 4
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one

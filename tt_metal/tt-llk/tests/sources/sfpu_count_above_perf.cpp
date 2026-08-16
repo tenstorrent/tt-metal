@@ -150,9 +150,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 namespace
 {
-constexpr std::uint32_t ARM_REPLAY_LOAD = 0; // control: frontend floor, ~1.0 cyc/vec
-constexpr std::uint32_t ARM_REPLAY_SWAP = 1; // control: known 2 cyc/vec
-constexpr std::uint32_t ARM_COUNT_D1    = 2; // the real selection loop
+constexpr std::uint32_t ARM_REPLAY_LOAD  = 0; // control: frontend floor, ~1.0 cyc/vec
+constexpr std::uint32_t ARM_REPLAY_SWAP  = 1; // control: known 2 cyc/vec
+constexpr std::uint32_t ARM_COUNT_D1     = 2; // the real selection loop
+constexpr std::uint32_t ARM_MACRO_TRIPLE = 3; // 3-sub-unit ceiling probe, see below
+constexpr std::uint32_t ARM_MASK_STORE   = 4; // Load+SFPGT+Store: the D2 filter, see below
 
 // LReg map. A/B ping-pong as the macro load target; SFPGT overwrites the
 // loaded register with its own -1/0 mask, which the SFPIADD then consumes.
@@ -227,6 +229,117 @@ inline void configure_macro0()
     TTI_SFPNOP;
     TTI_SFPNOP;
 }
+
+// ---------------------------------------------------------------------------
+// ARM_MACRO_TRIPLE -- the 3-sub-unit ceiling probe.
+//
+// QUESTION: does one SFPLOADMACRO retire Load + Simple + MAD in a single
+// cycle, as SFPLOADMACRO.md:13 claims ("up to five instructions per cycle")?
+//
+// WHY IT MATTERS EVEN THOUGH THE MAD CANNOT ACCUMULATE. The MAD sub-unit is
+// useless for a *count* -- macro-scheduled destinations are restricted to
+// macroVD or the write-only LReg[16], so no reduction is expressible (this is
+// why ARM_COUNT_D1 pays 2 cycles for a software SFPIADD). But the MAD slot is
+// free real estate for a *map*: in a fused MoE gate the Simple slot could
+// compare while the MAD slot scales, biases, or exponentiates. If the triple
+// retires at ~1.0 cyc/vector, that arithmetic is free. If it retires at ~2.0,
+// every fused design pays for it. This bounds the ceiling for any future
+// fused kernel and is worth one arm to settle.
+//
+// Timing, same ping-pong discipline as ARM_COUNT_D1 (see header table):
+//   Simple = SFPGT  at delay 0 -> fires t+1, writes the mask into macroVD
+//   MAD    = SFPMAD at delay 1 -> fires t+2, reads that mask as its addend
+// The +1 stagger is mandatory: same-delay means same cycle, and instructions
+// executing in cycle T read pre-T state, so the MAD would consume the loaded
+// value rather than the mask. The MAD's result goes to LReg[16] (bit 0x40) so
+// it never collides with the next macro's load into macroVD.
+//
+// The template's operands are deliberately non-degenerate: an earlier version
+// used LCONST_0 * LCONST_0 + x, which is a copy, and would have measured the
+// MAD sub-unit not being exercised at all.
+constexpr std::uint32_t SEQ3_SIMPLE = 0x80 | (0u << 3) | 4u; // 0x84 template[0]=SFPGT, delay 0
+constexpr std::uint32_t SEQ3_MAD    = 0x40 | (1u << 3) | 5u; // 0x4D template[1]=SFPMAD, delay 1, VD=LReg16
+constexpr std::uint32_t SEQUENCE_1  = (SEQ3_MAD << 8) | SEQ3_SIMPLE;
+
+// Simple (bit 8) and MAD (bit 9) both on WaitForElapsedInstructions. Bit 9 is
+// load-bearing here in a way it is not for macro 0: the MAD's delay is 1, so a
+// frontend bubble under cycle-counting would slide it off its producer.
+constexpr std::uint32_t MISC_WORD_3 = 0x300;
+
+inline void configure_macro1_triple()
+{
+    // template[0] = SFPGT (VD=12 backdoor), same as macro 0.
+    TTI_SFPGT(0, L_THR, 12, SFPGT_MOD1_SET_VD);
+
+    // template[1] = SFPMAD (VD=13 backdoor). Operands (VA, VB, VC) -> VD.
+    // The macro overrides VC to macroVD (the mask) and VD to LReg[16], leaving
+    // VA=LCONST_1 and VB=L_ACC from the template: LReg16 = 1.0*L_ACC + mask.
+    TTI_SFPMAD(ckernel::p_sfpu::LCONST_1, L_ACC, ckernel::p_sfpu::LCONST_0, 13, 0);
+
+    TTI_SFPCONFIG(SEQUENCE_1, 4 + 1, SFPCFG_IMM16_IS_VALUE); // Sequence[1] -> macro index 1
+    TTI_SFPCONFIG(MISC_WORD_3, 8, SFPCFG_IMM16_IS_VALUE);    // Misc
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// Macro index 1 variant of the LOADMACRO packing helper.
+#define LOADMACRO1(vd, addr_mod, off) TTI_SFPLOADMACRO((1u << 2) | ((vd) & 3u), ckernel::InstrModLoadStore::INT32, (addr_mod), (off) | ((vd) >> 2))
+
+// ---------------------------------------------------------------------------
+// ARM_MASK_STORE -- the "D2" filter, and the real candidate kernel.
+//
+// ARM_MACRO_TRIPLE shows the Simple and MAD slots are free. The Store slot is
+// free too, and unlike MAD it can write somewhere that SURVIVES: Dst. So
+//
+//     Load + Simple(SFPGT) + Store   ->  materialise a -1/0 mask tile in place
+//
+// is a MAP, not a reduction, and should therefore cost ~1.0 cyc/vector -- half
+// of ARM_COUNT_D1's 2.0. The count then comes from a separate reduction over
+// the mask tile (FPU, packer accumulate, or a second SFPU pass), which is
+// amortised over the whole tile instead of paid per vector.
+//
+// This is structurally the same shape as ckernel_sfpu_mul_int.h's 1-cycle case
+// (Load + MAD + Store with in == out), which the LLK documents at
+// "1, 2, or 3 cycles per input row" -- 1 when input and output share a Dst
+// index. Here they necessarily do: SFPLOADMACRO.md:140 forces the scheduled
+// store's address to equal the load's, so the mask overwrites its own input.
+// For a filter pass that is exactly what is wanted.
+//
+// store_bits = (1 << 3) | 3
+//   selector 3 -> SFPSTORE (SFPLOADMACRO.md:82)
+//   0x40 CLEAR and 0x80 CLEAR -> Insn.VD = macroVD, i.e. store the register the
+//        SFPGT just wrote (the mask). Setting 0x40 would store LReg[16]
+//        instead, which is not what the compare produced.
+//   delay 1 -> fires at t+2, one cycle after the SFPGT at t+1, so it stores the
+//        mask rather than the pre-compare loaded value.
+constexpr std::uint32_t SEQ4_SIMPLE = 0x80 | (0u << 3) | 4u; // SFPGT, delay 0
+constexpr std::uint32_t SEQ4_STORE  = (1u << 3) | 3u;        // SFPSTORE, delay 1, VD=macroVD
+constexpr std::uint32_t SEQUENCE_2  = (SEQ4_STORE << 24) | SEQ4_SIMPLE;
+
+// Misc for macro 2: UsesLoadMod0ForStore bit for macro 2 is bit 4+2 = 0x40, so
+// the store inherits the load's INT32 mode rather than StoreMod0 (the mask is
+// a raw bit pattern and must not be format-converted). UnitDelayKind bit 8
+// (Simple) and bit 11 (Store) = 0x900.
+constexpr std::uint32_t MISC_WORD_4 = 0x900 | 0x40;
+
+inline void configure_macro2_maskstore()
+{
+    TTI_SFPGT(0, L_THR, 12, SFPGT_MOD1_SET_VD); // template[0] = SFPGT
+
+    // Sequence[2] needs the Store byte in bits 24..31, so it does NOT fit the
+    // 16-bit immediate path used by the other macros. Stage the full 32-bit
+    // word through LReg[0] and write with Mod1=0 -- the idiom of
+    // ckernel_sfpu_mul_int.h's _init_mul_int_.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, SEQUENCE_2 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (SEQUENCE_2 >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+
+    TTI_SFPCONFIG(MISC_WORD_4, 8, SFPCFG_IMM16_IS_VALUE);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+#define LOADMACRO2(vd, addr_mod, off) TTI_SFPLOADMACRO((2u << 2) | ((vd) & 3u), ckernel::InstrModLoadStore::INT32, (addr_mod), (off) | ((vd) >> 2))
 
 // ---------------------------------------------------------------------------
 // MOP iteration ceiling.
@@ -315,6 +428,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             configure_macro0();
         }
+        else if constexpr (COUNT_ARM == ARM_MACRO_TRIPLE)
+        {
+            configure_macro1_triple();
+        }
+        else if constexpr (COUNT_ARM == ARM_MASK_STORE)
+        {
+            configure_macro2_maskstore();
+        }
 
         PROFILER_SYNC();
     }
@@ -378,6 +499,67 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 });
             ckernel_unpack_template::lA(lltt::replay_insn(0, 2), TT_OP_NOP).program();
             mop_run_all();
+        }
+        else if constexpr (COUNT_ARM == ARM_MASK_STORE)
+        {
+            // THE D2 FILTER. One macro per vector: Load + SFPGT + SFPSTORE.
+            // A map, not a reduction -- so unlike ARM_COUNT_D1 there is no
+            // software-issued instruction and the expected cost is ~1.0
+            // cyc/vector, matching ARM_REPLAY_LOAD.
+            //
+            // The mask overwrites its own input (the scheduled store's address
+            // is forced equal to the load's, SFPLOADMACRO.md:140). Ping-ponged
+            // A/B for the same double-write reason as the other macro arms.
+            load_replay_buf<NoExec>(
+                0,
+                2,
+                []
+                {
+                    LOADMACRO2(L_A, ADDR_MOD_WALK, 0);
+                    LOADMACRO2(L_B, ADDR_MOD_WALK, 0);
+                });
+
+            ckernel_unpack_template::lA(lltt::replay_insn(0, 2), TT_OP_NOP).program();
+            mop_run_all();
+
+            // Drain the scheduled Simple (t+1) and Store (t+2).
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+        }
+        else if constexpr (COUNT_ARM == ARM_MACRO_TRIPLE)
+        {
+            // 3-SUB-UNIT CEILING PROBE. One SFPLOADMACRO per vector, carrying
+            // both a Simple (SFPGT, delay 0) and a MAD (SFPMAD, delay 1).
+            // ONE issue per vector versus ARM_COUNT_D1's two.
+            //
+            // Ping-ponged A/B for the same reason as ARM_COUNT_D1: the SFPGT
+            // of macro N writes macroVD at t+1, and macro N+1 loads at t+1.
+            // Without the ping-pong those are a same-cycle double write to one
+            // LReg, which is undefined and (as this file's history shows) can
+            // hang the math thread rather than fail loudly.
+            //
+            // Expected: ~1.0 cyc/vector if Load+Simple+MAD co-issue.
+            //           ~2.0 if the MAD serialises behind the Simple.
+            // Compare directly against ARM_REPLAY_LOAD (pure load, ~1.0) --
+            // if this arm matches it, the Simple and MAD slots were free.
+            load_replay_buf<NoExec>(
+                0,
+                2,
+                []
+                {
+                    LOADMACRO1(L_A, ADDR_MOD_WALK, 0);
+                    LOADMACRO1(L_B, ADDR_MOD_WALK, 0);
+                });
+
+            ckernel_unpack_template::lA(lltt::replay_insn(0, 2), TT_OP_NOP).program();
+            mop_run_all();
+
+            // Drain the scheduled Simple (t+1) and MAD (t+2) of the final
+            // macro before the zone closes.
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
         }
         else // ARM_COUNT_D1 -- the real selection inner loop
         {

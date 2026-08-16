@@ -119,6 +119,8 @@ _DEST_ACC = DestAccumulation.Yes
         CountArm.ReplayLoad,
         CountArm.ReplaySwap,
         CountArm.CountD1,
+        CountArm.MacroTriple,
+        CountArm.MaskStore,
     ],
     iter_count=_ITER_COUNTS,
 )

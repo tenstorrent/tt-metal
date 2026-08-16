@@ -367,11 +367,39 @@ Measured on the Blackhole in this machine, via the tt-llk perf harness
 MATH_ISOLATE, two-point slope over ITER_COUNT ∈ {512, 2048} to cancel the profiler
 marker overhead, 5 runs per point:
 
-| Arm | cycles per 32-element vector |
-| :--- | ---: |
-| Replay/MOP feed floor (recorded `SFPLOAD`, MOP-driven) | **1.000** |
-| `SFPSWAP` control (independently known to be 2 cycles) | **2.000** |
-| **Threshold count (`SFPLOADMACRO`+`SFPGT` / software `SFPIADD`)** | **1.998** |
+| Arm | What it issues per vector | cyc/vector | elem/cycle |
+| :--- | :--- | ---: | ---: |
+| Feed floor | recorded `SFPLOAD`, MOP-driven | **1.000** | 32.0 |
+| `SFPSWAP` control | known-2-cycle instruction | **2.000** | 16.0 |
+| Count inline ("D1") | `SFPLOADMACRO`(Load+`SFPGT`) + software `SFPIADD` | **1.998** | 16.0 |
+| 3-sub-unit probe | `SFPLOADMACRO`(Load+`SFPGT`+`SFPMAD`) | **1.002** | 31.9 |
+| **Mask filter ("D2")** | `SFPLOADMACRO`(Load+`SFPGT`+`SFPSTORE`) | **1.003** | **31.9** |
+
+**The two macro arms are the result that matters.** Adding a Simple (`SFPGT`) and
+either a MAD or a Store to the macro costs **nothing** — 1.002 and 1.003 against a
+1.000 bare-load floor. Three sub-units genuinely co-issue, exactly as
+`SFPLOADMACRO.md:13` claims. So:
+
+- A **filter that materializes a mask tile** (`Load + SFPGT + SFPSTORE`, a *map*)
+  runs at **1 cycle / 32-element vector = 32 elements/cycle**.
+- The 2 cycles of the inline-count form are **entirely** the software-issued
+  `SFPIADD` — the *reduction*, not the compare. Reductions cannot be macro-scheduled
+  (destinations restricted to `macroVD` or write-only `LReg[16]`), so they cost a
+  second issue slot.
+- The free MAD slot means a **fused** gate (compare on Simple, scale/bias/exp on MAD)
+  is also free relative to a bare load. That is the lever for MoE gating.
+
+**Revised floor.** For a mask-materializing filter the N=32k figure is **1,024
+cycles**, not 2,048. And the roofline verdict flips by data type:
+
+| | unpacker delivers | SFPU filter consumes | verdict |
+| :--- | ---: | ---: | :--- |
+| FP32 | 32 elem/cyc (128 B/cyc) | 32 elem/cyc | **exactly balanced — on the roofline** |
+| BF16 | 64 elem/cyc (128 B/cyc) | 32 elem/cyc | SFPU-bound by 2x |
+
+An earlier revision of this section said selection was SFPU-bound by 2x-4x. That was
+correct for the inline-count form and wrong for the mask form, which is the one a real
+filter would use.
 
 Preceded by `test_profiler_overhead.py` passing on the same device, which pins the
 marker pair at 30 ± 5 cycles. The `SFPSWAP` arm is the methodology control: its 2.000
