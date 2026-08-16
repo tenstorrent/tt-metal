@@ -150,6 +150,50 @@ __attribute__((noinline)) void calculate_unary_max_min_int_fresh_cpp(const std::
         }
         sfpi::dst_reg++;
     }
+// Fresh typed-C++ integer add/sub over the sign-magnitude Int32 Dst the binary
+// harness drives (production dispatch: _add_int_/_sub_int_ with
+// InstrModLoadStore::INT32 and SIGN_MAGNITUDE_FORMAT=true).  On Blackhole that
+// production path is raw hand-scheduled TTI (TT_SFPLOAD + SFPCAST/SFPSETSGN
+// sign-magnitude<->2's-complement conversions + TTI_SFPIADD + TT_SFPSTORE).
+// This body states the same semantics in plain typed sfpi: DataLayout::SM32
+// loads/stores carry the representation contract and the compiler owns
+// conversion lowering, scheduling, and delivery.  No fixed LREGs, raw
+// instructions, replay slots, or SFPLOADMACRO templates.
+template <bool IS_ADD, int ITERATIONS>
+__attribute__((noinline)) void calculate_add_sub_int_fresh_cpp()
+{
+    constexpr std::uint32_t tile_rows = 32;
+
+#pragma GCC unroll 4
+    for (int face = 0; face < 4; ++face)
+    {
+#pragma GCC unroll 8
+        for (int row = 0; row < ITERATIONS; ++row)
+        {
+            const sfpi::vInt a                              = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vInt b                              = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = IS_ADD ? a + b : a - b;
+            sfpi::dst_reg++;
+        }
+        ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+}
+
+template <DstSync DST_SYNC, bool DST_ACCUM, bool IS_ADD, int ITERATIONS>
+inline void call_add_sub_int_fresh_cpp(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
+{
+    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh add/sub int expects adjacent inputs");
+    LLK_ASSERT(dst_index_out == dst_index_in0, "fresh add/sub int expects in-place output");
+    LLK_ASSERT(vector_mode == VectorMode::RC, "fresh add/sub int expects full-tile vector mode");
+
+    // Anchor the dynamic tile once in the wrapper so the isolated semantic body
+    // contains only constant relative Dst addresses (same idiom as the fresh
+    // max/min selector).
+    ::_llk_math_eltwise_sfpu_start_(dst_index_in0);
+    calculate_add_sub_int_fresh_cpp<IS_ADD, ITERATIONS>();
+    ::_llk_math_eltwise_sfpu_done_();
 }
 
 template <bool DST_ACCUM_MODE, DataFormat FORMAT, int ITERATIONS>

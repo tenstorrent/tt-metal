@@ -120,7 +120,18 @@ inline void run_selected_binary_sfpu(
         call_binary_max_min_fresh_cpp<
             DST_SYNC_MODE, is_fp32_dest_acc_en, is_max, 8>(
             dst_in0, dst_in1, dst_out, VectorMode::RC);
-    } else {
+    }
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && (SFPU_BINARY_OPERATION == ckernel::BinaryOp::ADD || SFPU_BINARY_OPERATION == ckernel::BinaryOp::SUB) &&
+        static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        // Test-only fresh typed-C++ leg for the sign-magnitude Int32 add/sub
+        // production path (_add_int_/_sub_int_ SIGN_MAGNITUDE).
+        constexpr bool is_add = SFPU_BINARY_OPERATION == ckernel::BinaryOp::ADD;
+        call_add_sub_int_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, is_add, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else
+    {
         test_utils::call_binary_sfpu_operation<
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,

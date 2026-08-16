@@ -147,12 +147,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 START_PERF_MEASURE("RECIPROCAL_BODY")
             if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
             {
-                // run_kernel is not a template, so a discarded if-constexpr branch is
-                // still fully checked: the assert must repeat the branch condition or
-                // it fails every dest_acc build of every other op in this file.
+                // Guard only variants that actually select this branch: run_kernel is not
+                // a template, so a discarded `if constexpr` branch is still fully checked
+                // and an unconditional static_assert here rejects every APPROX_MODE /
+                // fp32-dest variant of this kernel (signbit, reciprocal, ...).
                 static_assert(
-                    !(FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential) || (!APPROX_MODE && !is_fp32_dest_acc_en),
-                    "fresh exp supports only approx-off, 16-bit dest");
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::exponential || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "semantic exp selector supports only non-approx, bf16 dest");
                 SFPU_UNARY_CALL(
                     DST_SYNC,
                     is_fp32_dest_acc_en,
