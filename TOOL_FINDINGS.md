@@ -31,8 +31,10 @@ Correctness itself is solid and was measured by running the tests directly, not 
 tool's status files. Bring-up in particular is genuinely impressive: a 4B three-stack
 model, no per-model code, entirely on device in one round.
 
-**No performance number in this document describes the delivered model.** That is F46, and it is the
-first thing to read.
+**The optimizer's headline number does not describe the delivered model** — it reported −17.2%,
+measured on a decode path the demo never calls, while the shipped path improved **−13.2%** (297.69 →
+258.26 ms/frame, measured directly). The gains are real and reach the product through shared code;
+the measurement simply is not of the product. That is F46, and it is the first thing to read.
 
 ### The five that matter most
 
@@ -173,8 +175,8 @@ Three separable causes, in the order they were established:
 2. **Eager dispatch (F45).** `execute_trace` appears once in the entire pipeline, inside the
    capture selftest. The delivered generation loop replays no trace, so every op is dispatched from
    the host, every frame.
-3. **Tuning.** The 11 optimisations are real and correctness-preserving — but they were measured
-   against `decode_step`, which the demo does not call, so none of them are in the 258.26 ms above.
+3. **Tuning.** The 11 optimisations are real, correctness-preserving, **and they do reach the
+   shipped path** — see the before/after below. They are already in the 258.26 ms.
 
 Only the third is the kind of gap more optimisation closes. The first two are structural choices the
 generated port made and its gates never questioned.
@@ -201,8 +203,36 @@ what this model actually spends its time on.
   equality, zero code flips, measured directly on this same tree.
 - **Not that bring-up failed.** Bring-up is the strong half of this tool: a 4B three-stack model,
   no per-model code, 7/7 components and 114/114 operations on device, in one round, in 42 minutes.
-- **Not that the optimisation work is wasted.** All 11 commits improve `decode_step` — the function
-  that *should* ship. Wire it into `run_tts` and they arrive with it.
+### MEASURED: the optimisations DO reach the shipped path — a correction
+
+An earlier draft of this document said the 11 commits improve only `decode_step` and therefore
+"none of it reaches a user". **That was wrong, and the error mattered.** Most of the commits land in
+`tt_common.py` (6) and `tt_backbone.py` (3) — the helper module and the attention/MLP bodies that
+**both** paths execute — plus `_stubs/flow_matching.py` and `_stubs/codec_decoder.py`, which the demo
+runs directly. Only the changes specific to `decode_step`'s own structure are stranded.
+
+The shipped path was measured at the pre-optimise commit (`51e208f40c`) and at the optimised tree,
+same script, same settings:
+
+| | before 11 commits | after | change |
+|---|---|---|---|
+| **per frame** | **297.69 ms** | **258.26 ms** | **−13.2%** |
+| prefill | 156.4 ms | 142.2 ms | −9.1% |
+| codec | 37.1 ms | 31.6 ms | −14.8% |
+| total utterance | 7337.9 ms | 6371.9 ms | −966 ms |
+| RTF | 3.822 | 3.319 | |
+
+**So the work is not stranded and it did not pessimise the shipped path** — the concern that tuning
+for `M=32` might hurt a path running `M=224` is not borne out in aggregate.
+
+What remains true, and is the accurate form of the criticism: **the optimizer reported 17.2% and the
+product got 13.2%.** The metric is optimistic by four points, not fictional. The gains arrive by
+side effect — through shared code — rather than because anything measured the thing being shipped.
+A change that helped `decode_step` and hurt `run_tts` would still be banked, and nothing in the
+pipeline would notice; it simply did not happen this time.
+
+- **Not that the optimisation work is wasted.** It reached the product, as measured above. Wiring
+  `decode_step` into `run_tts` would additionally recover the structural gap (F46).
 
 The honest summary is narrow and specific: **the tool ports correctly and measures its own
 performance against something the user never runs.**
