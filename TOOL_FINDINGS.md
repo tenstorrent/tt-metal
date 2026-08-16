@@ -3867,9 +3867,11 @@ what makes this dangerous rather than merely broken — it is right often enough
 
 ### Fixes (the first is one line)
 
-1. **Reject out-of-range values as parse failures.** `if pcc is not None and not (-1.0 <= pcc <=
-   1.0): return {"status": "crash", "error": f"parsed PCC {pcc} is out of range — the log line
-   matched was not a correlation"}`. A value above 1.0 is *never* a passing measurement.
+1. **Reject out-of-range values as parse failures — WITH a tolerance.** A real correlation can
+   exceed unity by floating-point rounding (this port's own trace selftest prints `pcc=1.000017`),
+   so a strict `-1.0 <= pcc <= 1.0` test would fail valid runs. Use
+   `not (-1.0 - 1e-3 <= pcc <= 1.0 + 1e-3)` → `status: crash`, `pcc_verified: False`. The observed
+   bogus values (33.612, 47.779) are four orders of magnitude outside that band.
 2. **Tighten the regex.** `pcc[^\n]*?[:=]` should not span arbitrary text; require the delimiter to
    follow `pcc` closely (`pcc\s*[:=]` or `\bpcc\b[^,\n]{0,12}[:=]`).
 3. **Cross-check the exit code when the parse is implausible.** Ignoring the return code is
@@ -3877,6 +3879,52 @@ what makes this dangerous rather than merely broken — it is right often enough
    only remaining evidence and should decide.
 4. **Report `pcc_verified: false` when the value is not in range**, rather than asserting
    verification of a number the tool cannot have measured.
+
+### IT RECURS — a second instance, and the mechanism is now exact
+
+2026-08-16, ~11:20, same run, a different edit:
+
+```json
+{"full_pipeline": {"status": "regressed", "full_pipeline_ms": 1572.2449, ...},
+ "pcc":           {"status": "ok", "pcc": 47.779}}
+```
+
+**`pcc: 47.779`, accepted as ok.** Two instances now — `33.612` and `47.779` — so this is
+reproducible, not a one-off. Both land in the tens, consistent with a duration in seconds being
+scraped. (Nothing was banked here either: still 9 commits, and the perf side was `regressed`
+independently.)
+
+**The mechanism, established by running the tool's own regex over a real passing e2e log:**
+
+```
+matches in a healthy run: 11        min (what parse_pcc returns) = 0.9999   <- correct
+```
+
+In a healthy run the real per-stage PCC lines are present, the minimum of them is a true PCC, and
+the gate behaves. The bogus readings therefore mean **no sub-1.0 PCC line was present at all** —
+the e2e run did not reach its comparison — leaving only a spurious match, which by being the only
+match becomes the `min` and clears the threshold. The failure mode is precisely: *the test produced
+no PCC, and the absence was reported as a pass.*
+
+### The one-line fix needs a tolerance — a strict range check would break valid runs
+
+Worth correcting, because the naive version of this fix is wrong. The same healthy log contains two
+legitimate matches **above 1.0**:
+
+```
+  1.000017  <-  pcc=1.000017      (trace selftest, prefill stage)
+```
+
+A real correlation can exceed unity by rounding. So `if not (-1.0 <= pcc <= 1.0): reject` would fail
+correct runs. The check must carry a tolerance:
+
+```python
+if pcc is not None and not (-1.0 - 1e-3 <= pcc <= 1.0 + 1e-3):
+    return {"status": "crash", "pcc_verified": False,
+            "error": f"parsed PCC {pcc} is out of range — the matched line was not a correlation"}
+```
+
+`33.612` and `47.779` are four orders of magnitude outside that band; `1.000017` sits inside it.
 
 ### No harm done on this run — the severity is potential, not realised
 
