@@ -269,7 +269,7 @@ class MigrationDriver:
 
         Must run while the runner is alive (before any SHUTDOWN sentinel): the endpoint reads source KV
         from device DRAM. ``stats`` is the producer's RunStats — only ``stats.resident`` (slot_id ->
-        ``_Resident``) is read. ``num_slots`` is the KV table's slot count when known, used
+        ``_SlotFill``) is read. ``num_slots`` is the KV table's slot count when known, used
         only to bounds-check loopback destinations. ``slot_traces`` / ``pools_by_trace`` are the producer's
         per-slot prompt maps, needed only to write the cross-endpoint handoff.
 

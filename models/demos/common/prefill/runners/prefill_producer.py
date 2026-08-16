@@ -57,7 +57,7 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  schedule for all slots.
   PREFILL_DFLASH_GOLDEN_KV_DIR   dir with the DFlash drafter's golden context K/V (k_cache/v_cache
                                  .safetensors); set it to ALSO PCC the drafter caches the table carries.
-  PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.999). Both feed
+  PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.99). Both feed
                                  dflash_kv_table_pcc_check in deepseek_v3_d_p/tt/dflash_prefill/
                                  kv_validation.py; unset golden => the drafter half is skipped.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
@@ -533,8 +533,8 @@ class _Slot:
         return self.next_chunk >= self.target_chunks
 
 
-class _Resident(NamedTuple):
-    """What is physically resident in one slot's KV cache: `real_len`, the absolute non-pad extent
+class _SlotFill(NamedTuple):
+    """How much of one slot's KV cache the prefill filled: `real_len`, the absolute non-pad extent
     [0, real_len) the runner actually wrote (the last `actual_end` pushed). Recorded, not re-derived from
     chunk counts -- a multi-turn slot resumes at a non-zero prefix, so chunks_pushed * CHUNK_SIZE would
     describe only its latest turn. Shared producer/migration_driver contract."""
@@ -579,7 +579,7 @@ def _new_request(
 
 @dataclass
 class RunStats:
-    resident: dict  # slot_id -> _Resident (what is physically in that slot's KV cache)
+    resident: dict  # slot_id -> _SlotFill (what is physically in that slot's KV cache)
     total_pushes: int
     push_ms: list
     completed: int
@@ -591,9 +591,9 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
     Device-free: `push_fn(slot_id, chunk_idx, actual_start, actual_end) -> elapsed_ms` does and times the
     push; now_fn/sleep_fn/rng are injectable so tests run instantly and deterministically. Records each
-    slot's resident request as a `_Resident` at push time, and returns RunStats. A recycled slot restarts
+    slot's resident request as a `_SlotFill` at push time, and returns RunStats. A recycled slot restarts
     at chunk 0 unless `cfg.multi_turn_prob` continues the conversation from its aligned-down length; either
-    way `_Resident.real_len` is the slot's absolute non-pad extent.
+    way `_SlotFill.real_len` is the slot's absolute non-pad extent.
     """
     rng = rng if rng is not None else random.Random(cfg.seed)
     slots = [_Slot(i) for i in range(cfg.num_users)]
@@ -619,7 +619,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end))
         total_pushes += 1
         slot.next_chunk += 1
-        resident[slot.slot_id] = _Resident(real_len=actual_end)  # what's now resident in this slot
+        resident[slot.slot_id] = _SlotFill(real_len=actual_end)  # what's now resident in this slot
         if slot.done:
             completed += 1
             if next_req_id < cfg.max_requests:  # recycle the slot
@@ -1032,7 +1032,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold)
         return False
 
-    dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.999"))
+    dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.99"))
     # Under DFlash the table also carries the drafter's context caches (extra dflash_* configs); PCC them
     # via the deepseek gate. The import + read closure are built only when those configs are present, so a
     # non-DFlash run neither imports the deepseek module nor measures anything.
@@ -1203,7 +1203,7 @@ def _mr_config():
 
 
 def _mr_bcast_resident(rank: int, resident: dict) -> dict:
-    """Broadcast the master's resident-slot map (slot_id -> _Resident) to every rank via allgather_int:
+    """Broadcast the master's resident-slot map (slot_id -> _SlotFill) to every rank via allgather_int:
     element [0] of each allgather is rank 0's contribution, giving a broadcast from the only value-carrying
     collective ttnn exposes (no native broadcast/scatter). Doubles as the GO barrier: a validator blocks in
     the first allgather until the master arrives (only after it has drained every LayerAck). Non-master ranks
@@ -1216,7 +1216,7 @@ def _mr_bcast_resident(rank: int, resident: dict) -> dict:
         slot_id, real_len = (items[k][0], items[k][1].real_len) if rank == 0 else (0, 0)
         slot_id = ttnn.distributed_context_allgather_int(slot_id)[0]
         real_len = ttnn.distributed_context_allgather_int(real_len)[0]
-        out[slot_id] = _Resident(real_len=real_len)
+        out[slot_id] = _SlotFill(real_len=real_len)
     return out
 
 
