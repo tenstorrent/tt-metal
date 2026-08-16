@@ -10,6 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/kernel_lib/mcast_pipe.hpp"
 
 #include <cstdint>
 
@@ -275,28 +276,17 @@ void kernel_main() {
     constexpr uint32_t reduce_core_x = get_compile_time_arg_val(14);
     constexpr uint32_t reduce_core_y = get_compile_time_arg_val(15);
 
-    // start and end coordinates of the cores that will be used to compute the intermediate outputs
-    // At maximum, there can be two groups of cores (suffix 0 and 1)
-    constexpr uint32_t start_core_x0 = get_compile_time_arg_val(16);
-    constexpr uint32_t start_core_y0 = get_compile_time_arg_val(17);
-    constexpr uint32_t end_core_x0 = get_compile_time_arg_val(18);
-    constexpr uint32_t end_core_y0 = get_compile_time_arg_val(19);
-
-    constexpr uint32_t start_core_x1 = get_compile_time_arg_val(20);
-    constexpr uint32_t start_core_y1 = get_compile_time_arg_val(21);
-    constexpr uint32_t end_core_x1 = get_compile_time_arg_val(22);
-    constexpr uint32_t end_core_y1 = get_compile_time_arg_val(23);
-
-    constexpr uint32_t num_cores0 = get_compile_time_arg_val(24);  // Number of cores in group 0
-    constexpr uint32_t num_cores1 = get_compile_time_arg_val(25);  // Number of cores in group 1
-
-    // Semaphore to fire when intermediate outputs can be started to compute
-    constexpr uint32_t start_sem_idx = get_compile_time_arg_val(26);
+    constexpr uint32_t num_cores0 = get_compile_time_arg_val(16);  // Number of cores in group 0
 
     // Semaphore to fire when intermediate outputs for one page are ready
-    constexpr uint32_t done_sem_idx = get_compile_time_arg_val(27);
+    constexpr uint32_t done_sem_idx = get_compile_time_arg_val(17);
 
-    constexpr auto s_src_args = TensorAccessorArgs<28>();
+    constexpr dataflow_kernel_lib::McastArgs<18, 7> group0_start_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<group0_start_args.next_compile_time_args_offset(), group0_start_args.next_runtime_args_offset()>
+            group1_start_args;
+
+    constexpr auto s_src_args = TensorAccessorArgs<group1_start_args.next_compile_time_args_offset()>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
@@ -343,8 +333,13 @@ void kernel_main() {
         "Program logic error. "
         "Partial result buffer must use the same data format as values.");
 
-    // Semaphores
-    Semaphore<> start_sem(start_sem_idx);
+    // The two fixed Counter wires share the start semaphore but target disjoint rectangles. Keeping
+    // both sender views and the selected receiver view alive preserves their state across rounds.
+    auto group0_start_sender = group0_start_args.sender(noc);
+    auto group1_start_sender = group1_start_args.sender(noc);
+    auto start_receiver = core_id < num_cores0 ? group0_start_args.receiver(noc) : group1_start_args.receiver(noc);
+
+    // The worker-arrival counter remains operation-owned.
     Semaphore<> done_sem(done_sem_idx);
 
     uint32_t max_idx = 0;
@@ -365,30 +360,20 @@ void kernel_main() {
             if (k > 0) {
                 done_sem.set(0);
             }
-            start_sem.set(k + 1);
-
-            if constexpr (num_cores > 1) {
-                if (k > 0) {
-                    start_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                        noc, start_core_x0, start_core_y0, end_core_x0, end_core_y0, num_cores0);
+            if (k > 0) {
+                if constexpr (group0_start_args.active) {
+                    group0_start_sender.send_signal();
                 }
-
-                if (num_cores1 > 0) {
-                    start_sem.set_multicast(noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
+                if constexpr (group1_start_args.active) {
+                    group1_start_sender.send_signal();
                 }
-
-                noc.async_write_barrier();
             }
         }
 
-        // Wait to start.  Use wait_min (>=) rather than exact-match: in the
-        // reduce_all path there is no per-iteration done_sem back-pressure (it is
-        // lifted out of this loop), so the reduce core free-runs and can advance
-        // start_sem past (k+1) before a lagging worker samples it.  An exact-match
-        // wait(k+1) would then never observe k+1 and deadlock; start_sem is
-        // monotonically increasing, so wait_min(k+1) is correct for both paths.
-        if (k > 0) {
-            start_sem.wait_min(k + 1);
+        // Counter readiness is monotone and reset-free, so reduce_all workers cannot miss a round
+        // when the reducer free-runs without the per-iteration done counter.
+        if (k > 0 && !is_reduce_core) {
+            start_receiver.receive_signal();
         }
 
         find_argmax_for_core<reduce_all, src_cb_addr_data_format>(

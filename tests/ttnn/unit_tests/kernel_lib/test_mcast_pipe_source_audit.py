@@ -265,3 +265,20 @@ def test_sdpa_decode_read_k_uses_opaque_fixed_star_and_keeps_blackhole_completio
     assert "mcast_x" not in reader + factory
     assert "std::vector<ttnn::kernel_lib::host::Mcast2D> k_mcasts" in factory
     assert "reader_rt_args.append(k_mcasts[mcast_index].runtime_args(core));" in factory
+
+
+def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
+    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/reduction/argmax/device"
+    kernel = (base / "kernels/reader_argmax_interleaved_multicore.cpp").read_text()
+    factory = (base / "argmax_multi_core_program_factory.cpp").read_text()
+
+    assert "McastArgs<18, 7>" in kernel
+    assert "group0_start_args.next_compile_time_args_offset()" in kernel
+    assert "group0_start_args.next_runtime_args_offset()" in kernel
+    assert kernel.count("send_signal();") == 2
+    assert "start_receiver.receive_signal();" in kernel
+    assert "set_multicast" not in kernel
+    assert "done_sem.up(" in kernel and "done_sem.wait(num_cores)" in kernel
+    assert factory.count("DataReadyMode::Counter") == 1
+    assert factory.count("reader_runtime_args.append(group0_start_mcast.runtime_args(core));") == 2
+    assert factory.count("reader_runtime_args.append(group1_start_mcast.runtime_args(core));") == 2
