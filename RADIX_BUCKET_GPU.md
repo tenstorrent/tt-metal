@@ -1,10 +1,11 @@
 # RADIX_BUCKET_GPU.md — Radix/Bucket/Histogram Selection: the Literature, and What It Certifies on Blackhole
 
 **Purpose.** Engineering dossier on the *selection-without-sorting* family — radix select,
-bucket select, histogram-guided top-k — as (a) certification that the exponent-first
-bucket-select design sketched in `SORTING.md` is a member of a well-studied, exact algorithm
-family rather than an ad-hoc trick, and (b) design input for a Tenstorrent Blackhole
-implementation. Every claim is cited to a verified external source, or explicitly tagged
+bucket select, histogram-guided top-k — plus a taxonomy of vector-friendly full sorts, as
+(a) certification that the exponent-first bucket-select design sketched in `SORTING.md` is
+a member of a well-studied, exact algorithm family rather than an ad-hoc trick, and (b)
+design input for a Tenstorrent Blackhole implementation. Every claim is cited to a verified
+external source, or explicitly tagged
 **[local finding]** (measured on BH silicon in this repo, see `SORTING.md`) or
 **[inference]** (this document's own reasoning, unverified).
 
@@ -28,6 +29,7 @@ summary was the only source for a detail, that is flagged.
 | **AIR Top-k** (Zhang, Naruse, Li, Wang — NVIDIA) | 2023, SC'23, DOI 10.1145/3581784.3607062 | MSD radix select, multi-bit digits; *iteration-fused* — all digit passes in one kernel launch, no CPU↔GPU round-trips; adaptive strategy skips re-materializing candidates when the surviving set is still large (digit width in the RAFT implementation: 8/11-bit passes — **[inference]** from RAFT source, not re-verified here) | 1–⌈bits/digit⌉ fused passes; adaptive early-exit | Recurse on threshold bin; adaptivity chooses between re-scanning original input vs compacted candidate buffer by measured candidate fraction | Yes | Boundary bin: takes the first (k − count_above) elements of the threshold bin; among equal keys selection is arbitrary but count-exact | 1.98–21.48× (batch=1) and 8.01–574.78× (batch=100) over the prior radix top-k; 1.44–7.34× / 1.38–31.91× over SOTA overall |
 | **GridSelect** (same paper) | 2023, SC'23 | Not radix: grid-wide shared priority queue, two-step parallel insertion, on-the-fly (single pass) | 1 | n/a — maintains exact running top-k | Yes | Queue order among equal keys arbitrary | Up to 882.29× over BlockSelect (warp-select style baseline), esp. batch=1, large n |
 | **RadiK** (Li et al.) | 2024, ICS'24, arXiv 2501.14336, github.com/leefige/radik | MSD radix select; 12-bit first digit for fp32; optimized for memory traffic with block-local histograms, global aggregation, and a flush-efficient write buffer | ~3 passes for 32-bit keys | Recurse on threshold bin; **adaptive scaling subtracts a sampled input from all keys** to redistribute clustered float exponents | Yes | Count-exact boundary-bin split | Up to 2.5× (non-batch) and 4.8× (batch) over prior art; adaptive scaling worth up to 2.7× on adversarial distributions; supports large k |
+| **GVR** (Cheng et al.) | 2026, arXiv 2604.22312 / TensorRT-LLM | *Guess-Verify-Refine*: use the previous decode step's Top-K as a threshold prior, run secant-style exact counts, collect a bounded candidate set, finish exactly in shared memory | Common case: 1–2 full-row verification passes | Prediction affects work, never correctness; a ballot-free collector and shared-memory refinement produce the exact set | Yes | Exact finish; tie order remains unspecified | 1.88× average single-op speedup over TensorRT-LLM's production radix selector on the reported DeepSeek-V3.2 workload; current fast path is scoped to `index_topk=2048` |
 | **sampleselect** (Ribizel & Anzt) | 2019 (ICL-UT tech report / IPDPS-W line) | Splitters chosen by *sampling* the input, buckets = sample-defined ranges | histogram pass + recurse | Approximate variant stops early (k-th value approximate); exact variant recurses into the boundary bucket | Both modes offered — sampling alone is approximate; exact mode restores the guarantee by recursion | Boundary-bucket recursion | Faster than sort-based selection on V100-class GPUs (their measurements) |
 | **FlashInfer sorting-free sampling** (Ye et al.) | 2025 (blog 2025-03-10; FlashInfer: MLSys'25 best paper) | No histogram at all: fused **rejection sampling** — sample via inverse transform, use the sampled probability as a pivot, reject-and-resample; **dual-pivot** variant (v0.2.3) brackets with low/high pivots | Multiple rounds inside one kernel; each dual-pivot round halves the bracket → O(log 1/ε) rounds worst case | Pivot refinement per round | Yes *in distribution*: proven to sample token j with prob p_j/Z of the exact top-k/top-p-filtered distribution (it never materializes the top-k set) | >50% sampling-latency reduction vs sort-based top-k/top-p sampling on large vocabularies |
 
@@ -41,7 +43,9 @@ Algorithms on GPU: A Comprehensive Study and New Methods*, SC'23, DOI
 10.1145/3581784.3607062; Li et al., *RadiK: Scalable and Optimized GPU-Parallel Radix Top-K
 Selection*, ICS'24, DOI 10.1145/3650200.3656596, arXiv:2501.14336; Ribizel & Anzt,
 *Approximate and Exact Selection on GPUs* (icl.utk.edu/files/publications/2019/icl-utk-1230-2019.pdf);
-FlashInfer, *Sorting-Free GPU Kernels for LLM Sampling*, flashinfer.ai/2025/03/10/sampling.html.
+Cheng et al., *Guess-Verify-Refine: Data-Aware Top-K for Sparse-Attention Decoding on
+Blackwell via Temporal Correlation*, arXiv:2604.22312; FlashInfer, *Sorting-Free GPU Kernels
+for LLM Sampling*, flashinfer.ai/2025/03/10/sampling.html.
 
 ### 1.2 Notes per algorithm
 
@@ -96,6 +100,15 @@ and a defined policy for rounding and special values. The primary preprint confi
 12-bit fp32 first digit, hierarchical histogram aggregation, flush-efficient write buffer,
 and the reported 2.7× adversarial benefit.
 
+**GVR (2026) — the closest recent precedent for the TT hybrid.** GVR uses a workload-specific
+prior only to guess a threshold. Exact full-row counts verify/refine that guess, a candidate
+collector materializes a bounded set, and an exact shared-memory stage finishes selection.
+The reported common case needs 1–2 full-row passes and averages 1.88× over TensorRT-LLM's
+production radix selector on the evaluated DeepSeek-V3.2 workload. This does not transfer
+the speedup to TT: GVR has a GPU ballot-free collector and a resident shared-memory finish.
+It instead sharpens the TT hypothesis and its blocker: **prediction is optional; exact
+counting is necessary; cheap candidate materialization is load-bearing.**
+
 **FlashInfer (2025) — the field's endpoint for LLM sampling.** When the consumer is a
 *sampler* rather than a top-k *list*, FlashInfer shows you can skip selection entirely:
 rejection sampling with pivot refinement produces a token distributed exactly as if top-k/
@@ -121,6 +134,10 @@ radix/bucket branch is the relevant one.
 - **RTop-K (ICLR'25)** is relevant for many short rows: its exact mode uses threshold
   search, while its early-stop mode is approximate. MoE-style short rows may therefore
   favor threshold/local methods rather than global radix machinery.
+- **GVR (2026)** is the strongest current argument for a predictor→verify→collect→finish
+  path. Its success is workload- and architecture-specific, and its current TensorRT-LLM
+  fast path targets `index_topk=2048`; it is evidence for testing a hybrid, not for fixing
+  TT's route at small K.
 
 ---
 
@@ -143,6 +160,43 @@ fast heuristic, count, and fall back to a heavier exact method when progress deg
 Do not infer Musser's worst-case-linear guarantee from the standard `std::nth_element`
 contract; common library implementations use different fallbacks.
 
+### 2.1 Taxonomy of vector-friendly sorting and selection
+
+"Vector-friendly" describes several different mechanisms. They should not be collapsed
+into one category: the required collective operation, not the asymptotic name, predicts
+whether an algorithm belongs on SFPU, on the data-movement RISCs, or across both.
+
+| Family | Vectorization mechanism | Stability / data | Load-bearing primitives | Blackhole mapping |
+|---|---|---|---|---|
+| **Bitonic / odd-even merge networks** | Fixed compare-exchange and transpose schedule | Unstable by default; stable with `(key,index)` tie order; generic comparable keys | Lane min/max, fixed shuffle/transpose | **Strong SFPU fit locally.** `SFPSWAP` tracks paired indices and the in-tree `topk_local_sort` is already bitonic. Global networks pay `O(n log²n)` movement. |
+| **Register/block Top-K** | Maintain a small ordered candidate set while streaming | Exact; tie/stability policy must ride with the key | Register-resident compare-exchange, producer fusion | **Strong SFPU fit for small K.** This is the incumbent to beat, not a strawman baseline. |
+| **LSD/MSD radix sort** | Digit histogram → prefix sum → stable or unstable scatter | Fixed-width integers and monotone-mapped floats; LSD is naturally stable with stable digit scatters | Indexed counters, scan, dense scatter, ping-pong storage | **Poor direct SFPU fit; credible RISC/NoC fit.** BF16 is especially attractive as two exact byte digits. |
+| **Counting / histogram sort** | Count a bounded universe, prefix or repeated emit | Best for u8/quantized/low-cardinality keys; records need scatter for stability | Indexed L1 increments and small prefix scan | **Strong BRISC/NCRISC candidate; no-go on SFPU.** |
+| **Vector quicksort / quickselect** | Vector pivot compare followed by mask compaction | Usually unstable; expected-linear select / expected `O(n log n)` sort | Compress-store/expand, masks, pivot sampling, irregular stores | **Compare fits SFPU; partition does not.** Cheap dense compaction is the same blocker as threshold selection. |
+| **Sample sort** | Compare against sampled splitters, histogram buckets, scatter | Generic comparison keys; balance depends on oversampling | Broadcast compares, bucket counts, prefix/scatter | **Mixed fit.** SFPU can classify; RISCs must materialize buckets. Useful mainly when radix encoding is unavailable. |
+| **Merge sort / Merge Path** | Partition output ranges, perform contiguous local merges | Naturally stable with a consistent tie rule; generic records | Binary-search partitioning, streaming merge, ping-pong buffer | **Good generic control.** SFPU can perform local merges/networks; NoC/RISCs carry repeated cross-tile movement. |
+| **Hybrid MSD radix → local network** | RISC-side wide partition until buckets fit locally, then network-sort each bucket | Numeric fixed-width keys; stability depends on partition and leaf policy | RISC histogram/prefix/scatter plus local compare-exchange | **Best full-sort research candidate.** It assigns collective distribution to RISCs and fixed local ordering to SFPU. |
+| **Threshold/radix selection → local finish** | Count/refine one boundary, densely materialize survivors, sort only the final set | Exact Top-K only with verified counts, tie quotas, and preserved indices | Threshold compare/count plus dense emission | **Research-worthy hybrid only.** Comparison is solved; materialization remains load-bearing. |
+
+Production implementations reinforce a **dispatch taxonomy**, not one universal winner.
+CUB's segmented sorter selects radix or sub-warp merge according to segment size; rocPRIM
+similarly combines block radix, Onesweep, and small-size merge sub-algorithms. CUB/rocPRIM
+radix primitives couple digit extraction to cooperative histograms, shared storage, scans,
+and striped/coalesced scatter — the collectives that SFPU does not provide. Highway VQSort
+and x86-simd-sort instead combine vector partitioning with sorting-network leaves, but rely
+on efficient masked compaction/permutation. The GPU hybrid of Stehle and Jacobsen uses MSD
+partitioning for oversized buckets and switches to an on-chip local sort once a bucket fits;
+that split is the closest published analogue to **BRISC/NCRISC partition → SFPU finish**.
+
+Expected TT dispatch, subject to whole-op measurement:
+
+- tiny/local rows and small K: SFPU bitonic/register Top-K;
+- bounded low-cardinality keys: RISC counting sort;
+- long fixed-width numeric full sort: RISC radix or RISC-radix→SFPU hybrid;
+- generic comparator or stable records: tile network plus partitioned merge;
+- selection only: exact threshold/radix refinement only after dense materialization, then
+  one local network finish.
+
 ---
 
 ## 3. The common skeleton, its worst cases, and the standard mitigations
@@ -152,13 +206,14 @@ Every exact member of the family is the Alabi "generic technique" with different
 ```
 1. HISTOGRAM      count elements per digit/bucket (one streaming pass)
 2. PREFIX-SUM     cumulative counts over the (tiny) histogram
-3. LOCATE         the bucket b* where cum(b*−1) < n−k ≤ cum(b*)   ← the "threshold bucket"
+3. LOCATE         the bucket b* where cum(b*−1) < n−k+1 ≤ cum(b*) ← the "threshold bucket"
                   everything in buckets above b* is a winner (count_above of them)
 4. RECURSE/SCAN   need k' = k − count_above more winners from inside b* only:
                     - recurse until remaining digits identify an exact key class, or
                     - if |b*| is small, run an exact local selection/sort
 5. VERIFY/EMIT    establish Cgt = #(key > T), Ceq = #(key == T), with
-                  Cgt <= k <= Cgt+Ceq; emit all >T and exactly k−Cgt equals
+                  Cgt < k <= Cgt+Ceq when T is claimed to be the k-th value;
+                  emit all >T and exactly k−Cgt equals
 ```
 
 Exactness argument (shared by all): steps 1–3 use *exact counts*, so `b*` provably contains
@@ -166,6 +221,20 @@ the k-th element and `count_above` winners are provably above it — no approxim
 unless the histogram itself is approximate (then see §4.3). “Take the first k' from the
 threshold bin” is valid only after all remaining key digits have been resolved or an exact
 selection has run inside that bin. It is not valid for a coarse exponent bucket.
+The weaker condition `Cgt <= k <= Cgt+Ceq` is enough to emit a valid arbitrary Top-K
+*set*: when `Cgt == k`, emit no equals. It is not enough to call `T` the k-th value.
+Here `k` is one-based. For ascending cumulative counts the k-th largest has ascending rank
+`n-k+1`; using `n-k` is an off-by-one error (the maximum of `n` distinct elements would
+otherwise locate rank `n-1`). Implementations should derive `largest` and `smallest` from
+one explicit rank convention and exhaustively test every k for small n.
+
+The GPU papers' asymptotic `O(n)` description for fixed-width keys hides the constant
+that decides suitability here. With `b` useful exact bits per pass and no candidate
+compaction, TT pays approximately `O(n·ceil(w/b))` streamed work plus output extraction
+and any final sort. On Blackhole SFPU the measured menu is only 1 bit at 2.0 cyc/vector or
+3 bits at 3.0 cyc/vector, with a data-dependent rendezvous between decisions. The GPU
+algorithms obtain their economics from wide exact histograms and shrinking/compacted
+candidate sets; the family pedigree does not certify those economics on TT.
 
 **Worst cases:**
 
@@ -228,22 +297,31 @@ exponent, and the final compare all agree on one total order — the one top-k w
 For non-negative data the XOR map degenerates to a sign-bit flip, so the raw biased
 exponent field is already monotone in value.
 
-### 4.2 The exponent as the first radix digit
+### 4.2 Conceptual exponent digit versus implementable exact digits
 
-For fp32/bf16 the biased exponent is an 8-bit field ⇒ **256 buckets**, and for non-negative
-values, value order is lexicographic in (exponent, mantissa). An exponent histogram is
-therefore precisely **pass 1 of an MSD radix select with an 8-bit first digit** — the same
-shape as AIR Top-k / RadiK pass 1, just with the digit boundary aligned to the exponent
-field instead of an arbitrary bit offset. The sign bit is a 1-bit digit *above* it
-(handled first: with signs present, all positives outrank all negatives after the map;
-count positives, and only if k exceeds that count does the negative half matter — where
-exponent order *reverses*). **[inference]** on the composition; each ingredient is standard.
+For fp32/bf16 the biased exponent is an 8-bit field, and for non-negative values value
+order is lexicographic in `(exponent,mantissa)`. A **full exact** 256-bin exponent histogram
+would therefore be a valid first MSD digit. Blackhole's packer histogram is not that
+primitive: §4.3 shows that it samples fixed positions, exposes only `Exponent & 31`,
+saturates, and ignores sign. It is an exponent-derived threshold predictor, not pass 1 of
+an exact radix selector.
 
-The mantissa (23 bits fp32, 7 bits bf16) is the remaining digit string: if the boundary
-exponent bucket is heavy, recurse on mantissa bits (multi-level digits, §3) or fallback-sort
-the bucket (`topk_local_sort` exists in-tree and was measured/optimized —
-**[local finding]**, `SORTING.md`). For bf16 the boundary bucket has ≤ 2^7 distinct
-magnitudes, so a single fallback level suffices.
+The SFPU also lacks the indexed register file, scatter, and atomics used by GPU radix
+histograms. Exact SFPU refinement therefore takes the form of threshold counting over the
+raw sign-magnitude order: 1 bit at 2.0 cyc/vector (`CountD1`) or a measured 3-bit mapping
+plus reduction at 3.0 cyc/vector (`HistMacro+HistSum`), followed by a ≥25.1-cycle
+data-dependent rendezvous. Economically this is narrow threshold bisection/quickselect,
+not an 8–12-bit GPU radix pass.
+
+There is, however, a separate exact-radix hypothesis for **BF16 on the data-movement
+RISCs** **[inference]**. Map the raw word `b` to
+`key = b XOR ((b & 0x8000) ? 0xFFFF : 0x8000)`, then build
+an exact 256-bin high-byte histogram and an exact low-byte histogram restricted to the
+boundary high byte. Two 1-KiB private histograms fit naturally in L1; a final scan emits
+strict winners and the allocated threshold equals. This bounded two-digit design avoids
+SFPU lane reduction, but its scalar RISC throughput, tiled-address traversal, NoC reduction,
+and third-pass extraction are unmeasured. It is a competing implementation hypothesis,
+not yet a suitability result.
 
 ### 4.3 The packer exponent histogram — free, but sampled and aliased **[local finding]**
 
@@ -282,8 +360,9 @@ closer to sampleselect/Floyd–Rivest sampling than to Dr. Top-k's deterministic
 Because the fixed sampled positions can miss every extreme value, it does not guarantee a
 bracket. The exact construction must therefore be: predictor → exact `(Cgt,Ceq)` decision
 → monotone digit refinement or exact local fallback → emit only after
-`Cgt <= K <= Cgt+Ceq`. The predictor may improve expected work but cannot decide
-correctness, termination, or a one-refinement bound.
+`Cgt < K <= Cgt+Ceq` for a certified K-th-value threshold, or after `Cgt == K` when only
+an arbitrary valid Top-K set is required. The predictor may improve expected work but
+cannot decide correctness, termination, or a one-refinement bound.
 
 ### 4.4 The packer threshold filter — free compare-and-zero for T ≥ 0 **[local finding]**
 
@@ -301,6 +380,13 @@ survivor count. A device-to-device consume/round-trip path, or a separate explic
 gather/rescan compactor, is required before this mechanism belongs in an operator cost
 model.
 
+Zero-as-loser is not itself a safe dense representation. On an all-negative row, ordinary
+Top-K would rank the inserted zeroes above every surviving negative value. At a zero
+threshold, genuine zero-valued boundary ties are also indistinguishable from filtered
+zeroes in the compressed stream unless a separate validity mask or exact metadata carries
+membership. The silicon tests certify filter/compression primitives, not a device-consumable
+Top-K candidate list.
+
 The tested fused key is also narrower than the public contract: it carries only a u16
 index, orders equal positive values by the larger low 16 bits, and behaves differently for
 negative values. It is suitable only for a deliberately `stable=false`, u16-scoped
@@ -309,7 +395,8 @@ prototype until sign-aware tie encoding and UINT32/global-index reconstruction a
 **The T < 0 hole is real and closed.** A negative threshold is documented UB and measured
 to behave as |T| rounded up to the next power of two (mantissa ignored) — genuinely
 unusable. The fallback is an SFPU filter (`SFPGT`(SET_VD) + `SFPAND`, 2 issues/vector,
-proven to be the ISA floor). The reported 41.4% (non-negative packer arm) and 6.7% (signed
+proven to be the ISA floor for a bit-exact value-preserving filter). The reported 41.4%
+(non-negative packer arm) and 6.7% (signed
 SFPU arm) deltas compare one filter pass with one `_topk_xl_merge_` primitive; they are not
 complete Top-K speedups and must not be used for routing. Ties exactly on a negative
 threshold are zeroed, not kept — asserted in tests.
@@ -318,80 +405,155 @@ threshold are zeroed, not kept — asserted in tests.
 
 | GPU mechanism (papers §1) | Blackhole reality | Consequence |
 |---|---|---|
-| Shared-memory atomics for block-local histograms (`atomicInc` — Alabi; hierarchical atomics — RadiK) | SFPU lanes cannot issue CUDA-style shared-memory atomics, but data-movement RISCs can issue NoC atomics to local/remote L1 | Benchmark per-core private L1 histograms + tree reduction against NoC-atomic accumulation. Do not assume either wins. **[inference]** |
+| Shared-memory atomics for block-local histograms (`atomicInc` — Alabi; hierarchical atomics — RadiK) | SFPU lanes cannot issue CUDA-style shared-memory atomics, but data-movement RISCs can issue NoC atomics to local/remote L1 | Benchmark separate per-RISC private L1 histograms + local addition and tree reduction against shared NoC-atomic accumulation. Do not assume either wins. **[inference]** |
+| Wide exact radix digits in GPU shared memory | SFPU has only eight general vector registers and no indexed scatter; dual BRISC/NCRISC kernels can instead traverse raw BF16 words and maintain private 256-bin L1 histograms | For BF16, benchmark a bounded two-byte RISC radix selector against SFPU threshold bisection. The in-tree `masked_bincount` synchronization/tree-reduction structure is the scaffold; its hot loop updates one shared per-core histogram with NoC atomics, so separate private histograms remain an unimplemented comparison arm. **[local finding]** + **[inference]** |
 | Global barrier / grid sync between digit passes; Onesweep's chained scan to avoid it | No global sync primitive; cross-core sync is semaphores (`noc_semaphore_*`), multicast | Digit passes become **semaphore levels**: cores publish partial histograms, one core (or a tree) prefix-sums and multicasts `b*`/threshold, cores proceed. Iteration-fusion (AIR) maps to keeping all levels inside one program launch — TT programs already are. **[inference]** |
 | Candidate compaction to global memory with write buffers (RadiK) vs re-scan (AIR's adaptive choice) | Zero-compression emits a sparse proprietary PACR stream, but there is no production BH device consumer and byte length is not survivor count (§4.4) | Compact-vs-rescan remains open. Gate the sparse stream against explicit prefix/gather compaction and simple rescanning. **[local finding]** for emission, **[inference]** for any operator mapping |
-| Histogram pass reads global memory at ~2n bandwidth (Onesweep bound) | Histogram is free *inside an existing pack* (§4.3); a dedicated pack pass costs 806 cycles for N=32k (win drops to 2×/12.5× but survives) | The "count pass" can piggyback on whatever op produced the logits (e.g. the matmul's own pack). **[local finding]** for costs, **[inference]** for fusion |
+| Histogram pass reads global memory at ~2n bandwidth (Onesweep bound) | Histogram collection has zero measured marginal PACK throughput *inside an existing pack* (§4.3); absent producer fusion, the modeled N=32k path adds an ~806-cycle standalone pack plus readback/synchronization | Charge the standalone pass by default. No in-tree TTNN producer-fusion mechanism has been demonstrated for this use. **[local finding]** for the primitive, **[code survey/model]** for composition |
 | fp32 keys XOR-mapped in registers before binning | Comparators natively sign-magnitude (§4.1); no map needed for compare/filter; exponent field directly addressable | One fewer transform; but the histogram hardware is |x|-only, so the sign digit is handled by control flow, not by the map. **[local finding]** + **[inference]** |
 
 ---
 
 ## 5. Suitability verdict and gated plan
 
-**Verdict: suitable for an SFPU-assisted threshold-selection research prototype; not yet
-suitable as a production exact radix Top-K.** The literature pedigree is valid for a
-design that actually implements exact MSD refinement. Blackhole's strongest demonstrated
-fit is the compare/filter stage: `SFPGT` supplies the desired deterministic order, the
-negative-threshold bit-preserving filter reaches its two-issue floor, and the packer can
-provide cheap exponent telemetry. The missing pieces are the selector itself: no exact
-digit-refinement state machine, device-side sparse consumer, dense extraction, boundary-tie
-allocator, or whole-op implementation exists.
+The literature certifies the generic count→locate→refine family. It does **not** certify
+that GPU radix mechanics map efficiently to the TT SFPU.
 
-The hardware histogram must be treated only as an optional predictor. A correct row-level
-state machine needs the invariant
+| Candidate | Verdict | Reason |
+|---|---|---|
+| Literal GPU-style exact radix/bucket selector on SFPU | **No-go without a new primitive** | No wide exact histogram, indexed scatter, atomics, or gather/compaction; exact work degenerates to repeated narrow threshold scans |
+| Blackhole SFPU threshold counter/filter | **Suitable research primitive** | `SFPGT` implements the useful total order and the measured count/filter paths are exact |
+| Packer exponent histogram | **Predictor only** | Fixed 1-in-8 sample, `exp&31` aliasing, saturation, sign blindness, and readback/synchronization costs |
+| BF16 exact radix on BRISC/NCRISC | **Credible unmeasured alternative** | Two exact 8-bit digits and 1-KiB private L1 histograms are implementable; scalar throughput and extraction cost remain unknown |
+| Hybrid predictor→verify→collect→SFPU finish | **Research-worthy, production suitability unknown** | Matches Dr. Top-k/GVR structurally, but TT still lacks a demonstrated cheap candidate collector |
+| Wormhole port | **Low suitability / separate design** | No native Blackhole `SFPGT`; BH correctness and performance results do not transfer |
+
+The load-bearing gap is **candidate materialization**, not comparison. Without a device-side
+compactor, dense extractor, or count-guided tile skipping, filtering saves no work in the
+oblivious bitonic network and every selection pass is additive. The exact single-core
+selector is therefore a correctness oracle until the materialization gate succeeds.
+
+**Companion-design status.** `tt_metal/tt-llk/tests/docs/THRESHOLD_SELECT_DESIGN.md`
+currently labels itself "implementation-ready", but its fast path assumes that the
+variable-byte compressed PACR stream can be re-consumed and cascaded on device. No ordinary
+CB/device decoder or fixed metadata protocol has been demonstrated (§4.4). Treat that
+design as **blocked on Gate 2 materialization**, not as an implementation specification;
+do not begin its proposed full operator until one complete dense-emission or device-decoder
+arm passes correctness and headroom gates.
+
+A correct threshold-value state machine establishes
 
 ```
-Cgt = #(key > T), Ceq = #(key == T), and Cgt <= K <= Cgt + Ceq
+Cgt = #(key > T), Ceq = #(key == T), and Cgt < K <= Cgt + Ceq
 ```
 
-before emission. If the invariant is false, the kernel must monotonically refine another
-sign/exponent/mantissa digit or invoke a bounded exact fallback. If it is true, emit every
-strict winner and exactly `K-Cgt` equal keys using the requested tie policy, then sort the
-K results when `sorted=true`.
+before calling `T` the K-th value. To emit only an arbitrary valid Top-K set,
+`Cgt == K` is also acceptable and no equals are emitted. In either case, output every
+strict winner and allocate exactly `K-Cgt` threshold equals according to the requested tie
+policy, preserve unique global indices, and sort the K materialized results only when
+`sorted=true`.
 
 ### 5.1 Initial research scope
 
-Start with **Blackhole + BF16 + `largest=true` + `stable=false` + K≤32/64 + long rows**.
-Do not initially route FP32, UINT32-width indices, `largest=false`, stable ties, or sharded
-outputs. Do not position this as a replacement for the current column-parallel
-`topk_large_indices` path at K=512/1024/2048; its measured 24–89 µs whole-op baseline is
-the competitor, not the historical `_topk_xl_merge_` micro-op.
+Start implementation bring-up with **Blackhole + BF16 + last dimension + `largest=true` +
+`stable=false` + interleaved tensors**. A K≤64 prototype keeps the final SFPU finish small,
+but it must not pre-judge the performance route: the literature and current TT kernels make
+small K the strongest bitonic control. Performance sweeps must span at least K=16–2048 and
+N=4K–256K, including the current `topk_large_indices` cells. Carry UINT32 global indices in
+the prototype even if an early microbenchmark restricts width; do not bake the u16 key's
+N≤65,536 limitation into the operator contract.
 
 ### 5.2 Gates
 
-1. **Contract/oracle.** Define raw-key order, NaNs and payloads, ±0, infinities,
-   subnormals, padding, duplicate-boundary allocation, global indices, direction,
-   `sorted`, and `stable`. Differential-test the shipping operation rather than assuming
-   sign-magnitude order is its public semantic contract.
-2. **Exact single-core reference.** Implement sign handling, exact radix digits,
-   `(Cgt,Ceq)`, progress detection, boundary allocation, and a bounded `topk_local_sort`
-   fallback without the packer predictor. Require bit-exact values/valid indices on random
-   and adversarial inputs.
-3. **Estimator-guided path.** Add the sampled histogram only after Gate 2. Histogram OFF
-   and ON must return identical results. Measure refinement-count p50/p95/max and include
-   positional anti-samples, `exp&31` collisions, saturation, all-equal, duplicate-mass,
-   alternating-sign, all-negative, ±0/Inf/NaN, and tile-face-correlated inputs.
-4. **Compaction decision.** Build a production-style device-to-device compressed-stream
-   round trip carrying explicit `(offset,length,format)` metadata, or exclude packer
-   compression from v1. Compare its complete consume/cascade cost against explicit
-   prefix/gather compaction and rescanning. A producer-only packed-byte measurement is not
-   sufficient.
-5. **Whole-op A/B.** Measure Tracy Device Kernel Duration and total op duration against the
-   best current path for every cell: stock local/multicore Top-K and column-parallel
-   `topk_large_indices`. Charge standalone histogram packing, final extraction, index
-   reconstruction, and output sorting. Route only an empirically won region.
-6. **Multicore last.** Partition rows into width shards and A/B private L1 histograms plus
-   tree reduction against data-movement-RISC NoC atomics. Keep digit levels in one program
-   launch with versioned semaphore epochs. Require bounded progress, no hangs, exact
-   single-core identity, and measured synchronization below the benefit.
+1. **Contract and matched baseline.** Define raw-key order, NaN payloads/signs, ±0,
+   infinities, subnormals, padding, duplicate-boundary allocation, direction, `sorted`,
+   `stable`, and global indices. Differential-test the shipping operation rather than
+   assuming sign-magnitude order is its public semantic contract. Pin the build, selected
+   factory, device clocks, replay state, and whole-op profiler harness before quoting a
+   speedup.
+2. **Materialization gate first.** Given a known exact threshold, compare: fixed-size
+   BRISC/NCRISC dense emission; per-core count→exclusive-offset→direct writes; explicit
+   keep-mask/prefix/gather; count-guided tile skipping; and a real device consumer for the
+   packer's compressed stream. Test all-negative rows and a zero threshold so zeroed losers
+   cannot masquerade as candidates. Require exactly K unique in-range UINT32 indices and
+   gathered values that match bit-for-bit. If no complete path preserves enough headroom
+   over the incumbent, stop selector work.
+3. **Exact-engine shootout.** Benchmark, on identical resident and streamed inputs:
+   (a) SFPU one-bit threshold count; (b) SFPU three-bit `HistMacro+HistSum`; (c) one RISC
+   with a private 256-bin histogram; (d) BRISC/NCRISC with separate private histograms and
+   local addition; and (e) shared NoC-atomic accumulation as a control. Report slope and
+   fixed cost, cycles/element, read bandwidth, clear/reduction cost, contention, and exact
+   bin equality. Reuse the semaphore and binary-tree reduction structure in
+   `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/` rather than
+   inventing synchronization from scratch, but do not describe its shared NoC-atomic hot
+   loop as a separate-private-histogram implementation.
+4. **Exact single-core oracle.** Implement the winning bounded selector without the packer
+   predictor. For the RISC BF16 arm, use exact high-byte histogram→boundary locate→exact
+   low-byte histogram→threshold locate→emit. For the SFPU arm, use bounded raw-key threshold
+   bisection and exact `(Cgt,Ceq)` at every decision. Test all-equal, K−1/K/K+1 strict
+   winners, duplicate mass, every high byte, alternating sign, all-negative, ±0/Inf/NaN,
+   subnormals, logical-tail padding, sorted/reverse-sorted, and tile-face-correlated inputs.
+5. **Final SFPU finish and experimental op.** Materialize candidates into the existing
+   value/index tile representation and invoke `topk_local_sort` once for `sorted=true`, not
+   once per input tile. Keep the first implementation in a separate experimental operation;
+   do not modify shipping routing yet.
+6. **Predictors last.** Compare no prior, a workload temporal prior when available, and the
+   sampled packer histogram. Predictor OFF and ON must return identical results. Charge a
+   standalone pack when producer fusion is absent, counter saturation clears, readback,
+   `tensix_sync`, and refinement-count p50/p95/max. Include an exponent span greater than
+   32 with the true maximum placed only at unsampled positions, exercising alias-window and
+   missed-max failures together. A claim of “free” applies only to the marginal pack
+   throughput of an already-required pack.
+7. **Multicore width sharding.** Give each core private histograms/counts, tree-reduce them,
+   locate/broadcast the digit or threshold, then publish `(local_Cgt,local_Ceq)`. The root
+   computes exclusive output offsets and per-core equal quotas so cores write disjoint
+   ranges without an atomic output allocator. Use versioned semaphore epochs and require
+   bit-identical single-core membership, bounded progress, and repeated-launch no-hang tests.
+8. **Whole-op A/B and guarded routing.** Sweep N=4K–256K, K=16–2048, row counts from 1 to
+   many-row workloads, and random, clustered, duplicate-heavy, all-equal, signed, and
+   positional-adversarial distributions. Compare against the factory current `ttnn.topk`
+   actually selects and against `topk_large_indices` where eligible. Route only a contiguous
+   empirically won region; do not infer a small-K radix route from micro-op timings.
 
 ### 5.3 Go/no-go criteria
 
-Production routing requires: exact contract tests; no unbounded refinement; no sparse-stream
-metadata ambiguity; no hangs under repeated/multicore launches; a whole-op win over the best
-current per-cell baseline; and a guarded fallback with negligible regression outside the
-won region. Until those gates pass, the accurate claim is **“promising hybrid research
-hypothesis,” not “certified Blackhole implementation.”**
+Production routing requires: exact contract tests; bounded passes; unambiguous fixed or
+explicitly described output metadata; unique global indices; no hangs under repeated and
+mixed multicore launches; and a repeatable whole-op win beyond pooled noise over the best
+current per-cell baseline. SFPU participation in the streaming selector requires at least a
+10% repeatable complete-pass improvement after unpack, mask transfer, compaction, and
+synchronization; an isolate-only cycles/vector win is insufficient. Until these gates pass,
+the accurate claim is: **Blackhole SFPU-assisted hybrid is research-worthy; direct SFPU
+radix is a no-go; dual-RISC BF16 radix plus an SFPU finish is the strongest unmeasured
+implementation hypothesis.**
+
+### 5.4 Separate full-sort research track
+
+Do not infer full-sort suitability from the Top-K gates: full sorting changes the payoff
+because every element must eventually be materialized and ordered. Run it as a sibling
+track with the existing `ttnn.sort` factory as the matched control:
+
+1. **BF16 stable-LSD reference:** low-byte stable partition, then high-byte stable
+   partition, using private RISC histograms, exact per-core offsets, and ping-pong output.
+   This is the regular, distribution-insensitive reference even if it is not the winner.
+2. **BF16 hybrid-MSD candidate:** high-byte MSD partition; recurse on the low byte only for
+   oversized buckets; invoke the existing SFPU bitonic local sorter for buckets that fit;
+   concatenate buckets in radix order. Detect all-equal/homogeneous prefixes explicitly.
+3. **Generic comparison control:** SFPU tile network followed by a RISC/NoC partitioned
+   merge (Merge Path style), preserving a defined tie rule. This is the fallback for FP32,
+   custom comparison policies, and stable records that a simple radix codec cannot cover.
+4. **Counting-sort specialization:** measure keys-only and key/index forms for u8 and other
+   genuinely bounded low-cardinality domains; do not extrapolate those results to BF16.
+5. **Whole-sort matrix:** short and long rows, one and many rows, powers of two and tails;
+   keys-only and key+UINT32 index; uniform, sorted/reverse, all-equal, two-value,
+   low-cardinality, common-prefix/exponent-clustered, alternating-sign, and special-value
+   inputs. Report cycles/item, DRAM and NoC bytes/item, L1 footprint, synchronization,
+   scatter, stability, and selected incumbent factory.
+
+The expected hypothesis is **RISC-side wide MSD partition → SFPU local network**, not an
+all-SFPU radix port. Production dispatch must still be learned from complete-operator
+measurements by `(dtype, key width, row length, row count, payload width, stable)`; any
+distribution/cardinality hint may choose work but must not affect correctness.
 
 ---
 
@@ -453,10 +615,41 @@ hypothesis,” not “certified Blackhole implementation.”**
 20. S. Ashkiani et al. *GPU Multisplit.* 2017. https://arxiv.org/abs/1701.01189
 21. RTop-K. *A Top-K Operator for Efficient LLM Inference on GPUs.* ICLR 2025.
     https://xiexi51.github.io/assets/pdf/RTopK.pdf
+22. L. Cheng et al. *Guess-Verify-Refine: Data-Aware Top-K for Sparse-Attention
+    Decoding on Blackwell via Temporal Correlation.* 2026. https://arxiv.org/abs/2604.22312
+23. NVIDIA TensorRT-LLM. *Temporal Correlation Meets Sparse Attention:
+    Guess-Verify-Refine Top-K for Blackwell.* 2026.
+    https://nvidia.github.io/TensorRT-LLM/1.3.0rc15/blogs/tech_blog/blog21_Temporal_Correlation_Meets_Sparse_Attention.html
+24. **[local implementation precedent]** `masked_bincount`: dual BRISC/NCRISC local
+    traversal of disjoint token ranges, one shared per-core histogram updated with NoC
+    atomics, semaphores, and binary-tree reduction. Its synchronization and reduction are
+    reusable; separate per-RISC private histograms are still an unimplemented benchmark arm.
+    `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/`.
+25. N. Satish, M. Harris, M. Garland. *Designing Efficient Sorting Algorithms for
+    Manycore GPUs.* IPDPS 2009.
+    https://research.nvidia.com/publication/2009-05_designing-efficient-sorting-algorithms-manycore-gpus
+26. E. Stehle, H.-A. Jacobsen. *A Memory Bandwidth-Efficient Hybrid Radix Sort on GPUs.*
+    SIGMOD 2017. https://arxiv.org/abs/1611.01137
+27. NVIDIA CUB. Device/block radix and segmented-sort documentation.
+    https://nvidia.github.io/cccl/unstable/cub/index.html ·
+    https://nvidia.github.io/cccl/unstable/cub/api/structcub_1_1DeviceSegmentedSort.html
+28. AMD rocPRIM. Block radix-sort and device-algorithm tuning documentation.
+    https://rocm.docs.amd.com/projects/rocPRIM/en/docs-6.0.2/block_ops/ops_classes/sort.html ·
+    https://rocm.docs.amd.com/projects/rocPRIM/en/docs-6.4.1/concepts/tuning.html
+29. S. Odeh et al. *Merge Path — Parallel Merging Made Simple.* 2012; ModernGPU merge
+    implementation. https://arxiv.org/abs/1406.2628 · https://moderngpu.github.io/merge.html
+30. Google Highway VQSort implementation notes and Wassenberg et al. paper.
+    https://github.com/google/highway/blob/master/hwy/contrib/sort/README.md ·
+    https://arxiv.org/abs/2205.05982
 
 ---
 
 ## 6. Appendix — Swarm feasibility audit (2026-08-16)
+
+> [!NOTE]
+> This appendix is the historical audit record. Its accepted corrections are now folded
+> into §§3–5 above, including the compaction-first gate, SFPU-versus-RISC engine shootout,
+> and the distinction between a valid Top-K set and a certified k-th-value threshold.
 
 **Method.** Seven adversarial personas (Verifier/SFPU-ISA, Expert/LLK, Auditor/citations,
 Critic/skeptic+devil's-advocate, Supporter/steelman, Implementer/Gate-2, Random
@@ -542,7 +735,7 @@ All seven personas converged, from disjoint evidence, on the same recalibration:
    sign-magnitude order lets the bisection run on raw bits directly, collapsing §4.2's
    sign-digit/exponent-reversal special-casing.
 
-**Recalibrated verdict** (replacing §5's): *compare/filter primitives certified; the
+**Recalibrated verdict** (now incorporated into §5): *compare/filter primitives certified; the
 "radix select" is actually sampled-pivot quickselect with a free-but-lossy predictor;
 selector feasibility unknown pending a measured Gate-2 refinement loop; no win region
 exists before device-side compaction (Gate 4); the strongest defensible subset is
@@ -910,9 +1103,121 @@ outperforming any single persona.
 | C14 u16 fused-key narrowness (§4.4) | **Confirmed** + explicit N≤65,536 bound required |
 | C15 T<0 UB + SFPU fallback floor (§4.4) | **Confirmed**; floor scoped to value-preserving filters; signed deltas inherit [DISPUTED] denominators and the 6.7% edge inverts vs the fused macro merge |
 | C16 TT-vs-GPU mapping (§4.5) | **Partially corrected**: count/unpack serialization is stock-path (§0a-bis escape measured); (Cgt,Ceq) readback mechanism exists via Dst-mapped RISC access |
-| C17 verdict (§5) | **Recalibrated** — see §6.1 |
-| C18 gates (§5.2) | **Reordered** — Gate 4 load-bearing; Gate 2 re-scoped to bisection + count + bitonic-finish correctness oracle |
+| C17 verdict (§5) | **Recalibrated and incorporated** — see current §5 and historical §6.1 |
+| C18 gates (§5.2) | **Reordered and incorporated** — materialization is now Gate 2; exact engines are benchmarked only after that gate |
 
 *Generated by a 14-agent swarm audit (7 personas × 2 rounds), 2026-08-16. Composite
 predict score: 620 (39 confirmed × 15 + full persona participation + both rounds +
 anti-herd pass). The audit's scratch knowledge files were folded into this appendix.*
+
+---
+
+## 7. Closure report — where this family actually fits (measured, 2026-08-16)
+
+> [!NOTE]
+> This section closes the dossier. Gates 1–3 of §5.2 were executed on silicon by an
+> agent campaign (research → implement → validate); every number below is MEASURED on
+> the p150a under the canonical harness (correctness-gated, provenance-stamped) unless
+> tagged otherwise. Local commits `0fbf7afbd7f`, `27c6da71cbc`, `338ed267b2b`,
+> `15f5659493c`, `79709d176f7` on `nkapre/sorting`.
+
+### 7.1 The design space in one map
+
+Every exact top-k engine answers three independent questions. Where an algorithm sits
+in the design space is just its three answers:
+
+**Q1 — How are winners identified?**
+- **(A) Comparison networks** (bitonic sort/merge, WarpSelect): a fixed, data-oblivious
+  schedule of compare-exchanges. No decisions, no branches — the instruction stream is
+  identical for every input.
+- **(B) Counting / partitioning** (radix select, bucket select, quickselect,
+  threshold bisection): count how many elements land above a boundary, then *decide*
+  where to look next. Data-dependent by construction.
+
+**Q2 — How much data does each pass touch?**
+- **(C) Full-data passes** every time (bitonic; radix select without compaction).
+- **(D) Shrinking candidate sets** — after a pass, losers are physically removed
+  (compaction) or skipped (count-guided), so pass 2 touches ≪ n.
+
+**Q3 — What does a "decision" cost between passes?**
+- **(E) Nothing** — oblivious schedules have no decisions.
+- **(F) A synchronization rendezvous** — counting engines must get the count to a
+  scalar decision-maker and redistribute the verdict.
+
+The GPU papers of §1 are all **(B)+(D)+cheap-(F)**: 8–12-bit exact histograms via
+shared-memory atomics give a 256–4096-way partition per pass (few passes), scatter
+gives compaction (shrinking passes), and a grid sync or fused kernel makes the
+decision cost small. That combination — *wide exact counting + cheap materialization*
+— is the entire reason radix select beats sorting on GPUs.
+
+The shipping TT engine (bitonic top-k) is **(A)+(C)+(E)**: it pays ~2 cyc/elem on all
+n every time, but with zero decisions, zero rendezvous, a MOP/replay-schedulable
+instruction stream, and k-bounded merge state.
+
+The threshold-select/radix track asked: can BH move to (B)? The storm measured each
+ingredient separately, and the answer decomposes cleanly.
+
+### 7.2 What Blackhole gives each ingredient (all measured)
+
+| Ingredient the GPU family needs | GPU form | BH measured reality | Verdict |
+|---|---|---|---|
+| Wide exact counting (Q1-B) | 8–12 bits/pass via shared-mem atomics | SFPU: **1 bit @ 2.0 cyc/vec** or **3 bits @ 3.0** (`cgtceq_perf`, additive to the 3.94 unpack floor: +2.42/+4.52 measured); RISC: 256-bin histogram at **7.6–8.2 cyc/elem** vs a 3.02 load floor (`risc_scan_bench`) | Counting works but is *narrow* (SFPU) or *slow* (RISC) — radix degenerates to bisection |
+| Cheap decisions (Q3-F) | grid sync / fused iteration | **81 cyc/decision** best (tensix_sync + cross-lane fold + Dst-MMIO read; semaphore 101, sentinel 98; no-fold ~760). Bisection to an exact K-th threshold: **p50 14 decisions / 2313 cyc**, worst-case 17 | Fine in absolute terms (~1.7 µs/row) — not the blocker |
+| Candidate materialization (Q2-D) | scatter/compaction | Dense RISC emit **13.0 cyc/elem** (dead vs the 0.5 bar); SFPU has no scatter; the one survivor is the packer compressed stream + skip-zero RISC consumer at **0.63 cyc/orig-elem** (gray band — 3× under a bitonic leaf pass, 2–5× over the paper prior) | **The load-bearing gap, exactly as §5.2 Gate 2 predicted** |
+| A slow incumbent to beat | thrust::sort | Incumbent op after this campaign's own fixes: **34.4 µs** (k2048@65536), **23.3 µs** (k512@262144) | The bar moved 15–27% *during* the evaluation |
+
+So the family "fits" on BH only in the degenerate corner (B)+(C)+(F): *threshold
+bisection with full-data passes* — Floyd–Rivest/quickselect economics, not radix
+economics. Without (D), every counting pass is strictly additive to the bitonic
+finish that must still run (§6 IMPL-2). The single candidate mechanism for (D) —
+the packer's zero-compressed stream — measured just inside plausibility (0.63
+cyc/elem) and would need a composed producer+consumer bench at k2048 to get a
+whole-op number.
+
+### 7.3 What the campaign banked instead
+
+The gate-driven evaluation forced three deliverables worth more than the selector:
+
+1. **Gate 1 — the contract is now pinned** (`test_topk_contract.py`, 62 cells + JSONL
+   divergence ledger). Silicon discovery baked into the reference model: the **bf16
+   compute datapath canonicalizes before any op** — NaN(any payload)→same-sign Inf,
+   −0→+0, ±subnormal→+0; indices keep positions; fp32 bit-exact (identity-op probe;
+   `Dst.md:69`). Any future bit-exactness claim must model this first.
+2. **The K≤64 routing hole** (found by Gate-1 baselining, fixed in `15f5659493c`):
+   k≤64 rows structurally ineligible for the multi-core bitonic (padded W ≥ 65535 or
+   non-pow2, ≥ 4096 floor) fell to the linear single-core factory (~137 ns/elem).
+   Routing them through `topk_large_indices`: **40–423×** (k64@65536: 17.95 ms →
+   42.4 µs).
+3. **The P-cap raise** (`79709d176f7`): max slices 64→128 *plus* a cost-optimal
+   rectangle fit (the old full-rows-only fit capped k2048@65536 at 13×2=26 cores;
+   8×4=32 was free). Op-level: k2048@65536 41.9→34.4 µs, k2048@262144 58.6→49.6 µs,
+   k512@262144 32.0→23.3 µs.
+
+### 7.4 Why the track is closed
+
+The selector's honest model (filter + counts + rendezvous + materialization + final
+K-sort + envelope) prices at ~21–30 µs realistic per large cell. The stop rule of
+§5.3/CRIT-4 asks the incumbent to be ≥2× that. After item 3 above, the incumbent is
+**34.4 µs at k2048@65536** — inside the model band's uncertainty — and **49.6 µs at
+k2048@262144** — nominally 1.7–2.4× but shrinking every time the incumbent absorbs a
+cheap structural improvement (two of which this very campaign produced in an
+afternoon). A selector that must out-run its own evaluation's side effects is not a
+production bet.
+
+**Reopening conditions** (any one suffices):
+- a device-side compaction/gather primitive appears, or the composed
+  packer-compressed producer+consumer bench proves ≥2× headroom at k2048/N≥262144;
+- k grows past the LLK ceiling (k > 2048), where bitonic merge state stops fitting
+  and counting engines stop being additive;
+- the consumer becomes a *sampler* (FlashInfer branch of §1) — that contract never
+  materializes the top-k set, which deletes Gate 2 entirely;
+- N grows to where full-data bitonic passes dominate and count-guided *tile skipping*
+  (the weak form of (D), ~12% typical / 0% worst-case) compounds with much larger
+  skip fractions.
+
+Until then the accurate statement is: **on Blackhole, the radix/threshold family's
+certified value was diagnostic, not executive** — its gate discipline measured the
+hardware honestly (primitives banked: free T≥0 packer filter, exact counts at
+2.0–4.5 cyc/vec, 81 cyc/decision rendezvous, 0.63 cyc/elem compressed consumer,
+scalar-RISC scan floor 3.02 cyc/elem), pinned the public contract, and pointed at
+the two structural wins the incumbent was sitting on.
