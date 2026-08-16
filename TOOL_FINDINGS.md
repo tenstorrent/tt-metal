@@ -3585,6 +3585,24 @@ and continues without a baseline:
   [optimize/cc] discovery exited 1 but the manifest is complete; continuing.
 ```
 
+### It recurs, and it costs a rung rather than just a baseline
+
+Not a one-off. Hours later, on the `knob:dtype` rung, the ledger recorded another attempt lost the
+same way:
+
+```
+{'op_signature': 'MatmulDeviceOperation 32 x 4096 x 3072', 'kernel_kind': 'dtype',
+ 'fullpipe_ms': None, 'fullpipe_delta_ms': None,
+ 'note': "wedged/crashed when tried: tracy run exit 1 (log: /tmp/perf_mcp_d9qaacck/run0_tracy.log)
+          Fatal Python error: Segmentation fault
+          Aborted (core dumped)"}
+```
+
+`fullpipe_ms: None` — the attempt produced no measurement at all. To the tool's credit the entry is
+recorded honestly as *"wedged/crashed when tried"* rather than silently dropped, so the ladder knows
+the rung was attempted. But the effect is that a profiler crash converts a candidate optimisation
+into a hole in the search: not rejected on merit, just unmeasurable.
+
 ### Three separable problems
 
 1. **`close_mesh_device` segfaults.** On the same device, in the same session, `test_tts_e2e.py`
@@ -3910,6 +3928,18 @@ So the whole precision axis — the cheapest speed knob, and the one O1 notes th
 applies model-wide — is closed off by its own correctness gate before the first measurement. That
 is the exchange-rate O8 says the accept test lacks, supplied here by the test rather than by the
 optimizer.
+
+**But "closed off" turned out to be too strong, and the tool found the distinction that I did not.**
+Measured over the run: every *weight-dtype* attempt failed the gate (`bfloat8_b` → PCC 0.349), while
+a *math-fidelity* attempt **passed and won** −7.8 ms, on this reasoning:
+
+> *"MathFidelity is how many passes the FPU makes over the operand mantissa, and the hi/lo split
+> should make two passes sufficient here"*
+
+HiFi2 is safe exactly because `stage_weight_split` already carries the precision in a hi/lo pair —
+the mantissa bits the FPU would have gathered on later passes are in `lo`, not in the operand. So
+the closed axis is *lossier weights*, not *fewer FPU passes*, and the two live on the same ladder
+rung group. A blanket "no precision changes on a codec model" would have left that win on the table.
 
 **O1 — whole-model dtype only.** `plan` recommends "N150 with bfp8_b weights", one dtype for the
 whole model. The hand-port's §6.16 measured per-weight precision as the deciding factor: BFP8 on
