@@ -5076,3 +5076,89 @@ class SamplingGolden:
         if op in self.ROUND_TO_NEAREST_OPS:
             return values.to(torch.bfloat16).to(torch.float32)
         return truncate_to_bfloat16(values)
+
+
+@register_golden
+class RopeGolden:
+    """Golden for the SFPU RoPE (experimental/ckernel_sfpu_rope.h).
+
+    Modelled in DEST rows, the frame the LLK addresses in. One SFPU vector is 4 rows
+    x the 16 columns of one face, the LLK issues one per (width tile, face), and
+    adjacent columns of a DEST row form a complex pair:
+
+        x'_even = cos*x_even - sin*x_odd
+        x'_odd  = sin*x_even + cos*x_odd
+
+    cos/sin are loaded with even-column parity only, so both slots of a pair are
+    rotated by the even slot's angle -- the interleaved layout duplicates each angle
+    across its pair to make that work. Under a scale, cos/sin are multiplied by it
+    first, in the fp32 LReg, so only the final store quantizes.
+
+    Rows no operand covers come back untouched, so this returns a full copy of `dest`
+    rather than only the rotated band. `rotated_rows` reports which rows those are.
+    """
+
+    VECTOR_ROWS = 4  # one SFPU vector covers 4 DEST rows
+    FACE_ROWS = 16  # DEST rows per face
+
+    @classmethod
+    def bands(
+        cls,
+        ht: int,
+        wt: int,
+        x_base: int,
+        x_stride: int,
+        cos_base: int,
+        sin_base: int,
+        cs_stride: int,
+    ):
+        """(x_row, cos_row, sin_row) for every vector the LLK issues.
+
+        cos/sin are shared by all ht heads at a given (width tile, face), which is why
+        the head loop is the innermost one in the LLK too.
+        """
+        for w in range(wt):
+            for face in range(2):
+                cs_offset = w * cs_stride + face * cls.FACE_ROWS
+                for head in range(ht):
+                    x_row = (
+                        x_base
+                        + w * x_stride
+                        + face * cls.FACE_ROWS
+                        + head * wt * x_stride
+                    )
+                    yield x_row, cos_base + cs_offset, sin_base + cs_offset
+
+    @classmethod
+    def rotated_rows(cls, **geometry) -> list[int]:
+        """Every DEST row the rotation writes, ascending."""
+        rows = [
+            x_row + i
+            for x_row, _, _ in cls.bands(**geometry)
+            for i in range(cls.VECTOR_ROWS)
+        ]
+        return sorted(rows)
+
+    def __call__(
+        self, dest: torch.Tensor, scale: float = None, **geometry
+    ) -> torch.Tensor:
+        source = dest.to(torch.float32)
+        golden = source.clone()
+
+        even = torch.arange(0, source.shape[1], 2)
+        odd = even + 1
+        factor = 1.0 if scale is None else scale
+
+        for x_row, cos_row, sin_row in self.bands(**geometry):
+            for i in range(self.VECTOR_ROWS):
+                cos = source[cos_row + i, even] * factor
+                sin = source[sin_row + i, even] * factor
+                x_even = source[x_row + i, even]
+                x_odd = source[x_row + i, odd]
+                golden[x_row + i, even] = truncate_to_bfloat16(
+                    cos * x_even - sin * x_odd
+                )
+                golden[x_row + i, odd] = truncate_to_bfloat16(
+                    sin * x_even + cos * x_odd
+                )
+        return golden

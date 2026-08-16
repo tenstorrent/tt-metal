@@ -686,6 +686,45 @@ class HADAMARD(TemplateParameter):
 
 
 @dataclass
+class ROPE(TemplateParameter):
+    """Compile-time configuration for the SFPU RoPE test.
+
+    Every address is an absolute DEST row. ``x_base`` / ``x_stride`` place the Ht*Wt
+    x operands and ``cos_base`` / ``sin_base`` / ``cs_stride`` the Wt cos and sin
+    operands; the LLK requires all of them to be 4-row aligned. A stride of 64 is the
+    copy_tile layout (one operand per DEST tile slot) and 32 the dense-packed matmul
+    layout (two operands sharing a slot's faces).
+
+    ``scale_fp32`` is an fp32 bit pattern, and the LLK takes it as a runtime argument
+    rather than a template one: it is folded into cos/sin only under ``has_scale``.
+    """
+
+    ht: int = 1
+    wt: int = 1
+    x_base: int = 0
+    x_stride: int = 64
+    cos_base: int = 64
+    sin_base: int = 128
+    cs_stride: int = 64
+    has_scale: bool = False
+    scale_fp32: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t ROPE_HT = {self.ht};",
+            f"constexpr std::uint32_t ROPE_WT = {self.wt};",
+            f"constexpr std::uint32_t ROPE_X_BASE = {self.x_base};",
+            f"constexpr std::uint32_t ROPE_X_STRIDE = {self.x_stride};",
+            f"constexpr std::uint32_t ROPE_COS_BASE = {self.cos_base};",
+            f"constexpr std::uint32_t ROPE_SIN_BASE = {self.sin_base};",
+            f"constexpr std::uint32_t ROPE_CS_STRIDE = {self.cs_stride};",
+            f"constexpr bool ROPE_HAS_SCALE = {str(self.has_scale).lower()};",
+            f"constexpr std::uint32_t ROPE_SCALE_FP32 = {hex(self.scale_fp32)};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
