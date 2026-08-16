@@ -501,12 +501,68 @@ def _run_groupnorm(device, use_welford):
     _profile_repeated_program(device, f"groupnorm_sdxl_1920_{algorithm}", run_once, "groupnorm")
 
 
+def _run_groupnorm_interleaved(device, use_welford):
+    shape = (1, 768, 1, 512)
+    num_groups = 32
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+    [weight, bias], input_mask = ttnn.dram_group_norm_params_from_torch(
+        [torch.rand(shape[1]), torch.rand(shape[1])],
+        shape[1],
+        num_groups,
+        device,
+        core_grid=core_grid,
+        return_mask=True,
+        dtype=ttnn.bfloat16,
+    )
+
+    def run_once():
+        output = ttnn.group_norm(
+            tt_input,
+            num_groups=num_groups,
+            input_mask=input_mask,
+            weight=weight,
+            bias=bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=core_grid,
+            use_welford=use_welford,
+            num_out_blocks=2,
+            inplace=False,
+        )
+        ttnn.deallocate(output)
+
+    algorithm = "welford" if use_welford else "legacy"
+    kernel_prefix = "welford_" if use_welford else ""
+    _profile_repeated_program(
+        device,
+        f"groupnorm_interleaved_768_{algorithm}",
+        run_once,
+        f"{kernel_prefix}reader_mcast_sender_unary_gn.cpp",
+        (f"{kernel_prefix}reader_mcast_receiver_unary_gn.cpp",),
+    )
+
+
 @pytest.mark.parametrize("use_welford", [False, True], ids=["groupnorm_legacy", "groupnorm_welford"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_groupnorm_mcast_realtime_perf(device, use_welford):
     torch.manual_seed(0)
     _require_realtime_profiler()
     _run_groupnorm(device, use_welford)
+
+
+@pytest.mark.parametrize("use_welford", [False, True], ids=["groupnorm_legacy", "groupnorm_welford"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_groupnorm_interleaved_mcast_realtime_perf(device, use_welford):
+    torch.manual_seed(0)
+    _require_realtime_profiler()
+    _run_groupnorm_interleaved(device, use_welford)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

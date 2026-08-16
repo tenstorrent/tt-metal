@@ -207,3 +207,40 @@ def test_sender_pipe_degenerate_copy_preserves_async_write_semantics():
     assert "noc_.async_write(" in body
     assert "async_read" not in body
     assert "barrier" not in body
+
+
+def test_interleaved_groupnorm_uses_three_opaque_helper_wires_and_preserves_legacy_phases():
+    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/normalization/groupnorm/device"
+    factories = [
+        (base / "groupnorm_mcast_program_factory.cpp").read_text(),
+        (base / "groupnorm_no_mcast_program_factory.cpp").read_text(),
+    ]
+    kernel_base = base / "kernels/dataflow"
+    legacy_sender = (kernel_base / "reader_mcast_sender_unary_gn.cpp").read_text()
+    legacy_receiver = (kernel_base / "reader_mcast_receiver_unary_gn.cpp").read_text()
+    welford_sender = (kernel_base / "welford_reader_mcast_sender_unary_gn.cpp").read_text()
+    welford_receiver = (kernel_base / "welford_reader_mcast_receiver_unary_gn.cpp").read_text()
+
+    for source in (legacy_sender, legacy_receiver, welford_sender, welford_receiver):
+        assert source.count("using ") >= 3
+        assert "LastMcastArgs::next_compile_time_args_offset()" in source
+        assert "LastMcastArgs::next_runtime_args_offset()" in source
+        assert "mcast_dest_noc" not in source
+        assert "num_mcast_cores_mid_group" not in source
+
+    assert legacy_sender.count("_pipe.send_signal();") == 3
+    assert legacy_sender.count("_pipe.send(l1_read_addr_ex") == 3
+    assert "reduce_pipe.receive_signal();" in legacy_receiver
+    assert "reduce_pipe.receive();" in legacy_receiver
+    assert "reduce_receiver_sem.up(" in legacy_receiver
+    assert welford_sender.count("_pipe.send(global_means_ptr") == 3
+    assert "reduce_pipe.receive();" in welford_receiver
+
+    mcast_factory, no_mcast_factory = factories
+    assert "compile_time_args(/*pre_handshake=*/use_welford)" in mcast_factory
+    assert mcast_factory.count("reader_args.append(mcast.runtime_args(core));") == 1
+    assert "compile_time_args(/*pre_handshake=*/false)" in no_mcast_factory
+    assert no_mcast_factory.count("reader_args.append(mcast.runtime_args(core));") == 1
+    for source in factories:
+        assert "std::vector<ttnn::kernel_lib::host::Mcast2D>" in source
+        assert "mcast_dest_noc" not in source

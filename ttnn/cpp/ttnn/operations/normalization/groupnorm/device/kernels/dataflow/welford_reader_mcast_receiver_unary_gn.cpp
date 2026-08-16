@@ -6,17 +6,23 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
-#include "noc_parameters.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
-    constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    using FirstMcastArgs = dataflow_kernel_lib::
+        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
+    using LastMcastArgs = dataflow_kernel_lib::
+        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
+    constexpr MidMcastArgs mid_mcast_args;
+    constexpr uint32_t ct_base = LastMcastArgs::next_compile_time_args_offset();
+    constexpr uint32_t rt_base = LastMcastArgs::next_runtime_args_offset();
 
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
@@ -39,14 +45,11 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
     constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
-    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto src0_args = TensorAccessorArgs<ct_base>();
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
-
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
+    const uint32_t src_addr = get_arg_val<uint32_t>(rt_base);
+    const uint32_t start_id = get_arg_val<uint32_t>(rt_base + 2);
+    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(rt_base + 4);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -65,8 +68,7 @@ void kernel_main() {
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    auto reduce_pipe = mid_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -183,12 +185,7 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
-            // Signal to sender that our partial data is ready
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-
-            // Wait for sender to signal that it has sent the global data
-            reduce_sender_sem.wait(VALID);
-            reduce_sender_sem.set(INVALID);
+            reduce_pipe.receive();
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;
