@@ -56,11 +56,28 @@ parameters = {
             [0, 1, 2, 3],
         ],
         "largest": [True, False],
-        "k": [32],  # only k = 32 is supported for now
+        "k": [32],  # small-k suite; large k is swept by the "large_k" suite below
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "large_k": {
+        # Large-k coverage (64 < k <= 2048). On Blackhole + bfloat16 + last-dim +
+        # largest these route through ttnn.experimental.topk_large_indices'
+        # multi-core path (values + indices, exact); everywhere else stock
+        # single-core would take seconds-to-minutes per vector, so those
+        # combinations are invalidated below rather than swept.
+        "input_shape": gen_shapes([1, 1, 1, 8192], [1, 1, 4, 131072], [1, 1, 1, 8192], 20)
+        + gen_shapes([1, 1, 1, 100000], [1, 1, 2, 100000], [1, 1, 1, 1], 2)
+        + gen_shapes([1, 1, 32, 8192], [1, 1, 64, 65536], [1, 1, 32, 8192], 6),
+        "dim": [-1],
+        "largest": [True],
+        "k": [96, 128, 256, 512, 1024, 2048],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 64], [6, 12, 256, 1024], [1, 1, 32, 64], 64)
@@ -101,6 +118,17 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if len(test_vector["input_shape"]) != 4:
         return True, "Input shape must be 4D"
+    if test_vector["k"] > 64:
+        # Large k is only tractable on the BH routed path; stock single-core
+        # takes seconds-to-minutes per vector and would starve the sweep.
+        if test_vector["input_a_dtype"] != ttnn.bfloat16:
+            return True, "k > 64 swept via the BH routed path only (bfloat16)"
+        if test_vector["input_layout"] != ttnn.TILE_LAYOUT:
+            return True, "k > 64 swept via the BH routed path only (TILE layout)"
+        if not test_vector["largest"]:
+            return True, "k > 64 swept via the BH routed path only (largest=True)"
+        if test_vector["k"] > test_vector["input_shape"][-1]:
+            return True, "k must be <= the last dimension"
     if test_vector["dim"] != -1:
         return True, "Only the last dim is supported right now"
     if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
