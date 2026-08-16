@@ -17,9 +17,9 @@ its plan-mandated historical matched performance baseline requires a separately 
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v11 | 23 | 21 |
+| migrated at ledger API v11 | 31 | 27 |
 | pending | 2 | 5 |
-| deferred | 79 | 0 |
+| deferred | 71 | 0 |
 | quarantined | 0 | 0 |
 
 All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
@@ -71,6 +71,20 @@ guards passed. Matched 800 MHz LayerNorm and RMSNorm medians improved 3.2% and 1
 non-1D route remains unexercised because its existing one-core stats contract cannot supply every sender
 line; the outside-sender geometry is host-tested and required no helper API expansion.
 
+Tier 2.11 plain sharded LayerNorm remains deferred after its migrated single-stage path exceeded the
+mandatory performance gate by 0.086 percentage points; the experiment was reverted. Tier 2.12
+interleaved GroupNorm is migrated at v11 in `40e209daad9`, Tier 2.13 SDPA-decode `read_k` in
+`f760425fe06`, Tier 2.14 Argmax control in `5aaaf5b5aa5`, and Tier 2.15 Move overlap in
+`a25603ae2c0`. Their complete correctness, fresh-JIT, helper/source guards, production-LOC, and matched
+performance evidence is recorded in the per-unit logs and `helper_design/tracker.md`.
+
+Tier 2.16 reached terminal deferrals without production edits. Routed-expert FFN needs two linked data
+stages under one ACK and one final signal, which API v11 cannot express. Persistent H2D/D2H target
+cross-program GlobalSemaphore L1 addresses that API-v11 program-semaphore binding cannot address;
+H2D additionally separates metadata and worker-ready publication across its completion boundary. The
+service twins do not satisfy the unrelated-family API-extension gate, and their worker-sync tests
+require Galaxy/UBB hardware unavailable on the current single-chip machine. Helper API remains v11.
+
 ## Closed `needs_recheck`
 
 | Unit | Kernels | Reason |
@@ -98,7 +112,7 @@ design gap and continues to use the established raw primitive path.
 
 ## Deferred backlog
 
-Eighty-one entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+Seventy-one entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
 The major classes are:
 
 - genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;
@@ -112,6 +126,6 @@ factory, ABI, channel split, or data flow.
 
 ## Scoped rollout complete
 
-Tier 0, Tier 1.6, and Tier 2.7-2.9 have reached their approved terminal dispositions. Keep the two
+Tier 0, Tier 1.6, and Tier 2.7-2.16 have reached their approved terminal dispositions. Keep the two
 interleaved Matmul kernels and five bindings pending until a future instruction separately authorizes
 the historical performance checkout.

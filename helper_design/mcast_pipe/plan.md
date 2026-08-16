@@ -242,7 +242,8 @@ to D5 by user direction. Existing unit numbers remain stable so the audited path
     - Unit 16b: `models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_writer.cpp` with the H2D emitter.
     - Unit 16c: `persistent_d2h_reader.cpp` with the D2H emitter.
     - These are three independent atomic units. Preserve non-multicast routing and socket/metadata synchronization outside the pipe.
-    - Correctness: complete routed-expert/bias tests and single-device host-I/O service tests for each exact route.
+    - Correctness: complete routed-expert/bias tests. The exact H2D/D2H worker-sync service routes require Blackhole
+      Galaxy/UBB in the current tree; on a single-card machine record the coverage gap rather than crediting the skipped tests.
     - Perf: two operation-matched cases per unit; profile regular nodes where no perf test exists.
 
 ### Tier 3 — prototype against API v11; extension allowed only through the generality gate

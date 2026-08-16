@@ -634,6 +634,11 @@
       "route": "Use the DeepSeek v3 b1 kv-cache and flash-MLA unit tests; confirm the including JIT kernel because these are headers"
     },
     {
+      "candidate": "deepseek_prefill unified_routed_expert_ffn_reader.cpp",
+      "confidence": "route-audited; execution not required after API-v11 design-gate deferral",
+      "route": "tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/{test_single_routed_expert.py,test_routed_expert_bias.py,test_swigluoai_routed_expert.py}; the prior multi-device-only ledger note was stale"
+    },
+    {
       "candidate": "experimental moe_gate_mm dm1.cpp",
       "confidence": "discovery-only",
       "route": "tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_mm.py::test_moe_mm; confirm the full JIT path because dm1 is not unique"
@@ -647,6 +652,7 @@
   "known_coverage_gaps": [
     "Ring/joint SDPA and ring-all-gather matmul routes require multiple devices.",
     "Most CCL candidates require a mesh or Galaxy system; single-card moe_compute is the documented exception.",
+    "The persistent H2D/D2H service Python modules and C++ worker-sync tests require Blackhole Galaxy/UBB; their exact worker GlobalSemaphore routes skip on the current single-chip Blackhole P100a.",
     "The matmul reuse-mcast and contributed multicast programming-example kernels are exercised by binaries, not pytest."
   ],
   "entries": [

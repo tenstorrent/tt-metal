@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v11 status carries 27 migrated kernels and 24 migrated host bindings on the self-describing six-word CT wire. Interleaved GroupNorm legacy/Welford is anchored by 40e209daad9. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358, and post-allgather by 6cc49825476. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v11 status carries 31 migrated kernels and 27 migrated host bindings on the self-describing six-word CT wire. Tier 2 source anchors include Interleaved GroupNorm 40e209daad9, SDPA-decode f760425fe06, Argmax 5aaaf5b5aa5, and Move overlap a25603ae2c0; Group-attention Matmul, Conv3D, and post-allgather LayerNorm are anchored by 6e8eb763885, a290ce20281, and 6cc49825476. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
   "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
   "inventory_group_notes": {
@@ -2179,13 +2179,14 @@
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
-        "deepseek_prefill multi-device"
+        "route audit: test_single_routed_expert.py, test_routed_expert_bias.py, and test_swigluoai_routed_expert.py exist; stopped before execution at the API-v11 design gate"
       ],
       "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family) | DEFER-COVERAGE: deepseek_prefill multi-device",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Tier 2.16a: in0, in1-down, and activated single-payload channels fit API v11, but the active phase-1 in1 protocol links gate then up under one receiver-ready handshake and one final valid signal. SenderPipe exposes no data-only stage; two send() calls change ACK/signal semantics. No unrelated second family shares the exact invariant, so the extension generality gate fails.",
       "flags": [
-        "coverage-gap"
+        "design-gap",
+        "tier:2.16a"
       ]
     },
     {
@@ -2197,14 +2198,17 @@
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
-        "no identified single-chip test (host_io persistent path)"
+        "H2D Python service and C++ worker-sync routes require Blackhole Galaxy/UBB and skip on the current single-chip P100a"
       ],
       "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "Current-tree replacement for persistent_h2d_receiver.cpp. Metadata write_multicast plus worker counter inc_multicast; GlobalSemaphore L1 addresses cannot be bound by SenderPipe. DEFER-COVERAGE: no identified single-chip test for the persistent host_io path.",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Tier 2.16b; current-tree replacement for persistent_h2d_receiver.cpp. data_ready_sem_addr is a runtime GlobalSemaphore L1 address rather than a service-program semaphore id and API-v11 SenderPipe cannot bind it. Independently, metadata and the worker signal straddle a DRAM barrier plus PCIe completion publication, while send() fuses data and signal. The H2D/D2H twins are one socket subsystem and do not pass the unrelated-family extension gate.",
       "flags": [
+        "design-gap",
         "coverage-gap",
-        "global-semaphore-address"
+        "global-semaphore-address",
+        "data-signal-ordering",
+        "tier:2.16b"
       ]
     },
     {
@@ -2230,14 +2234,16 @@
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
-        "no identified single-chip test (host_io persistent path)"
+        "D2H Python service and C++ worker-sync routes require Blackhole Galaxy/UBB and skip on the current single-chip P100a"
       ],
       "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "Current-tree replacement for persistent_d2h_sender.cpp. Intra-chip inc_multicast-to-workers plus atomic barrier; transfer_done_sem_addr is a GlobalSemaphore L1 address that SenderPipe cannot bind. Socket writer leg is out of scope. DEFER-COVERAGE: no identified single-chip persistent-host-I/O validation.",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Tier 2.16c; current-tree replacement for persistent_d2h_sender.cpp. A no-handshake Counter send_signal otherwise matches exactly, but its runtime GlobalSemaphore L1 target transfer_done_sem_addr cannot be bound by API-v11 SenderPipe. The following atomic barrier and local write-ack counter stay operation-owned. The H2D/D2H twins are one socket subsystem and do not pass the unrelated-family extension gate.",
       "flags": [
+        "design-gap",
         "coverage-gap",
-        "global-semaphore-address"
+        "global-semaphore-address",
+        "tier:2.16c"
       ],
       "added_by_reconcile": "2026-06-27"
     },

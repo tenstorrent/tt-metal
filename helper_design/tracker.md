@@ -255,6 +255,38 @@ helper guards, and matched performance also timed out after five minutes without
 not treated as approval. The mandatory plan gates independently pass in both tiled and row-major paths,
 and no API expansion was made.
 
+### C14 — Tier 2.16a routed-expert FFN
+
+The architecture audit found that the in0, in1-down, and activated-data channels can each be
+described by API-v11 pipes, but phase 1's active in1 protocol cannot. It sends two discontiguous L1
+payloads (`gate`, then `up`) under one receiver-ready ACK and publishes one valid Flag after both
+linked writes. `send()` couples one payload to one signal; two handshaked calls would require two ACKs
+and publish two signals, while a no-handshake second pipe would not protect repeated destination
+lifetime. No public data-only stage exists.
+
+The required extension invariant was not found in a second unrelated production family. The H2D/D2H
+units need arbitrary GlobalSemaphore targeting instead, so they do not make the routed-FFN extension
+general. The required Claude consultation timed out after five minutes without a verdict; silence was
+not treated as approval. The kernel and factory remain raw, and no helper API change is proposed.
+
+### C15 — Tier 2.16b/c persistent host-I/O services
+
+Both persistent service kernels signal worker-grid `GlobalSemaphore` L1 addresses allocated outside
+their single-core service programs. API-v11 `Semaphore<>` accepts only a program semaphore ID and
+`SenderPipe` always signals the corresponding owned local address. Neither emitter creates a worker
+program semaphore, and substituting one would change the cross-program address and lifetime contract.
+
+H2D has a second independent gap: metadata and the worker-ready event are separated by a DRAM barrier
+and PCIe completion publication, whereas `send()` fuses its one payload directly to its signal. D2H
+otherwise exactly matches a no-handshake Counter `send_signal()` including its atomic barrier; its sole
+helper gap is external-address binding. Claude independently returned DEFER — DESIGN-GAP +
+COVERAGE-GAP for both and agreed that two directions of one socket subsystem fail the unrelated-family
+generality gate.
+
+The current Python and C++ worker-sync tests require Blackhole Galaxy/UBB and skip on this single-chip
+P100a. The plan's stale single-device coverage statement was corrected. No production code or helper
+API was changed.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
@@ -272,9 +304,9 @@ and no API expansion was made.
 | Tier 2.13 SDPA-decode `read_k` star | complete | API v11 at `f760425fe06`; full mapped correctness, fresh-JIT, shared-consumer audit, and q-factor 2/4 matched performance passed |
 | Tier 2.14 Argmax multicore control | complete | API v11 at `5aaaf5b5aa5`; exact two-rectangle, reduce-all, cache, full unit, fresh-JIT, source-audit, and both matched-performance gates passed |
 | Tier 2.15 Move overlap control | complete | API v11 at `a25603ae2c0`; TILE/ROW_MAJOR fresh JIT, complete Move/cache inventory, helper/source guards, and both matched-performance gates passed |
-| Tier 2.16a Routed-expert FFN | in-progress | Auditing the three ordinary multicast channels and exact routed-expert/bias test routes before migration |
-| Tier 2.16b H2D host-I/O service | pending | Independent atomic unit; exact single-device service route and emitter ABI still to audit |
-| Tier 2.16c D2H host-I/O service | pending | Independent atomic unit; exact single-device service route and emitter ABI still to audit |
+| Tier 2.16a Routed-expert FFN | deferred-design-gap | API v11 cannot stage gate+up under one ACK and one final linked signal; no unrelated family earns an extension |
+| Tier 2.16b H2D host-I/O service | deferred-design-and-coverage-gap | GlobalSemaphore target is unbindable; metadata and ready signal also straddle completion publication; Galaxy/UBB route unavailable |
+| Tier 2.16c D2H host-I/O service | deferred-design-and-coverage-gap | Counter control fits API v11 except for its GlobalSemaphore target; Galaxy/UBB route unavailable |
 
 ## Chronological findings
 
@@ -495,3 +527,19 @@ and no API expansion was made.
     from the source checkpoint parent, rebuilt, then the migrated files were restored byte-identically
     and rebuilt. Source was committed at `a25603ae2c0`; the two kernel rows and host binding were then
     written back at API v11. Rollout state is 31 migrated, 2 pending, and 71 deferred kernels.
+50. Tier 2.16a stopped before production edits at the API-v11 design gate. The phase-1 in1 path requires
+    gate and up to retain one linked path under one receiver-ready handshake and one final valid Flag;
+    the public helper has no data-only stage and two `send()` calls change the protocol. The prior
+    multi-device-only ledger coverage claim was corrected to the routed-expert test inventory. Claude's
+    five-minute architecture consultation timed out without a verdict. API expansion: NO.
+51. Tier 2.16b/c source audit proved that both worker events target cross-program GlobalSemaphore L1
+    addresses, while API-v11 binds only program semaphore IDs. Claude independently returned DEFER for
+    both, confirmed that D2H is otherwise an exact no-handshake Counter control pipe, and identified
+    H2D's separate metadata/barrier/completion/signal ordering gap. The twins do not satisfy the
+    unrelated-family extension gate. API expansion: NO.
+52. The H2D/D2H Python service modules and C++ worker-sync tests require Blackhole Galaxy/UBB and skip
+    on the current single-chip P100a, so no skipped route or performance result was credited. The stale
+    Tier 2.16 plan wording was corrected and both rows record design-gap plus coverage-gap separately.
+53. Every remaining Tier 2 unit now has a terminal disposition. Tier 2.16 made no production changes,
+    so rollout counts remain 31 migrated, 2 pending, and 71 deferred kernels with 27 migrated and 5
+    pending host bindings. The final static source audit passed 22/22. Helper API remains v11.
