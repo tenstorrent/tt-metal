@@ -1,26 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""DFlash drafter context-KV PCC gate against the golden GPU trace.
-
-The drafter analog of ``tt/runners/prefill_kv_validation.py``: that module gates the verifier's ``kvpe``
-cache, this one gates the drafter's separate K/V context caches. Both are optional bring-up hooks the
-runtime forwards into — never called in production serving.
-
-Why this exists as its own gate: ``kv_cache_pcc_check`` covers only ``kv_caches.kvpe``, so with DFlash on,
-the drafter cache the last rank writes was validated by NOTHING in the runner. On a multi-rank (D2D)
-pipeline that is the one cache whose correctness depends on the inter-galaxy transport — rank 0 sends its
-reduce_scattered FC partial packed alongside the hidden, and the drafter's K/V is the only observable that
-the partial arrived intact and was accumulated in the right place.
-
-Reference is the golden ``{k,v}_cache.safetensors`` pair, fp32 ``[draft_layer, kv_head, seq, head_dim]``
-(``$PREFILL_DFLASH_GOLDEN_KV_DIR``, default ``.../golden/dflash_context_kv_55k_v3``). Those axes are the
-device cache's global axes with the slot axis folded out, so the golden indexes straight against the
-readback. Comparing a prefix is sound: context K/V at position p depends only on tokens <= p (causal), so
-the first ``out_len`` rows of a full-length golden equal an ``out_len``-token run's cache.
-
-The device cache is ``bfloat8_b`` while the golden is fp32, which costs ~1e-4 of PCC (measured 0.9998 on
-the single-galaxy Stage-1 run), so 0.9999 is unreachable; the default bar is 0.99 (``PREFILL_DFLASH_PCC``).
+"""
+DFlash drafter context-KV PCC gate against the golden GPU trace.
+Device cache is bfloat8_b, while the golden is fp32.
 """
 
 from __future__ import annotations
@@ -46,23 +29,9 @@ DEFAULT_PCC = 0.99
 def read_slot_dflash_kv(
     mesh_device, cache, *, sp: int, chunk_size_global: int, num_layers: int, slot_id: int, out_len: int
 ) -> torch.Tensor:
-    """One slot's drafter K or V cache as ``[num_layers, num_kv_heads, out_len, head_dim]`` fp32, in
-    NATURAL token order.
-
-    Two layout inverses, in this order:
-
-    * dim0 is the writer's user-major linearization ``slot = user_id * num_layers + layer_idx``
-      (``allocate_dflash_kv_cache``), so this slot is rows ``[slot*L, (slot+1)*L)``. Slice it ON DEVICE
-      with an explicit ``DRAM_MEMORY_CONFIG``: the cache is ND-sharded ROUND_ROBIN_1D and slicing into
-      another ND-shard miscomputes the DRAM core on read-back (same requirement as ``read_slot_kv``).
-    * dim 2 is block-cyclic across SP chips. ``blockcyclic_positions`` maps shard row -> global natural
-      position, so the inverse is a SCATTER (``natural[p] = rotated``), never a gather — a gather is the
-      whole-cache PCC 0.354 = sqrt(1/8) signature.
-
-    Un-rotate the FULL cache and slice to ``out_len`` afterwards. Slicing first would take shard rows
-    rather than natural positions, which is a no-op only in the degenerate ``cache_len == chunk_size_global``
-    case (one aligned chunk) that hides every layout mistake.
-    """
+    """Read one slot's drafter K or V cache off the device and return it as
+    ``[num_layers, num_kv_heads, out_len, head_dim]`` fp32 in natural token order,
+    undoing the user-major slot layout and the block-cyclic sharding it was written in."""
     s = list(cache.shape)
     assert slot_id * num_layers + num_layers <= s[0], (
         f"slot {slot_id} x {num_layers} layers exceeds drafter cache dim0 {s[0]} "
@@ -95,16 +64,8 @@ def read_slot_dflash_kv(
 def _load_golden_kv(
     golden_dir: Path, *, num_layers: int, num_kv_heads: int, head_dim: int, out_len: int, clamp: bool = False
 ):
-    """Golden context K and V as ``[num_layers, num_kv_heads, N, head_dim]`` fp32.
-
-    The shape assert is the axis-mapping check: if the artifact ever changes axis order this fails here
-    instead of producing a uniformly bad PCC that reads like a device bug. ``get_slice`` keeps the read
-    partial — at ``out_len`` 5120 that is 126 MiB rather than the full 1.38 GiB.
-
-    ``N == out_len`` normally. With ``clamp`` it is ``min(out_len, golden_seq)`` instead — the table check's
-    push length is set independently of the golden, so a golden shorter than the push validates its own
-    prefix rather than raising; the caller reads the length used back off ``.shape[2]``.
-    """
+    """Load the golden reference context K and V (fp32) from the safetensors artifact in ``golden_dir``,
+    trimmed to ``out_len`` (or the golden's own length when ``clamp`` is set)."""
     from safetensors import safe_open
 
     out = []
@@ -129,13 +90,8 @@ def _load_golden_kv(
 
 
 def _pcc_per_head(tag: str, expected: torch.Tensor, actual: torch.Tensor, threshold: float, failures: list) -> float:
-    """PCC every (layer, head) slice separately, log each layer, and return the minimum.
-
-    Per-head, not whole-tensor: PCC dilutes as 1 - (fraction wrong), so one wrong head out of 48 lands at
-    ~0.99 on the whole tensor and hides under any threshold worth setting. Per-head also localizes the
-    fault — all heads of one TP column bad means the column/device-group mapping, one head per chip bad
-    means the ``head_idx % heads_per_chip`` term, one layer bad means the head/layer shard stride.
-    """
+    """Compare expected vs actual K/V per (layer, head), logging each layer's PCC and recording any slice
+    at or below ``threshold`` in ``failures``, and return the worst PCC over all (layer, head) slices."""
     from tests.ttnn.utils_for_testing import comp_pcc
 
     worst, worst_at = 1.0, None
@@ -172,17 +128,10 @@ def dflash_kv_cache_pcc_check(
     threshold: float = None,
     record_only: bool = False,
 ) -> float:
-    """PCC the drafter's populated context K/V for ``slot_id`` against the golden trace; returns the min
-    per-(layer, head) PCC and raises on failure unless ``record_only``.
-
-    Returns 1.0 unmeasured when the golden dir is absent, so a bring-up run on a host without the golden
-    artifact is not turned into a failure by enabling the gate.
-
-    Reads the caches host-side and un-rotates with ``blockcyclic_positions`` — the same shape as the
-    verifier's ``kv_cache_pcc_check``. That the migration KV chunk address table addresses these same
-    caches correctly is a separate concern, validated by the table-readback sibling
-    ``dflash_kv_table_pcc_check`` below.
-    """
+    """Validate the drafter's populated context K/V for one slot against the golden trace by reading the
+    device caches directly, returning the minimum per-(layer, head) PCC. Raises on failure unless
+    ``record_only``, and returns 1.0 (unmeasured) when no golden is available. Host-side counterpart of
+    ``dflash_kv_table_pcc_check`` below."""
     golden_dir = Path(golden_dir or os.environ.get(GOLDEN_KV_ENV) or GOLDEN_KV_DEFAULT)
     if not golden_dir.is_dir():
         logger.info(f"[dflash-pcc] SKIPPED: golden dir {golden_dir} not present (set {GOLDEN_KV_ENV})")
@@ -245,9 +194,8 @@ _KV_BLOCK_TOKENS = 32  # NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK: table reads go by w
 
 
 def _dflash_config_ids(table):
-    """``(k_ids, v_ids)`` indexed by GLOBAL kv-head, or None when the table carries no drafter configs.
-    Looked up BY NAME (the protobuf round-trip reassigns config ids in sorted-name order); a set that is not
-    exactly one K and one V per kv-head raises -- a partial publish, not a non-DFlash table."""
+    """Return the drafter caches' ``(k_ids, v_ids)`` config ids (indexed by kv-head) from a published KV
+    table, or None when the table carries no drafter configs; raises on a partial/malformed set."""
     from ..runners.kv_chunk_table import dflash_config_name
 
     names = [table.config_name(i) for i in range(table.num_configs())]
@@ -270,20 +218,10 @@ def _dflash_config_ids(table):
 def dflash_kv_table_pcc_check(
     table, slot_id: int, real_len: int, *, read_config_slice, threshold: float, golden_dir: str = None
 ) -> float | None:
-    """PCC the drafter's context K/V for ``slot_id`` over ``[0, real_len)`` read back through the published
-    KV chunk table vs the golden. Returns the min per-(layer, head) PCC, or None when there is nothing to
-    check -- None, not 1.0, so the caller can tell "measured and perfect" from "not measured" and leave its
-    summary unchanged on non-DFlash runs.
-
-    The table-readback sibling of ``dflash_kv_cache_pcc_check``: same golden and same per-(layer, head) core
-    (``_load_golden_kv`` / ``_pcc_per_head``), but the drafter KV comes back through the address table over
-    UMD -- the migration path -- rather than from the device cache handle, and this never raises (the caller
-    folds the returned PCC into the cross-rank validator verdict). Unlike the cache-handle sibling there is
-    NO default golden: it is prompt-specific, so the operator must name it via ``$PREFILL_DFLASH_GOLDEN_KV_DIR``.
-
-    ``read_config_slice(config_id, layer, slot_id, read_len, head_dim) -> [read_len, head_dim] fp32`` is the
-    caller's table->UMD reader, injected so this stays out of the producer's transport layer.
-    """
+    """Validate the drafter's context K/V for one slot against the golden by reading it back through the
+    published KV chunk table (the same path migration uses), returning the minimum per-(layer, head) PCC
+    or None when there is nothing to check. Table-based counterpart of ``dflash_kv_cache_pcc_check`` that
+    never raises."""
     ids = _dflash_config_ids(table)
     if ids is None:
         return None

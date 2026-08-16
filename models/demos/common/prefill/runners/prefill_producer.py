@@ -59,7 +59,7 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  .safetensors); set it to ALSO PCC the drafter caches the table carries.
   PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.99). Both feed
                                  dflash_kv_table_pcc_check in deepseek_v3_d_p/tt/dflash_prefill/
-                                 kv_validation.py; unset golden => the drafter half is skipped.
+                                 dflash_kv_validation.py; unset golden => the drafter half is skipped.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
 Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
@@ -1038,7 +1038,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
     # non-DFlash run neither imports the deepseek module nor measures anything.
     check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
     if check_dflash:
-        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.kv_validation import dflash_kv_table_pcc_check
+        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_table_pcc_check
 
         def read_dflash_slice(config_id, layer, slot_id, read_len, head_dim):
             return _read_kv_slice(

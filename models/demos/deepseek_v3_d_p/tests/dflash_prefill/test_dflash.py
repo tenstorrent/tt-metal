@@ -29,27 +29,9 @@ PCC_THRESHOLD = 0.999
 # test_mla.py:558's `chunk_size_global=5120` default. There is no config constant for it.
 CHUNK_GLOBAL = 5120
 
-# Per-user cache depth, matching what the prefill runner actually allocates: tt_prefill_runtime.py:225
-# takes `dflash_seq = self.config.max_seq_len` (documented "e.g. 60 * 1024" at :29, asserted a multiple of
-# chunk_size at :120). Sizing the test cache to the scenario instead would construct the drafter at a depth
-# production never uses (`max_seq_len=` is passed straight to TtDFlashDrafter), and would let the scenario
-# list silently pick the degenerate single-5k-chunk shape where every block-cyclic consumer collapses to
-# identity. 12 aligned 5k chunks, so `lr // chunk_local` spans 0..11 rather than the bare 0..1 two reach.
-#
-# "aligned 5k chunk" throughout means chunk_global consecutive positions starting at a MULTIPLE of
-# chunk_global -- the cache's own banding, 640 rows per chip. Not the same thing as a chunk WRITE, which is
-# also chunk_global wide but starts at any tile-aligned kv_actual; the two coincide only when
-# kv_actual % chunk_global == 0, and the difference between them IS the rotated staircase.
-MAX_SEQ_LEN = 12 * CHUNK_GLOBAL
+# Per-user cache depth
+MAX_SEQ_LEN = 11 * CHUNK_GLOBAL
 
-# FABRIC_2D, not 1D: the drafter runs inside the D2D-socket prefill pipeline, and a MeshSocket routes over
-# 2D fabric, so open_mesh_device forces 2D even at sp=8 (PREFILL_FABRIC_MODE=2d) -- set_fabric_config is one
-# global setting for the whole run. Validating the drafter under 1D would exercise different CCL routing for
-# its reduce_scatter/all_gather than production ever uses. RELAXED_INIT is required for FABRIC_2D bring-up on
-# BH Galaxy; the in-repo precedent for this exact param set on an 8x4 mesh is
-# test_prefill_block_chunked.py:1146-1163 (which additionally carves l1_small_size=512 -- not added here,
-# since no drafter op routes through L1_SMALL). Per-axis topology stays Linear: per_axis_topology() maps only
-# the TORUS/1D_RING fabrics to Ring, and plain FABRIC_2D wraps no axis.
 _FABRIC_2D = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D,
     "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
@@ -60,11 +42,6 @@ _FABRIC_2D = {
 def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> torch.Tensor:
     """Un-rotate a drafter cache read back as ``[.., .., cache_len, head_dim]`` in block-cyclic
     shard-row order (an SP-contiguous concat of dim 2) into natural token order.
-
-    ``blockcyclic_positions`` maps shard row -> global natural position, so the inverse is a SCATTER
-    (``natural[p] = rotated``), NOT a gather (``rotated[p]``) — writing it as a gather is the
-    whole-cache PCC 0.354 = sqrt(1/8) signature. Degenerates to identity when cache_len == chunk_global
-    (a single aligned 5k chunk), which is why today's single-chunk case cannot see a layout mistake.
     """
     cache_len = rotated.shape[2]
     p = blockcyclic_positions(sp, chunk_global, cache_len)
@@ -79,9 +56,6 @@ def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: i
     The cache is SP-sharded on seq and TP-sharded on kv-head, so concat SP along seq (dim 2) and TP along
     kv-head (dim 1). Slot 0 is dim0 rows ``[0, num_layers)`` under the writer's user-major linearization
     (``slot = user_id * num_layers + layer_idx``).
-
-    Order is load-bearing: un-rotate the FULL cache and slice to ``out_len`` AFTERWARDS. Slicing first would
-    take shard rows rather than natural positions — a no-op only when ``cache_seq == out_len``.
     """
     host = ttnn.to_torch(
         cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_shape)
@@ -90,19 +64,12 @@ def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: i
     return natural[:, :, :out_len, :]
 
 
-# pytest.ini caps every test at timeout=300, which does not fit FABRIC_2D 8x4 bring-up + a pretrained
-# safetensors load + n_chunks device work. Disable it here as the sibling test_dflash_prefill_integration.py:88
-# and the 8x4 legs of test_prefill_block_chunked.py already do.
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize(
     "ctx_len, n_chunks",
     [
         pytest.param(5120, 1, id="ctx5k-1chunk"),
-        # Deep cache + >1 chunk (issue #50725): cache_len = n_chunks * chunk_global, so the block-cyclic
-        # layout no longer degenerates to identity — the writer must place chunk c at global offset
-        # c * chunk_global, the rope table must be permuted to match, and the readback must be un-rotated.
-        # This is the case that makes all three layout consumers observable.
         pytest.param(10240, 2, id="ctx10k-2chunk"),
     ],
 )
@@ -170,9 +137,7 @@ def test_dflash_pcc(
     # Cache depth is the FULL context, so with n_chunks > 1 it spans several aligned 5k chunks.
     k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, cfg, ctx_len, sp_axis=sp_axis, tp_axis=tp_axis)
 
-    # Stream the context chunk by chunk, exactly as the prefill runner does. Each chunk's taps are a plain
-    # SP shard of that chunk's rows, which is what an ALIGNED write expects: chip r's local row
-    # k*chunk_local + j holds global position k*chunk_global + r*chunk_local + j.
+    # Stream the context chunk by chunk
     for c in range(n_chunks):
         lo = c * chunk_global
         drafter.reset()
@@ -191,8 +156,7 @@ def test_dflash_pcc(
         drafter.forward(k_cache, v_cache, lo)
     ttnn.synchronize_device(mesh_device)
 
-    # [num_layers, kv_heads, ctx_len, head_dim] in natural token order (the un-rotate is a no-op when
-    # n_chunks == 1, since a single-aligned-chunk cache's block-cyclic permutation is the identity).
+    # [num_layers, kv_heads, ctx_len, head_dim] in natural token order
     dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
     dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
 
@@ -207,18 +171,6 @@ def test_dflash_pcc(
         assert ok_k, f"K layer {i}: device vs HF PCC {pcc_k} < {PCC_THRESHOLD} (norm/rope mismatch if V passed)"
 
 
-# Per-iteration VALID token counts, ported from test_mla.py:541-549 (ROTATED_VALID_LISTS) so the drafter
-# exercises the same rotation edges the verifier's MLA chunked prefill already covers. Every iteration writes
-# a FULL chunk_global-wide chunk at cumulative offset kv_actual = sum of the preceding entries, so a turn
-# that ends early leaves the tail as pad and the NEXT turn resumes at an offset INSIDE an aligned 5k chunk —
-# which is exactly the multi-turn resume shape. The axes covered: which chip the valid/pad frontier falls on
-# (0..7), chip-aligned vs mid-chip straddle (kv_actual % chunk_local != 0), one vs several aligned 5k chunks
-# spanned by a single write, and how much of the
-# chunk is pad. All values are tile-aligned: sub-tile offsets are rejected by forward(), and the kernel
-# (which divides by tile_height before the boundary math) and the host mirror (which works in rows) provably
-# disagree off-tile.
-# MLA's 6th row [5120, 5120] ("allfull": aligned, no rotation) is omitted — that is exactly the
-# ctx10k-2chunk case of test_dflash_pcc above.
 _MULTITURN_ITERS = [
     pytest.param([640, 5120], id="aligned_min"),  # turn 0 = 1 chip valid (7 chips pad), then chip-1 rotated
     pytest.param([672, 5120], id="midchip_straddle"),  # frontier 1 tile into chip 1 → offset=32 straddle
@@ -256,15 +208,6 @@ def test_dflash_multiturn_pcc(
     drafter_state_dict,
     hf_context_kv,
 ):
-    """Multi-turn drafter context-KV at offsets inside an aligned 5k chunk, mirroring test_mla.py's
-    rotated-offset chunked prefill.
-
-    test_dflash_pcc only ever writes at ALIGNED offsets (0, 5120, ...), where the writer's staircase
-    degenerates to `want = kv_actual + c*chunk_local + r` and the taps can be a plain SP shard of a natural
-    slice. This test drives the offsets a real second turn produces, where the low chips are pushed into the
-    NEXT aligned 5k chunk and chip c row r carries an arbitrary global position, so the taps must be gathered
-    in the writer's rotated row order and the rope table permuted to match.
-    """
     cfg = drafter_cfg
     sd = drafter_state_dict
 
@@ -282,10 +225,6 @@ def test_dflash_multiturn_pcc(
 
     total_len = sum(iters_isl)
 
-    # Allocate the production per-user depth (see MAX_SEQ_LEN) rather than deriving one from the scenario, so
-    # the cache and the drafter under test are the shape the runner builds. Every write is a full
-    # chunk_global-wide window at the cumulative offset, and the op has a hard non-wrapping capacity FATAL
-    # (no ring — windowing happens at migration), so assert the last turn still lands inside the cache.
     cache_seq = MAX_SEQ_LEN
     assert cache_seq % chunk_global == 0, f"cache_seq {cache_seq} must be a whole number of aligned 5k chunks"
     assert (

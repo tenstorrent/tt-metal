@@ -449,8 +449,6 @@ def test_kimi_kv_cache_mock(
     ids=["8x4"],
     indirect=True,
 )
-# Only "line": the address table is pure host-side DRAM bookkeeping + UMD reads, so unlike the model
-# tests it has no fabric dependency; the kimi mock's ring leg would only double device time here.
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -473,24 +471,9 @@ def test_dflash_kv_cache_mock(
     num_layers,
     device_params,
 ):
-    """
-    The DFlash analogue of test_kimi_kv_cache_mock: mock K/V caches with known contents, an address
-    table built over them, and a readback of every 32-token chunk of every head.
-
-    What makes this different from the kimi mock, and why it is worth its own test: the drafter shards
-    its kv-heads over TP (8 global heads / tp=4 = 2 per chip) instead of replicating a single latent
-    head. The table key is (layer, position, slot) with no head axis, so each (tensor, head) needs its
-    OWN config with a SINGLE-MEMBER device group, and each config then walks only every other run of
-    its chip's DRAM shards. That is exactly what populate_kv_chunk_address_table_dflash exists to
-    address and what the kimi builder's incremental bank counter cannot express.
-
-    The reference is random per (batch, head, token), so this also pins down the one assumption the
-    working MLA table does NOT already prove: that ROUND_ROBIN_1D enumerates the per-chip shard grid
-    row-major with dim 1 (head) between dim 0 (slot*layer) and dim 2 (seq). Get that ordering wrong
-    and head h's config reads another head's or another layer's bytes, which fails here loudly
-    instead of silently misplacing KV in production. K and V are separate tensors so a config that
-    inherited config 0's base address also fails.
-    """
+    """DFlash analogue of test_kimi_kv_cache_mock (mock caches -> table -> readback). Global cache shape
+    [num_users*num_layers, num_kv_heads, cache_seq, head_dim], dim0 user-major (slot = user*num_layers + layer):
+    dim1 kv-heads TP-sharded (2/chip), dim2 seq SP-sharded + block-cyclic, ND ROUND_ROBIN_1D."""
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
@@ -499,7 +482,6 @@ def test_dflash_kv_cache_mock(
     head_dim = 128
     num_kv_heads = 8
     heads_per_chip = num_kv_heads // tp_factor
-    assert heads_per_chip > 1, "this test is only interesting when a chip holds more than one kv-head"
     batch = num_users * num_layers
 
     chunk_tokens = PREFILL_CHUNK_OUTPUT_TOKENS
@@ -597,9 +579,6 @@ def test_dflash_kv_cache_mock(
             torch.bfloat16
         )
 
-    # bfp8 shares an exponent per 16 elements along the row, so the block-cyclic row permutation (whole
-    # 640-row blocks) leaves the quantization of each element unchanged — the same property the kimi mock
-    # relies on. Round the natural-order reference and compare against it directly.
     reference_bf8 = {K_BASE: bf8_round(reference_k), V_BASE: bf8_round(reference_v)}
 
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]

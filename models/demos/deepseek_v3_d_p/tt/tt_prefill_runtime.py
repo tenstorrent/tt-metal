@@ -917,7 +917,7 @@ class TtPrefillRuntime:
                 "nothing to check"
             )
             return 1.0
-        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.kv_validation import dflash_kv_cache_pcc_check
+        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_cache_pcc_check
 
         dcfg = self.drafter.config
         return dflash_kv_cache_pcc_check(
