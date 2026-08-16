@@ -259,9 +259,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
     }
     // In chunked mode: legacy uses chunk_start_idx + Sq; flexible uses Sq + max prefix from page table.
-    const uint32_t Sk = is_chunked
-                            ? (flexible_chunked ? (Sq + max_prefix_tokens_flexible) : (chunk_start_idx.value() + Sq))
-                            : k_shape[2];
+    // neighborhood_gather uploads K/V as [B,NH,T*H,W*D] (W-row pages), so k_shape[2] is T*H, not the seq
+    // length -- take the real Sk = T*H*W from the neighborhood descriptor instead.
+    const uint32_t Sk =
+        is_chunked ? (flexible_chunked ? (Sq + max_prefix_tokens_flexible) : (chunk_start_idx.value() + Sq))
+        : operation_attributes.neighborhood_gather
+            ? (operation_attributes.neighborhood_3d.value()[0] * operation_attributes.neighborhood_3d.value()[1] *
+               operation_attributes.neighborhood_3d.value()[2])
+            : k_shape[2];
 
     /*
     Note about tensor shapes:
@@ -362,6 +367,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
+    // neighborhood_gather host-upload masks (nullptr when the writer generates instead).
+    auto* nbr_mask_buffer =
+        tensor_args.neighborhood_mask.has_value() ? tensor_args.neighborhood_mask.value().buffer() : nullptr;
+    auto* nbr_mask_off_buffer = tensor_args.neighborhood_mask_offsets.has_value()
+                                    ? tensor_args.neighborhood_mask_offsets.value().buffer()
+                                    : nullptr;
+    const uint32_t neighborhood_mask_provided = (nbr_mask_buffer != nullptr) ? 1u : 0u;
     // page_table and chunk_start_idx must be BufferBindings (not raw address writes);
     // otherwise their addresses go stale on descriptor cache hits.
     auto* page_table_buffer = is_chunked ? page_table.value().buffer() : nullptr;
@@ -566,6 +578,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
+    // arg 35: fused-gather variant of 3D-neighborhood (densely gather the window into cb_k/cb_v).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(operation_attributes.neighborhood_gather));
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -586,6 +600,15 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         tensor_args.windowed_q_token_offset_tensor.has_value()
             ? tensor_args.windowed_q_token_offset_tensor.value().buffer()
             : nullptr)
+        .append_to(reader_compile_time_args);
+    // neighborhood_gather host-upload masks: the pool (TILE) and per-Q-chunk offset array (ROW_MAJOR).
+    // nullptr placeholders keep the accessor offset chain intact when the reader generates instead.
+    TensorAccessorArgs(
+        tensor_args.neighborhood_mask.has_value() ? tensor_args.neighborhood_mask.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(
+        tensor_args.neighborhood_mask_offsets.has_value() ? tensor_args.neighborhood_mask_offsets.value().buffer()
+                                                          : nullptr)
         .append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
@@ -641,6 +664,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
+        // arg 26: fused-gather variant of 3D-neighborhood (mask generated over dense-packed keys).
+        static_cast<uint32_t>(operation_attributes.neighborhood_gather),
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -826,6 +851,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // which has no cu tensor). It must never alias the Q input CB -- a stray reserve_back there
         // desyncs Q streaming. UInt32 tile fits both the cu array and the 4-byte offset read.
         cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(tt::DataFormat::UInt32), tt::DataFormat::UInt32);
+        if (operation_attributes.neighborhood_gather) {
+            // Reader's row-major staging scratch: one full W-row page (W * D bf16 elems, sized for the wider
+            // of K's DHt and V's vDHt head dim), landed from DRAM before its box w-run is face-scattered
+            // into cb_k/cb_v. W-run coalescing => one page-read per (t,h) box-row instead of per token.
+            const uint32_t nb_W = operation_attributes.neighborhood_3d.value()[2];
+            const uint32_t gather_stage_bytes = nb_W * std::max(DHt, vDHt) * TILE_WIDTH * sizeof(uint16_t);
+            cb_ids.gather_stage = allocate_cb(gather_stage_bytes, 1, tt::DataFormat::Float16_b);
+        }
         if (tensor_args.cu_window_seqlens.has_value()) {
             const auto& cu = tensor_args.cu_window_seqlens.value();
             tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
@@ -1514,6 +1547,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         for (uint32_t d : neighborhood) {
             reader_args.push_back(d);
         }
+        // neighborhood_gather host-upload masks: pool + per-Q-chunk offset array (nullptr => reader
+        // generates nothing; the writer path fills the mask). Slots 20, 21 of the neighborhood tail.
+        reader_args.push_back(nbr_mask_buffer);
+        reader_args.push_back(nbr_mask_off_buffer);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -1540,7 +1577,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              neighborhood[4],                                  // 18: kh
              neighborhood[5],                                  // 19: kw
              w_shard[0],                                       // 20: W_full (0 => not W-sharded)
-             w_shard[1]});                                     // 21: w_origin (signed int32 bit-pattern)
+             w_shard[1],                                       // 21: w_origin (signed int32 bit-pattern)
+             neighborhood_mask_provided});                     // 22: 1 => reader DMAs mask, writer skips gen
 
         compute_desc.emplace_runtime_args(
             core,

@@ -48,7 +48,10 @@ ttnn::Tensor scaled_dot_product_attention(
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
-    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard) {
+    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
+    bool neighborhood_gather,
+    const std::optional<ttnn::Tensor>& neighborhood_mask,
+    const std::optional<ttnn::Tensor>& neighborhood_mask_offsets) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -100,7 +103,10 @@ ttnn::Tensor scaled_dot_product_attention(
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
         neighborhood_3d,
-        neighborhood_w_shard);
+        neighborhood_w_shard,
+        neighborhood_gather,
+        neighborhood_mask,
+        neighborhood_mask_offsets);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -143,6 +149,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // windowed_q_token_offset_tensor
         std::nullopt,  // neighborhood_3d
         std::nullopt,  // neighborhood_w_shard
+        false,         // neighborhood_gather
+        std::nullopt,  // neighborhood_mask
+        std::nullopt,  // neighborhood_mask_offsets
         paged_cache_geometry);
 }
 
@@ -186,6 +195,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // windowed_q_token_offset_tensor
         std::nullopt,  // neighborhood_3d
         std::nullopt,  // neighborhood_w_shard
+        false,         // neighborhood_gather
+        std::nullopt,  // neighborhood_mask
+        std::nullopt,  // neighborhood_mask_offsets
         paged_cache_geometry);
 }
 

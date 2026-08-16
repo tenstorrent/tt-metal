@@ -40,6 +40,12 @@ struct SDPAParams {
     // w_origin + local_w and clamps the window in [0, W_full). w_origin is a signed int32 stored in a
     // uint32 (a left-edge shard's fake halo maps to negative global w). Absent => not W-sharded.
     std::optional<std::array<uint32_t, 2>> neighborhood_w_shard;
+    // Fused-gather variant of neighborhood_3d: instead of streaming the box's active K/V tiles from a
+    // TILE-layout K/V and masking per tile, the reader densely gathers each query chunk's window rows
+    // from a ROW_MAJOR K/V table into a contiguous cb_k/cb_v (row-granular), so the compute runs dense
+    // flash over only real window tokens. Only meaningful when neighborhood_3d is set. Off => the
+    // existing streamed-active-tile path. (Build-out in progress; off by default.)
+    bool neighborhood_gather = false;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
@@ -61,6 +67,13 @@ struct SDPAInputs {
     // read by the writer at runtime. Present only when the caller wants a per-device offset under one
     // shared program; otherwise the scalar windowed_q_token_offset is used.
     std::optional<Tensor> windowed_q_token_offset_tensor;
+    // neighborhood_gather host-upload masks: a POOL of precomputed Float16_b mask tiles (TILE layout,
+    // [1,1,N*32,32]) and a per-Q-chunk tile OFFSET array (ROW_MAJOR uint32) selecting where each Q chunk's
+    // packed mask starts in the pool. When present the reader DMAs mask tiles from the pool (keyed by
+    // offsets[q_chunk]) instead of the writer generating them on-device -- the ~9 distinct neighborhood
+    // masks are deduplicated, so this is a few MB and a DMA per chunk rather than a per-tile fill.
+    std::optional<Tensor> neighborhood_mask;
+    std::optional<Tensor> neighborhood_mask_offsets;
 };
 
 }  // namespace ttnn::prim

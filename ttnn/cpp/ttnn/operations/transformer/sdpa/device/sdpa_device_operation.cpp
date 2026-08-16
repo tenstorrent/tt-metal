@@ -35,7 +35,14 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor->buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
-        TT_FATAL((input_tensor->layout() == Layout::TILE), "Inputs to SDPA must be tilized");
+        // Fused-gather 3D-neighborhood reads K/V row-by-row and repacks the window into cb_k/cb_v on
+        // device, so K and V come in ROW_MAJOR (Q stays TILE). Everything else is TILE.
+        const bool gather_kv_rowmajor = attrs.neighborhood_gather && (input_tensor == &k || input_tensor == &v);
+        TT_FATAL(
+            input_tensor->layout() == (gather_kv_rowmajor ? Layout::ROW_MAJOR : Layout::TILE),
+            "SDPA inputs must be tilized (neighborhood_gather K/V must be ROW_MAJOR); got layout {} for a {} tensor",
+            input_tensor->layout(),
+            gather_kv_rowmajor ? "gather-K/V" : "TILE");
         TT_FATAL(
             input_tensor->dtype() == DataType::BFLOAT16 || input_tensor->dtype() == DataType::BFLOAT8_B ||
                 input_tensor->dtype() == DataType::BFLOAT4_B,
@@ -80,6 +87,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
                 attrs.head_dim_v.value(),
                 q_shape[3]);
+        } else if (attrs.neighborhood_gather) {
+            // Fused gather uploads K/V as [B, NH, T*H, W*D] (W-row pages), so their [2]/[3] dims are
+            // (T*H, W*D), not (S, HD). Only batch, heads, and K==V shape are checked here; the (T,H,W,D)
+            // consistency is checked in the 3D-neighborhood branch.
+            TT_FATAL(k_shape[0] == B && v_shape[0] == B, "K and V batch must match Q.");
+            TT_FATAL(k_shape[1] == nkv && v_shape[1] == nkv, "K and V num_heads must match.");
+            TT_FATAL(k_shape[2] == v_shape[2] && k_shape[3] == v_shape[3], "gather K and V must have the same shape.");
         } else {
             TT_FATAL(
                 k_shape[0] == B && v_shape[0] == B,
@@ -447,11 +461,23 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 TT_FATAL(nbr[i] >= 1, "neighborhood_3d[{}] must be >= 1, got {}.", i, nbr[i]);
             }
             const uint32_t sites = nbr[0] * nbr[1] * nbr[2];
-            TT_FATAL(
-                sites == static_cast<uint32_t>(k.logical_shape()[-2]),
-                "neighborhood_3d T*H*W = {} must equal the K sequence length {}.",
-                sites,
-                k.logical_shape()[-2]);
+            if (attrs.neighborhood_gather) {
+                // Gather K/V come as [B, NH, T*H, W*D] (W-row pages): rows = T*H, page width = W*D.
+                TT_FATAL(
+                    static_cast<uint32_t>(k.logical_shape()[-2]) == nbr[0] * nbr[1] &&
+                        static_cast<uint32_t>(k.logical_shape()[-1]) % nbr[2] == 0,
+                    "gather K must be [B,NH,T*H,W*D]; got rows {} (want {}) and width {} (want a multiple of W={}).",
+                    k.logical_shape()[-2],
+                    nbr[0] * nbr[1],
+                    k.logical_shape()[-1],
+                    nbr[2]);
+            } else {
+                TT_FATAL(
+                    sites == static_cast<uint32_t>(k.logical_shape()[-2]),
+                    "neighborhood_3d T*H*W = {} must equal the K sequence length {}.",
+                    sites,
+                    k.logical_shape()[-2]);
+            }
             // SP-over-T: Q may be a tile-aligned shard at a global token offset while K/V stay the
             // full grid. The mask generator and the T/H/W k-range narrowing already use
             // windowed_q_token_offset as the global Q position, so a shard evaluates against full K/V
@@ -570,6 +596,27 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     check_conditions();
+    // Fused-gather variant is a sub-mode of 3D-neighborhood; it is meaningless without it.
+    TT_FATAL(
+        !attrs.neighborhood_gather || attrs.neighborhood_3d.has_value(),
+        "neighborhood_gather requires neighborhood_3d to be set.");
+    // Host-upload masks: the pool (TILE Float16_b) and per-Q-chunk offsets (ROW_MAJOR uint32) come as a
+    // pair, only in gather mode. When present the reader DMAs them instead of the writer generating.
+    TT_FATAL(
+        tensors.neighborhood_mask.has_value() == tensors.neighborhood_mask_offsets.has_value(),
+        "neighborhood_mask and neighborhood_mask_offsets must be provided together.");
+    if (tensors.neighborhood_mask.has_value()) {
+        const auto& m = tensors.neighborhood_mask.value();
+        const auto& off = tensors.neighborhood_mask_offsets.value();
+        TT_FATAL(attrs.neighborhood_gather, "neighborhood_mask requires neighborhood_gather.");
+        TT_FATAL(
+            m.storage_type() == StorageType::DEVICE && off.storage_type() == StorageType::DEVICE,
+            "neighborhood_mask/offsets must be on device.");
+        TT_FATAL(m.layout() == Layout::TILE, "neighborhood_mask must be TILE layout.");
+        TT_FATAL(m.dtype() == DataType::BFLOAT16, "neighborhood_mask must be bfloat16 (Float16_b).");
+        TT_FATAL(off.layout() == Layout::ROW_MAJOR, "neighborhood_mask_offsets must be ROW_MAJOR.");
+        TT_FATAL(off.dtype() == DataType::UINT32, "neighborhood_mask_offsets must be uint32.");
+    }
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
     if (attrs.is_windowed) {
@@ -709,6 +756,9 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
+    bool neighborhood_gather,
+    const std::optional<Tensor>& neighborhood_mask,
+    const std::optional<Tensor>& neighborhood_mask_offsets,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -727,6 +777,7 @@ Tensor sdpa(
             .windowed_q_token_offset = windowed_q_token_offset,
             .neighborhood_3d = neighborhood_3d,
             .neighborhood_w_shard = neighborhood_w_shard,
+            .neighborhood_gather = neighborhood_gather,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },
@@ -740,6 +791,8 @@ Tensor sdpa(
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
+            .neighborhood_mask = neighborhood_mask,
+            .neighborhood_mask_offsets = neighborhood_mask_offsets,
         });
 }
 }  // namespace ttnn::prim

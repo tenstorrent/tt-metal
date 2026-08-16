@@ -16,6 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/neighborhood_gather.hpp"
 
 // Zero a [row,col) sub-rectangle of a Float16_b tile that is otherwise -inf (the partial-window boundary
 // tile). A Float16_b tile is 4 row-major 16x16 faces of 2-byte elements, so this is a direct per-element
@@ -351,6 +352,239 @@ inline void generate_windowed_mask_for_q_chunk(
         }
         noc.async_read_barrier();
         cb_mask.push_back(mask_chunk_tiles);
+    }
+}
+
+// --- Fused-gather (dense-packed) 3D-neighborhood mask ---------------------------------------------
+// The key columns are the reader's DENSELY PACKED window tokens (packed index j -> real token via the
+// T-outer/H-mid/W-inner box enumeration the reader packs), not contiguous flat positions. Element (r, c)
+// is 0 when the real key at packed_col_base + c lies in query (q_base + r)'s (kt,kh,kw) window; padded
+// columns (j >= n_box) and out-of-grid query rows stay -inf. W-shard handling mirrors
+// fill_neighborhood_3d_tile (W_full == 0 => global w == local w).
+//
+// Structural fill (no 1024-element test): because the box is a superset of EVERY query's window, each
+// query's in-window keys are a sub-rectangle of the box — under the packing, a set of contiguous W-runs
+// (one per (t,h) box-row). Each query row's window is hoisted into NbrRowWindows (computed once per Q
+// row-tile, reused across all packed column-tiles), then the tile's 32 columns are walked as box-row
+// SEGMENTS (constant t_key/h_key, contiguous local w) and each row's in-window column run is zeroed.
+
+// Per-query-row window bounds for one 32-row Q tile. t/h are local==global; the W window is stored as a
+// LOCAL half-open range [wl0, wl1) (global [w0,w1) minus w_origin) so it compares directly to the box's
+// local w. Invalid rows (padding or fake-halo query) get wl0 >= wl1 so no column is ever zeroed for them.
+struct NbrRowWindows {
+    uint32_t t0[tt::constants::TILE_HEIGHT];
+    uint32_t t1[tt::constants::TILE_HEIGHT];
+    uint32_t h0[tt::constants::TILE_HEIGHT];
+    uint32_t h1[tt::constants::TILE_HEIGHT];
+    int32_t wl0[tt::constants::TILE_HEIGHT];
+    int32_t wl1[tt::constants::TILE_HEIGHT];
+};
+
+inline void compute_nbr_row_windows(
+    uint32_t q_base,
+    uint32_t T,
+    uint32_t H,
+    uint32_t W,
+    uint32_t kt,
+    uint32_t kh,
+    uint32_t kw,
+    uint32_t W_full,
+    int32_t w_origin,
+    NbrRowWindows& rw) {
+    const uint32_t HW = H * W;
+    const uint32_t sites = T * HW;
+    const uint32_t w_span = (W_full != 0) ? W_full : W;
+    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+        rw.wl0[r] = 0;
+        rw.wl1[r] = 0;  // default: empty (skipped)
+        const uint32_t q = q_base + r;
+        if (q >= sites) {
+            continue;
+        }
+        const uint32_t qt = q / HW;
+        const uint32_t qrem = q % HW;
+        const int32_t qw_g = w_origin + static_cast<int32_t>(qrem % W);
+        if (qw_g < 0 || qw_g >= static_cast<int32_t>(w_span)) {
+            continue;  // fake-halo query row: its output is cropped, leave -inf
+        }
+        uint32_t t0, t1, h0, h1, w0, w1;
+        nbr_axis_bounds(qt, T, kt, t0, t1);
+        nbr_axis_bounds(qrem / W, H, kh, h0, h1);
+        nbr_axis_bounds(static_cast<uint32_t>(qw_g), w_span, kw, w0, w1);
+        rw.t0[r] = t0;
+        rw.t1[r] = t1;
+        rw.h0[r] = h0;
+        rw.h1[r] = h1;
+        // [w0, w1) is GLOBAL and clamped in [0, w_span), so its LOCAL image is in-bounds and the
+        // fake-halo KEY test is subsumed — any column we zero has global w in [w0, w1) ⊆ [0, w_span).
+        rw.wl0[r] = static_cast<int32_t>(w0) - w_origin;
+        rw.wl1[r] = static_cast<int32_t>(w1) - w_origin;
+    }
+}
+
+template <uint32_t tile_bytes, uint32_t cb_mask_in>
+inline void fill_neighborhood_3d_tile_packed(
+    uint32_t tile_id,
+    uint32_t packed_col_base,
+    uint32_t n_box,
+    const NeighborhoodBox& box,
+    const neighborhood_gather::BoxDims& d,
+    const NbrRowWindows& rw) {
+    fill_neginf_tile<tile_bytes>(cb_mask_in, tile_id);
+    constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t FW = tt::constants::FACE_WIDTH;
+    constexpr uint32_t TH = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t TW = tt::constants::TILE_WIDTH;
+    const uint32_t bw = d.bw;  // box W extent (packed W-inner stride)
+    const uint32_t bh = d.bh;  // box H extent
+    CircularBuffer cb(cb_mask_in);
+    volatile tt_l1_ptr uint16_t* p =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
+
+    // Walk the tile's key columns [packed_col_base, +32) as box-row segments (each: constant t_key/h_key,
+    // contiguous local w). Columns with packed index >= n_box are past the box and stay -inf.
+    uint32_t c = 0;
+    uint32_t j = packed_col_base;
+    while (c < TW && j < n_box) {
+        const uint32_t r_box = j / bw;  // (t,h) box-row index = jt*bh + jh
+        const uint32_t jw = j - r_box * bw;
+        uint32_t seg_len = TW - c;
+        if (bw - jw < seg_len) {
+            seg_len = bw - jw;  // segment ends at this box-row's W boundary
+        }
+        if (n_box - j < seg_len) {
+            seg_len = n_box - j;  // ...or at the box end
+        }
+        const uint32_t jt = r_box / bh;
+        const uint32_t jh = r_box - jt * bh;
+        const uint32_t t_key = box.t0 + jt;
+        const uint32_t h_key = box.h_lo + jh;
+        const int32_t w_start = static_cast<int32_t>(box.w_lo + jw);  // local w of column c
+        for (uint32_t r = 0; r < TH; ++r) {
+            if (rw.wl1[r] <= rw.wl0[r]) {
+                continue;  // invalid/empty row
+            }
+            if (t_key < rw.t0[r] || t_key >= rw.t1[r] || h_key < rw.h0[r] || h_key >= rw.h1[r]) {
+                continue;  // this (t,h) box-row is out of the query's window
+            }
+            // In-window local w in [wl0, wl1) -> segment column offset i in [i_lo, i_hi).
+            int32_t i_lo = rw.wl0[r] - w_start;
+            int32_t i_hi = rw.wl1[r] - w_start;
+            if (i_lo < 0) {
+                i_lo = 0;
+            }
+            if (i_hi > static_cast<int32_t>(seg_len)) {
+                i_hi = static_cast<int32_t>(seg_len);
+            }
+            if (i_lo >= i_hi) {
+                continue;
+            }
+            const uint32_t face_row = (r >= FH) ? 2u : 0u;
+            const uint32_t fr = r & (FH - 1);
+            for (int32_t i = i_lo; i < i_hi; ++i) {
+                const uint32_t col = c + static_cast<uint32_t>(i);
+                const uint32_t face = face_row + ((col >= FW) ? 1u : 0u);
+                p[face * (FH * FW) + fr * FW + (col & (FW - 1))] = 0x0000;
+            }
+        }
+        c += seg_len;
+        j += seg_len;
+    }
+}
+
+// Generate the dense-packed mask for one Q chunk: n_packed_chunks chunks of Sq_chunk_t x Sk_chunk_t
+// tiles. n_packed_chunks is computed from the same neighborhood_box the reader gathers, so the mask
+// count matches the reader's K/V chunk count and the compute's ctrl-CB walk exactly (CB balance).
+template <uint32_t mask_tile_bytes, uint32_t cb_mask_in>
+inline void generate_neighborhood_gather_mask_for_q_chunk(
+    Noc& noc,
+    uint32_t q_chunk,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t valid_Sqt,
+    uint32_t q_tok_offset,
+    uint32_t nb_T,
+    uint32_t nb_H,
+    uint32_t nb_W,
+    uint32_t nb_kt,
+    uint32_t nb_kh,
+    uint32_t nb_kw,
+    uint32_t nb_W_full,
+    int32_t nb_w_origin) {
+    const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+    const auto box = neighborhood_box(
+        q_chunk,
+        Sq_chunk_t,
+        valid_Sqt,
+        q_tok_offset,
+        nb_T,
+        nb_H,
+        nb_W,
+        nb_kt,
+        nb_kh,
+        nb_kw,
+        tt::constants::TILE_HEIGHT);
+    const neighborhood_gather::BoxDims d = neighborhood_gather::box_dims(box);
+    const uint32_t n_box = d.n_box;
+    const uint32_t n_packed_seqtiles = (n_box + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    uint32_t n_packed_chunks = (n_packed_seqtiles + Sk_chunk_t - 1) / Sk_chunk_t;
+    if (n_packed_chunks == 0) {
+        n_packed_chunks = 1;
+    }
+    const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
+    CircularBuffer cb_mask(cb_mask_in);
+    for (uint32_t pc = 0; pc < n_packed_chunks; ++pc) {
+        cb_mask.reserve_back(mask_chunk_tiles);
+        for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+            const uint32_t q_base = q_tok_offset + (q_row_start_tile + row) * tt::constants::TILE_HEIGHT;
+            NbrRowWindows rw;  // this Q row-tile's per-row windows (reused across the Sk_chunk_t col tiles)
+            compute_nbr_row_windows(q_base, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw, nb_W_full, nb_w_origin, rw);
+            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                const uint32_t packed_col_base = (pc * Sk_chunk_t + col) * tt::constants::TILE_HEIGHT;
+                fill_neighborhood_3d_tile_packed<mask_tile_bytes, cb_mask_in>(
+                    row * Sk_chunk_t + col, packed_col_base, n_box, box, d, rw);
+            }
+        }
+        noc.async_read_barrier();
+        cb_mask.push_back(mask_chunk_tiles);
+    }
+}
+
+// Template wrapper: instantiate the packed generator ONLY when GATHER is true (same rationale as
+// windowed_generate_if_enabled -- kernel_main is not a template, so guard get_tile_size behind this).
+template <bool GATHER, uint32_t cb_mask_in>
+inline void neighborhood_gather_generate_if_enabled(
+    Noc& noc,
+    uint32_t q_chunk,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t valid_Sqt,
+    uint32_t q_tok_offset,
+    uint32_t nb_T,
+    uint32_t nb_H,
+    uint32_t nb_W,
+    uint32_t nb_kt,
+    uint32_t nb_kh,
+    uint32_t nb_kw,
+    uint32_t nb_W_full,
+    int32_t nb_w_origin) {
+    if constexpr (GATHER) {
+        constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+        generate_neighborhood_gather_mask_for_q_chunk<mask_tile_bytes, cb_mask_in>(
+            noc,
+            q_chunk,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            valid_Sqt,
+            q_tok_offset,
+            nb_T,
+            nb_H,
+            nb_W,
+            nb_kt,
+            nb_kh,
+            nb_kw,
+            nb_W_full,
+            nb_w_origin);
     }
 }
 
