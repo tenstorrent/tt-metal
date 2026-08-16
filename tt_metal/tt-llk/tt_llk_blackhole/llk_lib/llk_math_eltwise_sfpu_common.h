@@ -27,23 +27,14 @@ inline void _llk_math_eltwise_sfpu_done_()
 
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
-    // Typed architectural Dst face advance: two CR-mode Dst += 8 counter steps,
-    // expressed with the typed TTINCRWC builtin so the compiler's region and
-    // ownership proofs see a typed Dst/RWC effect instead of an opaque
-    // `.ttinsn` word (migration idiom of df504b3b2).  This branch's compiler
-    // head exposes no rvtt_ttdstface / rvtt_ttsetrwc builtin, so the raw
-    // SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D) word is replaced by the
-    // architecturally equivalent CR-mode INCRWC (dst_rwc_cr += 8; dst_rwc =
-    // dst_rwc_cr under both encodings), an established production idiom --
-    // cf. TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0) in
-    // llk_math_eltwise_binary.h.
-    //
-    // The builtin range-checks its increment as a signed 4-bit field, so the
-    // unsigned field value 8 must be spelled -8; the assembled word is
-    // byte-identical to raw TT_OP_INCRWC(p_setrwc::CR_D, 8, 0, 0)
-    // (`ttincrwc 4,8,0,0`, 0xe0480000).
-    __builtin_rvtt_ttincrwc(p_setrwc::CR_D, -8, 0, 0);
-    __builtin_rvtt_ttincrwc(p_setrwc::CR_D, -8, 0, 0);
+    // Typed architectural Dst face advance (two CR-mode Dst += 8 counter
+    // steps).  The typed builtin assembles byte-identically to the two raw
+    // SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D) words it replaces, but stays
+    // compiler-visible as a pure Dst/RWC run separator instead of an opaque
+    // instruction word (migration idiom of df504b3b2; the builtin is called
+    // directly because this toolchain's sfpi include snapshot predates the
+    // sfpi::dst_face_advance() wrapper).
+    __builtin_rvtt_ttdstface();
 }
 
 inline void _llk_math_eltwise_sfpu_uninit_()
