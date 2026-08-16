@@ -61,6 +61,19 @@
 #include "ckernel_template.h"
 #endif
 
+// Default ON (Blackhole): replay-record the phase >= 4 step loop's load16 and
+// store16 so each iteration costs the math RISC-V 2 issues instead of 16. The
+// instruction stream reaching the SFPU is identical; only issue count changes.
+// Measured op-level on BH silicon (canonical sweep, 2026-08-16): ttnn.topk
+// single-core 1.154x-1.202x across N in [4096, 131072], k in [8, 512]; the
+// multi-core topk path and every ttnn.sort factory are insensitive (~1.00x).
+// Correctness: topk/sort/sampling/moe suites 347 passed with this on,
+// stable=True spot-checked, nightly moe-gate consumers green.
+// Opt out with -DTOPK_DISABLE_REPLAY_STEP (A/B bisect knob for reviewers).
+#if !defined(TOPK_DISABLE_REPLAY_STEP) && !defined(TOPK_REPLAY_STEP_STORE)
+#define TOPK_REPLAY_STEP_STORE 1
+#endif
+
 #if defined(TOPK_REPLAY_STEP_STORE) && !defined(TOPK_REPLAY_STEP_LOAD)
 #define TOPK_REPLAY_STEP_LOAD 1
 #endif
@@ -79,9 +92,15 @@
 #define TOPK_STEP_LOAD_REPLAY_START  16
 #define TOPK_STEP_STORE_REPLAY_START 24
 #else
-// Load only: 0-7 hold load16(4, 8), 8-15 store16(4, 8), 16-20 the phase-3
-// compare lattice; the buffer is REPLAY_BUF_SIZE = 32 deep, so [21, 29) is
-// unclaimed and needs no coordination with any other recording at all.
+// Load only: 0-7 hold load16(4, 8), 8-15 store16(4, 8); the phase-3 compare
+// lattice occupies 16-20 (or 16-24 under STABLE_SORT, replay_count = 9). The
+// buffer is REPLAY_BUF_SIZE = 32 deep. Without STABLE_SORT, [21, 29) does not
+// overlap anything. Under STABLE_SORT it shares slots 21-24 with the lattice,
+// which is safe for the same reason as the STORE window above: every consumer
+// of slots >= 16 re-records before it replays — the step loop re-records at
+// the top of EVERY step (`init_step_load` is step-scoped), and the phase >= 4
+// "steps 4 to 1" tail re-records the lattice itself, because `init_phase` is
+// reset to true at the top of every phase per (face, col) pass.
 #define TOPK_STEP_LOAD_REPLAY_START 21
 #endif
 #endif
