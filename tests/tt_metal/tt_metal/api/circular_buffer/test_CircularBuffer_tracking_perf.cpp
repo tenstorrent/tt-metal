@@ -332,6 +332,80 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, DISABLED_TensixCircularBufferPace
         kPaced);
 }
 
+// Cost of the tracking hook on the dispatch path, which is where the work moved to.
+//
+// Re-dispatching the same program hits a fast path -- the footprint is compared by pointer
+// and nothing is recomputed -- so a benchmark that loops on one program measures nothing.
+// This alternates two programs with different CB footprints, so every dispatch changes the
+// resident set and pays the full cost: apply the per-core footprint, then publish to shared
+// memory. That is the shape of a real workload, where consecutive dispatches are different
+// ops.
+//
+// Run twice to compare:
+//   unit_tests_api --gtest_filter='*DispatchOverhead*' --gtest_also_run_disabled_tests
+//   TT_METAL_SHM_TRACKING_DISABLED=1 unit_tests_api --gtest_filter=... (same)
+TEST_F(UnitMeshCQSingleCardProgramFixture, DISABLED_TensixCircularBufferTrackingDispatchOverhead) {
+    for (auto& mesh_device : this->devices_) {
+        auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
+        ASSERT_NE(device, nullptr);
+        const bool tracking_on = device->get_shm_stats_provider() != nullptr;
+
+        const CoreCoord grid = device->compute_with_storage_grid_size();
+        const CoreRangeSet cr_set({CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1))});
+        const CBConfig cb_config;
+        auto zero = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero, zero);
+        auto& cq = mesh_device->mesh_command_queue();
+
+        // Two programs whose CB footprints differ, so the resident set changes every dispatch.
+        auto make_workload = [&](uint32_t size_multiple) {
+            auto workload = std::make_shared<distributed::MeshWorkload>();
+            Program p;
+            workload->add_program(device_range, std::move(p));
+            auto& prog = workload->get_programs().at(device_range);
+            for (uint32_t cb_id = 0; cb_id < 4; cb_id++) {
+                CircularBufferConfig config =
+                    CircularBufferConfig(cb_config.page_size * size_multiple, {{cb_id, cb_config.data_format}})
+                        .set_page_size(cb_id, cb_config.page_size);
+                CreateCircularBuffer(prog, cr_set, config);
+            }
+            initialize_program(prog, cr_set);
+            return workload;
+        };
+        auto workload_a = make_workload(1);
+        auto workload_b = make_workload(4);
+
+        // Warm up: compile, populate caches, and let the first dispatches settle.
+        for (int i = 0; i < 4; i++) {
+            distributed::EnqueueMeshWorkload(cq, *workload_a, false);
+            distributed::EnqueueMeshWorkload(cq, *workload_b, false);
+        }
+        distributed::Finish(cq);
+
+        // Host-side enqueue cost is what the hook adds to; finish once at the end so device
+        // execution does not dominate the measurement.
+        constexpr int kDispatches = 2000;
+        auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < kDispatches; i++) {
+            distributed::EnqueueMeshWorkload(cq, (i % 2) ? *workload_b : *workload_a, false);
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        distributed::Finish(cq);
+
+        const double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        log_info(
+            tt::LogTest,
+            "device {}: SHM tracking {} -- {} alternating dispatches, {:.3f} us per enqueue ({:.1f} ms total, "
+            "{} cores, 4 CBs/program)",
+            device->id(),
+            tracking_on ? "ON" : "OFF",
+            kDispatches,
+            total_ms * 1000.0 / kDispatches,
+            total_ms,
+            grid.x * grid.y);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Ground-truth check: does the tracked CB figure match what is actually
 // configured on the device?

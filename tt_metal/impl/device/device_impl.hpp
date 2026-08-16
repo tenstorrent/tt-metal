@@ -305,11 +305,19 @@ private:
     // Push the current CB total to shared memory. Must be called without cb_residency_mutex_.
     void publish_cb_residency();
 
-    // CB bytes resident per core, keyed by logical core, updated on dispatch.
+    // Resolve a core's entry in cb_bytes_by_core_, growing the grid if this is the first time
+    // a circular buffer has been seen on it. Caller holds cb_residency_mutex_.
+    uint64_t& cb_residency_slot_locked(CoreCoord core);
+
+    // CB bytes resident per core, indexed row-major over the grid below. A flat array rather
+    // than a map keyed by CoreCoord: this is walked once per dispatch whose footprint differs
+    // from the last one, and per-core tree lookups cost ~3 us per enqueue on a 56-core grid.
     mutable std::mutex cb_residency_mutex_;
-    std::map<CoreCoord, uint64_t> cb_bytes_per_core_;
-    // Kept in step with cb_bytes_per_core_ incrementally, under cb_residency_mutex_. Re-summing
-    // the whole map per dispatch made the enqueue path scale with the program's grid.
+    std::vector<uint64_t> cb_bytes_by_core_;
+    uint32_t cb_residency_width_ = 0;
+    uint32_t cb_residency_height_ = 0;
+    // Kept in step with cb_bytes_by_core_ incrementally, under cb_residency_mutex_. Re-summing
+    // the whole grid per dispatch made the enqueue path scale with the device, not the program.
     std::atomic<uint64_t> total_cb_resident_{0};
     // The program footprint last applied to this device, or null if the residency was last set
     // by something other than a program dispatch (trace replay). Holding the shared_ptr keeps

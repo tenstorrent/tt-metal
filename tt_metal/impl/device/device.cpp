@@ -1156,15 +1156,37 @@ void Device::apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core) {
     }
 }
 
+uint64_t& Device::cb_residency_slot_locked(CoreCoord core) {
+    const auto x = static_cast<uint32_t>(core.x);
+    const auto y = static_cast<uint32_t>(core.y);
+    if (x >= cb_residency_width_ || y >= cb_residency_height_) {
+        // Grow to cover this core, preserving what is already recorded. The grid settles on
+        // the first dispatch, so this runs a handful of times at most.
+        const uint32_t width = std::max(cb_residency_width_, x + 1);
+        const uint32_t height = std::max(cb_residency_height_, y + 1);
+        std::vector<uint64_t> grown(static_cast<size_t>(width) * height, 0);
+        for (uint32_t row = 0; row < cb_residency_height_; row++) {
+            for (uint32_t col = 0; col < cb_residency_width_; col++) {
+                grown[static_cast<size_t>(row) * width + col] =
+                    cb_bytes_by_core_[static_cast<size_t>(row) * cb_residency_width_ + col];
+            }
+        }
+        cb_bytes_by_core_ = std::move(grown);
+        cb_residency_width_ = width;
+        cb_residency_height_ = height;
+    }
+    return cb_bytes_by_core_[static_cast<size_t>(y) * cb_residency_width_ + x];
+}
+
 bool Device::apply_cb_residency_locked(const std::map<CoreCoord, uint64_t>& per_core) {
-    // Maintain the total incrementally instead of re-summing cb_bytes_per_core_: this runs on
-    // the enqueue path, and a full re-sum made its cost scale with the number of cores the
-    // device has ever had circular buffers on.
+    // Maintain the total incrementally instead of re-summing the grid: this runs on the enqueue
+    // path, and a full re-sum made its cost scale with the number of cores the device has ever
+    // had circular buffers on rather than with the program being dispatched.
     uint64_t total = total_cb_resident_.load(std::memory_order_relaxed);
     for (const auto& [core, bytes] : per_core) {
-        auto [slot, inserted] = cb_bytes_per_core_.try_emplace(core, 0);
-        total = total - slot->second + bytes;
-        slot->second = bytes;
+        uint64_t& slot = cb_residency_slot_locked(core);
+        total = total - slot + bytes;
+        slot = bytes;
     }
     return total != total_cb_resident_.exchange(total, std::memory_order_relaxed);
 }
