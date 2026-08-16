@@ -94,6 +94,23 @@ Two broader final write-back prompts and two compact retries were terminated aft
 No approval was inferred from those timeouts; write-back follows the earlier explicit KEEP verdict after
 its raw-baseline condition was satisfied. API expansion: NO.
 
+### C5 — Tier 2.7 DRAM-sharded Matmul
+
+The first architecture prompt and a bounded retry returned no output. A second, fact-complete bounded
+retry returned DEFER for API v11 as-is:
+
+- the runtime ACK override resolves the historical destination-count/ACK-count split;
+- normal type-2 sender+compute and `SKIP_MCAST` type-1 sender-only behavior are expressible;
+- normal type-1 sender-only behavior is not equivalent under `send()`: because the sender is inside the
+  rectangle and the sharded source differs from the compute destination, loopback inference adds an
+  unowned local data write and leaves the sender's helper Flag VALID;
+- `SKIP_MCAST` type 2 is not expressible: `send()` couples data and signaling, while `send_signal()` is
+  EXCLUDE-source and cannot satisfy the sender's local readiness dependency;
+- the smallest proposed API extension is an explicit default-preserving self-mode (`AUTO`, `INCLUDE`,
+  `EXCLUDE`) on data and signal sends. That would be an API-v12 design decision and is not authorized.
+
+No production source was edited and no correctness/performance tests were credited for this blocked unit.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
@@ -102,7 +119,7 @@ its raw-baseline condition was satisfied. API expansion: NO.
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
-| Tier 2.7 DRAM-sharded Matmul | pending | Required behavior and test collection not started |
+| Tier 2.7 DRAM-sharded Matmul | deferred-design-gap | API v11 cannot preserve sender-only EXCLUDE plus type-2 signal-only INCLUDE behavior; API expansion is not authorized |
 | Tier 2.8 group-attention Matmul | pending | Required behavior and post-flag-barrier proof not started |
 | Tier 2.9 Conv3D weight sharing | pending | Required behavior and test collection not started |
 
@@ -150,3 +167,8 @@ its raw-baseline condition was satisfied. API expansion: NO.
 13. Tier 1.6 matched Tracy device-kernel durations: argmax raw 18,789 ns vs migrated 18,836 ns (+0.25%);
     top-k raw 1,558,235 ns vs migrated 1,557,464 ns (-0.05%). The original test skip was restored and
     the test file is unchanged.
+14. Tier 2.7 architecture audit confirmed that API v11's runtime ACK override closes the historical
+    count split but not the full protocol. Sender-only normal sends require forced EXCLUDE despite a
+    non-aliasing in-rectangle source, while sender+compute `SKIP_MCAST` requires an INCLUDE-source
+    readiness signal without data. The public helper exposes neither operation. Claude returned DEFER;
+    the API-extension gate remains closed, so the kernel/factory were left untouched.

@@ -1,6 +1,22 @@
-# reader_bmm_tile_layout_in0_sender_dram_sharded.cpp — DEFERRED (design gap)
+# reader_bmm_tile_layout_in0_sender_dram_sharded.cpp — DEFERRED (API-v11 design gap)
 
-## Verdict: deferred (helper design gap — NOT migrated, file untouched)
+## 2026-08-16 API-v11 re-audit
+
+API v11's runtime `consumer_ack_count` resolves the historical fan-out/ACK-count split documented
+below, but the complete Tier-2.7 protocol is still not expressible:
+
+- Type 1 is an in-rectangle sender-only core whose raw data and Flag multicasts both EXCLUDE source.
+  Its sharded source and compute destination addresses differ, so `SenderPipe::send()` infers INCLUDE
+  loopback. That adds an unowned local destination write and leaves the sender-local helper Flag VALID.
+- Under `SKIP_MCAST`, type 2 must skip data while signaling INCLUDE source so its own local readiness
+  dependency completes. `send()` always couples data and signal; `send_signal()` is always EXCLUDE.
+
+A bounded Claude architecture review returned DEFER. The smallest proposed contract change is a
+default-preserving explicit self-mode (`AUTO`, `INCLUDE`, `EXCLUDE`) available to both `send()` and
+`send_signal()`. That is an API expansion and was not authorized. Production kernel and factory remain
+untouched.
+
+## Historical v7 verdict: deferred (helper design gap — NOT migrated, file untouched)
 
 Worker-type-dispatched kernel (3 runtime core types via `worker_core_type` arg: 1=sender-no-compute,
 2=sender+compute, 3=receiver+compute, 0=idle). The blocker is the **split between the mcast dest-count
