@@ -208,7 +208,7 @@ class PerfTarget:
     aggregate_rate: float = 0.0
 
 
-def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0, batch: int = 1) -> int:
+def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0, batch: int = 1, items: int = 0) -> int:
     """Bytes streamed from DRAM per unit of work, summed per-tensor at each tensor's real dtype.
 
     `regime` selects the unit: "decode" is one token, "prefill" is one request of `seq_len` tokens.
@@ -264,15 +264,26 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0,
     # intermediate widths carried through each layer. Written from the same facts the decode path
     # uses; no new inputs, no per-model table.
     act = 0.0
-    if regime == "prefill":
-        kv *= 2.0  # written on the way in, then read back by attention
-        _n, _h = _scalar(mf.get("layers", 0), 0), _scalar(mf.get("hidden_size", 0), 0)
-        _i = _scalar(mf.get("intermediate_size", 0), 0) or (4 * _h)
-        if seq_len and _n and _h:
-            a_dt = mf.get("dominant_dtype") or mf.get("torch_dtype") or "bfloat16"
-            # per layer: the residual stream in and out, and the MLP intermediate in and out
-            act = float(_n) * (2.0 * _h + 2.0 * _i) * int(seq_len) * _bytes_per_elem(a_dt)
-            act *= max(1, int(batch or 1))
+    # ITEMS, NOT A REGIME NAME. This read `if regime == "prefill"`, so the two terms that scale with
+    # WORK -- the KV a stage writes and the activations it carries -- existed for exactly one stage
+    # name. A third tower got neither, however much work it did, and the branch had to be edited for
+    # every stage anyone added. What actually separates them is how many items one unit of work
+    # processes: a prompt-consuming stage retires every prompt token, a recurring stage retires one,
+    # an encoder retires its frames. The caller knows that number and passes it.
+    #
+    # DEFAULT 0, so a caller that says nothing gets the weights and the KV it reads and no work
+    # term at all -- exactly what every non-prefill caller got before. Silence is not a claim
+    # that one item was processed.
+    _items = max(0, int(items or 0))
+    if _items and seq_len:
+        kv += (kv / float(seq_len)) * float(_items)  # written on the way in, then read back
+    _n, _h = _scalar(mf.get("layers", 0), 0), _scalar(mf.get("hidden_size", 0), 0)
+    _i = _scalar(mf.get("intermediate_size", 0), 0) or (4 * _h)
+    if _items and _n and _h:
+        a_dt = mf.get("dominant_dtype") or mf.get("torch_dtype") or "bfloat16"
+        # per layer: the residual stream in and out, and the MLP intermediate in and out
+        act = float(_n) * (2.0 * _h + 2.0 * _i) * float(_items) * _bytes_per_elem(a_dt)
+        act *= max(1, int(batch or 1))
 
     total = wb + kv + act
     # Non-finite means the facts are junk (a corrupted/hand-edited perf_target_inputs.json: json.loads

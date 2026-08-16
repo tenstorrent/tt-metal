@@ -1063,8 +1063,11 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             from agent.perf_target import active_bytes as _ab
 
             _b = max(1, _prefill_batch())
-            _extra = float(_ab(mf, regime=stage, seq_len=_seq, batch=_b) or 0.0) - float(
-                _ab(mf, regime=stage, seq_len=0, batch=1) or 0.0
+            # ITEMS PER REQUEST is what this stage does in one unit -- `toks` already includes the
+            # batch, so dividing it out keeps the two factors from being applied twice.
+            _items = max(1, int(round(float(toks or 1) / float(_b)))) if toks else 0
+            _extra = float(_ab(mf, regime=stage, seq_len=_seq, batch=_b, items=_items) or 0.0) - float(
+                _ab(mf, regime=stage, seq_len=0, batch=1, items=0) or 0.0
             )
         except Exception:  # noqa: BLE001 -- regime unknown to the byte model, or no byte model at all
             return base
@@ -1349,16 +1352,34 @@ def _roofline_tables(
     # model's bytes -- exceeding it means the pair is inconsistent (a stale target, or a reading from
     # a shallower window), not that the model beat physics.
     _exceeds = bool(measured and theo and measured > theo)
-    _pf_measured = (stage_ms or {}).get("prefill")
-    _pf_measured = float(_pf_measured) if isinstance(_pf_measured, (int, float)) and _pf_measured > 0 else None
+    # TTFT IS THE PROMPT-CONSUMING STAGE'S TIME, and which stage that is follows from what it does --
+    # retiring many items per unit -- not from being called "prefill". Resolved after the roofs are
+    # built, below, so the item counts are available; None until then.
+    _pf_measured = None
     _roofs = _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile, stage_ms)
     # ONE CEILING, NOT TWO THAT NEARLY AGREE. `theo` is what perf_target published and what the stop
     # gate judges against -- and on the anchored path it is recomputed from the ledger, not from the
     # snapshot this function was handed. Re-deriving the decode memory roof from bytes here would put
     # a second, almost-identical ceiling in the same report, and "almost" is how a run gets banked
     # against one number and reported against another.
-    if _roofs.get("decode") and theo:
-        _roofs["decode"]["memory_ms"] = 1000.0 / float(theo)
+    # THE HEADLINE CEILING BELONGS TO THE RECURRING STAGE -- the one retiring a single item per unit,
+    # which is what a per-token/per-step figure measures. Keyed on the name "decode", a model whose
+    # recurring stage is called anything else kept a second, almost-identical ceiling in the same
+    # report, and "almost" is how a run gets banked against one number and reported against another.
+    # THE LAST recurring stage, in declared order: a pipeline's output comes from the stage it ends
+    # on. Taking the first put the model's per-unit ceiling on an encoder that happens to retire one
+    # item per pass, and printed it under that heading instead of the generating stage's.
+    for _st_x, _rf_x in _roofs.items():
+        if int((_rf_x or {}).get("tokens") or 0) > 1:
+            _v = (stage_ms or {}).get(_st_x)
+            if isinstance(_v, (int, float)) and _v > 0:
+                _pf_measured = float(_v)
+            break
+    _recurring_st = next(
+        (st for st, rf in reversed(list(_roofs.items())) if int((rf or {}).get("tokens") or 0) == 1), None
+    )
+    if _recurring_st and theo:
+        _roofs[_recurring_st]["memory_ms"] = 1000.0 / float(theo)
     _fid, _cc = _fidelity_breakdown(profile)
     _cc_floor = float(_cc) if (_cc and _cc > 0) else None
     # Which fidelity the model ACTUALLY runs at, by FLOP share. The per-fidelity rows below price the
@@ -1439,7 +1460,9 @@ def _roofline_tables(
         _o.append("\u2500" * W)
         return _o
 
-    _STAGE_UNIT = {"prefill": "req/s", "decode": unit}
+    # A stage retiring one item per unit reports the model's own unit; one retiring many reports
+    # requests. Both follow from the item count the stage list already carries, not from a name.
+    _STAGE_UNIT = {st: (unit if int((rf or {}).get("tokens") or 0) == 1 else "req/s") for st, rf in _roofs.items()}
     # A DECLARED STAGE GETS A UNIT TOO. Only prefill and decode were named here, so a third stage --
     # voxtral's audio encoder, measured at 12.79 ms -- had no unit, no title, and no row. Its unit is
     # one pass of that tower, which is what "per pass" says without pretending it emits tokens.
@@ -1448,8 +1471,12 @@ def _roofline_tables(
     # The recurring stage is named for the unit the model actually reports, so a diffusion run reads
     # "per step" rather than being told it decodes.
     _STAGE_TITLE = {
-        "prefill": "PREFILL \u2014 per request",
-        "decode": "%s \u2014 per %s" % (("DECODE" if _step == "token" else _step.upper()), _step),
+        st: (
+            "%s \u2014 per %s" % (str(st).upper(), _step)
+            if int((rf or {}).get("tokens") or 0) == 1
+            else "%s \u2014 per request" % str(st).upper()
+        )
+        for st, rf in _roofs.items()
     }
     for _extra in _roofs:
         _STAGE_TITLE.setdefault(_extra, "%s \u2014 per pass" % str(_extra).upper())
@@ -1655,7 +1682,7 @@ def _roofline_tables(
             # not, so the reader sees the whole ladder the stage could sit on rather than only where
             # it sits today -- and the rung actually in use is marked.
 
-        if _st != "decode":
+        if int((_rf or {}).get("tokens") or 0) != 1:
             out.append(_rule4())
 
     if not _rendered:

@@ -215,6 +215,48 @@ def sections_from_keys(keys) -> dict:
     return {p: max(v) + 1 for p, v in idx.items() if len(v) >= 2 and 0 in v}
 
 
+def tower_geometry(snapshot) -> dict:
+    """{depth: {layers, hidden_size, intermediate_size}} for every tower the config declares.
+
+    A multi-tower checkpoint states each tower's shape in its own sub-config -- audio_config,
+    vision_config, text_config -- and the ceiling needs them because a tower's activations are its
+    OWN width, not the language model's. Voxtral: audio 32x1280x5120 beside text 30x3072x8192, so
+    pricing the audio encoder with the text numbers is wrong by more than a factor of two.
+
+    KEYED BY DEPTH, not by name, so it joins to the rest of the evidence chain: the probe reports a
+    stack's block count, declared_sections reports a section's, and this reports a config's. Three
+    vocabularies, one number they all agree on. A tower nobody has named before -- vocoder, denoiser,
+    a second vision stack -- lands here with no code change, which is the whole point.
+
+    Any sub-dict carrying a layer count and a hidden size is a tower; nothing is recognised by name.
+    """
+    out: dict = {}
+    snap = Path(snapshot)
+    cfg = snap / "config.json" if snap.is_dir() else snap
+    try:
+        doc = json.loads(cfg.read_text())
+    except Exception:  # noqa: BLE001
+        return out
+    if not isinstance(doc, dict):
+        return out
+    for sub in list(doc.values()) + [doc]:
+        if not isinstance(sub, dict):
+            continue
+        try:
+            n = int(sub.get("num_hidden_layers") or sub.get("layers") or 0)
+            h = int(sub.get("hidden_size") or sub.get("d_model") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n <= 0 or h <= 0 or n in out:
+            continue
+        try:
+            i = int(sub.get("intermediate_size") or sub.get("ffn_dim") or 0)
+        except (TypeError, ValueError):
+            i = 0
+        out[n] = {"layers": n, "hidden_size": h, "intermediate_size": i or 4 * h}
+    return out
+
+
 def declared_sections(root, model_id: str = "") -> dict:
     """{section: depth} straight from a model's weights. {} when nothing readable is present.
 

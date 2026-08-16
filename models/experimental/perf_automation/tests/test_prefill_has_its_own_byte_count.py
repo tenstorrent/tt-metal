@@ -45,14 +45,20 @@ MF = {
 }
 
 
+# ITEMS IS NOW EXPLICIT. The terms that scale with WORK -- the KV a stage writes and the activations
+# it carries -- used to appear only under `if regime == "prefill"`, which meant a third stage got
+# neither however much work it did. The caller states how many items one unit processes instead: a
+# prompt-consuming stage retires every prompt token, so items = seq_len here.
+
+
 def test_prefill_is_accepted():
-    assert PT.active_bytes(MF, regime="prefill", seq_len=128) > 0
+    assert PT.active_bytes(MF, regime="prefill", seq_len=128, items=128) > 0
 
 
 def test_prefill_moves_more_than_decode():
     """The whole point: one number used twice was hiding a real difference."""
     d = PT.active_bytes(MF, regime="decode", seq_len=128)
-    p = PT.active_bytes(MF, regime="prefill", seq_len=128)
+    p = PT.active_bytes(MF, regime="prefill", seq_len=128, items=128)
     assert p > d, (p, d)
 
 
@@ -60,15 +66,15 @@ def test_the_weights_still_dominate_at_short_context():
     """Both stages stream the model once, so the floors are CLOSE -- that similarity is real, and a
     fix that made them wildly different would be as wrong as making them identical."""
     d = PT.active_bytes(MF, regime="decode", seq_len=128)
-    p = PT.active_bytes(MF, regime="prefill", seq_len=128)
+    p = PT.active_bytes(MF, regime="prefill", seq_len=128, items=128)
     assert 1.0 < p / d < 1.5, p / d
 
 
 def test_the_extra_terms_scale_with_the_prompt():
     """KV written and activations are both linear in seq_len; the weight term is not."""
-    a = PT.active_bytes(MF, regime="prefill", seq_len=128)
-    b = PT.active_bytes(MF, regime="prefill", seq_len=1024)
-    w = PT.active_bytes(MF, regime="prefill", seq_len=0)
+    a = PT.active_bytes(MF, regime="prefill", seq_len=128, items=128)
+    b = PT.active_bytes(MF, regime="prefill", seq_len=1024, items=1024)
+    w = PT.active_bytes(MF, regime="prefill", seq_len=0, items=0)
     assert b > a > w
     assert abs((b - w) - 8 * (a - w)) < 0.02 * (b - w), (a, b, w)
 

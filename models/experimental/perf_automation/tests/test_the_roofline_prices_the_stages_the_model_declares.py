@@ -246,8 +246,18 @@ def test_a_third_tower_is_priced_from_its_own_weights(monkeypatch):
 
 def test_the_backbone_stops_paying_for_the_tower_it_never_reads(monkeypatch):
     """A decode token reads the language backbone and never the audio encoder, but it was charged for
-    the whole resident figure -- both towers."""
-    r = _roofs_with_roots(monkeypatch)
+    the whole resident figure -- both towers.
+
+    Asserted on the WEIGHTS, with no context in flight: with a prompt loaded decode legitimately
+    exceeds the whole-model figure, because eight users each re-read their own KV history and that is
+    1.26 GB on top of the weights. The tower it does not read is the part that had to go."""
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_model_facts", lambda: dict(_MF, stage_roots=_ROOTS))
+    monkeypatch.setattr(S, "_prefill_tokens", lambda: 0)  # nothing in flight: weights only
+    monkeypatch.setattr(S, "_prefill_batch", lambda: 8)
+    monkeypatch.setattr(S, "_SECTION_BYTES", _SECS)
+    r = S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "decode": 6.11})
     assert r["decode"]["bytes"] < _BYTES, "decode still carries the audio tower's weights"
 
 
