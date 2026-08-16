@@ -246,17 +246,23 @@ def test_na3d_op_sp_w_matches_host(*, mesh_device, sp_axis, dims, kernel):
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
-@pytest.mark.parametrize("dims, kernel", [((4, 4, 32), (3, 3, 3)), ((2, 8, 32), (3, 3, 5))])
+@pytest.mark.parametrize(
+    "dims, kernel",
+    # The last case has a non-tile-aligned (W/sp)*T*H -- the deterministic stages are all like this,
+    # so it must be exact too (the executor tile-pads the sequence transparently).
+    [((4, 4, 32), (3, 3, 3)), ((2, 8, 32), (3, 3, 5)), ((3, 2, 16), (3, 3, 3))],
+)
 def test_na3d_op_sp_w_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel):
     """Sharded-I/O SP-over-W (full-stage building block): q/k/v sharded over W, output sharded, K/V
-    gathered internally over a W-outer flatten. Reassembled, it matches the host full result."""
+    gathered internally over a W-outer flatten. Reassembled, it matches the host full result --
+    including a non-tile-aligned shard, which the deterministic stages need."""
     from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded
 
     T, H, W = dims
     heads, head_dim = 4, 64
     sp = list(mesh_device.shape)[sp_axis]
-    if W % sp != 0 or (W // sp) * T * H % 32 != 0:
-        pytest.skip(f"dims={dims} not shardable over sp={sp} with tile-aligned origin")
+    if W % sp != 0:
+        pytest.skip(f"W={W} not divisible by sp={sp}")
 
     torch.manual_seed(0)
     q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
@@ -277,6 +283,75 @@ def test_na3d_op_sp_w_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel
     # Reassemble the W-sharded output (dim 3 along sp_axis) into the full volume.
     got = to_torch_replicated(out, mesh_axes=[None, None, None, sp_axis, None])
     assert_quality(expected, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
+def test_na_block_op_sp_w_sharded_matches_op(*, mesh_device, sp_axis):
+    """SP over W for a deterministic-stage NA block: run on a W-SHARDED sequence (x + RoPE tables
+    split over W) and match the replicated block. Uses a non-tile-aligned shard, as the det stages
+    do. This is the det-stage-SP analog of test_na_block_op_sp_sharded_matches_op (T)."""
+    torch.manual_seed(0)
+    dim, head_dim, kernel = 128, 64, (3, 3, 3)
+    dims = (3, 2, 16)  # (W/sp)*T*H is not tile-aligned -- exactly the det-stage regime
+    T, H, W = dims
+    sp = list(mesh_device.shape)[sp_axis]
+    if W % sp != 0:
+        pytest.skip(f"W={W} not divisible by sp={sp}")
+    w_local = W // sp
+    tokens = T * H * W
+    hidden = (int(dim * 4.0) + 15) // 16 * 16
+
+    weights = {
+        "norm1.weight": (dim,),
+        "norm2.weight": (dim,),
+        "attn.qkv.weight": (3 * dim, dim),
+        "attn.qkv.bias": (3 * dim,),
+        "attn.proj.weight": (dim, dim),
+        "attn.proj.bias": (dim,),
+        "attn.q_norm.weight": (head_dim,),
+        "attn.k_norm.weight": (head_dim,),
+        "mlp.w_gate.weight": (hidden, dim),
+        "mlp.w_up.weight": (hidden, dim),
+        "mlp.w_down.weight": (dim, hidden),
+    }
+    state = {name: torch.randn(shape) * 0.1 for name, shape in weights.items()}
+    hidden_states = torch.randn(tokens, dim)
+    cos, sin = rope_tables(dims, default_rope_dim_split(head_dim), mesh_device=mesh_device)
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+    # Replicated reference.
+    block_op = NABlock(dim, kernel, head_dim=head_dim, mesh_device=mesh_device, na3d_backend="op")
+    block_op.load_state_dict({k: v.clone() for k, v in state.items()})
+    x_full = ttnn.from_torch(hidden_states, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ref = to_torch_replicated(block_op(x_full, dims=dims, cos=cos, sin=sin, device_plan=None))
+
+    # W-sharded: the flat (t, h, w) rows are reordered to (device, t, h, w_local) contiguous before
+    # sharding on the row dim; the RoPE tables split over W with a plain mesh_partition on the W dim.
+    block_sp = NABlock(
+        dim,
+        kernel,
+        head_dim=head_dim,
+        mesh_device=mesh_device,
+        na3d_backend="op_sp_w_sharded",
+        ccl_manager=ccl_manager,
+        sp_axis=sp_axis,
+    )
+    block_sp.load_state_dict({k: v.clone() for k, v in state.items()})
+    reordered = hidden_states.reshape(T, H, sp, w_local, dim).permute(2, 0, 1, 3, 4).reshape(sp * T * H * w_local, dim)
+    x_shard = from_torch(
+        reordered, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_axes=[sp_axis, None]
+    )
+    cos_shard = ttnn.mesh_partition(cos, dim=3, cluster_axis=sp_axis)
+    sin_shard = ttnn.mesh_partition(sin, dim=3, cluster_axis=sp_axis)
+    out_shard = block_sp(x_shard, dims=(T, H, w_local), cos=cos_shard, sin=sin_shard, device_plan=None)
+
+    got = to_torch_replicated(out_shard, mesh_axes=[sp_axis, None])
+    got = got.reshape(sp, T, H, w_local, dim).permute(1, 2, 0, 3, 4).reshape(tokens, dim)
+    assert_quality(ref, got, pcc=0.999)
 
 
 @pytest.mark.parametrize(

@@ -777,8 +777,10 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     assert w_local * sp == w_full, f"W={w_full} must split evenly over sp={sp} (got W_local={w_local})"
     width = heads * head_dim
     seq_local = w_local * t_full * h_full  # W-outer flatten of this chip's band
-    tile_height = 32
-    assert seq_local % tile_height == 0, f"shard origin (W/sp)*T*H={seq_local} must be a multiple of {tile_height}"
+    # No tile-alignment requirement on seq_local: to_layout tile-pads the sequence dim transparently
+    # and the gather/op operate on the logical shape, so a non-multiple-of-32 shard is exact (verified
+    # against the host reference). The deterministic stages rely on this -- their (W/sp)*T*H is not
+    # tile-aligned at any useful sp, unlike the stage-5 grid.
     if scale is None:
         scale = head_dim**-0.5
     kt, kh, kw = (min(kk, d) for kk, d in zip(kernel_size, dims))

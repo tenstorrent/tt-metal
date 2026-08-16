@@ -29,6 +29,7 @@ from ...layers.na3d import (
     build_device_plan,
     neighborhood_attention_3d,
     neighborhood_attention_3d_op_sp_sharded,
+    neighborhood_attention_3d_op_sp_w_sharded,
     plan_na3d,
 )
 from ...layers.normalization import RMSNorm
@@ -319,6 +320,21 @@ class NeighborhoodAttention(Module):
                 k,
                 v,
                 dims=(t * sp, h, w),
+                kernel_size=self.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+            )
+        elif self.na3d_backend == "op_sp_w_sharded":
+            # Full-stage spatial-W SP: x/q/k/v are this chip's W-slice, so `dims` here is local (w is
+            # W/sp). The attention needs the full W; K/V are gathered inside over the W-outer flatten.
+            # cos/sin were W-sharded the same way, so the RoPE above used each column's global W.
+            sp = int(list(q.device().shape)[self.sp_axis])
+            attended = neighborhood_attention_3d_op_sp_w_sharded(
+                q,
+                k,
+                v,
+                dims=(t, h, w * sp),
                 kernel_size=self.kernel_size,
                 sp_axis=self.sp_axis,
                 ccl_manager=self.ccl_manager,
