@@ -385,12 +385,13 @@ class TtHCAState:
     that is what lets one compiled program serve every chunk. The counters say how much is real;
     the attention mask -infs the rest."""
 
-    def __init__(self, compressed_kv, sliding_carry, tail):
+    def __init__(self, compressed_kv, sliding_carry, tail, max_seq_len):
         self.compressed_kv = compressed_kv  # [B, 1, compressed_capacity, head_dim]
         self.sliding_carry = sliding_carry  # [B, 1, sliding_window, head_dim]
         # The cache's last tile is usually only partly filled. Its entries sit here, right-aligned, so the
         # next write can place them and the new entries with a single shift.
         self.tail = tail  # [B, 1, TILE_SIZE, head_dim]
+        self.max_seq_len = int(max_seq_len)
         self.entry_count = 0
         self.kv_actual = 0
 
@@ -575,6 +576,7 @@ class TtHCA(_TtHCABase):
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
             tail=self._from_torch(torch.zeros(batch, 1, ttnn.TILE_SIZE, self.head_dim)),
+            max_seq_len=max_seq_len,
         )
 
     @classmethod
@@ -806,8 +808,10 @@ class TtHCA(_TtHCABase):
         The whole padded width is written, not just the real entries, so the width is the same for every
         chunk; the mask -infs everything past ``total_entries`` anyway."""
         width = new_entries.shape[2]
-        assert state.entry_count + width <= state.compressed_kv.shape[2], (
-            f"compressed cache full: writing {width} entries at {state.entry_count} exceeds capacity "
+        tile_start = (state.entry_count // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        write_end = tile_start + _cache_write_rows(width)
+        assert write_end <= state.compressed_kv.shape[2], (
+            f"compressed cache full: writing rows [{tile_start}, {write_end}) exceeds capacity "
             f"{state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
         )
         self._write_tail_tile(state, new_entries, width, n_new)
@@ -947,10 +951,9 @@ class TtHCA(_TtHCABase):
 
         n_new = real_len // compress_rate
         total_entries = state.entry_count + n_new
-        capacity = state.compressed_kv.shape[2]
-        assert total_entries <= capacity, (
-            f"compressed cache full: {total_entries} entries > capacity {capacity}; allocate the state "
-            f"with a larger max_seq_len"
+        assert state.kv_actual + real_len <= state.max_seq_len, (
+            f"context longer than the state was allocated for: {state.kv_actual + real_len} tokens > "
+            f"max_seq_len {state.max_seq_len}"
         )
         # Checked on tokens and not on entry_count, where a dropped partial window is invisible: 4097
         # tokens still gives 32 entries, and the next chunk would start at the wrong position.
