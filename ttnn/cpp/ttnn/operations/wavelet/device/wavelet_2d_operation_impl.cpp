@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "tt-logger/tt-logger.hpp"
-#include "tt-metalium/allocator.hpp"
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/core_coord.hpp"
@@ -63,7 +62,6 @@ constexpr const char* kWriterKernel = "ttnn/cpp/ttnn/operations/wavelet/device/k
 
 struct WorkingBuffers2D {
     std::array<uint32_t, device_protocol::kLwt2DPlaneCount> plane_tile_counts{};
-    uint32_t workspace_address{0};
     std::array<tt::tt_metal::Buffer*, device_protocol::kLwt2DBandCount> outputs{};
     std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config;
     std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config;
@@ -127,29 +125,6 @@ struct Logical2DShape {
         "{} physical batch stride is not tile aligned",
         tensor_name);
     return checked_u32(elements_per_batch / (kTileHeight2D * kTileWidth2D), "2D wavelet tiles per batch item");
-}
-
-[[nodiscard]] uint32_t static_workspace_address_2d(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const uint32_t scratch_tile_count) {
-    const size_t alignment = mesh_device.allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
-    size_t address = mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const auto reserve_cb = [&](const size_t bytes) {
-        address = round_up(address, alignment);
-        TT_FATAL(
-            address <= std::numeric_limits<uint32_t>::max() && bytes <= std::numeric_limits<uint32_t>::max() - address,
-            "2D wavelet static circular-buffer addresses overflow uint32_t");
-        address += bytes;
-    };
-    reserve_cb(kTileBuffering * kTileBytes);
-    reserve_cb(kTileBuffering * kTileBytes);
-    reserve_cb(kTileBuffering * kTileBytes);
-    reserve_cb(kTileBuffering * kTileBytes);
-    reserve_cb(kConfigNocAlignmentBytes);
-    reserve_cb(device_protocol::kLwt2DChunkConfigPageBytes);
-    reserve_cb(device_protocol::kLwt2DBandConfigPageBytes);
-    reserve_cb(static_cast<size_t>(scratch_tile_count) * kTileBytes);
-    reserve_cb(kTileBytes);
-    return checked_u32(round_up(address, alignment), "2D wavelet workspace address");
 }
 
 [[nodiscard]] uint32_t noc_scratch_tile_count(
@@ -253,15 +228,15 @@ void add_cb(
     return checked_u32((height / kTileHeight2D) * (width / kTileWidth2D), "2D route tile count");
 }
 
-[[nodiscard]] std::vector<uint32_t> plane_addresses(const WorkingBuffers2D& buffers) {
+[[nodiscard]] std::vector<uint32_t> plane_offsets(const WorkingBuffers2D& buffers) {
     std::vector<uint32_t> args(2 * device_protocol::kLwt2DPlaneCount, 0);
-    uint32_t plane_address = buffers.workspace_address;
+    uint32_t plane_offset = 0;
     for (size_t slot = 0; slot < buffers.plane_tile_counts.size(); ++slot) {
-        args[slot] = plane_address;
+        args[slot] = plane_offset;
         TT_FATAL(
-            buffers.plane_tile_counts[slot] <= (std::numeric_limits<uint32_t>::max() - plane_address) / kTileBytes,
-            "2D workspace plane addresses overflow uint32_t");
-        plane_address += buffers.plane_tile_counts[slot] * kTileBytes;
+            buffers.plane_tile_counts[slot] <= (std::numeric_limits<uint32_t>::max() - plane_offset) / kTileBytes,
+            "2D workspace plane offsets overflow uint32_t");
+        plane_offset += buffers.plane_tile_counts[slot] * kTileBytes;
     }
     return args;
 }
@@ -289,7 +264,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
         plan.y_plan.preprocess_layout.pad_config.left,
         plan.x_plan.preprocess_layout.pad_config.left,
     });
-    std::vector<uint32_t> planes = plane_addresses(buffers);
+    std::vector<uint32_t> planes = plane_offsets(buffers);
     replace_plane_tile_counts_with_widths(planes, plan);
     args.append(planes);
     args.push_back(static_cast<uint32_t>(buffers.chunk_config->get_backing_buffer()->address()));
@@ -308,7 +283,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
     const CoreChunkWork& work,
     const uint32_t chunks_per_sample,
     const uint32_t output_tiles_per_sample) {
-    std::vector<uint32_t> plane_args = plane_addresses(buffers);
+    std::vector<uint32_t> plane_args = plane_offsets(buffers);
     replace_plane_tile_counts_with_widths(plane_args, plan);
     tt::tt_metal::KernelDescriptor::RTArgList args;
     args.append(plane_args);
@@ -356,7 +331,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
     args.push_back(encoded_i32(y_canonical_start - y_forward.final_odd_shift, "2D ILWT y-odd offset"));
     args.push_back(encoded_i32(x_canonical_start - x_forward.final_even_shift, "2D ILWT x-even offset"));
     args.push_back(encoded_i32(x_canonical_start - x_forward.final_odd_shift, "2D ILWT x-odd offset"));
-    std::vector<uint32_t> planes = plane_addresses(buffers);
+    std::vector<uint32_t> planes = plane_offsets(buffers);
     replace_plane_tile_counts_with_widths(planes, plan);
     args.append(planes);
     args.push_back(static_cast<uint32_t>(buffers.chunk_config->get_backing_buffer()->address()));
@@ -375,7 +350,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
     const CoreChunkWork& work,
     const uint32_t chunks_per_sample,
     const uint32_t output_tiles_per_sample) {
-    std::vector<uint32_t> plane_args = plane_addresses(buffers);
+    std::vector<uint32_t> plane_args = plane_offsets(buffers);
     replace_plane_tile_counts_with_widths(plane_args, plan);
     tt::tt_metal::KernelDescriptor::RTArgList args;
     args.append(plane_args);
@@ -791,7 +766,6 @@ template <typename Scheme>
 
     WorkingBuffers2D buffers{
         .plane_tile_counts = {},
-        .workspace_address = static_workspace_address_2d(mesh_device, scratch_tile_count),
         .outputs =
             {
                 std::get<0>(tensor_return_value).buffer(),
@@ -903,7 +877,6 @@ template <typename Scheme>
 
     WorkingBuffers2D buffers{
         .plane_tile_counts = {},
-        .workspace_address = static_workspace_address_2d(mesh_device, scratch_tile_count),
         .outputs =
             {
                 tensor_return_value.buffer(),

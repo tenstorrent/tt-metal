@@ -1218,8 +1218,10 @@ void kernel_main() {
 #endif
     uint32_t plane_addrs[ttnn::operations::wavelet::device_protocol::kLwt2DPlaneCount];
     uint32_t plane_tile_columns[ttnn::operations::wavelet::device_protocol::kLwt2DPlaneCount];
+    const uint32_t workspace_base =
+        CircularBuffer(ttnn::operations::wavelet::device_protocol::kLwt2DWorkspaceCb).get_write_ptr();
     for (uint32_t slot = 0; slot < ttnn::operations::wavelet::device_protocol::kLwt2DPlaneCount; ++slot) {
-        plane_addrs[slot] = get_arg_val<uint32_t>(plane_arg_base + slot);
+        plane_addrs[slot] = workspace_base + get_arg_val<uint32_t>(plane_arg_base + slot);
         plane_tile_columns[slot] =
             get_arg_val<uint32_t>(plane_arg_base + ttnn::operations::wavelet::device_protocol::kLwt2DPlaneCount + slot);
     }
