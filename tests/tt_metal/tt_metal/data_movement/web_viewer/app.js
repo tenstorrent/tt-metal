@@ -829,8 +829,13 @@ async function selectTest(group, test) {
         `${GITHUB_BASE}/${group.directory}/README.md`;
 
     renderTestList();
-    renderDiagram(group);
-    renderFAQ(group);
+
+    const groupChanged = state.lastFaqDiagramGroup !== group;
+    if (groupChanged) {
+        renderDiagram(group);
+        renderFAQ(group);
+        state.lastFaqDiagramGroup = group;
+    }
 
     state.availableArchs = await probeArchitectures(test);
     if (state.availableArchs.length === 0) {
