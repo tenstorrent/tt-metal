@@ -102,6 +102,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/where.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/add_rsqrt.h
+    inc/api/compute/experimental/compute_kernel_hw_cleanup.h
     inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
