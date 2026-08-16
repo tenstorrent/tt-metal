@@ -184,11 +184,17 @@ def measure_adapter(adapter, device) -> float:
         # a census that cannot run leaves the ceiling on its existing fallbacks rather than failing
         # a measurement run.
         try:
-            from .weight_census import census as _census, marker as _cmarker
+            from .weight_census import census as _census, marker as _cmarker, sections_marker as _smarker
 
             _c = _census(getattr(adapter, "_pipe", None) or adapter, scope="pipeline")
             if _c.get("weight_bytes"):
                 print(_cmarker(_c), flush=True)
+                # The split, measured in the same walk. Printed beside the total rather than derived
+                # later from the checkpoint, which is the only other place a split was available and
+                # states disk precision, not served precision.
+                _sm = _smarker(_c)
+                if _sm:
+                    print(_sm, flush=True)
         except Exception:  # noqa: BLE001
             pass
     except NotTraceCapable as exc:

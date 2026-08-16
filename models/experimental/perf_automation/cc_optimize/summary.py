@@ -945,6 +945,64 @@ def _section_bytes_cached() -> dict:
     return _SECTION_BYTES
 
 
+def _roofline_stage_share(mf, stage) -> float:
+    """Fraction of the model's resident weights the subtree THIS stage runs holds; 1.0 when unknown.
+
+    A stage streams its own tower and nothing else -- a decode token reads the language backbone and
+    never the audio encoder -- so handing every stage the whole-model byte count overprices the
+    backbone stages and leaves a third tower with nothing at all.
+
+    MEASURED FIRST, APPORTIONED SECOND. The census walks the built model and credits every tensor to
+    the attribute names it was reached through, so a stage's resident bytes are a lookup by the name
+    the model declared. Before that existed the only split available was the CHECKPOINT's, which
+    states disk precision: voxtral's language tower is 85.8% of a 9.36 GB bf16 file, and the loader
+    put 1.72 GB on the chip at widths it chose per tensor. 85.8% of the file is 85.8% of the chip only
+    if both towers were quantised alike -- nothing requires that, and the error lands whole on the
+    stage's ceiling. It published a decode floor of 3.15 ms against a 2.89 ms measurement: 109% of
+    peak, which is not a fast model but an unusable row.
+
+    The checkpoint ratio remains the fallback rather than being removed, because it is right whenever
+    the widths do match and it is the only answer for a model whose census never ran.
+    """
+    root = str(((mf or {}).get("stage_roots") or {}).get(str(stage)) or "").strip()
+    if not root:
+        # NO MAPPING. Decided by how many towers the checkpoint has, not by the stage's NAME.
+        # A single-tower model has only one subtree, so every stage streams all of it and the
+        # whole-model figure is exactly right -- the behaviour before any of this existed. With
+        # two or more towers there is no such answer: pricing one at another's byte count is the
+        # wrong divisor rather than an approximation, and a refused ceiling beside a real
+        # measurement is more use to a reader than a confident wrong one.
+        if len(_section_bytes_cached()) == 1:
+            return 1.0  # one tower: every stage streams all of it, so the whole model IS its share
+        # OTHERWISE ASK THE BYTE MODEL, not a list of stage names. perf_target owns which regimes
+        # it can price and raises for the rest; a regime it prices is one whose read set IS the
+        # backbone, which is what the whole-model figure describes. Keeping a second list here
+        # meant summary.py had to be edited every time perf_target learned a regime -- and it is
+        # exactly the hardcoding that left a third tower unpriced.
+        try:
+            from agent.perf_target import active_bytes as _ab
+
+            _ab(mf or {}, regime=str(stage), seq_len=0, batch=1)
+            return 1.0
+        except Exception:  # noqa: BLE001 -- not a regime the byte model knows: refuse the share
+            return 0.0
+    _dev = (mf or {}).get("device_section_bytes") or {}
+    _res = float((mf or {}).get("device_weight_bytes") or 0.0)
+    _mine_dev = float(_dev.get(root) or 0.0)
+    if _res > 0 and _mine_dev > 0:
+        # A group is credited at every depth it was reached through, so a name high enough in the
+        # tree covers the whole model and yields 1.0 -- the true share for that root, not an
+        # overflow. ABOVE 1.0 is impossible and means the two figures came from different walks;
+        # fall through rather than publish a share the census cannot support.
+        _s = _mine_dev / _res
+        if _s <= 1.0:
+            return _s
+    secs = _section_bytes_cached()
+    total = float(sum(secs.values()) or 0.0)
+    mine = float(secs.get(root) or 0.0)
+    return (mine / total) if (total > 0 and mine > 0) else 1.0
+
+
 def _stage_units(stage, prompt_tokens) -> int:
     """How many items this stage retires in one unit of work.
 
@@ -996,46 +1054,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     per_dev_bytes = float(active_bytes) / tp
 
     def _stage_share(stage) -> float:
-        """Fraction of the model's weights the subtree THIS stage runs holds, or 1.0 when unknown.
-
-        A stage streams its own tower and nothing else -- a decode token reads the language backbone
-        and never the audio encoder -- so handing every stage the whole-model byte count overprices
-        the backbone stages and leaves a third tower with nothing at all. weight_census declines to
-        guess at the split; the checkpoint does not have to guess, because tensor names state which
-        tower each weight belongs to and their byte spans are in the header.
-
-        A SHARE, not the checkpoint bytes outright: the ceiling divides by what is RESIDENT on the
-        device, which is not the checkpoint total (1.72 GB against 9.36 GB here, the loader having
-        chosen its own widths). The split is the part the checkpoint can state and the resident
-        census cannot, so the resident figure is apportioned by it. 1.0 -- the whole model -- when the
-        mapping or the checkpoint is unavailable, which is exactly the behaviour before this existed.
-        """
-        root = str(((mf or {}).get("stage_roots") or {}).get(str(stage)) or "").strip()
-        if not root:
-            # NO MAPPING. Decided by how many towers the checkpoint has, not by the stage's NAME.
-            # A single-tower model has only one subtree, so every stage streams all of it and the
-            # whole-model figure is exactly right -- the behaviour before any of this existed. With
-            # two or more towers there is no such answer: pricing one at another's byte count is the
-            # wrong divisor rather than an approximation, and a refused ceiling beside a real
-            # measurement is more use to a reader than a confident wrong one.
-            if len(_section_bytes_cached()) == 1:
-                return 1.0  # one tower: every stage streams all of it, so the whole model IS its share
-            # OTHERWISE ASK THE BYTE MODEL, not a list of stage names. perf_target owns which regimes
-            # it can price and raises for the rest; a regime it prices is one whose read set IS the
-            # backbone, which is what the whole-model figure describes. Keeping a second list here
-            # meant summary.py had to be edited every time perf_target learned a regime -- and it is
-            # exactly the hardcoding that left a third tower unpriced.
-            try:
-                from agent.perf_target import active_bytes as _ab
-
-                _ab(mf or {}, regime=str(stage), seq_len=0, batch=1)
-                return 1.0
-            except Exception:  # noqa: BLE001 -- not a regime the byte model knows: refuse the share
-                return 0.0
-        secs = _section_bytes_cached()
-        total = float(sum(secs.values()) or 0.0)
-        mine = float(secs.get(root) or 0.0)
-        return (mine / total) if (total > 0 and mine > 0) else 1.0
+        return _roofline_stage_share(mf, stage)
 
     def _bytes_for(stage, toks):
         """This stage's read set: the weights its subtree streams, plus what it alone carries.

@@ -26,11 +26,14 @@ in, so every caller fell through to one of the three predictions above.
 Mixed precision comes out right for free: each tensor carries its own dtype, so a model serving
 attention at bf8 and MLP at bf4 is summed as it actually is rather than as one blended guess.
 
-WHAT THIS DOES NOT ANSWER. A multimodal model loads a vision tower a decode token never reads. The
-census counts what is RESIDENT, so scoping it to the tensors a given stage touches is a separate
-question -- one the pipeline can answer and this module deliberately does not guess at. `scope`
-records which subtree was walked so a caller can tell a whole-model census from a decoder-only one
-instead of assuming.
+A multimodal model loads a vision tower a decode token never reads, so the resident TOTAL is not any
+one stage's read set. That split used to be left to the caller, which had only the checkpoint to
+apportion it by -- disk proportions, measured at disk precision. The loader does not quantise every
+tower alike, so the ratio does not transfer, and the whole error lands on the stage's ceiling: on
+voxtral the language tower is 85.8% of the bf16 FILE, and nothing says it is 85.8% of the 1.72 GB
+actually resident. `sections` answers it from the same walk -- bytes credited to every attribute name
+on the path in, so a caller asks by the name the model itself declared, at whatever depth it sits.
+`scope` still records which subtree was walked.
 """
 
 from __future__ import annotations
@@ -257,10 +260,19 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     tensors: list = []
     scratch: list = []
     unknown = 0
-    queue = [root]
+    # WHERE each tensor was reached from, carried alongside it. The walk already knows -- it arrived
+    # by following a named attribute -- and threw the name away, which is the whole reason a caller
+    # wanting one tower's bytes had to apportion the total by the CHECKPOINT's proportions. Those are
+    # disk proportions: on a mixed-precision load the towers are not quantised alike, so the ratio
+    # does not transfer, and the error lands directly on the stage's ceiling.
+    #
+    # A tuple of attribute names, not a full path string: only the names are ever matched against,
+    # list indices carry no meaning, and a tuple of interned strings costs nothing to copy.
+    sections: dict = {}
+    queue = [(root, ())]
     nodes = 0
     while queue and nodes < max_nodes:
-        obj = queue.pop()
+        obj, path = queue.pop()
         nodes += 1
         oid = id(obj)
         if oid in seen:
@@ -271,20 +283,37 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
             n, name = entry
             if bytes_per_elem(name) > 0:
                 entry = {"numel": int(n), "dtype": name}
-                (tensors if (not ckpt or int(n) in ckpt) else scratch).append(entry)
+                if not ckpt or int(n) in ckpt:
+                    tensors.append(entry)
+                    # CREDITED TO EVERY NAME ON THE WAY IN, so a lookup works whatever depth the
+                    # tower sits at -- `language_model` reached via `.model.language_model` is
+                    # credited to both, and the caller asks for the one the model declared. The
+                    # groups therefore OVERLAP and must never be summed against each other; the
+                    # denominator is the census total, which is counted once.
+                    #
+                    # path[:-1] drops the attribute the TENSOR ITSELF was bound to. A subtree is
+                    # never named for one of its own weights, so `weight`/`w`/`bias` as groups are
+                    # noise -- and noise that would rank near the top by bytes, displacing a real
+                    # tower from the bounded marker.
+                    _b = int(n) * bytes_per_elem(name)
+                    for seg in set(path[:-1]):
+                        sections[seg] = sections.get(seg, 0.0) + _b
+                else:
+                    scratch.append(entry)
             else:
                 unknown += 1
             continue
         try:
             if isinstance(obj, dict):
-                queue.extend([v for v in obj.values() if _walkable(v)])
+                # A str key names its value as surely as an attribute does (ModuleDict, state dicts).
+                queue.extend([(v, path + (k,) if isinstance(k, str) else path) for k, v in obj.items() if _walkable(v)])
                 continue
             if isinstance(obj, (list, tuple, set)):
-                queue.extend([v for v in obj if _walkable(v)])
+                queue.extend([(v, path) for v in obj if _walkable(v)])
                 continue
             d = getattr(obj, "__dict__", None)
             if isinstance(d, dict):
-                queue.extend([v for k, v in d.items() if _walkable(v) and not _is_cache_attr(k)])
+                queue.extend([(v, path + (k,)) for k, v in d.items() if _walkable(v) and not _is_cache_attr(k)])
         except Exception:  # noqa: BLE001 -- one unwalkable node must not lose the whole census
             continue
     total = sum(t["numel"] * bytes_per_elem(t["dtype"]) for t in tensors)
@@ -310,6 +339,7 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     return {
         "weight_tensors": tensors,
         "weight_bytes": int(round(total)),
+        "sections": {k: int(round(v)) for k, v in sections.items() if v > 0},
         "scope": scope,
         "bytes_per_param": round(per_param, 6),
         "resident_elems": int(elems),
@@ -320,6 +350,32 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
         "complete": unknown == 0 and bool(tensors),
         "source": "device census (built model)",
     }
+
+
+_SECTIONS_IN_MARKER = 48
+
+
+def sections_marker(c: dict) -> str:
+    """The per-subtree bytes, as its own line. Empty string when the walk recorded none.
+
+    SEPARATE FROM `marker` because the two are consumed by different questions -- the total feeds the
+    width, these feed a stage's share -- and because an older harness parsing the census line must
+    not have to cope with a field that did not exist when it was written.
+
+    Bounded: a deep model has hundreds of distinct attribute names and the tail of that list is
+    LayerNorm weights. Sorted by bytes and truncated, so what survives is every name big enough for a
+    stage to be made of. A name that falls off the end could not have been a tower.
+    """
+    secs = c.get("sections") or {}
+    if not secs:
+        return ""
+    top = sorted(secs.items(), key=lambda kv: -int(kv[1]))[:_SECTIONS_IN_MARKER]
+    # A name with a separator in it would be unparseable on the other side; attribute names cannot
+    # contain these, but a dict key reached during the walk can be anything at all.
+    safe = [(k, v) for k, v in top if "," not in str(k) and ":" not in str(k) and str(k).strip()]
+    if not safe:
+        return ""
+    return "TRACE_WEIGHT_SECTIONS=%s" % ",".join("%s:%d" % (k, int(v)) for k, v in safe)
 
 
 def marker(c: dict) -> str:

@@ -2332,7 +2332,28 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         return {}
 
 
-def _persist_device_weight_bytes(nbytes: int, complete: bool, bytes_per_param: float = 0.0) -> None:
+def _parse_census_sections(out: str) -> dict:
+    """{attribute name: resident bytes} from the census marker, or {} when it did not print one.
+
+    Tolerant by design: a malformed pair is skipped rather than discarding the line, because a
+    partial split still prices the towers it names and the alternative is the checkpoint ratio."""
+    secs: dict = {}
+    try:
+        for line in (out or "").splitlines():
+            if "TRACE_WEIGHT_SECTIONS=" not in line:
+                continue
+            for pair in line.split("TRACE_WEIGHT_SECTIONS=", 1)[1].split()[0].split(","):
+                name, _, raw = pair.partition(":")
+                if name.strip() and raw.strip().isdigit() and int(raw) > 0:
+                    secs[name.strip()] = int(raw)
+    except Exception:  # noqa: BLE001 -- a census line the report can do without
+        return {}
+    return secs
+
+
+def _persist_device_weight_bytes(
+    nbytes: int, complete: bool, bytes_per_param: float = 0.0, sections: dict | None = None
+) -> None:
     """Merge the census result into the model's own facts file. Best-effort; never raises.
 
     Written to the MODEL directory, and only when that directory was STATED -- a model fact resolved
@@ -2355,6 +2376,7 @@ def _persist_device_weight_bytes(nbytes: int, complete: bool, bytes_per_param: f
             doc.get("device_weight_bytes") == int(nbytes)
             and doc.get("device_census_complete") == bool(complete)
             and (not bytes_per_param or doc.get("bytes_per_param") == float(bytes_per_param))
+            and (not sections or doc.get("device_section_bytes"))
         ):
             return
         # THE FIRST COMPLETE CENSUS WINS, and nothing later moves it.
@@ -2369,9 +2391,30 @@ def _persist_device_weight_bytes(nbytes: int, complete: bool, bytes_per_param: f
         # The ceiling describes the model the run STARTED with. An incomplete census may still be
         # replaced -- it is not yet an answer -- but a complete one is the answer for this run.
         if doc.get("device_weight_bytes") and doc.get("device_census_complete"):
+            # SAME MEASUREMENT, MORE OF IT. An identical total is not a second census -- it is this
+            # one, described further. Refusing the split here would be refusing detail that changes
+            # no number already written, and it would strand every model whose facts file was pinned
+            # by a tool version that had no split to record: the file is already complete, so the
+            # split could never arrive and the ceiling would silently keep apportioning by the
+            # checkpoint. A DIFFERENT total is a different census and is still refused.
+            if (
+                sections
+                and not doc.get("device_section_bytes")
+                and int(doc.get("device_weight_bytes") or 0) == int(nbytes)
+            ):
+                doc["device_section_bytes"] = {str(k): int(v) for k, v in sections.items() if int(v) > 0}
+                tmp = p.with_suffix(p.suffix + ".tmp")
+                tmp.write_text(json.dumps(doc, indent=2) + "\n")
+                os.replace(str(tmp), str(p))
             return
         doc["device_weight_bytes"] = int(nbytes)
         doc["device_census_complete"] = bool(complete)
+        # PINNED WITH THE TOTAL, by being written inside the same guard. The split describes the
+        # model the run STARTED with for exactly the reason the total does: a dtype rung that halves
+        # one tower changes the proportions, and a share that moves between iterations scores the
+        # same run against two different ceilings.
+        if sections:
+            doc["device_section_bytes"] = {str(k): int(v) for k, v in sections.items() if int(v) > 0}
         if bytes_per_param and bytes_per_param > 0:
             doc["bytes_per_param"] = float(bytes_per_param)
         tmp = p.with_suffix(p.suffix + ".tmp")
@@ -2628,6 +2671,11 @@ def _run_full_pipeline_ms():
         # and more reliable than sampling telemetry alongside, which aliases against short runs.
         if _run_reported_clamp(out):
             globals()["_LAST_RUN_CLAMPED"] = True
+        # READ AHEAD, because the census is PINNED on the line before this one. The total and the
+        # split are printed as two lines and the total is written first; persisting it there would
+        # take the pin, and the split arriving one line later would be refused by the very guard that
+        # stops the ceiling drifting mid-run. They are one measurement, so they are written together.
+        _census_sections = _parse_census_sections(out)
         for line in out.splitlines():
             # PHASE TIMINGS, MEASURED. trace_replay prints one of these per stage it traced, derived
             # from the PIPELINE_STAGES the model itself declares -- so "prefill"/"decode" here are
@@ -2676,7 +2724,7 @@ def _run_full_pipeline_ms():
                     if "bytes_per_param=" in line:
                         _bpp = float(line.split("bytes_per_param=", 1)[1].split()[0])
                     if _wb > 0:
-                        _persist_device_weight_bytes(_wb, _ok, _bpp)
+                        _persist_device_weight_bytes(_wb, _ok, _bpp, _census_sections)
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_STAGE_OPS[" in line:
