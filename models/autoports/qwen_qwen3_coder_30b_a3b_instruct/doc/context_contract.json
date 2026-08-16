@@ -260,5 +260,31 @@
     "sdpa_prefill_program_config_passed": "None",
     "steady_state_only_replays_moved": true,
     "note": "runtime_fallback_audit() itself does not yet carry the two properties stage 06 introduced -- the paged SDPA program config and the sampler's live-row count -- because adding fields would change a dict tests/test_full_model.py::test_runtime_fallback_audit_is_clean pins field by field. They are recorded here and in the JSON above instead, read off the modules that own them."
+  },
+  "stage07_note": "Stage 07 (the datatype sweep) changed NOTHING this file measures about capability. No capability reduction; advertised and supported context both remain 262144. The selected precision config moves only the two expert matmul inner block widths (experts_gate_up_in0_block_w 16 -> 64, experts_down_in0_block_w 12 -> 24). A block width is a program-config field, not a tensor dtype or shape: device_expert_bytes_per_die is identical (84 934 656 B) before and after, no allocation moves, and the KV cache dtype, layout, paging and bytes/token are untouched. Evidence: doc/datatype_sweep/README.md and work_log.md, doc/datatype_sweep/sweep_results.json.",
+  "stage07_kv_bfp8_candidate": {
+    "status": "measured, not selected -- the shipped kv_cache_dtype stays bfloat16",
+    "why_recorded": "This is the only candidate in the sweep that could move capacity, so the contract records what it would buy even though it was not taken. It moves capacity UPWARD (fewer bytes per token), so it could never have forced a reduction. Its first measurement was invalid -- a bfloat8_b paged cache filled from this model's bfloat16 K/V reads back as NaN, so the row scored at chance -- and the prefill writer now casts K/V to the cache dtype (tt/functional_decoder.match_cache_dtype). The numbers below are from the post-fix runs.",
+    "kv_cache_dtype": "bfloat8_b",
+    "bytes_per_token_per_layer": 1088,
+    "bytes_per_token_per_layer_per_die": 272,
+    "bytes_per_token_per_layer_per_die_bfloat16": 512,
+    "formula": "num_key_value_heads_per_die(1) * head_dim(128) * 1.0625 B/elem * 2 tensors (K and V); 1.0625 is bfloat8_b once each 16-element block's shared exponent byte is counted",
+    "device_kv_bytes_at_full_context_per_die": 3422552064,
+    "device_kv_bytes_at_full_context_per_die_bfloat16": 6442450944,
+    "device_kv_bytes_saved_per_die": 3019898880,
+    "device_kv_gb_at_full_context_per_die": 3.423,
+    "device_kv_gb_at_full_context_per_die_bfloat16": 6.442,
+    "share_of_the_11_759_gb_per_die_footprint_bfloat16": 0.548,
+    "measured_rows": {
+      "R19_kv_bfp8": "bfp8 KV as a delta from the stage-06 baseline: top-1 0.980 / top-5 1.000 / top-100 1.000, decode 42.29 t/s/u (-0.12% vs 42.34, inside the 0.368% band), TTFT 7842.57 ms against 3250.90",
+      "R28_kv_bfp8_bw64_24": "bfp8 KV on top of the selected block widths: top-1 0.980 / top-5 1.000 / top-100 1.000, decode 43.45 t/s/u (-0.21% vs the selected 43.54, inside the band), TTFT 7792.06 ms against 3287.61"
+    },
+    "verdict": "Not selected. bfp8 KV buys 3.020 GB/die of headroom at 262144 tokens -- real capacity -- but it buys NO decode throughput (both rows land inside the run-to-run band), costs one top-1 point, and costs 2.4x TTFT (7.8 s against 3.3 s on the 158-token gate prompt). The stage ranks on decode and the advertised context is already met at bfloat16 with 22.119 GB/die free, so there is no capacity problem for this to solve. It is recorded here so that a future stage needing more KV headroom -- a larger batch, or a longer served context -- has the price already measured. The TTFT cost would need explaining first; it is not the cast (it was present before the cast existed) and is unattributed.",
+    "evidence": [
+      "doc/datatype_sweep/sweep_results.json (rows R19_kv_bfp8, R28_kv_bfp8_bw64_24)",
+      "doc/datatype_sweep/probes/kv_bfp8_diagnosis.json (both cache writers, six cache/input combinations)",
+      "doc/datatype_sweep/logs/rows/R19_kv_bfp8.log, R28_kv_bfp8_bw64_24.log"
+    ]
   }
 }

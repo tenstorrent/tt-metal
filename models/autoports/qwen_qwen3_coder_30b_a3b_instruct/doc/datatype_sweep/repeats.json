@@ -1,0 +1,122 @@
+{
+  "R00_default": {
+    "config_id": "R00_default",
+    "n": 3,
+    "samples": [
+      {
+        "decode_tps_user": 42.34,
+        "ttft_ms": 3277.95,
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      {
+        "decode_tps_user": 42.41,
+        "ttft_ms": 3496.98,
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      {
+        "decode_tps_user": 42.34,
+        "ttft_ms": 3463.8,
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      }
+    ],
+    "decode_min": 42.34,
+    "decode_max": 42.41,
+    "decode_median": 42.34,
+    "decode_mean": 42.3633,
+    "decode_spread_abs": 0.07,
+    "decode_spread_pct": 0.1652,
+    "top1_values": [
+      0.99,
+      0.99,
+      0.99
+    ],
+    "top1_stable": true,
+    "decode_stdev": 0.0404
+  },
+  "R25_gateup64_down24": {
+    "config_id": "R25_gateup64_down24",
+    "n": 3,
+    "samples": [
+      {
+        "decode_tps_user": 43.46,
+        "ttft_ms": 3248.42,
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      {
+        "decode_tps_user": 43.38,
+        "ttft_ms": 3500.34,
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      {
+        "decode_tps_user": 43.54,
+        "ttft_ms": 3439.81,
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      }
+    ],
+    "decode_min": 43.38,
+    "decode_max": 43.54,
+    "decode_median": 43.46,
+    "decode_mean": 43.46,
+    "decode_spread_abs": 0.16,
+    "decode_spread_pct": 0.3682,
+    "top1_values": [
+      0.99,
+      0.99,
+      0.99
+    ],
+    "top1_stable": true,
+    "decode_stdev": 0.08
+  },
+  "R26_attn_bfp4_bw64_24": {
+    "config_id": "R26_attn_bfp4_bw64_24",
+    "n": 3,
+    "samples": [
+      {
+        "decode_tps_user": 43.46,
+        "ttft_ms": 3318.7,
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      {
+        "decode_tps_user": 43.52,
+        "ttft_ms": 3261.58,
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      {
+        "decode_tps_user": 43.55,
+        "ttft_ms": 3414.87,
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      }
+    ],
+    "decode_min": 43.46,
+    "decode_max": 43.55,
+    "decode_median": 43.52,
+    "decode_mean": 43.51,
+    "decode_spread_abs": 0.09,
+    "decode_spread_pct": 0.2068,
+    "top1_values": [
+      0.98,
+      0.98,
+      0.98
+    ],
+    "top1_stable": true,
+    "decode_stdev": 0.0458
+  }
+}

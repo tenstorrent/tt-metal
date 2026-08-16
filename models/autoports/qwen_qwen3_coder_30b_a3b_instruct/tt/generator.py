@@ -892,7 +892,17 @@ def _resolve_snapshot(model_path: str | Path | None = None) -> Path:
 
 
 def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator:
-    """Readiness discovery factory. See ``models/common/readiness_check/contract.py``."""
+    """Readiness discovery factory. See ``models/common/readiness_check/contract.py``.
+
+    **This is the construction path the precision config has to reach.** The
+    readiness runners, the qualitative suite and (later) vLLM all arrive here
+    and none of them can pass a Python object, so ``precision`` is accepted as a
+    kwarg *and* read from ``QWEN3_PRECISION_CONFIG`` in the environment as a
+    path to a ``selected_precision_config.json``. Unset -- which is every run to
+    date -- means ``DEFAULT_PRECISION``, i.e. the shipped policy, so this
+    default is the one the stage-07 goal asks for rather than a JSON field that
+    hard-coded model code ignores.
+    """
     snapshot = _resolve_snapshot(kwargs.pop("model_path", os.getenv("QWEN3_CODER_30B_MODEL_PATH")))
     tokenizer = AutoTokenizer.from_pretrained(snapshot)
     max_batch_size = int(kwargs.pop("max_batch_size", 1))
@@ -901,6 +911,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator:
     num_layers = NUM_LAYERS if override_num_layers is None else int(override_num_layers)
     page_block_size = int(kwargs.pop("page_block_size", 32))
     rope_cache_len = int(kwargs.pop("rope_cache_len", 8192))
+    precision = kwargs.pop("precision", os.getenv("QWEN3_PRECISION_CONFIG") or None)
     if kwargs:
         raise TypeError(f"unsupported build_generator kwargs: {sorted(kwargs)}")
     model = Qwen3CoderModel.from_checkpoint(
@@ -911,6 +922,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator:
         num_layers=num_layers,
         page_block_size=page_block_size,
         rope_cache_len=rope_cache_len,
+        precision=precision,
     )
     return Qwen3CoderGenerator(model, tokenizer)
 

@@ -122,13 +122,15 @@ from .functional_decoder import (
     attention_prefill,
     rope_transformation_matrix,
 )
+
+# The four precision constants this module used to import from here are gone:
+# every one of them is now read off the ``PrecisionConfig`` threaded through the
+# functions below, so importing the import-time default would have been the bug
+# this stage exists to remove. ``tt/precision.py`` holds the values.
 from .optimized_decoder import (
     _DRAM_BANKS,
-    ATTENTION_WEIGHT_DTYPE,
-    EXPERT_IN0_BLOCK_W_DOWN,
-    EXPERT_IN0_BLOCK_W_GATE_UP,
-    EXPERT_WEIGHT_DTYPE,
     OptimizedWeights,
+    _attention_compute_kernel_config,
     _bank_row,
     _dram_sharded_ok,
     _expert_compute_kernel_config,
@@ -138,6 +140,7 @@ from .optimized_decoder import (
     attention_decode_optimized,
     moe_prefill_optimized,
 )
+from .precision import DEFAULT_PRECISION, PrecisionConfig  # noqa: F401  (re-exported)
 from .weight_mapping import hf_to_meta_channels, permute_head_vector_to_meta, permute_wqkv_to_meta
 
 # The target mesh. This module deliberately supports exactly one shape: the
@@ -290,8 +293,9 @@ def _meta_rope(ctx: MeshContext, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor,
     which ``doc/context_contract.json`` describes. That is a whole-layer change,
     not the in-place decode optimization this stage is.
 
-    A second cost, smaller and independent: ``ATTENTION_WEIGHT_DTYPE`` is
-    ``bfloat8_b``, whose 16-element blocks share an exponent, so permuting
+    A second cost, smaller and independent: the qkv weight dtype
+    (``PrecisionConfig.attention_qkv_dtype``) is ``bfloat8_b`` by default, and
+    bfloat8_b's 16-element blocks share an exponent, so permuting
     channels **regroups the blocks** and requantizes. The two paths therefore
     are not bit-identical in the layer even where the ops are -- attention out
     ``max|diff|`` 1.221e-04 on a fresh cache, and the K cache differs by
@@ -426,7 +430,7 @@ def mesh_context(mesh_device) -> MeshContext:
     return MeshContext(mesh=mesh_device, ccl=TT_CCL(mesh_device))
 
 
-def all_reduce(x: ttnn.Tensor, ctx: MeshContext) -> ttnn.Tensor:
+def all_reduce(x: ttnn.Tensor, ctx: MeshContext, precision: PrecisionConfig = DEFAULT_PRECISION) -> ttnn.Tensor:
     """All-reduce a ``[1, 1, ., H]`` partial as reduce-scatter then all-gather.
 
     **One spelling for both modes, and that is a change from the plan.**
@@ -467,7 +471,27 @@ def all_reduce(x: ttnn.Tensor, ctx: MeshContext) -> ttnn.Tensor:
     The scatter axis is dim 3 (hidden, 2048), which is independent of the
     sequence length -- that is what keeps non-aligned S working through the
     collective without any padding of its own.
+
+    ``precision.ccl_dtype`` is ``None`` on the shipped path, which means "run
+    the collective at whatever dtype the partial arrives in" -- no cast, no
+    extra op, the behaviour every stage-02..06 number was measured at. A named
+    dtype casts in before the reduce-scatter and back out after the all-gather,
+    so a sweep can price a narrower wire without touching the arithmetic that
+    feeds it. The cast is deliberately *outside* the buffer cache key's reach
+    only in the sense that the cache keys on ``x.dtype`` already -- casting
+    first means the cached buffers are allocated at the wire dtype, which is the
+    point.
     """
+    # The cast allocates a *new* tensor and leaves ``x`` alone: every caller
+    # deallocates the partial it passed in, so freeing it here would be a double
+    # free the moment ``ccl_dtype`` was set.
+    wire_dtype = precision.ccl_dtype
+    restore_dtype = None
+    cast_in = None
+    if wire_dtype is not None and x.dtype != wire_dtype:
+        restore_dtype = x.dtype
+        cast_in = ttnn.typecast(x, wire_dtype)
+        x = cast_in
     bufs = _decode_ccl_buffers(x, ctx)
     num_links = _links(x, ctx)
     scattered = ttnn.experimental.reduce_scatter_minimal_async(
@@ -493,10 +517,18 @@ def all_reduce(x: ttnn.Tensor, ctx: MeshContext) -> ttnn.Tensor:
     )
     if bufs is None:
         ttnn.deallocate(scattered)
-        return gathered
-    # ``gathered`` *is* the persistent buffer, which the caller is about to
-    # deallocate. Hand back a copy so the buffer survives the next token.
-    return ttnn.clone(gathered, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = gathered
+    else:
+        # ``gathered`` *is* the persistent buffer, which the caller is about to
+        # deallocate. Hand back a copy so the buffer survives the next token.
+        out = ttnn.clone(gathered, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if restore_dtype is not None:
+        cast_out = ttnn.typecast(out, restore_dtype)
+        ttnn.deallocate(out)
+        out = cast_out
+    if cast_in is not None:
+        ttnn.deallocate(cast_in)
+    return out
 
 
 def _decode_ccl_buffers(x: ttnn.Tensor, ctx: MeshContext):
@@ -1007,17 +1039,19 @@ def _norm_program_config(dim: int):
     )
 
 
-def _norm_compute_config(device):
+def _norm_compute_config(device, precision: PrecisionConfig = DEFAULT_PRECISION):
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=precision.norm_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
 
 
-def decode_residual_norm(x: ttnn.Tensor, weight_rm: ttnn.Tensor, eps: float) -> ttnn.Tensor:
+def decode_residual_norm(
+    x: ttnn.Tensor, weight_rm: ttnn.Tensor, eps: float, precision: PrecisionConfig = DEFAULT_PRECISION
+) -> ttnn.Tensor:
     """One residual-stream RMSNorm at decode shape, width-sharded across 8 cores.
 
     Takes a DRAM-interleaved ``[1, 1, B, H]`` (B <= 32, padded to one tile) and
@@ -1037,13 +1071,20 @@ def decode_residual_norm(x: ttnn.Tensor, weight_rm: ttnn.Tensor, eps: float) -> 
         epsilon=eps,
         program_config=_norm_program_config(dim),
         memory_config=mc,
-        compute_kernel_config=_norm_compute_config(x.device()),
+        # ``precision`` rather than the default: this is the only site
+        # ``norm_fidelity`` reaches. It was called with the module default until
+        # the stage-07 review, which meant the field was a documented knob with
+        # no effect and ``R21_norm_hifi2`` measured nothing. The prefill norms
+        # (``decoder_layer_prefill_multichip``) pass no compute config at all and
+        # still take the op default -- ``norm_fidelity`` is a decode-path field,
+        # which is the path the stage ranks on.
+        compute_kernel_config=_norm_compute_config(x.device(), precision),
     )
     ttnn.deallocate(xs)
     return out
 
 
-def _exact_matmul_config(device):
+def _exact_matmul_config(device, precision: PrecisionConfig = DEFAULT_PRECISION):
     """HiFi4, so the one-hot window matmul is a copy rather than an approximation.
 
     The matmul default is LoFi, which keeps ~5 mantissa bits, and that is fine
@@ -1055,7 +1096,7 @@ def _exact_matmul_config(device):
     """
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=precision.router_window_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -1098,6 +1139,7 @@ def upload_multichip_weights(
     config: MeshDecoderConfig,
     expert_dtype=None,
     meta_rope: bool = False,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> MultichipWeights:
     """Shard and upload one layer's weights across the mesh.
 
@@ -1117,7 +1159,12 @@ def upload_multichip_weights(
     """
     a = config.global_config.attention
     n = config.num_devices
-    dtype = expert_dtype if expert_dtype is not None else EXPERT_WEIGHT_DTYPE
+    # ``expert_dtype`` is the stage-04 spelling and still wins when given (the
+    # multichip tests sweep it); otherwise every dtype below comes from
+    # ``precision``, whose defaults are the values this docstring's table was
+    # measured at.
+    gate_up_dtype = expert_dtype if expert_dtype is not None else precision.experts_gate_up_dtype
+    down_dtype = expert_dtype if expert_dtype is not None else precision.experts_down_dtype
 
     def replicate(t: torch.Tensor, tensor_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -1158,7 +1205,7 @@ def upload_multichip_weights(
     )
     assert _dram_sharded_ok(k_o, n_o), f"per-die wo [{k_o}, {n_o}] is not bank-divisible"
 
-    def dram_sharded(t: torch.Tensor, dim: int, k: int, n_local: int) -> ttnn.Tensor:
+    def dram_sharded(t: torch.Tensor, dim: int, k: int, n_local: int, tensor_dtype) -> ttnn.Tensor:
         """Width-shard the per-die weight one shard per DRAM bank, then mesh-shard it.
 
         Two independent shardings compose here and it is worth being explicit
@@ -1170,7 +1217,7 @@ def upload_multichip_weights(
         return shard(
             t,
             dim,
-            ATTENTION_WEIGHT_DTYPE,
+            tensor_dtype,
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.DRAM,
@@ -1180,20 +1227,20 @@ def upload_multichip_weights(
 
     experts = OptimizedWeights(
         # [E, 2I, H] -> [1, E, H, 2I], sharded on the expert dim.
-        gate_up_proj=shard(torch_weights["experts_gate_up"].transpose(-2, -1).unsqueeze(0), 1, dtype),
+        gate_up_proj=shard(torch_weights["experts_gate_up"].transpose(-2, -1).unsqueeze(0), 1, gate_up_dtype),
         # [E, H, I] -> [1, E, I, H], sharded on the expert dim.
-        down_proj=shard(torch_weights["experts_down"].transpose(-2, -1).unsqueeze(0), 1, dtype),
+        down_proj=shard(torch_weights["experts_down"].transpose(-2, -1).unsqueeze(0), 1, down_dtype),
         attention=AttentionWeights(
             # Column split (head-interleaved, see head_interleaved_wqkv).
-            wqkv=shard(wqkv, -1, ATTENTION_WEIGHT_DTYPE),
+            wqkv=shard(wqkv, -1, precision.attention_qkv_dtype),
             # Row split by Q head. Contiguous *because* the Q head assignment
             # above is contiguous per die: die d owns rows 1024d..1024d+1023.
-            wo=shard(wo, -2, ATTENTION_WEIGHT_DTYPE),
-            q_norm=replicate(as_4d(torch_weights["q_norm"], pad_to_4d=True), ttnn.bfloat16),
-            k_norm=replicate(as_4d(torch_weights["k_norm"], pad_to_4d=True), ttnn.bfloat16),
+            wo=shard(wo, -2, precision.attention_wo_dtype),
+            q_norm=replicate(as_4d(torch_weights["q_norm"], pad_to_4d=True), precision.norm_weight_dtype),
+            k_norm=replicate(as_4d(torch_weights["k_norm"], pad_to_4d=True), precision.norm_weight_dtype),
         ),
-        wqkv_decode=dram_sharded(wqkv, -1, k_qkv, n_qkv),
-        wo_decode=dram_sharded(wo, -2, k_o, n_o),
+        wqkv_decode=dram_sharded(wqkv, -1, k_qkv, n_qkv, precision.attention_qkv_dtype),
+        wo_decode=dram_sharded(wo, -2, k_o, n_o, precision.attention_wo_dtype),
     )
 
     # Stage 04. The Meta-ordered decode twin, built **only when asked**. It is
@@ -1223,14 +1270,14 @@ def upload_multichip_weights(
                 experts.attention,
                 q_norm=replicate(
                     as_4d(permute_head_vector_to_meta(torch_weights["q_norm"], head_dim=a.head_dim), pad_to_4d=True),
-                    ttnn.bfloat16,
+                    precision.norm_weight_dtype,
                 ),
                 k_norm=replicate(
                     as_4d(permute_head_vector_to_meta(torch_weights["k_norm"], head_dim=a.head_dim), pad_to_4d=True),
-                    ttnn.bfloat16,
+                    precision.norm_weight_dtype,
                 ),
             ),
-            wqkv_decode=dram_sharded(wqkv_meta, -1, k_qkv, n_qkv),
+            wqkv_decode=dram_sharded(wqkv_meta, -1, k_qkv, n_qkv, precision.attention_qkv_dtype),
         )
 
     router = torch_weights["router"]
@@ -1241,7 +1288,7 @@ def upload_multichip_weights(
         flat = t.reshape(-1)
         return ttnn.from_torch(
             flat.reshape(1, 1, flat.numel() // 32, 32).contiguous().float(),
-            dtype=ttnn.bfloat16,
+            dtype=precision.norm_weight_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1249,11 +1296,11 @@ def upload_multichip_weights(
         )
 
     return MultichipWeights(
-        input_layernorm=replicate(torch_weights["input_layernorm"].reshape(1, 1, 1, -1), ttnn.bfloat16),
+        input_layernorm=replicate(torch_weights["input_layernorm"].reshape(1, 1, 1, -1), precision.norm_weight_dtype),
         post_attention_layernorm=replicate(
-            torch_weights["post_attention_layernorm"].reshape(1, 1, 1, -1), ttnn.bfloat16
+            torch_weights["post_attention_layernorm"].reshape(1, 1, 1, -1), precision.norm_weight_dtype
         ),
-        router=replicate(router.T.contiguous().reshape(1, 1, router.shape[1], router.shape[0]), ttnn.bfloat16),
+        router=replicate(router.T.contiguous().reshape(1, 1, router.shape[1], router.shape[0]), precision.router_dtype),
         expert_window=_expert_window_matrix(mesh_device, config.global_config.moe.num_experts, n),
         experts=experts,
         experts_meta=experts_meta,
@@ -1268,6 +1315,7 @@ def create_mesh_kv_cache(
     max_batch: int,
     max_seq_len: int,
     block_size: int | None = None,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> KVCache:
     """Allocate the *local* KV cache: 1 KV head per die, not 4.
 
@@ -1302,7 +1350,7 @@ def create_mesh_kv_cache(
     k, v = (
         ttnn.from_torch(
             torch.zeros(shape),
-            dtype=ttnn.bfloat16,
+            dtype=precision.kv_cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1403,6 +1451,7 @@ def router_forward_multichip(
     window: ttnn.Tensor,
     config: MoEConfig,
     local_moe: MoEConfig,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Replicated global routing, returning this die's ``[1, 1, S, 32]`` window.
 
@@ -1435,10 +1484,17 @@ def router_forward_multichip(
     )
 
     logits = ttnn.linear(x, w_router, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return _router_tail(logits, window, config, local_moe, x.device())
+    return _router_tail(logits, window, config, local_moe, x.device(), precision)
 
 
-def _router_tail(logits, window, config: MoEConfig, local_moe: MoEConfig, device) -> ttnn.Tensor:
+def _router_tail(
+    logits,
+    window,
+    config: MoEConfig,
+    local_moe: MoEConfig,
+    device,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
+) -> ttnn.Tensor:
     """Top-8, softmax over the survivors, this die's 32-expert window.
 
     Split out of ``router_forward_multichip`` so a probe can vary where the
@@ -1457,7 +1513,9 @@ def _router_tail(logits, window, config: MoEConfig, local_moe: MoEConfig, device
     # global: normalising within a window would renormalise each die's share to
     # 1 and the four contributions would sum to 4.
     total = ttnn.matmul(dense, _ones_column(device, config.num_experts), dtype=ttnn.bfloat16)
-    local = ttnn.matmul(dense, window, dtype=ttnn.bfloat16, compute_kernel_config=_exact_matmul_config(device))
+    local = ttnn.matmul(
+        dense, window, dtype=ttnn.bfloat16, compute_kernel_config=_exact_matmul_config(device, precision)
+    )
     # Same clamp as the single-chip router, and for the same reason: after the
     # scatter the divide runs over whole tiles, and the tile row-padding has a
     # zero numerator *and* a zero denominator, which unguarded ttnn.div returns
@@ -1479,6 +1537,7 @@ def moe_decode_multichip(
     routing: ttnn.Tensor,
     weights: OptimizedWeights,
     local_moe: MoEConfig,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Decode expert pass over this die's 32 experts. Returns a *partial* sum.
 
@@ -1529,9 +1588,9 @@ def moe_decode_multichip(
     sparsity = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
     expert_memory_config = _decode_expert_memory_config(batch, local_moe)
     output_tile = ttnn.Tile([32, 32])
-    compute_config = _expert_compute_kernel_config(x.device())
-    gate_up_config = _tuned_sparse_matmul_config(1, 2 * inter, hidden_size, EXPERT_IN0_BLOCK_W_GATE_UP)
-    down_config = _tuned_sparse_matmul_config(1, hidden_size, inter, EXPERT_IN0_BLOCK_W_DOWN)
+    compute_config = _expert_compute_kernel_config(x.device(), precision)
+    gate_up_config = _tuned_sparse_matmul_config(1, 2 * inter, hidden_size, precision.experts_gate_up_in0_block_w)
+    down_config = _tuned_sparse_matmul_config(1, hidden_size, inter, precision.experts_down_in0_block_w)
 
     x_batched = ttnn.reshape(x, (1, batch, 1, hidden_size))
     fused = ttnn.sparse_matmul(
@@ -1543,7 +1602,7 @@ def moe_decode_multichip(
         output_tile=output_tile,
         program_config=gate_up_config,
         compute_kernel_config=compute_config,
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
     )
     packed_width = fused.shape[-1]
     fused = ttnn.reshape(fused, (batch, n_experts, packed_width))
@@ -1568,7 +1627,7 @@ def moe_decode_multichip(
         is_input_a_sparse=True,
         is_input_b_sparse=False,  # selects batch_length_A = B * E; see the single-chip docstring
         compute_kernel_config=compute_config,
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
     )
     ttnn.deallocate(down_input)
 
@@ -1596,6 +1655,7 @@ def decoder_layer_prefill_multichip(
     sparsity: ttnn.Tensor,
     kv_cache: KVCache | None = None,
     user_id: int = 0,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Prefill one layer on the mesh. ``x`` / return replicated ``[1, 1, S, 2048]``.
 
@@ -1615,25 +1675,30 @@ def decoder_layer_prefill_multichip(
         sin_cache,
         kv_cache,
         user_id,
+        # ``None`` at the shipped precision, which is the op default and what
+        # every prefill number was measured at; see
+        # ``optimized_decoder._attention_compute_kernel_config``.
+        compute_kernel_config=_attention_compute_kernel_config(x.device(), precision),
+        activation_dtype=precision.activation_dtype,
         # NOT adopted -- see _sdpa_prefill_program_config. The seam is wired and
         # the config is built and measured; passing it costs a top-1 point on
         # run_teacher_forcing, so prefill stays at the op default.
         sdpa_program_config=None,
     )
     ttnn.deallocate(normed)
-    attn_out = all_reduce_prefill(attn_partial, ctx)
+    attn_out = all_reduce_prefill(attn_partial, ctx, precision)
     ttnn.deallocate(attn_partial)
     hidden = ttnn.add(x, attn_out)
     ttnn.deallocate(attn_out)
 
     normed = ttnn.rms_norm(hidden, weight=weights.post_attention_layernorm, epsilon=eps)
     routing = router_forward_multichip(
-        normed, weights.router, weights.expert_window, config.global_config.moe, config.local_moe
+        normed, weights.router, weights.expert_window, config.global_config.moe, config.local_moe, precision
     )
-    moe_partial = moe_prefill_optimized(normed, routing, weights.experts, config.local_moe, sparsity)
+    moe_partial = moe_prefill_optimized(normed, routing, weights.experts, config.local_moe, sparsity, precision)
     ttnn.deallocate(normed)
     ttnn.deallocate(routing)
-    moe_out = all_reduce_prefill(moe_partial, ctx)
+    moe_out = all_reduce_prefill(moe_partial, ctx, precision)
     ttnn.deallocate(moe_partial)
 
     out = ttnn.add(hidden, moe_out)
@@ -1653,6 +1718,7 @@ def decoder_layer_decode_multichip(
     current_pos: ttnn.Tensor,
     token_index: int,
     rope=None,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Decode one token per user on the mesh. ``x`` / return ``[1, 1, B, 2048]``.
 
@@ -1670,7 +1736,7 @@ def decoder_layer_decode_multichip(
     """
     eps = config.global_config.rms_norm_eps
 
-    normed = decode_residual_norm(x, weights.input_layernorm_rm, eps)
+    normed = decode_residual_norm(x, weights.input_layernorm_rm, eps, precision)
     # ``rope`` is the stage-05 seam. It defaults to ``None`` and therefore to
     # ``_apply_rope`` -- ``ttnn.experimental.rotary_embedding`` with a **Python
     # int** ``token_index``, which is what every stage-03/04 number was measured
@@ -1707,29 +1773,30 @@ def decoder_layer_decode_multichip(
         # _sdpa_program_config and _sdpa_k_chunk.
         sdpa_program_config=_sdpa_program_config(x.device(), kv_cache),
         rope=rope,
+        precision=precision,
     )
     ttnn.deallocate(normed)
-    attn_out = all_reduce_decode(attn_partial, ctx)
+    attn_out = all_reduce_decode(attn_partial, ctx, precision)
     ttnn.deallocate(attn_partial)
     hidden = ttnn.add(x, attn_out)
     ttnn.deallocate(attn_out)
 
-    normed_sharded = decode_residual_norm(hidden, weights.post_attention_layernorm_rm, eps)
+    normed_sharded = decode_residual_norm(hidden, weights.post_attention_layernorm_rm, eps, precision)
     # The router projection reads the shard directly -- N = 128 is 4 tiles, so
     # the matmul uses 4 cores either way, but a width-sharded L1 in0 turns a
     # 24.62 us DRAM-interleaved read into 5.85 us of L1 with bit-identical
     # output (``probes/norm_router_probe.py``, max|diff| exactly 0.0).
     routing = router_forward_multichip(
-        normed_sharded, weights.router, weights.expert_window, config.global_config.moe, config.local_moe
+        normed_sharded, weights.router, weights.expert_window, config.global_config.moe, config.local_moe, precision
     )
     # ``sparse_matmul``'s in0 is DRAM-interleaved, so the expert path pays one
     # sharded-to-interleaved (0.53 us) rather than the norm paying 15.
     normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(normed_sharded)
-    moe_partial = moe_decode_multichip(normed, routing, weights.experts, config.local_moe)
+    moe_partial = moe_decode_multichip(normed, routing, weights.experts, config.local_moe, precision)
     ttnn.deallocate(normed)
     ttnn.deallocate(routing)
-    moe_out = all_reduce_decode(moe_partial, ctx)
+    moe_out = all_reduce_decode(moe_partial, ctx, precision)
     ttnn.deallocate(moe_partial)
 
     out = ttnn.add(hidden, moe_out)
@@ -1738,7 +1805,41 @@ def decoder_layer_decode_multichip(
     return out
 
 
-def fallback_audit(weights: MultichipWeights, config: MeshDecoderConfig, batch: int) -> dict:
+# Bytes one 32x32 tile occupies, per dtype. Spelled out because
+# ``Tensor.element_size()`` raises for the block-float types -- their storage is
+# a byte (or nibble) per element *plus* a shared exponent per 16-element face
+# row, i.e. 1024 + 64 for bfloat8_b and 512 + 64 for bfloat4_b -- and the
+# expert weights, which are the whole point of measuring this, are block-float.
+_TILE_BYTES = {
+    str(ttnn.float32): 4096,
+    str(ttnn.bfloat16): 2048,
+    str(ttnn.bfloat8_b): 1088,
+    str(ttnn.bfloat4_b): 576,
+}
+
+
+def _tensor_bytes(t: ttnn.Tensor) -> int | None:
+    """Device bytes one mesh-sharded tensor occupies **per die**, or ``None``.
+
+    A mesh tensor's shape is already the *local* (per-die) shape, so this is the
+    allocation a dtype change actually moves -- which is the observable
+    ``tests/test_precision_config.py`` asserts on. ``None`` for a dtype with no
+    entry above rather than a wrong number.
+    """
+    tile_bytes = _TILE_BYTES.get(str(t.dtype))
+    if tile_bytes is None:
+        return None
+    shape = [int(v) for v in t.padded_shape]
+    tiles = math.prod(shape[:-2]) * math.ceil(shape[-2] / 32) * math.ceil(shape[-1] / 32)
+    return tiles * tile_bytes
+
+
+def fallback_audit(
+    weights: MultichipWeights,
+    config: MeshDecoderConfig,
+    batch: int,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
+) -> dict:
     """Every runtime fallback the imported single-chip code can still take.
 
     Three of stage 02's helpers choose a slower path silently rather than
@@ -1756,6 +1857,13 @@ def fallback_audit(weights: MultichipWeights, config: MeshDecoderConfig, batch: 
     * ``_decode_expert_memory_config`` -- moves the expert intermediates from L1
       to DRAM past a byte budget, which EP shrank 4x.
 
+    Since stage 07 it also reports what the *precision config actually put on
+    the device*: the dtypes read back off the uploaded tensors (not the config's
+    own fields -- those would only prove the dataclass round-trips), the block
+    widths the program configs resolved to, and the fidelities the compute
+    configs carry. That is what ``tests/test_precision_config.py`` asserts
+    against when it constructs at a non-default value.
+
     Returned as data so a test can assert on it and the work log can quote it.
     """
     a = config.local_attention
@@ -1764,8 +1872,10 @@ def fallback_audit(weights: MultichipWeights, config: MeshDecoderConfig, batch: 
     n_qkv = int(weights.experts.wqkv_decode.shape[-1]) if weights.experts.wqkv_decode is not None else None
     k_o = int(weights.experts.wo_decode.shape[-2]) if weights.experts.wo_decode is not None else None
     n_o = int(weights.experts.wo_decode.shape[-1]) if weights.experts.wo_decode is not None else None
-    gate_up = _tuned_sparse_matmul_config(1, 2 * m.moe_intermediate_size, m.hidden_size, EXPERT_IN0_BLOCK_W_GATE_UP)
-    down = _tuned_sparse_matmul_config(1, m.hidden_size, m.moe_intermediate_size, EXPERT_IN0_BLOCK_W_DOWN)
+    gate_up = _tuned_sparse_matmul_config(
+        1, 2 * m.moe_intermediate_size, m.hidden_size, precision.experts_gate_up_in0_block_w
+    )
+    down = _tuned_sparse_matmul_config(1, m.hidden_size, m.moe_intermediate_size, precision.experts_down_in0_block_w)
     return {
         "batch": batch,
         "dram_sharded_qkv": (k_qkv, n_qkv),
@@ -1790,6 +1900,28 @@ def fallback_audit(weights: MultichipWeights, config: MeshDecoderConfig, batch: 
         "norm_shard_cores": _NORM_SHARD_CORES,
         "norm_shard_feeds_qkv_directly": _norm_shard_config(m.hidden_size) == _width_sharded_l1(m.hidden_size),
         "decode_ccl_buffers_persistent": True,
+        # -- what the precision config actually produced on device -------------
+        # Read off the uploaded tensors, so these differ from
+        # ``precision.<field>`` if any of the threading above is broken.
+        "device_experts_gate_up_dtype": str(weights.experts.gate_up_proj.dtype),
+        "device_experts_down_dtype": str(weights.experts.down_proj.dtype),
+        "device_attention_qkv_dtype": str(weights.experts.attention.wqkv.dtype),
+        "device_attention_wo_dtype": str(weights.experts.attention.wo.dtype),
+        "device_attention_qkv_decode_dtype": (
+            None if weights.experts.wqkv_decode is None else str(weights.experts.wqkv_decode.dtype)
+        ),
+        "device_router_dtype": str(weights.router.dtype),
+        "device_norm_weight_dtype": str(weights.input_layernorm.dtype),
+        # Bytes one layer's expert weights occupy per die -- the allocation-size
+        # consequence of the two expert dtypes, in a form a sweep can diff.
+        "device_expert_bytes_per_die": (
+            _tensor_bytes(weights.experts.gate_up_proj) + _tensor_bytes(weights.experts.down_proj)
+        ),
+        "expert_math_fidelity": str(precision.experts_fidelity),
+        "attention_math_fidelity": None if precision.attention_fidelity is None else str(precision.attention_fidelity),
+        "router_window_math_fidelity": str(precision.router_window_fidelity),
+        "ccl_dtype": str(precision.effective_ccl_dtype),
+        "activation_dtype": str(precision.activation_dtype),
     }
 
 

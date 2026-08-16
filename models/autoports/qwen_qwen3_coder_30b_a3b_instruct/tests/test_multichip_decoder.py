@@ -972,8 +972,19 @@ def test_no_runtime_fallbacks(fixture, batch):
     assert audit["dram_sharded_taken"], "decode attention fell back to the interleaved path"
     assert audit["dram_sharded_qkv"] == (2048, 1280), audit
     assert audit["dram_sharded_wo"] == (1024, 2048), audit
-    assert audit["gate_up_in0_block_w"] == O.EXPERT_IN0_BLOCK_W_GATE_UP, "gate/up block width was lowered"
-    assert audit["down_in0_block_w"] == O.EXPERT_IN0_BLOCK_W_DOWN, "down block width was lowered"
+    # **Literals, not the module constants.** ``EXPERT_IN0_BLOCK_W_*`` are now
+    # derived from ``DEFAULT_PRECISION``, which is the same value the audit
+    # resolves from -- so comparing them was an identity that could not fail and
+    # could no longer catch a width regression. These are the widths stage 07
+    # selected and measured; changing the default must fail here and be
+    # re-measured, not silently ratified. ``test_precision_config.py`` pins the
+    # same two literals through the full construction path.
+    assert audit["gate_up_in0_block_w"] == 64, "gate/up block width moved off the stage-07 selection"
+    assert audit["down_in0_block_w"] == 24, "down block width moved off the stage-07 selection"
+    assert (O.EXPERT_IN0_BLOCK_W_GATE_UP, O.EXPERT_IN0_BLOCK_W_DOWN) == (
+        64,
+        24,
+    ), "the module constants no longer agree with the selected widths"
     assert audit["local_heads"] == (8, 1) and audit["local_experts"] == 32, audit
     # Batch 1 is the latency target and must keep the intermediates in L1 -- the
     # traced A/B says L1 is 7.6% faster there. Batch 32 must not: the allocator

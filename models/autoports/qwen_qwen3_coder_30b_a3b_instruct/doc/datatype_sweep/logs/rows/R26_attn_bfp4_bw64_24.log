@@ -1,0 +1,66 @@
+# config_id: R26_attn_bfp4_bw64_24
+# delta: attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b, experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64
+# why: R06 composed with R25: qkv+wo at bfloat4_b on top of the two full-K expert block widths. R06 and R25 are orthogonal (attention projection weights vs expert matmul scheduling), so if the attention dtype gain survives on top of the width gain this is the fastest config the sweep can build. Measured rather than inferred, for the same reason R25 itself was measured rather than summed from R23 and R11. The verdict may turn on top-1: R06 sits exactly on the 0.980 floor and this reference resolves top-1 to +/-0.01, so one token decides whether this row is eligible at all.
+# env: QWEN3_PRECISION_CONFIG=/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/configs/R26_attn_bfp4_bw64_24.json
+# cmd: /home/raahem/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/qwen_qwen3_coder_30b_a3b_instruct --reference models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_aime24_chat.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING --trace-region-size 300000000
+# hw: 1x4 Blackhole P300_X2 / MeshShape(1,4), FABRIC_1D_RING, 4 dies
+# regime: traced teacher-forcing decode (enable_trace=True), 48 layers, batch 1, AIME24 chat reference, 158 prompt tokens / 100 generated tokens
+# date: 2026-08-16T09:54:36+0000
+2026-08-16 09:54:38.905 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-16 09:54:38.938 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-16 09:54:38.938 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-16 09:54:38.938 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-16 09:54:38.938 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-16 09:54:38.950 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-16 09:54:38.950 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-16 09:54:39.028 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-16 09:54:39.029 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-16 09:54:39.029 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-16 09:54:39.029 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-16 09:54:39.030 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-16 09:54:39.186 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-16 09:54:39.300 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-16 09:54:39.300 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-16 09:54:39.300 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-16 09:54:39.300 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-16 09:54:39.300 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-16 09:54:39.342 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-16 09:54:39.370 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-16 09:54:39.370 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+entry[0]             top1=0.980 (98/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=3336.75ms  decode=43.58 t/s/u  e2e=17.83 t/s/u
+AGGREGATE            top1=0.980 (98/100)  top5=1.000 (100/100)  top100=1.000 (100/100)  TTFT=3336.75ms  decode=43.58 t/s/u  e2e=17.83 t/s/u
+nanobind: leaked 1 instances!
+ - leaked instance 0x71ce91984f78 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 45 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "ttnn._ttnn.types.iterator"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 351 functions!
+ - leaked function ""
+ - leaked function "get_dram_alignment"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "sfpu_eps"
+ - leaked function "__eq__"
+ - leaked function ""
+ - leaked function "num_cores"
+ - leaked function "__eq__"
+ - leaked function "experimental_per_core_buffer_address"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-16 09:57:30.859 | info     |    BuildKernels | JIT cache stats: 605/605 hits (100.0%) [605 cached, 298 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-16 09:57:30.859 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-16 09:57:30.878 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-16 09:57:30.878 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-16 09:57:31.467 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-16 09:57:31.467 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-16 09:57:31.467 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

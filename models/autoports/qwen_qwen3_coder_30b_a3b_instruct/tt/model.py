@@ -92,6 +92,7 @@ from .multichip_decoder import (
     mesh_context,
     upload_multichip_weights,
 )
+from .precision import DEFAULT_PRECISION, PrecisionConfig, dtype_to_name
 
 HF_MODEL_ID = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
 HF_REVISION = "b2cff646eb4bb1d68355c01b18ae02e7cf42d120"
@@ -115,10 +116,15 @@ DEFAULT_ROPE_CACHE_LEN = 8192
 
 #: ``lm_head`` weight dtype. bfloat8_b halves the 155 MB/die bf16 read that a
 #: decode step would otherwise make against a 2048x37984 weight.
-LM_HEAD_WEIGHT_DTYPE = ttnn.bfloat8_b
+#:
+#: Since stage 07 this is an **alias** for ``DEFAULT_PRECISION.lm_head_dtype``,
+#: not the source of truth: a model built at a non-default ``PrecisionConfig``
+#: does not read it. See ``tt/precision.py``.
+LM_HEAD_WEIGHT_DTYPE = DEFAULT_PRECISION.lm_head_dtype
 #: The embedding table stays bf16: it is a gather, not a matmul, and bfloat8_b
 #: would quantise every token's hidden state at the very top of the stack.
-EMBED_WEIGHT_DTYPE = ttnn.bfloat16
+#: Alias for ``DEFAULT_PRECISION.embedding_dtype``, as above.
+EMBED_WEIGHT_DTYPE = DEFAULT_PRECISION.embedding_dtype
 
 
 #: ``_WatcherCleanSampling1D._sample_argmax``'s "not a winner" sentinel. Any value
@@ -483,10 +489,41 @@ class _WatcherCleanSampling1D(Sampling1D):
         return tt_out_tok, None
 
 
-def _lm_head_compute_config(device):
+def _resolve_precision(precision) -> PrecisionConfig:
+    """Accept a ``PrecisionConfig``, a dict, a path to JSON, or ``None``.
+
+    ``None`` is ``DEFAULT_PRECISION``, so every existing caller keeps the
+    shipped policy. The dict and path forms exist so a sweep runner -- and,
+    later, the vLLM construction path -- can pass the *artifact*
+    (``selected_precision_config.json``) rather than importing the dataclass,
+    which is what makes the artifact something the model consumes rather than
+    something written next to it.
+    """
+    if precision is None:
+        return DEFAULT_PRECISION
+    if isinstance(precision, PrecisionConfig):
+        return precision
+    if isinstance(precision, dict):
+        return PrecisionConfig.from_dict(precision)
+    if isinstance(precision, (str, Path)):
+        return PrecisionConfig.read_json(precision)
+    # A ``PrecisionConfig`` from a *duplicate copy* of ``tt.precision``, which is
+    # a real hazard in this tree and not a hypothetical one: ``tt/generator.py``
+    # imports ``tt.model`` by absolute path while tests and probes import it
+    # relatively, and under pytest's ``--import-mode=importlib`` (this repo's
+    # ``addopts``) with no ``models/__init__.py`` the two spellings produce two
+    # distinct module objects and therefore two distinct classes. ``isinstance``
+    # is then False for an object that is, by every meaning that matters, the
+    # right one. Rebuild it through the serialised form rather than refusing it.
+    if type(precision).__name__ == "PrecisionConfig" and hasattr(precision, "to_dict"):
+        return PrecisionConfig.from_dict(precision.to_dict())
+    raise TypeError(f"precision must be a PrecisionConfig, dict, path or None; got {type(precision).__name__}")
+
+
+def _lm_head_compute_config(device, precision: PrecisionConfig = DEFAULT_PRECISION):
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=precision.lm_head_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -592,6 +629,7 @@ class Qwen3CoderModel:
         num_layers: int = NUM_LAYERS,
         page_block_size: int = DEFAULT_PAGE_BLOCK_SIZE,
         rope_cache_len: int = DEFAULT_ROPE_CACHE_LEN,
+        precision: "PrecisionConfig | dict | str | Path | None" = None,
     ) -> None:
         _validate_mesh(mesh_device)
         if not 1 <= int(max_batch_size) <= 32:
@@ -608,6 +646,14 @@ class Qwen3CoderModel:
             raise ValueError("this checkpoint has an untied lm_head; tied weights would be a different contract")
         if _rope_type(hf_config) != "default":
             raise ValueError(f"rope_type {_rope_type(hf_config)!r} is not supported by this port's rotary tables")
+
+        # The precision policy, resolved once and then read by every builder and
+        # every forward below. ``None`` -> ``DEFAULT_PRECISION``, the shipped
+        # stage-06 policy, so a caller that says nothing gets exactly the model
+        # it got before this parameter existed. A ``dict`` or a path is accepted
+        # too, so a sweep runner can hand over a ``selected_precision_config.json``
+        # without importing the dataclass.
+        self.precision = _resolve_precision(precision)
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config
@@ -633,8 +679,13 @@ class Qwen3CoderModel:
         self.lm_head = self._build_lm_head(checkpoint)
 
         self.sparsity = build_local_sparsity(mesh_device, self.config.local_moe)
-        self.lm_head_compute_config = _lm_head_compute_config(mesh_device)
-        self.norm_compute_config = _norm_compute_config(mesh_device)
+        self.lm_head_compute_config = _lm_head_compute_config(mesh_device, self.precision)
+        self.norm_compute_config = _norm_compute_config(mesh_device, self.precision)
+        # Set by ``local_logits`` / the sampler-input path once a forward has
+        # run, so ``runtime_fallback_audit`` can report the dtypes the terminal
+        # path *produced* rather than the ones the config asked for.
+        self._observed_logits_dtype = None
+        self._observed_sampling_dtype = None
 
         self.rope_cache_len = 0
         self.cos_table = None
@@ -692,6 +743,7 @@ class Qwen3CoderModel:
         num_layers: int = NUM_LAYERS,
         page_block_size: int = DEFAULT_PAGE_BLOCK_SIZE,
         rope_cache_len: int = DEFAULT_ROPE_CACHE_LEN,
+        precision: "PrecisionConfig | dict | str | Path | None" = None,
     ) -> "Qwen3CoderModel":
         checkpoint_path = Path(checkpoint_path)
         hf_config = AutoConfig.from_pretrained(checkpoint_path)
@@ -705,6 +757,7 @@ class Qwen3CoderModel:
             num_layers=num_layers,
             page_block_size=page_block_size,
             rope_cache_len=rope_cache_len,
+            precision=precision,
         )
         gc.collect()
         return model
@@ -713,7 +766,7 @@ class Qwen3CoderModel:
         host = checkpoint.get("model.embed_tokens.weight").float()
         tensor = ttnn.from_torch(
             host,
-            dtype=EMBED_WEIGHT_DTYPE,
+            dtype=self.precision.embedding_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -731,7 +784,9 @@ class Qwen3CoderModel:
             sd = checkpoint.layer(layer_idx)
             torch_weights = convert_layer_weights(sd, self.hf_config)
             del sd
-            layers.append(upload_multichip_weights(torch_weights, self.mesh_device, self.config))
+            layers.append(
+                upload_multichip_weights(torch_weights, self.mesh_device, self.config, precision=self.precision)
+            )
             del torch_weights
             gc.collect()
         return layers
@@ -740,7 +795,7 @@ class Qwen3CoderModel:
         host = checkpoint.get("model.norm.weight").float().reshape(-1)
         tiled = ttnn.from_torch(
             host.reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
+            dtype=self.precision.norm_weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -750,7 +805,7 @@ class Qwen3CoderModel:
         # ``multichip_decoder.upload_multichip_weights.norm_row_major``.
         row_major = ttnn.from_torch(
             host.reshape(1, 1, host.numel() // 32, 32).contiguous(),
-            dtype=ttnn.bfloat16,
+            dtype=self.precision.norm_weight_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -763,7 +818,7 @@ class Qwen3CoderModel:
         assert tuple(host.shape) == (self.hidden_size, self.vocab_size), tuple(host.shape)
         tensor = ttnn.from_torch(
             host.reshape(1, 1, self.hidden_size, self.vocab_size),
-            dtype=LM_HEAD_WEIGHT_DTYPE,
+            dtype=self.precision.lm_head_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -873,7 +928,7 @@ class Qwen3CoderModel:
             k, v = (
                 ttnn.from_torch(
                     torch.zeros(total_blocks, local.num_key_value_heads, self.page_block_size, local.head_dim),
-                    dtype=ttnn.bfloat16,
+                    dtype=self.precision.kv_cache_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -917,7 +972,7 @@ class Qwen3CoderModel:
             self.embed_tokens,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=self.precision.activation_dtype,
         )
         hidden = ttnn.unsqueeze_to_4D(hidden)
         return ttnn.reshape(hidden, (1, 1, int(hidden.shape[-2]), self.hidden_size))
@@ -956,6 +1011,7 @@ class Qwen3CoderModel:
                 self.sparsity,
                 kv_cache=caches[layer_idx],
                 user_id=user_id,
+                precision=self.precision,
             )
         ttnn.deallocate(cos, True)
         ttnn.deallocate(sin, True)
@@ -1005,13 +1061,19 @@ class Qwen3CoderModel:
 
     def local_logits(self, normed: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, rows, 2048]`` -> this die's ``[1, 1, rows, 37984]`` logits."""
-        return ttnn.linear(
+        out = ttnn.linear(
             normed,
             self.lm_head,
             compute_kernel_config=self.lm_head_compute_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=self.precision.logits_dtype,
         )
+        # Observed, not asserted: the dtype the produced tensor actually carries.
+        # ``runtime_fallback_audit`` reports it so ``logits_dtype`` is verified
+        # off a real tensor rather than echoed back out of the config -- see the
+        # ``*_observed`` entries there.
+        self._observed_logits_dtype = out.dtype
+        return out
 
     def gather_logits_to_torch(self, local_logits: ttnn.Tensor, *, valid_rows: int | None = None) -> torch.Tensor:
         """Host-side full-vocabulary logits. **Not** on the token-out path.
@@ -1041,7 +1103,7 @@ class Qwen3CoderModel:
             self.embed_tokens,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=self.precision.activation_dtype,
         )
         hidden = ttnn.unsqueeze_to_4D(hidden)
         flat = ttnn.reshape(hidden, (1, 1, int(hidden.shape[-2]), self.hidden_size))
@@ -1078,6 +1140,7 @@ class Qwen3CoderModel:
                 current_pos,
                 0,  # token_index: unused by the rope seam below, see _rope_decode
                 rope=self._rope_decode,
+                precision=self.precision,
             )
         ttnn.deallocate(cos, True)
         ttnn.deallocate(sin, True)
@@ -1090,7 +1153,7 @@ class Qwen3CoderModel:
         it emits is exactly the width-sharded L1 config the projections read, so
         crossing into the head costs one sharded-to-interleaved.
         """
-        normed_sharded = decode_residual_norm(hidden, self.final_norm_rm, self.rms_norm_eps)
+        normed_sharded = decode_residual_norm(hidden, self.final_norm_rm, self.rms_norm_eps, self.precision)
         normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(normed_sharded, True)
         # ``ttnn.sampling`` addresses 32 fixed user slots, and it compares the
@@ -1110,6 +1173,13 @@ class Qwen3CoderModel:
             normed = padded
         logits = self.local_logits(normed)
         ttnn.deallocate(normed, True)
+        if self.precision.sampling_dtype != logits.dtype:
+            # Equal on the shipped path, so this is dead code at the default and
+            # the traced decode graph is byte-for-byte what stage 06 captured.
+            cast = ttnn.typecast(logits, self.precision.sampling_dtype)
+            ttnn.deallocate(logits, True)
+            logits = cast
+        self._observed_sampling_dtype = logits.dtype
         return logits
 
     def decode_forward_from_ttnn_inputs(
@@ -1195,7 +1265,7 @@ class Qwen3CoderModel:
     def runtime_fallback_audit(self, batch: int | None = None) -> dict:
         """The layer audit, plus the boundaries this wrapper owns."""
         batch = self.max_batch_size if batch is None else int(batch)
-        audit = fallback_audit(self.layers[0], self.config, batch)
+        audit = fallback_audit(self.layers[0], self.config, batch, self.precision)
         audit.update(
             {
                 "num_layers": self.num_layers,
@@ -1204,7 +1274,9 @@ class Qwen3CoderModel:
                 "final_norm": "replicated, width-sharded decode kernel",
                 "lm_head_parallelism": "column_parallel_over_vocab",
                 "lm_head_local_vocab": self.local_vocab_size,
-                "lm_head_weight_dtype": str(LM_HEAD_WEIGHT_DTYPE),
+                "lm_head_weight_dtype": str(self.lm_head.dtype),
+                "embedding_weight_dtype": str(self.embed_tokens.dtype),
+                "precision": self.precision.to_dict(),
                 "vocab_padding": 0,
                 "decode_rope": "rotary_embedding_hf(is_decode_mode=True), device position gather",
                 "decode_rope_position_source": "device tensor advanced by ttnn.plus_one inside the trace",
@@ -1216,7 +1288,46 @@ class Qwen3CoderModel:
                 "sampling_pad_to_power_of_2": False,
                 "host_logit_readback_on_token_out_path": False,
                 "host_argmax_on_token_out_path": False,
-                "kv_cache_dtype": "bfloat16",
+                # Read off the allocated cache when one exists, so a swept
+                # ``kv_cache_dtype`` is *observed* rather than asserted. This
+                # was a hard-coded "bfloat16" until stage 07's sweep, which
+                # would have silently mislabelled every non-default KV row.
+                # Falls back to the configured value before allocation.
+                # Emitted as the PLAIN name ("bfloat16"), not ``str(dtype)``
+                # ("DataType.BFLOAT16"), because that is the existing contract:
+                # doc/optimized_full_model's committed runtime_fallback_audit.json
+                # and check_published_figures.py both pin the plain spelling, and
+                # they are stage evidence that must keep passing. The sibling
+                # ``device_*`` fields use str(dtype) and are left alone.
+                "kv_cache_dtype": dtype_to_name(
+                    self.kv_cache[0].k.dtype if self.kv_cache else self.precision.kv_cache_dtype
+                ),
+                "kv_cache_dtype_source": "device_readback" if self.kv_cache else "config_not_yet_allocated",
+                # -- the four fields stage 07's selection proof could not check --
+                #
+                # Before the stage-07 review these were the only swept fields
+                # with no audit entry at all, so ``R03_lmhead_lofi``,
+                # ``R21_norm_hifi2`` and ``R22_logits_sampling_bfp8`` produced
+                # ``device_audit`` blocks byte-identical to the baseline's and
+                # "this lever does nothing" was indistinguishable from "this
+                # lever is not wired up". For ``norm_fidelity`` it was the
+                # second: ``decode_residual_norm`` built its compute config from
+                # the module default and never saw ``self.precision``.
+                #
+                # The two fidelities are read off the ``compute_kernel_config``
+                # objects the ops are actually handed (built here, passed at the
+                # call site), so they verify the config -> compute-config
+                # threading. The two dtypes are read off the **produced
+                # tensors** and are ``None`` until a forward has run.
+                "lm_head_math_fidelity": str(self.lm_head_compute_config.math_fidelity),
+                "norm_math_fidelity": str(self.norm_compute_config.math_fidelity),
+                "logits_dtype_observed": (
+                    None if self._observed_logits_dtype is None else dtype_to_name(self._observed_logits_dtype)
+                ),
+                "sampling_dtype_observed": (
+                    None if self._observed_sampling_dtype is None else dtype_to_name(self._observed_sampling_dtype)
+                ),
+                "terminal_dtype_source": ("device_readback" if self._observed_logits_dtype else "no_forward_yet"),
                 "kv_cache_paged": True,
                 "page_block_size": self.page_block_size,
                 "collective_topology": str(TOPOLOGY),

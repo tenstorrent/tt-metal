@@ -266,7 +266,19 @@ for name, log in (("prefill", "run_prefill_check.log"), ("decode", "run_teacher_
 
 # --- degeneracy, divergence and completions ----------------------------------
 
-meta_path = MODEL_DIR / "readiness_autoregressive" / "autoregressive_meta.json"
+# `readiness_autoregressive/autoregressive_meta.json` is a **shared, mutable**
+# artifact: every stage's `run_autoregressive` regenerates it in place. Stage 06
+# re-ran it and the free-running agreement moved 4/128 -> 2/128 (disclosed in
+# that stage's docs, and expected -- its adopted SDPA config is not bit-identical).
+# That silently invalidated this stage's published figure, because this checker
+# recomputes the count from the live file while the README correctly records what
+# stage 05 measured. Both were right; the coupling was wrong.
+#
+# So stage 05 now reads its **own archived copy**, taken from commit 8ea42a6b8ed.
+# A stage's evidence must not depend on a file a later stage rewrites.
+meta_path = DOC / "autoregressive_meta_at_stage05.json"
+if not meta_path.is_file():  # pragma: no cover - the archive is committed beside this file
+    meta_path = MODEL_DIR / "readiness_autoregressive" / "autoregressive_meta.json"
 if meta_path.is_file():
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     hf_ids, tt_ids = meta["hf"]["token_ids"], meta["tt"]["token_ids"]

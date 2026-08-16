@@ -1,0 +1,83 @@
+# cmd: python models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/probes/repeats.py --ids R00_default,R25_gateup64_down24 --n 3
+# git: 6855f7e372e + uncommitted stage-07 sweep
+# date: 2026-08-16T07:11:48+00:00
+# hw: 1x4 Blackhole P300_X2, FABRIC_1D_RING
+# purpose: measure the run-to-run band on the ranking metric so the frontier is not drawn through noise
+2026-08-16 07:11:49.949 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+R00_default repeat 1/3
+  -> 42.34 t/s/u  top1=0.99
+R00_default repeat 2/3
+  -> 42.41 t/s/u  top1=0.99
+R00_default repeat 3/3
+  -> 42.34 t/s/u  top1=0.99
+R25_gateup64_down24 repeat 1/3
+  -> 43.46 t/s/u  top1=0.99
+R25_gateup64_down24 repeat 2/3
+  -> 43.38 t/s/u  top1=0.99
+R25_gateup64_down24 repeat 3/3
+  -> 43.54 t/s/u  top1=0.99
+{
+  "R00_default": {
+    "config_id": "R00_default",
+    "n": 3,
+    "decode_min": 42.34,
+    "decode_max": 42.41,
+    "decode_median": 42.34,
+    "decode_mean": 42.3633,
+    "decode_spread_abs": 0.07,
+    "decode_spread_pct": 0.1652,
+    "top1_values": [
+      0.99,
+      0.99,
+      0.99
+    ],
+    "top1_stable": true,
+    "decode_stdev": 0.0404
+  },
+  "R25_gateup64_down24": {
+    "config_id": "R25_gateup64_down24",
+    "n": 3,
+    "decode_min": 43.38,
+    "decode_max": 43.54,
+    "decode_median": 43.46,
+    "decode_mean": 43.46,
+    "decode_spread_abs": 0.16,
+    "decode_spread_pct": 0.3682,
+    "top1_values": [
+      0.99,
+      0.99,
+      0.99
+    ],
+    "top1_stable": true,
+    "decode_stdev": 0.08
+  }
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x7c4f53d8c5e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

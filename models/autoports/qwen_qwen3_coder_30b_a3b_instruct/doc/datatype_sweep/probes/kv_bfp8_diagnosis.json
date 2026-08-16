@@ -1,0 +1,51 @@
+[
+  {
+    "op": "paged_fill_cache",
+    "cache_dtype": "DataType.BFLOAT16",
+    "input_dtype": "DataType.BFLOAT16",
+    "pcc_vs_input": 1.0,
+    "pcc_vs_input_is_nan": false,
+    "status": "ok"
+  },
+  {
+    "op": "paged_update_cache",
+    "cache_dtype": "DataType.BFLOAT16",
+    "input_dtype": "DataType.BFLOAT16",
+    "pcc_vs_input": 1.0,
+    "pcc_vs_input_is_nan": false,
+    "wrote_nan": false,
+    "status": "ok"
+  },
+  {
+    "op": "paged_fill_cache",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "input_dtype": "DataType.BFLOAT16",
+    "pcc_vs_input": null,
+    "pcc_vs_input_is_nan": true,
+    "status": "ok"
+  },
+  {
+    "op": "paged_update_cache",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "input_dtype": "DataType.BFLOAT16",
+    "pcc_vs_input": 0.999969,
+    "pcc_vs_input_is_nan": false,
+    "wrote_nan": false,
+    "status": "ok"
+  },
+  {
+    "op": "paged_fill_cache",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "input_dtype": "DataType.BFLOAT8_B",
+    "pcc_vs_input": 1.0,
+    "pcc_vs_input_is_nan": false,
+    "status": "ok"
+  },
+  {
+    "op": "paged_update_cache",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "input_dtype": "DataType.BFLOAT8_B",
+    "status": "error",
+    "error": "RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_device_operation.cpp:296: input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16\\ninfo:\\nData type of input tensor for update cache must be FLOAT32 or BFLOAT16\\nbacktrace:\\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstr"
+  }
+]

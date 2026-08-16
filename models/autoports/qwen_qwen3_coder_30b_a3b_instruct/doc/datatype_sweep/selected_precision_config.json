@@ -1,0 +1,22 @@
+{
+  "activation_dtype": "bfloat16",
+  "attention_fidelity": null,
+  "attention_qkv_dtype": "bfloat8_b",
+  "attention_wo_dtype": "bfloat8_b",
+  "ccl_dtype": null,
+  "embedding_dtype": "bfloat16",
+  "experts_down_dtype": "bfloat4_b",
+  "experts_down_in0_block_w": 24,
+  "experts_fidelity": "LoFi",
+  "experts_gate_up_dtype": "bfloat4_b",
+  "experts_gate_up_in0_block_w": 64,
+  "kv_cache_dtype": "bfloat16",
+  "lm_head_dtype": "bfloat8_b",
+  "lm_head_fidelity": "HiFi2",
+  "logits_dtype": "bfloat16",
+  "norm_fidelity": "HiFi4",
+  "norm_weight_dtype": "bfloat16",
+  "router_dtype": "bfloat16",
+  "router_window_fidelity": "HiFi4",
+  "sampling_dtype": "bfloat16"
+}

@@ -1,0 +1,38 @@
+{
+  "selected": "R25_gateup64_down24",
+  "selection_rule": "gate(top5>=0.98, top100==1.0) AND top1 >= 0.980 AND decode gain > 0.368% (measured run-to-run band); among the eligible, rows within 0.368% of the fastest are tied and the tie breaks on the simpler and safer config (fewest dtype/fidelity fields moved off the default), then top-1, then decode, then TTFT",
+  "noise_band_pct": 0.3682,
+  "top1_floor_points": 0.01,
+  "baseline_top1": 0.99,
+  "eligible": [
+    "R06_attn_bfp4",
+    "R09_gateup_bw32",
+    "R11_down_bw24",
+    "R15_down_bfp8_only",
+    "R23_gateup_bw64",
+    "R24_gateup32_down24",
+    "R25_gateup64_down24",
+    "R26_attn_bfp4_bw64_24",
+    "R28_kv_bfp8_bw64_24",
+    "R27_attn_bfp4_lofi_bw64_24"
+  ],
+  "rejected": {
+    "R01_lmhead_bfp4": "+0.12% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R02_lmhead_bfp4_lofi": "slower than the default by 0.38%, beyond the +/-0.37% run-to-run band -- a real regression",
+    "R03_lmhead_lofi": "+0.17% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R04_qkv_bfp4": "clears the formal gate but costs 0.030 top-1 (floor is 0.010) for +0.33% decode",
+    "R05_wo_bfp4": "+0.21% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R07_attn_bfp4_lofi": "+0.21% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R08_attn_lofi": "-0.05% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R10_gateup_bw8": "slower than the default by 2.38%, beyond the +/-0.37% run-to-run band -- a real regression",
+    "R12_down_bw6": "slower than the default by 1.58%, beyond the +/-0.37% run-to-run band -- a real regression",
+    "R13_experts_bfp8_cotuned": "+0.09% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R14_gateup_bfp8_only": "slower than the default by 1.27%, beyond the +/-0.37% run-to-run band -- a real regression",
+    "R16_ccl_bfp8": "slower than the default by 2.06%, beyond the +/-0.37% run-to-run band -- a real regression",
+    "R22_logits_sampling_bfp8": "-0.31% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R19_kv_bfp8": "-0.12% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R21_norm_hifi2": "+0.24% decode is inside the measured +/-0.37% run-to-run band -- indistinguishable from the default",
+    "R26_attn_bfp4_bw64_24": "eligible, and the closest thing to a rival the sweep produced: it leads the selected R25_gateup64_down24 by 0.09% (43.58 vs 43.54 t/s/u), which is inside the 0.37% run-to-run band -- so the two are tied on the ranking metric. The tie breaks on the simpler and safer config: it moves 2 dtype/fidelity field(s) off the default (attention_qkv_dtype, attention_wo_dtype) against 0 for R25_gateup64_down24. Top-1 agrees as the secondary ordering, 0.980 against 0.990",
+    "R28_kv_bfp8_bw64_24": "eligible, and the closest thing to a rival the sweep produced: it trails the selected R25_gateup64_down24 by 0.21% (43.45 vs 43.54 t/s/u), which is inside the 0.37% run-to-run band -- so the two are tied on the ranking metric. The tie breaks on the simpler and safer config: it moves 1 dtype/fidelity field(s) off the default (kv_cache_dtype) against 0 for R25_gateup64_down24. Top-1 agrees as the secondary ordering, 0.980 against 0.990"
+  }
+}

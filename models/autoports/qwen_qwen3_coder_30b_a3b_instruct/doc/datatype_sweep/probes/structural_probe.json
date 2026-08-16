@@ -1,0 +1,1329 @@
+[
+  {
+    "config_id": "R00_default",
+    "group": "baseline",
+    "delta": "default (shipped stage-06 policy)",
+    "why": "The shipped stage-06 policy, re-measured in this sweep's own session so every other row is compared against a number taken on the same tree and the same silicon rather than against a quoted one.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R01_lmhead_bfp4",
+    "group": "lm_head",
+    "delta": "lm_head_dtype=bfloat4_b",
+    "why": "The LM head is 2048x37984 per die and is read in full for every decode token; bfloat8_b -> bfloat4_b halves that read. Biggest single decode lever the sweep has. Fidelity left at the shipped HiFi2 so this row isolates the dtype.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT4_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R02_lmhead_bfp4_lofi",
+    "group": "lm_head",
+    "delta": "lm_head_dtype=bfloat4_b, lm_head_fidelity=LoFi",
+    "why": "REQUIRED BFP4+LoFi pair for R01. Four mantissa bits leave HiFi2 nothing to resolve, so if stage 02's finding generalises this is free accuracy-wise and cheaper in cycles.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT4_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.LoFi",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R03_lmhead_lofi",
+    "group": "lm_head",
+    "delta": "lm_head_fidelity=LoFi",
+    "why": "Control for R02: LoFi at the *shipped* bfloat8_b. Separates 'LoFi is free' from 'bfp4 is free' in R02, exactly as R08 does for attention.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.LoFi",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R04_qkv_bfp4",
+    "group": "attention",
+    "delta": "attention_qkv_dtype=bfloat4_b",
+    "why": "qkv alone to bfloat4_b. Separate from wo because wo's output feeds the attention all-reduce directly and is the more sensitive of the two.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT4_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT4_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R05_wo_bfp4",
+    "group": "attention",
+    "delta": "attention_wo_dtype=bfloat4_b",
+    "why": "wo alone to bfloat4_b, to price the sensitive half apart from qkv.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R06_attn_bfp4",
+    "group": "attention",
+    "delta": "attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b",
+    "why": "Both attention projections to bfloat4_b: the full attention-weight lever, 48 layers of it.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT4_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT4_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R07_attn_bfp4_lofi",
+    "group": "attention",
+    "delta": "attention_fidelity=LoFi, attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b",
+    "why": "REQUIRED BFP4+LoFi pair for R06.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT4_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT4_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": "MathFidelity.LoFi",
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R08_attn_lofi",
+    "group": "attention",
+    "delta": "attention_fidelity=LoFi",
+    "why": "Control row for R07 and the first non-None attention_fidelity the model has ever run. attention_fidelity defaults to None ('the op picks'), so R07 is uninterpretable without this: it is the only thing that says whether a delta belongs to the dtype or to leaving the op default.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": "MathFidelity.LoFi",
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R09_gateup_bw32",
+    "group": "experts",
+    "delta": "experts_gate_up_in0_block_w=32",
+    "why": "Co-tuning check. EXPERT_IN0_BLOCK_W_GATE_UP's own comment records 16 winning at LoFi and 32 at HiFi4; this re-measures that on the shipped bfp4+LoFi at 48 layers rather than trusting the comment. 32 divides K (2048/32 = 64 tiles) so it will not be clamped.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 32,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      32,
+      12
+    ],
+    "block_width_resolved": [
+      32,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R10_gateup_bw8",
+    "group": "experts",
+    "delta": "experts_gate_up_in0_block_w=8",
+    "why": "The other side of the gate_up width optimum, so R09/R00/R10 bracket it rather than testing one direction.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 8,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      8,
+      12
+    ],
+    "block_width_resolved": [
+      8,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R11_down_bw24",
+    "group": "experts",
+    "delta": "experts_down_in0_block_w=24",
+    "why": "down's width bracket, upper side. 24 divides down's K in tiles; 12 ships.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      24
+    ],
+    "block_width_resolved": [
+      16,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R12_down_bw6",
+    "group": "experts",
+    "delta": "experts_down_in0_block_w=6",
+    "why": "down's width bracket, lower side.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 6,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      6
+    ],
+    "block_width_resolved": [
+      16,
+      6
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R13_experts_bfp8_cotuned",
+    "group": "experts",
+    "delta": "experts_down_dtype=bfloat8_b, experts_down_in0_block_w=24, experts_gate_up_dtype=bfloat8_b, experts_gate_up_in0_block_w=32",
+    "why": "Reverse direction: experts back up to bfloat8_b, WITH the block widths that dtype wants (32/24) rather than bfloat4_b's. This is the row that prices the shipped bfp4 expert choice -- it should buy top-1 and cost t/s/u, and if it did not, the shipped default would be wrong. Co-tuned because stage 02 proved sweeping dtype at an untuned width finds the wrong optimum.",
+    "tokens": [
+      3601,
+      100146,
+      30248,
+      99299
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT8_B",
+      "device_experts_down_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 160432128,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 32,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      32,
+      24
+    ],
+    "block_width_resolved": [
+      32,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R14_gateup_bfp8_only",
+    "group": "experts",
+    "delta": "experts_gate_up_dtype=bfloat8_b, experts_gate_up_in0_block_w=32",
+    "why": "gate_up alone to bfloat8_b, down left at bfp4. The two expert groups are separate fields precisely so the sweep can price them apart; down feeds the residual directly and is the likelier of the two to want precision.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT8_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 135266304,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 32,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      32,
+      12
+    ],
+    "block_width_resolved": [
+      32,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R15_down_bfp8_only",
+    "group": "experts",
+    "delta": "experts_down_dtype=bfloat8_b, experts_down_in0_block_w=24",
+    "why": "down alone to bfloat8_b -- the sensitive half -- at down's co-tuned width.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 110100480,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      24
+    ],
+    "block_width_resolved": [
+      16,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R16_ccl_bfp8",
+    "group": "ccl",
+    "delta": "ccl_dtype=bfloat8_b",
+    "why": "Halve the reduce-scatter/all-gather payload, twice per layer for 48 layers. Costs a cast in and out; the question is whether the wire saving beats the cast at batch 1. NOTE: ccl_dtype allocates a second persistent CCL buffer set (the cache keys on dtype), so this value gets its own process -- which it does anyway, one runner invocation per row.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R17_act_bfp8",
+    "group": "activation",
+    "delta": "activation_dtype=bfloat8_b",
+    "why": "Activations and the inter-layer residual to bfloat8_b. Small bytes at batch 1, but it changes the input dtype of every matmul in the model, so it is the row most likely to move accuracy for no speed.",
+    "status": "error",
+    "error": "RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16\\ninfo:\\nUnsupported data format\\nbacktrace:\\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\\n --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)\\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x77bf34de5c43]\\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x77bf34de5618]\\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x84688f) [0x77bf35c4688f]\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\\n --- python() [0x1ac48b8]\\n --- python() [0x189b92e]\\n --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]\\n --- python() [0x1ac48b8]\\n --- python() [0x189b92e]\\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\\n --- python() [0x18b1949]\\n --- python() [0x19fc785]\\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\\n --- python() [0x19fc278]\\n --- python() [0x19fc171]\\n --- python() [0x1ae94a3]\\n --- python() [0x1979298]\\n --- python() [0x19790ac]\\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\\n --- python(_start+0x29) [0x19c1ea9]\\n')",
+    "traceback": "nWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x77bf34de5c43]\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x77bf34de5618]\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x84688f) [0x77bf35c4688f]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\n --- python() [0x18b1949]\n --- python() [0x19fc785]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\n --- python() [0x19fc278]\n --- python() [0x19fc171]\n --- python() [0x1ae94a3]\n --- python() [0x1979298]\n --- python() [0x19790ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\n --- python(_start+0x29) [0x19c1ea9]\n\n"
+  },
+  {
+    "config_id": "R18_act_ccl_bfp8",
+    "group": "activation",
+    "delta": "activation_dtype=bfloat8_b, ccl_dtype=bfloat8_b",
+    "why": "Both together: with activations already bfloat8_b the CCL cast becomes a no-op (effective_ccl_dtype inherits), so this prices the wire saving without the cast that R16 pays.",
+    "status": "error",
+    "error": "RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16\\ninfo:\\nUnsupported data format\\nbacktrace:\\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\\n --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)\\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x77bf34de5c43]\\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x77bf34de5618]\\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x84688f) [0x77bf35c4688f]\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\\n --- python() [0x1ac48b8]\\n --- python() [0x189b92e]\\n --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]\\n --- python() [0x1ac48b8]\\n --- python() [0x189b92e]\\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\\n --- python() [0x18b1949]\\n --- python() [0x19fc785]\\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\\n --- python() [0x19fc278]\\n --- python() [0x19fc171]\\n --- python() [0x1ae94a3]\\n --- python() [0x1979298]\\n --- python() [0x19790ac]\\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\\n --- python(_start+0x29) [0x19c1ea9]\\n')",
+    "traceback": "nWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x77bf34de5c43]\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x77bf34de5618]\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x84688f) [0x77bf35c4688f]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\n --- python() [0x18b1949]\n --- python() [0x19fc785]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\n --- python() [0x19fc278]\n --- python() [0x19fc171]\n --- python() [0x1ae94a3]\n --- python() [0x1979298]\n --- python() [0x19790ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\n --- python(_start+0x29) [0x19c1ea9]\n\n"
+  },
+  {
+    "config_id": "R19_kv_bfp8",
+    "group": "kv_cache",
+    "delta": "kv_cache_dtype=bfloat8_b",
+    "why": "Halves KV bytes per token per layer per die (512 -> 256 B). At the gate's 158-token prompt this is nearly invisible, but it is the one row that could move the CONTEXT CONTRACT -- and it moves it upward (more capacity per byte), so it cannot reduce advertised capability. Measured so the contract question is answered with a number.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat8_b",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R20_embed_bfp8",
+    "group": "embedding",
+    "delta": "embedding_dtype=bfloat8_b",
+    "why": "The embedding table is a gather, not a matmul: one row read per token. Expected flat on t/s/u and near-flat on accuracy. Here so the report can say the group was evaluated rather than assumed.",
+    "status": "error",
+    "error": "RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/core/tensor/py_to_tt_tensor.cpp:399: layout == Layout::TILE\\ninfo:\\nLayout must be Layout::TILE for bfloat8_b or bfloat4_b!\\nbacktrace:\\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn34convert_python_tensor_to_tt_tensorERKN2tt8tt_metal5ShapeENS1_8DataTypeENS1_6LayoutERKSt8optionalINS1_4TileEERKNS1_12MemoryConfigENS_7PyDTypeERKSt8functionIFNS1_10HostBufferES5_EES7_IPNS1_11distributed10MeshDeviceEES7_IN4ttsl10StrongTypeIhNS_10QueueIdTagEEEEPKNS_11distributed12TensorToMeshES7_IfEbbb+0x1007) [0x77bf34d61047]\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x417ef8) [0x77bf35817ef8]\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x417b45) [0x77bf35817b45]\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x366265) [0x77bf35766265]\\n --- python(_PyEval_EvalFrameDefault+0x3271) [0x1816031]\\n --- python() [0x1ac48b8]\\n --- python() [0x189b92e]\\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\\n --- python() [0x1891a4f]\\n --- python() [0x180256d]\\n --- python(_PyEval_EvalFrameDefault+0x3075) [0x1815e35]\\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\\n --- python() [0x18b1949]\\n --- python() [0x19fc785]\\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\\n --- python() [0x19fc278]\\n --- python() [0x19fc171]\\n --- python() [0x1ae94a3]\\n --- python() [0x1979298]\\n --- python() [0x19790ac]\\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\\n --- python(_start+0x29) [0x19c1ea9]\\n')",
+    "traceback": "rgs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/raahem/tt-metal/ttnn/ttnn/operations/core.py\", line 352, in from_torch\n    return ttnn.Tensor(\n           ^^^^^^^^^^^^\nRuntimeError: TT_FATAL @ /home/raahem/tt-metal/ttnn/core/tensor/py_to_tt_tensor.cpp:399: layout == Layout::TILE\ninfo:\nLayout must be Layout::TILE for bfloat8_b or bfloat4_b!\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn34convert_python_tensor_to_tt_tensorERKN2tt8tt_metal5ShapeENS1_8DataTypeENS1_6LayoutERKSt8optionalINS1_4TileEERKNS1_12MemoryConfigENS_7PyDTypeERKSt8functionIFNS1_10HostBufferES5_EES7_IPNS1_11distributed10MeshDeviceEES7_IN4ttsl10StrongTypeIhNS_10QueueIdTagEEEEPKNS_11distributed12TensorToMeshES7_IfEbbb+0x1007) [0x77bf34d61047]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x417ef8) [0x77bf35817ef8]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x417b45) [0x77bf35817b45]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x366265) [0x77bf35766265]\n --- python(_PyEval_EvalFrameDefault+0x3271) [0x1816031]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\n --- python() [0x1891a4f]\n --- python() [0x180256d]\n --- python(_PyEval_EvalFrameDefault+0x3075) [0x1815e35]\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\n --- python() [0x18b1949]\n --- python() [0x19fc785]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\n --- python() [0x19fc278]\n --- python() [0x19fc171]\n --- python() [0x1ae94a3]\n --- python() [0x1979298]\n --- python() [0x19790ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\n --- python(_start+0x29) [0x19c1ea9]\n\n"
+  },
+  {
+    "config_id": "R21_norm_hifi2",
+    "group": "norm",
+    "delta": "norm_fidelity=HiFi2",
+    "why": "RMSNorm at HiFi2 instead of HiFi4. Norm weights are 4 KB; this is a fidelity-only row on a reduction, expected flat.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi2",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R22_logits_sampling_bfp8",
+    "group": "terminal",
+    "delta": "logits_dtype=bfloat8_b, sampling_dtype=bfloat8_b",
+    "why": "The terminal path: logits and the sampler's input to bfloat8_b. Touches one 37984-wide tensor per token per die. Included because the goal enumerates logits/sampling dtype as part of the selected config, so it needs a measured row rather than an inherited default.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 16,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat8_b",
+      "sampling_dtype_observed": "bfloat8_b",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      16,
+      12
+    ],
+    "block_width_resolved": [
+      16,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R23_gateup_bw64",
+    "group": "stacked",
+    "delta": "experts_gate_up_in0_block_w=64",
+    "why": "gate_up at full-K (64 tiles), the top of its legal bracket. The 8/16/32 bracket was monotonic upward so the optimum may be here -- but this is also the width most likely to fail quietly: it is 4x the shipped block and 2x the winner, so it is the row where L1 pressure would first bite. _tuned_sparse_matmul_config clamps only on divisibility (k_tiles % blk), never on L1 capacity, so it CANNOT silently rescue an oversized block -- which means a slowdown here is a real spill and not an invalid config. The resolved width is read back from fallback_audit regardless.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 64,
+      "down_in0_block_w": 12,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      64,
+      12
+    ],
+    "block_width_resolved": [
+      64,
+      12
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R24_gateup32_down24",
+    "group": "stacked",
+    "delta": "experts_down_in0_block_w=24, experts_gate_up_in0_block_w=32",
+    "why": "The combined block-width winner: gate_up 32 with down at its full-K 24. Measured rather than inferred -- stage 02 proved these interact, so the two individual gains are not assumed to add.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 32,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      32,
+      24
+    ],
+    "block_width_resolved": [
+      32,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R25_gateup64_down24",
+    "group": "stacked",
+    "delta": "experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64",
+    "why": "The same combination at gate_up's full-K, so the stacked row is measured at both of the top two gate_up widths rather than only at whichever won alone.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 64,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      64,
+      24
+    ],
+    "block_width_resolved": [
+      64,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R26_attn_bfp4_bw64_24",
+    "group": "stacked",
+    "delta": "attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b, experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64",
+    "why": "R06 composed with R25: qkv+wo at bfloat4_b on top of the two full-K expert block widths. R06 and R25 are orthogonal (attention projection weights vs expert matmul scheduling), so if the attention dtype gain survives on top of the width gain this is the fastest config the sweep can build. Measured rather than inferred, for the same reason R25 itself was measured rather than summed from R23 and R11. The verdict may turn on top-1: R06 sits exactly on the 0.980 floor and this reference resolves top-1 to +/-0.01, so one token decides whether this row is eligible at all.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT4_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT4_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 64,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      64,
+      24
+    ],
+    "block_width_resolved": [
+      64,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R27_attn_bfp4_lofi_bw64_24",
+    "group": "stacked",
+    "delta": "attention_fidelity=LoFi, attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b, experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64",
+    "why": "REQUIRED BFP4+LoFi pair for R26 -- the same obligation R07 discharges for R06, re-run at the selected block widths so the pair is measured in the regime the stacked row is judged in.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT4_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT4_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat16",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 64,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": "MathFidelity.LoFi",
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      64,
+      24
+    ],
+    "block_width_resolved": [
+      64,
+      24
+    ],
+    "block_width_clamped": false
+  },
+  {
+    "config_id": "R28_kv_bfp8_bw64_24",
+    "group": "stacked",
+    "delta": "experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64, kv_cache_dtype=bfloat8_b",
+    "why": "bfloat8_b KV on top of the selected block widths, measured after the prefill cache writer was taught to cast K/V to the cache dtype (tt/functional_decoder.match_cache_dtype). R19 answers 'what does bfp8 KV cost against the stage-06 baseline'; this row answers the question the context contract actually needs -- 'what does it cost against the config we ship'. Same accuracy regime, so the KV capacity lever can be priced against the shipped model rather than against a config nobody runs.",
+    "tokens": [
+      3601,
+      100146,
+      4807,
+      25564
+    ],
+    "audit": {
+      "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+      "device_experts_down_dtype": "DataType.BFLOAT4_B",
+      "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+      "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+      "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+      "device_router_dtype": "DataType.BFLOAT16",
+      "device_norm_weight_dtype": "DataType.BFLOAT16",
+      "device_expert_bytes_per_die": 84934656,
+      "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+      "embedding_weight_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "bfloat8_b",
+      "kv_cache_dtype_source": "config_not_yet_allocated",
+      "gate_up_in0_block_w": 64,
+      "down_in0_block_w": 24,
+      "expert_math_fidelity": "MathFidelity.LoFi",
+      "attention_math_fidelity": null,
+      "router_window_math_fidelity": "MathFidelity.HiFi4",
+      "ccl_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT16",
+      "lm_head_math_fidelity": "MathFidelity.HiFi2",
+      "norm_math_fidelity": "MathFidelity.HiFi4",
+      "logits_dtype_observed": "bfloat16",
+      "sampling_dtype_observed": "bfloat16",
+      "dram_sharded_taken": true,
+      "expert_intermediate_buffer": "L1",
+      "norm_shard_feeds_qkv_directly": true
+    },
+    "status": "ok",
+    "block_width_requested": [
+      64,
+      24
+    ],
+    "block_width_resolved": [
+      64,
+      24
+    ],
+    "block_width_clamped": false
+  }
+]

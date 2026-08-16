@@ -1,0 +1,83 @@
+# cmd: python models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/probes/sweep_runner.py
+# git: 6855f7e372e + uncommitted stage-07 sweep
+# date: 2026-08-16T06:02:15+00:00
+# hw: 1x4 Blackhole P300_X2, FABRIC_1D_RING
+# regime: TIER B -- full 48-layer traced teacher forcing, one subprocess per row
+2026-08-16 06:02:16.289 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1/23] R00_default :: default (shipped stage-06 policy)
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.34 t/s/u ttft=3250.9 ms pass=True  (172.6s)
+[2/23] R01_lmhead_bfp4 :: lm_head_dtype=bfloat4_b
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.39 t/s/u ttft=3471.96 ms pass=True  (173.9s)
+[3/23] R02_lmhead_bfp4_lofi :: lm_head_dtype=bfloat4_b, lm_head_fidelity=LoFi
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.18 t/s/u ttft=3474.96 ms pass=True  (175.0s)
+[4/23] R03_lmhead_lofi :: lm_head_fidelity=LoFi
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.41 t/s/u ttft=3358.9 ms pass=True  (175.9s)
+[5/23] R04_qkv_bfp4 :: attention_qkv_dtype=bfloat4_b
+    -> top1=0.960 top5=1.000 top100=1.000 decode=42.48 t/s/u ttft=3871.14 ms pass=True  (176.3s)
+[6/23] R05_wo_bfp4 :: attention_wo_dtype=bfloat4_b
+    -> top1=1.000 top5=1.000 top100=1.000 decode=42.43 t/s/u ttft=3704.81 ms pass=True  (176.8s)
+[7/23] R06_attn_bfp4 :: attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b
+    -> top1=0.980 top5=1.000 top100=1.000 decode=42.53 t/s/u ttft=3372.89 ms pass=True  (178.4s)
+[8/23] R07_attn_bfp4_lofi :: attention_fidelity=LoFi, attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b
+    -> top1=0.980 top5=1.000 top100=1.000 decode=42.43 t/s/u ttft=4159.14 ms pass=True  (177.0s)
+[9/23] R08_attn_lofi :: attention_fidelity=LoFi
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.32 t/s/u ttft=4019.31 ms pass=True  (180.4s)
+[10/23] R09_gateup_bw32 :: experts_gate_up_in0_block_w=32
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.94 t/s/u ttft=3541.73 ms pass=True  (176.1s)
+[11/23] R10_gateup_bw8 :: experts_gate_up_in0_block_w=8
+    -> top1=0.990 top5=1.000 top100=1.000 decode=41.33 t/s/u ttft=3519.11 ms pass=True  (176.8s)
+[12/23] R11_down_bw24 :: experts_down_in0_block_w=24
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.99 t/s/u ttft=3479.04 ms pass=True  (177.3s)
+[13/23] R12_down_bw6 :: experts_down_in0_block_w=6
+    -> top1=0.990 top5=1.000 top100=1.000 decode=41.67 t/s/u ttft=3419.2 ms pass=True  (179.5s)
+[14/23] R13_experts_bfp8_cotuned :: experts_down_dtype=bfloat8_b, experts_down_in0_block_w=24, experts_gate_up_dtype=bfloat8_b, experts_gate_up_in0_block_w=32
+    -> top1=1.000 top5=1.000 top100=1.000 decode=42.38 t/s/u ttft=3360.65 ms pass=True  (177.8s)
+[15/23] R14_gateup_bfp8_only :: experts_gate_up_dtype=bfloat8_b, experts_gate_up_in0_block_w=32
+    -> top1=1.000 top5=1.000 top100=1.000 decode=41.8 t/s/u ttft=3306.45 ms pass=True  (177.4s)
+[16/23] R15_down_bfp8_only :: experts_down_dtype=bfloat8_b, experts_down_in0_block_w=24
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.62 t/s/u ttft=3576.81 ms pass=True  (180.2s)
+[17/23] R16_ccl_bfp8 :: ccl_dtype=bfloat8_b
+    -> top1=0.980 top5=1.000 top100=1.000 decode=41.47 t/s/u ttft=5730.85 ms pass=True  (175.7s)
+[18/23] R17_act_bfp8 :: activation_dtype=bfloat8_b
+    -> BLOCKED (tier A): paged_fill_cache_device_operation.cpp:36
+[19/23] R18_act_ccl_bfp8 :: activation_dtype=bfloat8_b, ccl_dtype=bfloat8_b
+    -> BLOCKED (tier A): paged_fill_cache_device_operation.cpp:36
+[20/23] R19_kv_bfp8 :: kv_cache_dtype=bfloat8_b
+    -> top1=0.010 top5=0.010 top100=0.010 decode=28.86 t/s/u ttft=8107.86 ms pass=False  (182.0s)
+[21/23] R20_embed_bfp8 :: embedding_dtype=bfloat8_b
+    -> BLOCKED (tier A): py_to_tt_tensor.cpp:399
+[22/23] R21_norm_hifi2 :: norm_fidelity=HiFi2
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.49 t/s/u ttft=3339.68 ms pass=True  (178.8s)
+[23/23] R22_logits_sampling_bfp8 :: logits_dtype=bfloat8_b, sampling_dtype=bfloat8_b
+    -> top1=0.990 top5=1.000 top100=1.000 decode=42.21 t/s/u ttft=3368.72 ms pass=True  (176.4s)
+
+23 rows in /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/sweep_results.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x73b47d4eb138 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function "create_descriptor"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "empty"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "create_output_tensors"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

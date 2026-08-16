@@ -1,0 +1,123 @@
+# cmd: python models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/probes/structural_probe.py --layers 2
+# git: 6855f7e372e + uncommitted stage-07 sweep + review fixes
+# date: 2026-08-16T09:46:59+00:00
+# hw: 1x4 Blackhole P300_X2, FABRIC_1D_RING
+2026-08-16 09:47:00.422 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-16 09:47:02.285 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-16 09:47:02.285 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-16 09:47:02.286 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-16 09:47:02.286 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-16 09:47:02.297 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-16 09:47:02.297 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-16 09:47:02.375 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-16 09:47:02.375 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-16 09:47:02.375 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-16 09:47:02.375 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-16 09:47:02.376 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-16 09:47:02.519 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-16 09:47:02.632 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-16 09:47:02.632 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-16 09:47:02.632 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-16 09:47:02.632 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-16 09:47:02.633 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-16 09:47:02.675 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-16 09:47:02.704 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-16 09:47:02.704 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+[1/29] R00_default :: default (shipped stage-06 policy)
+    -> ok  clamped=False
+[2/29] R01_lmhead_bfp4 :: lm_head_dtype=bfloat4_b
+    -> ok  clamped=False
+[3/29] R02_lmhead_bfp4_lofi :: lm_head_dtype=bfloat4_b, lm_head_fidelity=LoFi
+    -> ok  clamped=False
+[4/29] R03_lmhead_lofi :: lm_head_fidelity=LoFi
+    -> ok  clamped=False
+[5/29] R04_qkv_bfp4 :: attention_qkv_dtype=bfloat4_b
+    -> ok  clamped=False
+[6/29] R05_wo_bfp4 :: attention_wo_dtype=bfloat4_b
+    -> ok  clamped=False
+[7/29] R06_attn_bfp4 :: attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b
+    -> ok  clamped=False
+[8/29] R07_attn_bfp4_lofi :: attention_fidelity=LoFi, attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b
+    -> ok  clamped=False
+[9/29] R08_attn_lofi :: attention_fidelity=LoFi
+    -> ok  clamped=False
+[10/29] R09_gateup_bw32 :: experts_gate_up_in0_block_w=32
+    -> ok  clamped=False
+[11/29] R10_gateup_bw8 :: experts_gate_up_in0_block_w=8
+    -> ok  clamped=False
+[12/29] R11_down_bw24 :: experts_down_in0_block_w=24
+    -> ok  clamped=False
+[13/29] R12_down_bw6 :: experts_down_in0_block_w=6
+    -> ok  clamped=False
+[14/29] R13_experts_bfp8_cotuned :: experts_down_dtype=bfloat8_b, experts_down_in0_block_w=24, experts_gate_up_dtype=bfloat8_b, experts_gate_up_in0_block_w=32
+    -> ok  clamped=False
+[15/29] R14_gateup_bfp8_only :: experts_gate_up_dtype=bfloat8_b, experts_gate_up_in0_block_w=32
+    -> ok  clamped=False
+[16/29] R15_down_bfp8_only :: experts_down_dtype=bfloat8_b, experts_down_in0_block_w=24
+    -> ok  clamped=False
+[17/29] R16_ccl_bfp8 :: ccl_dtype=bfloat8_b
+    -> ok  clamped=False
+[18/29] R17_act_bfp8 :: activation_dtype=bfloat8_b
+2026-08-16 09:49:56.881 | critical |          Always | TT_FATAL: Unsupported data format (assert.hpp:104)
+    -> error  RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16\ninfo:\nUnsupported data format\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\n --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x77bf34de5c43]\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x77bf34de5618]\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x84688f) [0x77bf35c4688f]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\n --- python() [0x18b1949]\n --- python() [0x19fc785]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\n --- python() [0x19fc278]\n --- python() [0x19fc171]\n --- python() [0x1ae94a3]\n --- python() [0x1979298]\n --- python() [0x19790ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\n --- python(_start+0x29) [0x19c1ea9]\n')
+[19/29] R18_act_ccl_bfp8 :: activation_dtype=bfloat8_b, ccl_dtype=bfloat8_b
+2026-08-16 09:50:06.478 | critical |          Always | TT_FATAL: Unsupported data format (assert.hpp:104)
+    -> error  RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:41: input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16\ninfo:\nUnsupported data format\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\n --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d3) [0x77bf34de5c43]\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x398) [0x77bf34de5618]\n --- ttnn::prim::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)\n --- ttnn::experimental::nlp_create_qkv_heads_decode(ttnn::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<ttnn::Tensor, 3ul> >&, std::optional<bool const>, std::optional<ttnn::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x84688f) [0x77bf35c4688f]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\n --- python() [0x18b1949]\n --- python() [0x19fc785]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\n --- python() [0x19fc278]\n --- python() [0x19fc171]\n --- python() [0x1ae94a3]\n --- python() [0x1979298]\n --- python() [0x19790ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\n --- python(_start+0x29) [0x19c1ea9]\n')
+[20/29] R19_kv_bfp8 :: kv_cache_dtype=bfloat8_b
+    -> ok  clamped=False
+[21/29] R20_embed_bfp8 :: embedding_dtype=bfloat8_b
+2026-08-16 09:50:16.435 | critical |          Always | TT_FATAL: Layout must be Layout::TILE for bfloat8_b or bfloat4_b! (assert.hpp:104)
+    -> error  RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/core/tensor/py_to_tt_tensor.cpp:399: layout == Layout::TILE\ninfo:\nLayout must be Layout::TILE for bfloat8_b or bfloat4_b!\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)\n --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn34convert_python_tensor_to_tt_tensorERKN2tt8tt_metal5ShapeENS1_8DataTypeENS1_6LayoutERKSt8optionalINS1_4TileEERKNS1_12MemoryConfigENS_7PyDTypeERKSt8functionIFNS1_10HostBufferES5_EES7_IPNS1_11distributed10MeshDeviceEES7_IN4ttsl10StrongTypeIhNS_10QueueIdTagEEEEPKNS_11distributed12TensorToMeshES7_IfEbbb+0x1007) [0x77bf34d61047]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x417ef8) [0x77bf35817ef8]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x417b45) [0x77bf35817b45]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x77bf357604d5]\n --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x366265) [0x77bf35766265]\n --- python(_PyEval_EvalFrameDefault+0x3271) [0x1816031]\n --- python() [0x1ac48b8]\n --- python() [0x189b92e]\n --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]\n --- python() [0x1891a4f]\n --- python() [0x180256d]\n --- python(_PyEval_EvalFrameDefault+0x3075) [0x1815e35]\n --- python(PyEval_EvalCode+0xde) [0x1896b20]\n --- python() [0x18b1949]\n --- python() [0x19fc785]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]\n --- python() [0x19fc278]\n --- python() [0x19fc171]\n --- python() [0x1ae94a3]\n --- python() [0x1979298]\n --- python() [0x19790ac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77bf36c2a1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77bf36c2a28b]\n --- python(_start+0x29) [0x19c1ea9]\n')
+[22/29] R21_norm_hifi2 :: norm_fidelity=HiFi2
+    -> ok  clamped=False
+[23/29] R22_logits_sampling_bfp8 :: logits_dtype=bfloat8_b, sampling_dtype=bfloat8_b
+    -> ok  clamped=False
+[24/29] R23_gateup_bw64 :: experts_gate_up_in0_block_w=64
+    -> ok  clamped=False
+[25/29] R24_gateup32_down24 :: experts_down_in0_block_w=24, experts_gate_up_in0_block_w=32
+    -> ok  clamped=False
+[26/29] R25_gateup64_down24 :: experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64
+    -> ok  clamped=False
+[27/29] R26_attn_bfp4_bw64_24 :: attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b, experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64
+    -> ok  clamped=False
+[28/29] R27_attn_bfp4_lofi_bw64_24 :: attention_fidelity=LoFi, attention_qkv_dtype=bfloat4_b, attention_wo_dtype=bfloat4_b, experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64
+    -> ok  clamped=False
+[29/29] R28_kv_bfp8_bw64_24 :: experts_down_in0_block_w=24, experts_gate_up_in0_block_w=64, kv_cache_dtype=bfloat8_b
+    -> ok  clamped=False
+
+29 probed; 3 failed: ['R17_act_bfp8', 'R18_act_ccl_bfp8', 'R20_embed_bfp8']; clamped widths: []
+nanobind: leaked 1 instances!
+ - leaked instance 0x77beb7ebfd38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "merge"
+ - leaked function "config"
+ - leaked function "buffer_page_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-16 09:51:34.218 | info     |    BuildKernels | JIT cache stats: 849/861 hits (98.6%) [849 cached, 477 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-16 09:51:34.218 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-16 09:51:34.238 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-16 09:51:34.238 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-16 09:51:34.815 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-16 09:51:34.815 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-16 09:51:34.815 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

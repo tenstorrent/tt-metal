@@ -1,0 +1,125 @@
+# cmd: pytest models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py -q -p no:randomly
+# git: 6855f7e372e + stage-07 precision plumbing (uncommitted)
+# date: 2026-08-16T05:02:07+00:00
+2026-08-16 05:02:08.989 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/raahem/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/raahem/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, timeout-2.4.0, split-0.11.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, anyio-4.14.2, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 11 items
+
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_is_the_shipped_policy PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_module_constants_still_resolve_to_the_default PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_paths_all_resolve_to_the_same_object PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_round_trip_is_lossless PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_carries_every_field_the_goal_lists PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_is_plain_names_not_repr PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_write_and_read_json_file PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_unknown_names_are_rejected PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_config_is_frozen PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_non_default_precision_reaches_the_device 2026-08-16 05:02:12.383 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-16 05:02:12.383 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-16 05:02:12.383 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-16 05:02:12.383 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-16 05:02:12.395 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-16 05:02:12.395 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-16 05:02:12.473 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-16 05:02:12.473 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-16 05:02:12.473 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-16 05:02:12.473 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-16 05:02:12.474 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-16 05:02:12.767 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-16 05:02:12.883 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-16 05:02:12.883 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-16 05:02:12.883 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-16 05:02:12.884 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-16 05:02:12.884 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-16 05:02:12.926 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-16 05:02:12.953 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-16 05:02:12.953 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_audit_matches_the_shipped_values PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/raahem/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+22.58s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_non_default_precision_reaches_the_device
+9.40s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_audit_matches_the_shipped_values
+1.44s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_non_default_precision_reaches_the_device
+0.21s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_is_the_shipped_policy
+0.21s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_audit_matches_the_shipped_values
+0.20s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_config_is_frozen
+0.20s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_unknown_names_are_rejected
+0.20s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_is_plain_names_not_repr
+0.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_module_constants_still_resolve_to_the_default
+0.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_carries_every_field_the_goal_lists
+0.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_write_and_read_json_file
+0.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_round_trip_is_lossless
+0.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_paths_all_resolve_to_the_same_object
+0.12s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_audit_matches_the_shipped_values
+
+(11 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_is_the_shipped_policy
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_module_constants_still_resolve_to_the_default
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_paths_all_resolve_to_the_same_object
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_round_trip_is_lossless
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_carries_every_field_the_goal_lists
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_json_is_plain_names_not_repr
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_write_and_read_json_file
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_unknown_names_are_rejected
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_config_is_frozen
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_non_default_precision_reaches_the_device
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_precision_config.py::test_default_construction_audit_matches_the_shipped_values
+======================= 11 passed, 2 warnings in 36.44s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7006c1c7ba08 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7006c2263d68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "synchronize_device"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-16 05:02:47.881 | info     |    BuildKernels | JIT cache stats: 518/565 hits (91.7%) [518 cached, 300 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-16 05:02:47.882 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-16 05:02:47.896 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-16 05:02:47.896 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-16 05:02:48.373 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-16 05:02:48.373 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-16 05:02:48.373 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

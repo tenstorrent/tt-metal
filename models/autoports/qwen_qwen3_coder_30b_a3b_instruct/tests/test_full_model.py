@@ -733,8 +733,10 @@ def test_prefill_logits_are_deterministic_across_runs(generator):
 def test_runtime_fallback_audit_is_clean(generator):
     audit = generator.model.runtime_fallback_audit()
     assert audit["dram_sharded_taken"] is True
-    assert audit["gate_up_in0_block_w"] == 16
-    assert audit["down_in0_block_w"] == 12
+    # Stage 07 retuned both to their full-K ceilings (+2.83% decode, no
+    # accuracy change); see doc/datatype_sweep/README.md.
+    assert audit["gate_up_in0_block_w"] == 64
+    assert audit["down_in0_block_w"] == 24
     assert audit["expert_intermediate_buffer"] == "L1"
     assert audit["local_heads"] == (8, 1)
     assert audit["local_experts"] == 32

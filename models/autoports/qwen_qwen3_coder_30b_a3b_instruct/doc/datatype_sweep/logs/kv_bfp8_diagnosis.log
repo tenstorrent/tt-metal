@@ -1,0 +1,73 @@
+# cmd: python models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/probes/kv_bfp8_diagnosis.py
+# git: 6855f7e372e + uncommitted stage-07 sweep + review fixes
+# date: 2026-08-16T10:21:28+00:00
+# hw: 1x4 Blackhole P300_X2, FABRIC_1D_RING
+2026-08-16 10:21:30.253 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-16 10:21:30.287 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-16 10:21:30.287 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-16 10:21:30.287 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-16 10:21:30.287 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-16 10:21:30.298 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-16 10:21:30.299 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-16 10:21:30.377 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-16 10:21:30.377 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-16 10:21:30.377 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-16 10:21:30.377 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-16 10:21:30.379 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-16 10:21:30.519 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-16 10:21:30.634 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-16 10:21:30.634 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-16 10:21:30.634 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-16 10:21:30.634 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-16 10:21:30.634 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-16 10:21:30.676 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-16 10:21:30.704 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-16 10:21:30.704 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+paged_fill_cache    cache=DataType.BFLOAT16      input=DataType.BFLOAT16      -> 1.0
+paged_update_cache  cache=DataType.BFLOAT16      input=DataType.BFLOAT16      -> 1.0
+paged_fill_cache    cache=DataType.BFLOAT8_B     input=DataType.BFLOAT16      -> None
+paged_update_cache  cache=DataType.BFLOAT8_B     input=DataType.BFLOAT16      -> 0.999969
+paged_fill_cache    cache=DataType.BFLOAT8_B     input=DataType.BFLOAT8_B     -> 1.0
+2026-08-16 10:21:31.394 | critical |          Always | TT_FATAL: Data type of input tensor for update cache must be FLOAT32 or BFLOAT16 (assert.hpp:104)
+paged_update_cache  cache=DataType.BFLOAT8_B     input=DataType.BFLOAT8_B     -> RuntimeError('TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_device_operation.cpp:296: input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16\ninfo:\nData type of input tensor for update cache must be FLOAT32 or BFLOAT16\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstr
+
+Interpretation:
+  paged_fill_cache:   bfp8 cache + bf16 input => NaN, bfp8 cache + bfp8 input => 1.0.
+                      The cache is fine at bfp8; our call into it was not. CAST here.
+  paged_update_cache: bfp8 cache + bf16 input => ~1.0, bfp8 input REJECTED by the op.
+                      The op converts internally. DO NOT cast here.
+nanobind: leaked 1 instances!
+ - leaked instance 0x7c805e0e2f28 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "load_sub_device_manager"
+ - leaked function ""
+ - leaked function "RegisterProgramRealtimeProfilerCallback"
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "item"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-16 10:21:31.857 | info     |    BuildKernels | JIT cache stats: 70/70 hits (100.0%) [70 cached, 30 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-16 10:21:31.857 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-16 10:21:31.868 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-16 10:21:31.868 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-16 10:21:32.473 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-16 10:21:32.473 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-16 10:21:32.473 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

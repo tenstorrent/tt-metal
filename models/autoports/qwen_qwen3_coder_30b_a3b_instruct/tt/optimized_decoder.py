@@ -160,6 +160,7 @@ from .functional_decoder import (  # noqa: F401  (re-exported for callers)
     upload_layer_weights,
     upload_router_weight,
 )
+from .precision import DEFAULT_PRECISION, PrecisionConfig  # noqa: F401  (re-exported)
 
 # Tokens per expert-path chunk. Kept at one tile: sparse_matmul folds the group
 # dimension into M, so a larger chunk grows num_blocks_y and can overflow the
@@ -197,21 +198,29 @@ EXPERT_CHUNK_SIZE = 32
 #   LoFi   78.12   69.13   69.27   70.88
 #
 # 16 at LoFi is the minimum, so 16 stays.
-EXPERT_WEIGHT_DTYPE = ttnn.bfloat4_b
-EXPERT_IN0_BLOCK_W_GATE_UP = 16  # divides 2048/32 = 64
-EXPERT_IN0_BLOCK_W_DOWN = 12  # divides 768/32 = 24
+#
+# **These five names are now aliases, not the source of truth.** The values
+# themselves live in ``precision.PrecisionConfig``, whose defaults are exactly
+# what was written here before stage 07; the names survive because probes under
+# ``doc/`` and the stage-02/04 tests import them, and because a reader arriving
+# at the sweep comments above should find the value they describe next to them.
+# Anything that needs to *vary* the policy must take a ``PrecisionConfig``
+# instead -- these are bound at import and cannot follow a non-default model.
+EXPERT_WEIGHT_DTYPE = DEFAULT_PRECISION.experts_gate_up_dtype
+EXPERT_IN0_BLOCK_W_GATE_UP = DEFAULT_PRECISION.experts_gate_up_in0_block_w  # divides 2048/32 = 64
+EXPERT_IN0_BLOCK_W_DOWN = DEFAULT_PRECISION.experts_down_in0_block_w  # divides 768/32 = 24
 
 # bfp4 weights carry 4 mantissa bits, so HiFi4's extra passes have nothing left
 # to resolve. LoFi is 4.6% faster on prefill and 1.6% on decode at PCC 0.99910
 # vs HiFi4's 0.99909. This also answers tt-perf-report's "HiFi2 may also work"
 # on the sparse rows: HiFi2 measured 69.78 us/token, between the two.
-EXPERT_MATH_FIDELITY = ttnn.MathFidelity.LoFi
+EXPERT_MATH_FIDELITY = DEFAULT_PRECISION.experts_fidelity
 
 # Attention projections. bf16 -> bfloat8_b costs 0.00003 PCC and buys 1.8% of
 # decode; bfloat4_b buys another 0.1% but drops layer PCC to 0.9928, under the
 # 0.995 bar, so it is rejected. q_norm/k_norm stay bf16 -- they are norms, not
 # projections, and weigh 4 KB.
-ATTENTION_WEIGHT_DTYPE = ttnn.bfloat8_b
+ATTENTION_WEIGHT_DTYPE = DEFAULT_PRECISION.attention_qkv_dtype
 
 # Blackhole p300c has 8 DRAM banks. The DRAM-sharded matmul wants the weight
 # width-sharded one shard per bank, and both the activation and the output
@@ -219,16 +228,38 @@ ATTENTION_WEIGHT_DTYPE = ttnn.bfloat8_b
 _DRAM_BANKS = 8
 
 
-def _expert_compute_kernel_config(device):
+def _expert_compute_kernel_config(device, precision: PrecisionConfig = DEFAULT_PRECISION):
     """LoFi, and ``fp32_dest_acc_en`` deliberately OFF.
 
     ``fp32_dest_acc_en`` looks like the natural next lever but must not be used
     here: it halves the matmul dest from 8 tiles to 4, which corrupts expert
-    output on Blackhole (tt-metal #49068, hit on BH-QB-2).
+    output on Blackhole (tt-metal #49068, hit on BH-QB-2). It is therefore
+    **not** a ``PrecisionConfig`` field -- a sweep must not be able to turn it
+    on.
     """
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=EXPERT_MATH_FIDELITY,
+        math_fidelity=precision.experts_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
+def _attention_compute_kernel_config(device, precision: PrecisionConfig = DEFAULT_PRECISION):
+    """``None`` at the default, which is what the projections have always passed.
+
+    ``attention_fidelity=None`` means "leave the op at its own default", so this
+    returns ``None`` and the ``compute_kernel_config=`` argument is a no-op. Any
+    named fidelity builds a real config; the remaining flags mirror
+    ``_expert_compute_kernel_config``'s, which is the closest measured
+    neighbour.
+    """
+    if precision.attention_fidelity is None:
+        return None
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=precision.attention_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -489,17 +520,29 @@ class OptimizedWeights:
 PackedExpertWeights = OptimizedWeights
 
 
-def upload_optimized_weights(torch_weights, device, config: MoEConfig, dtype=None) -> OptimizedWeights:
+def upload_optimized_weights(
+    torch_weights,
+    device,
+    config: MoEConfig,
+    dtype=None,
+    *,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
+) -> OptimizedWeights:
     """Upload experts packed along the output dim, plus both attention copies.
 
-    ``dtype`` defaults to ``EXPERT_WEIGHT_DTYPE`` and applies to the experts
-    only. It is a parameter because the weight dtype and ``in0_block_w`` are
+    ``precision`` supplies every weight dtype. ``dtype``, the stage-02 spelling,
+    still overrides **both** expert dtypes when given -- several stage-02 tests
+    sweep it directly -- but new callers should pass a ``PrecisionConfig``,
+    which can also move gate/up and down apart.
+
+    The expert dtype is a parameter at all because it and ``in0_block_w`` are
     **not** independent: precision only pays once the block width is wide enough
     for the matmul to become bandwidth-bound. Sweeping either alone finds the
-    wrong optimum.
+    wrong optimum, which is why both live in the same config object.
     """
     fused = torch_weights["experts_gate_up"]  # [E, 2I, H], gate first
-    weight_dtype = dtype if dtype is not None else EXPERT_WEIGHT_DTYPE
+    gate_up_dtype = dtype if dtype is not None else precision.experts_gate_up_dtype
+    down_dtype = dtype if dtype is not None else precision.experts_down_dtype
 
     def up(t: torch.Tensor, tensor_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -519,13 +562,13 @@ def upload_optimized_weights(torch_weights, device, config: MoEConfig, dtype=Non
 
     wqkv, wo = as_4d(torch_weights["wqkv"]), as_4d(torch_weights["wo"])
 
-    def dram_sharded(t: torch.Tensor) -> ttnn.Tensor | None:
+    def dram_sharded(t: torch.Tensor, tensor_dtype) -> ttnn.Tensor | None:
         k, n = int(t.shape[-2]), int(t.shape[-1])
         if not _dram_sharded_ok(k, n):
             return None
         return up(
             t,
-            ATTENTION_WEIGHT_DTYPE,
+            tensor_dtype,
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.DRAM,
@@ -534,16 +577,16 @@ def upload_optimized_weights(torch_weights, device, config: MoEConfig, dtype=Non
         )
 
     return OptimizedWeights(
-        gate_up_proj=up(fused.transpose(-2, -1).unsqueeze(0), weight_dtype),
-        down_proj=up(torch_weights["experts_down"].transpose(-2, -1).unsqueeze(0), weight_dtype),
+        gate_up_proj=up(fused.transpose(-2, -1).unsqueeze(0), gate_up_dtype),
+        down_proj=up(torch_weights["experts_down"].transpose(-2, -1).unsqueeze(0), down_dtype),
         attention=AttentionWeights(
-            wqkv=up(wqkv, ATTENTION_WEIGHT_DTYPE),
-            wo=up(wo, ATTENTION_WEIGHT_DTYPE),
-            q_norm=up(as_4d(torch_weights["q_norm"], pad_to_4d=True), ttnn.bfloat16),
-            k_norm=up(as_4d(torch_weights["k_norm"], pad_to_4d=True), ttnn.bfloat16),
+            wqkv=up(wqkv, precision.attention_qkv_dtype),
+            wo=up(wo, precision.attention_wo_dtype),
+            q_norm=up(as_4d(torch_weights["q_norm"], pad_to_4d=True), precision.norm_weight_dtype),
+            k_norm=up(as_4d(torch_weights["k_norm"], pad_to_4d=True), precision.norm_weight_dtype),
         ),
-        wqkv_decode=dram_sharded(wqkv),
-        wo_decode=dram_sharded(wo),
+        wqkv_decode=dram_sharded(wqkv, precision.attention_qkv_dtype),
+        wo_decode=dram_sharded(wo, precision.attention_wo_dtype),
     )
 
 
@@ -562,6 +605,7 @@ def attention_decode_optimized(
     token_index: int,
     sdpa_program_config=None,
     rope=None,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """``attention_decode`` with the two projections run DRAM-sharded.
 
@@ -608,13 +652,15 @@ def attention_decode_optimized(
     k_qkv, n_qkv = int(weights.wqkv_decode.shape[-2]), int(weights.wqkv_decode.shape[-1])
     k_o, n_o = int(weights.wo_decode.shape[-2]), int(weights.wo_decode.shape[-1])
 
+    attn_compute_config = _attention_compute_kernel_config(x.device(), precision)
     x_sharded = ttnn.to_memory_config(x, _width_sharded_l1(k_qkv))
     xqkv = ttnn.linear(
         x_sharded,
         weights.wqkv_decode,
         program_config=_dram_sharded_program_config(k_qkv, n_qkv),
         memory_config=_width_sharded_l1(n_qkv),
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
+        compute_kernel_config=attn_compute_config,
     )
     ttnn.deallocate(x_sharded)
 
@@ -653,6 +699,12 @@ def attention_decode_optimized(
     q = _rope(q, cos_cache, sin_cache, token_index)
     k = ttnn.to_memory_config(_rope(k, cos_cache, sin_cache, token_index), kv_sharded_mem)
 
+    # Deliberately NOT cast to the cache dtype, unlike the prefill fill writers.
+    # ``paged_update_cache`` requires a FLOAT32/BFLOAT16 update and converts into
+    # the cache itself (measured: bfp8 cache + bf16 update round-trips at PCC
+    # 0.999969, bfp8 update is rejected at
+    # ``paged_update_cache_device_operation.cpp:296``). See
+    # ``functional_decoder.match_cache_dtype`` for the full table.
     ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
     ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
     ttnn.deallocate(k)
@@ -687,7 +739,8 @@ def attention_decode_optimized(
         weights.wo_decode,
         program_config=_dram_sharded_program_config(k_o, n_o),
         memory_config=_width_sharded_l1(n_o),
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
+        compute_kernel_config=attn_compute_config,
     )
     ttnn.deallocate(attn)
     return ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
@@ -699,6 +752,7 @@ def _experts_chunk_packed(
     weights: OptimizedWeights,
     config: MoEConfig,
     sparsity_base: ttnn.Tensor,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """One 32-token chunk with gate and up computed in a single matmul.
 
@@ -722,10 +776,12 @@ def _experts_chunk_packed(
     group_size = chunk_len // EXPERT_CHUNK_SIZE
 
     device = hidden.device()
-    compute_config = _expert_compute_kernel_config(device)
+    compute_config = _expert_compute_kernel_config(device, precision)
     output_tile = ttnn.Tile([32, 32])
-    gate_up_config = _tuned_sparse_matmul_config(EXPERT_CHUNK_SIZE, 2 * inter, hidden_size, EXPERT_IN0_BLOCK_W_GATE_UP)
-    down_config = _tuned_sparse_matmul_config(EXPERT_CHUNK_SIZE, hidden_size, inter, EXPERT_IN0_BLOCK_W_DOWN)
+    gate_up_config = _tuned_sparse_matmul_config(
+        EXPERT_CHUNK_SIZE, 2 * inter, hidden_size, precision.experts_gate_up_in0_block_w
+    )
+    down_config = _tuned_sparse_matmul_config(EXPERT_CHUNK_SIZE, hidden_size, inter, precision.experts_down_in0_block_w)
 
     hidden_grouped = ttnn.reshape(hidden, (1, group_size, EXPERT_CHUNK_SIZE, hidden_size))
     sparsity = ttnn.repeat(sparsity_base, (1, 1, group_size, 1))
@@ -740,7 +796,7 @@ def _experts_chunk_packed(
         output_tile=output_tile,
         program_config=gate_up_config,
         compute_kernel_config=compute_config,
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
     )
     ttnn.deallocate(hidden_grouped)
     packed_width = fused.shape[-1]
@@ -766,7 +822,7 @@ def _experts_chunk_packed(
         program_config=down_config,
         is_input_a_sparse=True,
         compute_kernel_config=compute_config,
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
     )
     ttnn.deallocate(down_input)
 
@@ -782,6 +838,7 @@ def moe_prefill_optimized(
     weights: OptimizedWeights,
     config: MoEConfig,
     sparsity_base: ttnn.Tensor,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Expert pass over a sequence. ``x`` ``[1, 1, S, H]``, any S.
 
@@ -806,6 +863,7 @@ def moe_prefill_optimized(
                 weights,
                 config,
                 sparsity_base,
+                precision,
             )
         )
     out = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
@@ -819,6 +877,7 @@ def moe_decode_optimized(
     routing: ttnn.Tensor,
     weights: OptimizedWeights,
     config: MoEConfig,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Decode MoE with gate/up packed and per-token sparsity. ``x`` ``[1, 1, batch, H]``.
 
@@ -863,9 +922,9 @@ def moe_decode_optimized(
     sparsity = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
     expert_memory_config = _decode_expert_memory_config(batch, config)
     output_tile = ttnn.Tile([32, 32])
-    compute_config = _expert_compute_kernel_config(x.device())
-    gate_up_config = _tuned_sparse_matmul_config(1, 2 * inter, hidden_size, EXPERT_IN0_BLOCK_W_GATE_UP)
-    down_config = _tuned_sparse_matmul_config(1, hidden_size, inter, EXPERT_IN0_BLOCK_W_DOWN)
+    compute_config = _expert_compute_kernel_config(x.device(), precision)
+    gate_up_config = _tuned_sparse_matmul_config(1, 2 * inter, hidden_size, precision.experts_gate_up_in0_block_w)
+    down_config = _tuned_sparse_matmul_config(1, hidden_size, inter, precision.experts_down_in0_block_w)
 
     x_batched = ttnn.reshape(x, (1, batch, 1, hidden_size))
     fused = ttnn.sparse_matmul(
@@ -877,7 +936,7 @@ def moe_decode_optimized(
         output_tile=output_tile,
         program_config=gate_up_config,
         compute_kernel_config=compute_config,
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
     )
     packed_width = fused.shape[-1]
     fused = ttnn.reshape(fused, (batch, n_experts, packed_width))
@@ -903,7 +962,7 @@ def moe_decode_optimized(
         is_input_a_sparse=True,
         is_input_b_sparse=False,  # see docstring: selects batch_length_A = B * E
         compute_kernel_config=compute_config,
-        dtype=ttnn.bfloat16,
+        dtype=precision.activation_dtype,
     )
     ttnn.deallocate(down_input)
 
@@ -923,6 +982,7 @@ def decoder_layer_prefill_optimized(
     packed_experts: OptimizedWeights,
     kv_cache: KVCache | None = None,
     user_id: int = 0,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Optimized prefill. Same contract as ``decoder_layer_prefill``.
 
@@ -942,7 +1002,7 @@ def decoder_layer_prefill_optimized(
 
     normed = ttnn.rms_norm(hidden, weight=weights.post_attention_layernorm, epsilon=eps)
     routing = router_forward_optimized(normed, weights.router, config.moe)
-    moe_out = moe_prefill_optimized(normed, routing, packed_experts, config.moe, sparsity)
+    moe_out = moe_prefill_optimized(normed, routing, packed_experts, config.moe, sparsity, precision)
     ttnn.deallocate(normed)
     ttnn.deallocate(routing)
 
@@ -963,13 +1023,22 @@ def decoder_layer_decode_optimized(
     token_index: int,
     *,
     packed_experts: OptimizedWeights,
+    precision: PrecisionConfig = DEFAULT_PRECISION,
 ) -> ttnn.Tensor:
     """Optimized decode. Decode already used per-token sparsity in stage 01."""
     eps = config.rms_norm_eps
 
     normed = ttnn.rms_norm(x, weight=weights.input_layernorm, epsilon=eps)
     attn_out = attention_decode_optimized(
-        normed, packed_experts, config.attention, cos_cache, sin_cache, kv_cache, current_pos, token_index
+        normed,
+        packed_experts,
+        config.attention,
+        cos_cache,
+        sin_cache,
+        kv_cache,
+        current_pos,
+        token_index,
+        precision=precision,
     )
     ttnn.deallocate(normed)
     hidden = ttnn.add(x, attn_out)
@@ -977,7 +1046,7 @@ def decoder_layer_decode_optimized(
 
     normed = ttnn.rms_norm(hidden, weight=weights.post_attention_layernorm, epsilon=eps)
     routing = router_forward_optimized(normed, weights.router, config.moe)
-    moe_out = moe_decode_optimized(normed, routing, packed_experts, config.moe)
+    moe_out = moe_decode_optimized(normed, routing, packed_experts, config.moe, precision)
     ttnn.deallocate(normed)
     ttnn.deallocate(routing)
 
@@ -993,6 +1062,8 @@ __all__ = [
     "EXPERT_WEIGHT_DTYPE",
     "EXPERT_MATH_FIDELITY",
     "ATTENTION_WEIGHT_DTYPE",
+    "PrecisionConfig",
+    "DEFAULT_PRECISION",
     "moe_prefill_optimized",
     "moe_decode_optimized",
     "attention_decode_optimized",

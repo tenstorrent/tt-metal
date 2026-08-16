@@ -1447,7 +1447,17 @@ if qual_path.is_file():
         "the limitation is closed but still stated",
     )
 
-meta_path = MODEL_DIR / "readiness_autoregressive" / "autoregressive_meta.json"
+# `readiness_autoregressive/autoregressive_meta.json` is **shared and mutable** —
+# every stage's `run_autoregressive` rewrites it in place. Recomputing a published
+# figure from the live file makes this stage's evidence depend on whatever ran
+# last: stage 06's own re-run moved the count 4/128 -> 2/128 and silently
+# falsified stage 05's published figure that way, which is why stage 05 now reads
+# its own archived copy (`doc/full_model/autoregressive_meta_at_stage05.json`).
+# This read had the identical coupling and passed only because nothing has re-run
+# the generator since stage 06 committed. Archived here so it stays true.
+meta_path = DOC / "autoregressive_meta_at_stage06.json"
+if not meta_path.is_file():  # pragma: no cover - the archive is committed beside this file
+    meta_path = MODEL_DIR / "readiness_autoregressive" / "autoregressive_meta.json"
 check("the autoregressive metadata is present", meta_path.is_file(), str(meta_path))
 if meta_path.is_file():
     meta = load(meta_path)

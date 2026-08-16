@@ -1,0 +1,87 @@
+# cmd: python models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/probes/selection_proof.py
+# git: 6855f7e372e + uncommitted stage-07 sweep + review fixes
+# date: 2026-08-16T10:28:47+00:00
+# hw: 1x4 Blackhole P300_X2, FABRIC_1D_RING
+# note: NO precision argument, QWEN3_PRECISION_CONFIG unset -- the default path
+2026-08-16 10:28:48.887 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-16 10:28:50.788 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-16 10:28:50.788 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-16 10:28:50.788 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-16 10:28:50.788 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-16 10:28:50.800 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-16 10:28:50.800 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-16 10:28:50.878 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-16 10:28:50.878 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-16 10:28:50.878 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-16 10:28:50.878 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-16 10:28:50.879 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-16 10:28:51.081 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-16 10:28:51.197 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-16 10:28:51.197 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-16 10:28:51.197 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-16 10:28:51.197 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-16 10:28:51.197 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-16 10:28:51.239 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-16 10:28:51.264 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-16 10:28:51.264 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+field                            on device                  selected config            ok
+experts_gate_up_in0_block_w      64                         64                         OK
+experts_down_in0_block_w         24                         24                         OK
+experts_gate_up_dtype            DataType.BFLOAT4_B         DataType.BFLOAT4_B         OK
+experts_down_dtype               DataType.BFLOAT4_B         DataType.BFLOAT4_B         OK
+attention_qkv_dtype              DataType.BFLOAT8_B         DataType.BFLOAT8_B         OK
+attention_wo_dtype               DataType.BFLOAT8_B         DataType.BFLOAT8_B         OK
+lm_head_dtype                    DataType.BFLOAT8_B         DataType.BFLOAT8_B         OK
+embedding_dtype                  DataType.BFLOAT16          DataType.BFLOAT16          OK
+router_dtype                     DataType.BFLOAT16          DataType.BFLOAT16          OK
+norm_weight_dtype                DataType.BFLOAT16          DataType.BFLOAT16          OK
+kv_cache_dtype                   bfloat16                   bfloat16                   OK
+activation_dtype                 DataType.BFLOAT16          DataType.BFLOAT16          OK
+experts_fidelity                 MathFidelity.LoFi          MathFidelity.LoFi          OK
+router_window_fidelity           MathFidelity.HiFi4         MathFidelity.HiFi4         OK
+lm_head_fidelity                 MathFidelity.HiFi2         MathFidelity.HiFi2         OK
+norm_fidelity                    MathFidelity.HiFi4         MathFidelity.HiFi4         OK
+logits_dtype                     bfloat16                   bfloat16                   OK
+sampling_dtype                   bfloat16                   bfloat16                   OK
+ccl_dtype (resolved, not readback) DataType.BFLOAT16          DataType.BFLOAT16          OK
+attention_fidelity               None                       None                       OK
+kv_cache_dtype (allocated tensor) bfloat16                   bfloat16                   OK
+
+env QWEN3_PRECISION_CONFIG = None (must be None)
+
+PASS: the default construction path puts the selected config on the device.
+nanobind: leaked 1 instances!
+ - leaked instance 0x719a790ffca8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function "to_list"
+ - leaked function "empty"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "experimental_set_per_core_allocation"
+ - leaked function ""
+ - leaked function "get_num_devices"
+ - leaked function ""
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-16 10:31:37.121 | info     |    BuildKernels | JIT cache stats: 548/548 hits (100.0%) [548 cached, 299 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-16 10:31:37.121 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-16 10:31:37.138 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-16 10:31:37.138 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-16 10:31:37.766 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-16 10:31:37.767 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-16 10:31:37.767 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

@@ -274,6 +274,50 @@ def create_kv_cache(
     return KVCache(k=k, v=v, page_table=page_table, block_size=block_size or 0)
 
 
+def match_cache_dtype(cache: ttnn.Tensor, x: ttnn.Tensor) -> ttnn.Tensor:
+    """Return ``x`` in the cache tensor's dtype, casting only if they differ.
+
+    **For the fill (prefill) writers only.** The two cache writers have
+    *opposite* dtype contracts, and neither says so out loud, which is how
+    stage 07's ``R19_kv_bfp8`` came to score at chance.
+    ``doc/datatype_sweep/probes/kv_bfp8_diagnosis.py`` measures both at the op
+    level, with no model:
+
+    ==================  ============  ============  =============================
+    op                  cache         input         round-trip PCC
+    ==================  ============  ============  =============================
+    paged_fill_cache    bfloat16      bfloat16      1.0 (control)
+    paged_fill_cache    bfloat8_b     bfloat16      **NaN**
+    paged_fill_cache    bfloat8_b     bfloat8_b     1.0
+    paged_update_cache  bfloat16      bfloat16      1.0 (control)
+    paged_update_cache  bfloat8_b     bfloat16      0.999969
+    paged_update_cache  bfloat8_b     bfloat8_b     **rejected by the op**
+    ==================  ============  ============  =============================
+
+    So ``paged_fill_cache`` needs the input cast **to** the cache dtype -- it
+    validates the input against a permissive ``OR`` that a mismatch satisfies,
+    and then writes NaN -- while ``paged_update_cache`` needs the input left
+    **alone**: it converts into the cache itself and hard-rejects a block-float
+    input (``paged_update_cache_device_operation.cpp:296``, *"Data type of input
+    tensor for update cache must be FLOAT32 or BFLOAT16"*). Casting at the
+    decode writer would turn silent corruption into a hard crash, which is why
+    this helper is applied at the fill sites and deliberately not at the update
+    sites.
+
+    Taking the dtype off the **cache tensor itself** rather than off
+    ``precision.kv_cache_dtype`` keeps the guarantee true by construction: the
+    thing the write must agree with is the allocated cache, and this cannot
+    drift from it even if a caller allocates a cache some other way.
+
+    The cast is a no-op in the shipped configuration (``kv_cache_dtype ==
+    activation_dtype == bfloat16``), so it costs nothing unless the cache dtype
+    is actually moved.
+    """
+    if x.dtype == cache.dtype:
+        return x
+    return ttnn.typecast(x, cache.dtype, memory_config=x.memory_config())
+
+
 def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int) -> None:
     """Write a whole prompt's K/V into the cache.
 
@@ -281,10 +325,14 @@ def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int)
     last block is zero-padded up to a block boundary first. Those trailing
     positions are never read: decode passes ``cur_pos``, and SDPA only attends
     up to it.
+
+    K/V are cast to the cache's own dtype before the write -- see
+    :func:`match_cache_dtype` for why the ops will not do it for us. The cast
+    goes *after* the pad, because ``ttnn.pad`` is a bfloat16/float32 op.
     """
     if not kv_cache.is_paged:
-        ttnn.fill_cache(kv_cache.k, k, user_id)
-        ttnn.fill_cache(kv_cache.v, v, user_id)
+        ttnn.fill_cache(kv_cache.k, match_cache_dtype(kv_cache.k, k), user_id)
+        ttnn.fill_cache(kv_cache.v, match_cache_dtype(kv_cache.v, v), user_id)
         return
 
     seq_len = k.shape[2]
@@ -294,8 +342,12 @@ def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int)
         k = ttnn.pad(k, pad, value=0.0)
         v = ttnn.pad(v, pad, value=0.0)
 
-    ttnn.experimental.paged_fill_cache(kv_cache.k, k, kv_cache.page_table, batch_idx=user_id)
-    ttnn.experimental.paged_fill_cache(kv_cache.v, v, kv_cache.page_table, batch_idx=user_id)
+    ttnn.experimental.paged_fill_cache(
+        kv_cache.k, match_cache_dtype(kv_cache.k, k), kv_cache.page_table, batch_idx=user_id
+    )
+    ttnn.experimental.paged_fill_cache(
+        kv_cache.v, match_cache_dtype(kv_cache.v, v), kv_cache.page_table, batch_idx=user_id
+    )
 
 
 def attention_decode(
@@ -355,6 +407,12 @@ def attention_decode(
 
     k = ttnn.to_memory_config(k, kv_sharded_mem)  # v never left the sharded layout
     # page_table=None is the contiguous path; the same op serves both.
+    # NOT cast to the cache dtype -- unlike the fill writers above.
+    # ``paged_update_cache`` requires a FLOAT32/BFLOAT16 update and converts into
+    # the cache itself; handing it a block-float input is rejected outright
+    # (``paged_update_cache_device_operation.cpp:296``). Measured both ways in
+    # ``doc/datatype_sweep/probes/kv_bfp8_diagnosis.json``. See
+    # :func:`match_cache_dtype`.
     ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
     ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
     ttnn.deallocate(k)
@@ -403,6 +461,7 @@ def attention_prefill(
     user_id: int = 0,
     compute_kernel_config=None,
     sdpa_program_config=None,
+    activation_dtype=ttnn.bfloat16,
 ) -> ttnn.Tensor:
     """Causal self-attention over a full sequence. ``x``/return ``[1, 1, S, hidden]``.
 
@@ -419,11 +478,17 @@ def attention_prefill(
     and buys nothing at the 158-token prompt that gate uses. See
     ``multichip_decoder._sdpa_prefill_program_config`` for the numbers and for
     what it would take to adopt.
+
+    ``activation_dtype`` is the dtype the two projections emit. It defaults to
+    ``ttnn.bfloat16``, which is the literal that used to be written here, so
+    every existing caller is unchanged; the multichip prefill layer passes
+    ``precision.activation_dtype`` so that field reaches prefill attention and
+    not only decode.
     """
     xqkv = ttnn.linear(
         x,
         weights.wqkv,
-        dtype=ttnn.bfloat16,
+        dtype=activation_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=compute_kernel_config,
     )
@@ -458,7 +523,7 @@ def attention_prefill(
     out = ttnn.linear(
         attn,
         weights.wo,
-        dtype=ttnn.bfloat16,
+        dtype=activation_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=compute_kernel_config,
     )
