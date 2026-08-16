@@ -31,13 +31,11 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import build_drafter_rope_hf_config
-from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
-from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 WEIGHT_DTYPE = ttnn.bfloat8_b  # fc / k_proj / v_proj projection weights
 NORM_WEIGHT_DTYPE = ttnn.bfloat16  # k_norm RMSNorm weight
-ROPE_DTYPE = ttnn.bfloat16  # rope cos/sin tables
 
 
 class TtDFlashDrafter:
@@ -101,23 +99,23 @@ class TtDFlashDrafter:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        self.hifi4_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
 
+        # Meta-rope branch (Plan B): the drafter persists K in Meta INTERLEAVED convention and ropes it with
+        # the verifier's on-device offset op (rotary_embedding_indexed). The half-split per-chunk host rope
+        # path (Plan A) was deleted here, so interleaved is the only convention implemented — fail closed on
+        # anything else (only the KV-tail rank ropes; non-tail ranks never touch this).
+        if self.build_kv_tail and config.rope_convention != "interleaved":
+            raise NotImplementedError(
+                f"rope_convention={config.rope_convention!r} is not supported on the DFlash meta-rope branch: "
+                "the half-split per-chunk host rope path was deleted (Plan B). Use 'interleaved'."
+            )
         self._load_weights(state_dict)
-        self._rope_cos = self._rope_sin = None
-        self._rope_key: Optional[Tuple[int, int]] = None  # (kv_actual_global, chunk_local) of the device table
-        self._cos_host = self._sin_host = None
-        # rope feeds the per-draft-layer K path, which only the tail rank runs. The HOST table is natural
-        # order over the whole cache and is built once; the per-chunk DEVICE table is a permutation of it
-        # keyed by the write offset, which is not known until forward().
-        if self.build_kv_tail:
-            self._build_host_rope(self.cache_seq)
+        # Whole-cache INTERLEAVED indexed rope table (cos/sin block-cyclic-reordered + SP-sharded, trans_mat
+        # replicated), built ONCE on the first forward when chunk_global becomes known and reused across all
+        # chunks/requests/turns — only kv_actual_global varies (the op derives each chunk's per-chip shard
+        # offset on-device). Memoized on chunk_global (invariant across a run); None until built / non-tail.
+        self._rope: Optional[dict] = None
+        self._rope_chunk_global: Optional[int] = None
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
@@ -200,73 +198,53 @@ class TtDFlashDrafter:
             topology=self.topology,
         )
 
+        # Meta-rope branch: bake the half-split -> interleaved permutation into k_proj + k_norm at load, so the
+        # drafter can rope its persisted K with the interleaved on-device offset op (rotary_embedding_indexed)
+        # while the STORED K stays value-identical to the half-split path up to this one fixed head_dim
+        # permutation. Canonical direction: interleaved[j] == halfsplit[src[j]], so k_il = k_hs[..., src]
+        # (verified against the pure-torch rope reference, max|diff| = 0). rms_norm over head_dim is
+        # permutation-invariant, so permuting BOTH the k_proj output rows AND k_norm by src yields exactly the
+        # src-permuted pre-rope K. V never touches rope, so v_proj is untouched. Interleaved is enforced in
+        # __init__; a pure gather, no float error.
+        src = torch.argsort(interleaved_to_halfsplit_perm(D))  # [0, 64, 1, 65, ...] for head_dim=128
+
         # Per draft layer: k/v proj column-parallel (KV heads split across TP), per-head k_norm replicated.
         self.k_proj, self.v_proj, self.k_norm = [], [], []
         for i in range(cfg.num_hidden_layers):
-            kw = state_dict[self._K_PROJ.format(i=i)]  # [kv_dim, H]
+            kw = state_dict[self._K_PROJ.format(i=i)]  # [kv_dim, H]; output rows are per-head head_dim blocks
             vw = state_dict[self._V_PROJ.format(i=i)]
-            kn = state_dict[self._K_NORM.format(i=i)]  # [head_dim]
+            kn = state_dict[self._K_NORM.format(i=i)]  # [head_dim], shared across heads, applied before rope
+            # kw'[h*D + j, :] = kw[h*D + src[j], :] for every head h; kn'[j] = kn[src[j]].
+            kw = kw.view(cfg.num_key_value_heads, D, H)[:, src, :].reshape(kv_dim, H).contiguous()
+            kn = kn[src].contiguous()
             self.k_proj.append(_linear_w(kw, mapper_col))
             self.v_proj.append(_linear_w(vw, mapper_col))
             self.k_norm.append(_norm_w(kn))
         assert kv_dim == cfg.num_key_value_heads * D
 
-    def _build_host_rope(self, end: int) -> None:
-        """Build the NATURAL-order host deepseek_yarn cos/sin covering positions [0, end), once, from
-        __init__ (end=cache_seq). HALF-SPLIT (interleave=False) to match Qwen3 rotate_half +
-        ``ttnn.experimental.rotary_embedding_hf``; full head_dim (128) rotated, unlike the MLA 64-dim pe.
+    def _ensure_rope_table(self, chunk_global: int) -> None:
+        """Build the whole-cache INTERLEAVED indexed rope table once (memoized on ``chunk_global``) via the
+        same ``RotarySetup`` helper the verifier's MLA path uses.
 
-        Kept on the HOST because the device table is a *permutation* of this one keyed by the chunk's write
-        offset (see :meth:`_ensure_chunk_rope`), and that offset does not exist at construction time."""
-        hf = build_drafter_rope_hf_config(self.config, max_seq_len=end)
-        cos, sin = get_cos_sin_matrix(hf, interleave=False)  # [1, 1, end, head_dim]
-        self._cos_host, self._sin_host = cos[..., :end, :], sin[..., :end, :]
+        ``get_rope_tensors_indexed`` block-cyclic-reorders the cos/sin by the per-chip chunk and SP-shards
+        them, so device ``c``'s contiguous shard holds -- in local-cache-row order -- the rope values for
+        every global position it can ever carry; ``rotary_embedding_indexed`` then derives each chunk's start
+        row in that shard ON-DEVICE from a single ``kv_actual_global`` runtime arg (the same ``update_idxt``
+        math the per-chip KV-cache writer uses). So the SAME tensors serve every chunk/request/turn and only
+        ``kv_actual_global`` varies -- no per-chunk host gather, and every tile-aligned offset (including
+        mid-band multi-turn resumes) is handled with no host mirror.
 
-    def _ensure_chunk_rope(self, kv_actual_global: int, chunk_local: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Device cos/sin for ONE chunk written at global offset ``kv_actual_global``, laid out so a plain
-        SP shard hands each chip the absolute positions its own rows will carry.
-
-        ``update_padded_kv_cache`` scatters a chunk block-cyclically: chip c's local row ``lr`` ends up
-        holding global position ``(lr // chunk_local) * chunk_global + c * chunk_local + (lr % chunk_local)``.
-        So the rope rows this chunk needs are NOT ``[kv_actual_global, kv_actual_global + chunk_global)`` in
-        natural order — they are that range permuted by the writer's staircase.
-        :func:`rotated_chip_positions` is that staircase (it mirrors the writer kernel exactly), so gathering
-        the host table by it, chip-major, gives a ``[1, 1, chunk_global, head_dim]`` table whose SP shard c is
-        precisely chip c's positions in local-row order. ``rotary_embedding_hf`` then reads rows
-        ``[0, chunk_local)`` of each chip's shard and applies the right absolute positions — no indexed rope
-        op and no on-device offset needed.
-
-        Memoized on ``(kv_actual_global, chunk_local)``: the permutation depends on BOTH, so the old
-        "rebuild only if a longer range is requested" test was unsound — a longer table is not a superset of
-        a shorter one once the rows are permuted."""
-        key = (kv_actual_global, chunk_local)
-        if self._rope_cos is not None and self._rope_key == key:
-            return self._rope_cos, self._rope_sin
-        assert self._cos_host is not None, "host rope table not built (build_kv_tail=False?)"
-        sp = self.sp_factor
-        chunk_global = sp * chunk_local
-        positions = rotated_chip_positions(kv_actual_global, sp, chunk_local)
-        idx = torch.tensor([p for chip_rows in positions for p in chip_rows], dtype=torch.long)
-        assert idx.numel() == chunk_global, f"gathered {idx.numel()} rope rows, expected {chunk_global}"
-        assert int(idx.max()) < self._cos_host.shape[2], (
-            f"chunk at kv_actual_global={kv_actual_global} needs rope position {int(idx.max())}, but the host "
-            f"table only covers [0, {self._cos_host.shape[2]}) — construct with a larger max_seq_len"
+        ``chunk_global`` is invariant across a run (the verifier hands the drafter a fixed chunk width), so a
+        single build suffices. ``get_rope_tensors_indexed`` re-asserts its layout constraints
+        (``cache_seq <= max_seq_len``; ``chunk_global % (TILE*sp) == 0``; ``cache_seq % chunk_global == 0``),
+        which the drafter's forward guards already satisfy."""
+        if self._rope is not None and self._rope_chunk_global == chunk_global:
+            return
+        hf = build_drafter_rope_hf_config(self.config, max_seq_len=self.cache_seq)
+        self._rope = RotarySetup(hf, self.mesh_device, sp_axis=self.sp_axis).get_rope_tensors_indexed(
+            cache_seq_len_global=self.cache_seq, chunk_size_global=chunk_global
         )
-        cos, sin = self._cos_host[:, :, idx, :], self._sin_host[:, :, idx, :]
-        shard = [None, None]
-        shard[self.sp_axis] = 2  # SP-shard the chunk table on seq → chip c gets its own rotated positions
-        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard)
-        if self._rope_cos is not None:
-            ttnn.deallocate(self._rope_cos)
-            ttnn.deallocate(self._rope_sin)
-        self._rope_cos = ttnn.from_torch(
-            cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
-        )
-        self._rope_sin = ttnn.from_torch(
-            sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
-        )
-        self._rope_key = key
-        return self._rope_cos, self._rope_sin
+        self._rope_chunk_global = chunk_global
 
     def reset(self):
         """Clear the FC accumulator + any imported upstream partial — call at the start of each prefill
@@ -397,7 +375,8 @@ class TtDFlashDrafter:
 
         The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
-        the rope table is permuted to match (see :meth:`_ensure_chunk_rope`)."""
+        the interleaved indexed rope op derives each chip's shard offset on-device (see
+        :meth:`_ensure_rope_table`)."""
         assert self.build_kv_tail, (
             "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
             "via export_partial instead"
@@ -454,19 +433,11 @@ class TtDFlashDrafter:
             ttnn.deallocate(target_hidden)
             target_hidden = gathered  # [1,1,seq,H] replicated on TP
 
-        # RoPE cos/sin for exactly this chunk's rotated positions, SP-sharded so each chip reads rows
-        # [0, seq) of its own shard. Memoized on (kv_actual_global, chunk_local).
-        cos, sin = self._ensure_chunk_rope(kv_actual_global, chunk_local=seq)
-        # rotary_embedding_hf guards cos_seq_len >= seq, NOT ==, so a wrong-length table would silently
-        # apply rows [0, seq) instead of failing. Check equality -- but in PER-CHIP units: .shape on a
-        # mesh-sharded tensor is the local shard (cf. mla.py:1378 `seq_len_local = q.shape[2]`), and the
-        # table is SP-sharded on dim 2, so its logical chunk_global rows arrive here as chunk_local. This
-        # still catches the failure mode it is here for: a full-depth table shards to cache_seq/sp >= seq
-        # per chip, which would rope rows [0, seq) of the wrong aligned 5k chunk.
-        assert cos.shape[2] == seq, (
-            f"rope table per-chip seq {cos.shape[2]} != chunk_local {seq} (global {chunk_global}); "
-            f"rotary_embedding_hf would silently rope the wrong positions"
-        )
+        # Whole-cache INTERLEAVED indexed rope table (SP-sharded cos/sin + replicated trans_mat), built once
+        # and reused for every chunk/request/turn; the indexed op reads kv_actual_global at call time. The
+        # per-chip shard already covers cache_seq/sp >= chunk_local rows, so there is no per-chunk length to
+        # guard here (unlike the deleted half-split path).
+        self._ensure_rope_table(chunk_global)
 
         for i in range(cfg.num_hidden_layers):
             k = ttnn.linear(
@@ -483,7 +454,12 @@ class TtDFlashDrafter:
             )
             k = self._split_heads(k)  # [1, kvh_local, seq, head_dim]
             v = self._split_heads(v)
-            # per-head RMSNorm over head_dim, then Qwen3 half-split rope. V untouched.
+            # per-head RMSNorm over head_dim (permutation-invariant, so the src-permuted k_norm gives exactly
+            # the src-permuted pre-rope K), then Meta INTERLEAVED rope via the verifier's on-device offset op.
+            # V untouched. rotary_embedding_indexed derives each chip's per-chunk shard offset on-device from
+            # kv_actual_global (the same update_idxt math the KV-cache writer uses), so one whole-cache table
+            # ropes every tile-aligned offset -- including mid-band multi-turn resumes -- with no host mirror.
+            # Mirrors mla.py's call: keyword scalars, no compute_kernel_config.
             k = ttnn.rms_norm(
                 k,
                 weight=self.k_norm[i],
@@ -491,8 +467,13 @@ class TtDFlashDrafter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.default_compute_kernel_config,
             )
-            k = ttnn.experimental.rotary_embedding_hf(
-                k, cos, sin, is_decode_mode=False, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                k,
+                self._rope["cos_matrix"],
+                self._rope["sin_matrix"],
+                self._rope["trans_matrix"],
+                kv_actual_global=kv_actual_global,
+                cluster_axis=self.sp_axis,
             )
             # The cache is bf8 (align w/ the decode KV cache) while k/v leave the projections in bf16;
             # update_padded_kv_cache FATALs unless cache and input dtypes match exactly, so typecast down
