@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared compute helpers for the COLUMN-PARALLEL topk_large_indices kernels
-// (compute_local.cpp / compute_final.cpp) and the return_values kernel
-// variants (compute_with_values.cpp / compute_final_with_values.cpp).
+// Shared compute helpers for the COLUMN-PARALLEL merge-tree kernels
+// (compute_tree.cpp / compute_tree_root.cpp / compute_tree_root_with_values.cpp)
+// and the row-parallel return_values variant (compute_with_values.cpp).
 //
 // NOTE: compute.cpp (the row-parallel kernel) deliberately keeps its own
 // byte-identical copies of these helpers instead of including this header —

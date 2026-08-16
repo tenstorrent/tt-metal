@@ -887,10 +887,10 @@ def test_topk_large_indices_return_values_program_cache(device):
 
 
 def test_topk_large_indices_num_slices_override_correctness(device):
-    # Force P=8 at the canonical column-parallel shape (which the cost model
-    # also picks P=8 for -- the point here is the OVERRIDE plumbing produces a
-    # correct program; distinct-P correctness is covered by the cache test
-    # below). Random input => tie-safe value-multiset assertions.
+    # Force P=8 at the canonical column-parallel shape (a 3-level tree; the
+    # tree cost model would pick 32 -- the point here is the OVERRIDE plumbing
+    # produces a correct program; distinct-P correctness is covered by the
+    # cache test below). Random input => tie-safe value-multiset assertions.
     torch.manual_seed(0)
     n, k = 65536, 2048
     torch_input = torch.randn(1, n, dtype=torch.bfloat16)
@@ -909,8 +909,8 @@ def test_topk_large_indices_num_slices_override_correctness(device):
 
 @pytest.mark.parametrize("num_slices", [4, 16])
 def test_topk_large_indices_num_slices_non_model_values(device, num_slices):
-    # P values the cost model would NOT pick (model pick is 8 here): exercises
-    # uneven chunk splits (32 chunks over 4 or 16 slices) end to end.
+    # P values the cost model would NOT pick (the tree model picks the chunk
+    # count, 32, here): exercises uneven chunk splits end to end.
     torch.manual_seed(1)
     n, k = 65536, 2048
     torch_input = torch.randn(1, n, dtype=torch.bfloat16)
@@ -971,3 +971,106 @@ def test_topk_large_indices_num_slices_program_cache_distinct_entries(device):
         assert entries[3] == entries[2]  # P=8 rerun: cache hit, no growth
     finally:
         device.disable_and_clear_program_cache()
+
+
+# ---------------------------------------------------------------------------
+# Column-parallel MERGE TREE (in-place log2(P) reduction on the slice
+# rectangle; slice 0 is the root). These parametrize P via num_slices so the
+# tree shape is explicit; the model default path is exercised by all earlier
+# column_parallel tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("num_slices", [4, 8, 16, 32])
+@pytest.mark.parametrize("k", [512, 2048])
+def test_topk_large_indices_tree_random_ties(device, num_slices, k):
+    # Random bf16 has duplicate values, including ties that straddle slice and
+    # tree-level boundaries; tie order is unspecified, so assert the selected
+    # value multiset + index validity. n chosen so every P has >= 1 chunk per
+    # slice for both LLK windows (k=512 -> 64 chunks, k=2048 -> 32 chunks).
+    torch.manual_seed(0)
+    n = 65536
+    torch_input = torch.randn(1, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, num_slices=num_slices)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0]
+
+    assert indices.min() >= 0
+    assert indices.max() < n
+    assert indices.unique().numel() == k
+
+    actual_values = torch_input.float()[0][indices]
+    ref_values, _ = torch.topk(torch_input.float()[0], k, largest=True, sorted=True)
+    assert_equal(actual_values.sort().values, ref_values.sort().values)
+
+
+def test_topk_large_indices_tree_multilevel_adversarial_placement(device):
+    # 3-level tree (P=8, slice width 8192). The winning block is split across
+    # slices that meet only AT THE ROOT and traverse different tree depths:
+    #   slice 5 (upper half of the top-k): 5 -> 4 (level 0), 4 -> 0 (level 2)
+    #   slice 3 (lower half):              3 -> 2 (level 0), 2 -> 0 (level 1)
+    # A mis-ordered intermediate survivor (the num_chunks=4 lesson, applied at
+    # tree levels) only shows when its consumer merges it — the root sees both
+    # halves through 2-deep chains. Values are globally distinct, so the final
+    # rank order is asserted EXACTLY against torch.
+    n, k = 65536, 2048
+    region = 8192
+    half = k // 2
+    torch_input = torch.zeros(1, n, dtype=torch.bfloat16)
+
+    def block(count, base):
+        hi16 = (0x3F80 + base + np.arange(count, dtype=np.uint32)).astype(np.uint32)
+        return torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+
+    # Lower half of the winners in slice 3, upper half in slice 5 (all values
+    # distinct and above the zero background).
+    torch_input[0, 3 * region : 3 * region + half] = block(half, 0)
+    torch_input[0, 5 * region : 5 * region + half] = block(half, half)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, num_slices=8)
+
+    _, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    _assert_indices(tt_indices, ref_indices, [1, k])
+
+
+def test_topk_large_indices_tree_valid_length_empty_winners(device):
+    # P=16 over 32 chunks (slice width 4096); valid_length=5000 leaves slice 0
+    # full, slice 1 partial, slices 2..15 empty. Empty WINNERS (2, 4, 8, ...)
+    # must adopt their first incoming survivor instead of merging into an
+    # empty DST; empty pure losers ship the writer's -inf scratch. Winning
+    # block sits inside the prefix, decoys beyond it.
+    n, k = 65536, 2048
+    valid_length = 5000
+    torch_input = _make_distinct_block_input(n, k, block_start=valid_length - k)
+    torch_input[:, valid_length:] = 100.0  # stale decoys, must never be selected
+
+    tt_indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, valid_length=valid_length, num_slices=16
+    )
+
+    _, ref_indices = torch.topk(torch_input[:, :valid_length].float(), k, dim=-1, largest=True, sorted=True)
+    assert int(ref_indices.max()) < valid_length
+    _assert_indices(tt_indices, ref_indices, [1, k])
+
+
+@pytest.mark.parametrize("num_slices", [8, 32])
+def test_topk_large_indices_tree_return_values(device, num_slices):
+    # Values ride the tree with the indices (every shipped survivor carries
+    # both regions); the root's with-values materialization must emit the
+    # exact torch value order.
+    torch.manual_seed(2)
+    n, k = 65536, 2048
+    torch_input = torch.randn(1, n, dtype=torch.bfloat16)
+
+    values, indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, return_values=True, num_slices=num_slices
+    )
+
+    torch_values = ttnn.to_torch(values)
+    torch_indices = ttnn.to_torch(indices, dtype=torch.uint32).to(torch.int64)
+    ref_values, _ = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+
+    assert_equal(torch_values.float(), ref_values)  # both sorted descending: exact even under ties
+    gathered = torch.gather(torch_input, dim=-1, index=torch_indices)
+    assert_equal(gathered, torch_values)
+    assert torch_indices[0].unique().numel() == k

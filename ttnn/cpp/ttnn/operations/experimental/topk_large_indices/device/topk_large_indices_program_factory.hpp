@@ -42,11 +42,13 @@ struct TopkLargeIndicesProgramFactory {
 //     so a serving loop growing valid_length reuses one cached program.
 struct ColumnSplitConfig {
     bool enabled = false;
-    // Number of row slices == number of local cores (each reduces >= 1 chunk).
+    // Number of row slices == number of tree cores (each reduces >= 1 chunk).
     uint32_t num_slices = 0;
-    // Local cores form the rectangle (0, 0)..(local_grid_x-1, local_grid_y-1)
-    // with num_slices == local_grid_x * local_grid_y; the final (merge) core
-    // sits at (0, local_grid_y).
+    // The tree cores form the rectangle (0, 0)..(local_grid_x-1, local_grid_y-1)
+    // with num_slices == local_grid_x * local_grid_y. Slice i lives at
+    // (i % local_grid_x, i / local_grid_x); slice 0 is the merge-tree root
+    // (there is no separate final core — the reduction is in place: at tree
+    // level L, core i with i % 2^(L+1) == 0 merges core i + 2^L's survivor).
     uint32_t local_grid_x = 0;
     uint32_t local_grid_y = 0;
 };
@@ -62,14 +64,12 @@ ColumnSplitConfig compute_column_split_config(
     std::optional<uint32_t> num_slices_override = std::nullopt);
 
 struct TopkLargeIndicesMultiCoreSharedVariables {
-    tt::tt_metal::KernelHandle reader_local_kernel_id{};
-    tt::tt_metal::KernelHandle compute_local_kernel_id{};
-    tt::tt_metal::KernelHandle writer_local_kernel_id{};
-    tt::tt_metal::KernelHandle reader_final_kernel_id{};
-    tt::tt_metal::KernelHandle compute_final_kernel_id{};
-    tt::tt_metal::KernelHandle writer_final_kernel_id{};
-    std::vector<CoreCoord> local_cores{};
-    CoreCoord final_core{};
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle compute_node_kernel_id{};
+    tt::tt_metal::KernelHandle compute_root_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
+    // Slice-major (row-major rectangle) core list; cores[0] is the tree root.
+    std::vector<CoreCoord> cores{};
 };
 
 struct TopkLargeIndicesMultiCoreProgramFactory {
