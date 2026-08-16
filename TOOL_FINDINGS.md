@@ -3997,11 +3997,31 @@ does not hold *in general*, not that it failed here — the window in which a wr
 exists, is silent, and opens in the unsafe direction. It was found only because a human read an
 impossible number; nothing in the system objected to it.
 
-### Still to establish
+### Settled — the port's correctness, measured independently of this gate
 
-Whether the underlying pytest run actually passed at the moment of that reading is not settled — the
-raw output was not retained in the transcript, only the parsed verdict. The port's real correctness
-will be re-measured directly (`pytest …::test_e2e_pcc`) once the device is free, and recorded here.
+The optimize run was stopped after ~17.5 h and 11 banked commits, and `test_e2e_pcc` was run
+directly against the resulting tree — not read from the gate that produced 33.612, 47.779, 1.525 and
+11.021:
+
+```
+e2e PCC = 0.9999803900718689
+frames tt=(8,37) ref=(8,37)  exact_match=True  code_flips=0
+per-step hidden PCC: 1.000000 x9
+```
+
+Against the pre-optimisation 0.9999834299087524, a drop of 3e-6 — negligible, far above the 0.99
+threshold, with exact audio-code equality and zero code flips preserved. **The eleven optimisations
+did not damage correctness.**
+
+That is a good outcome and it is worth being precise about what it does *not* show: it does not
+retroactively validate the gate. Four times in twelve hours the gate reported `pcc_verified: true`
+on a number that cannot be a correlation, and each time it was the *perf* gate that stopped the
+commit. The port survived because the edits it would have waved through happened to be slow.
+
+*(Two other tests failed in that run, neither about correctness: `gate1` reports
+`flow_matching: live stub differs from its graduated snapshot` — the documented `stub_edits_break_gate1`
+behaviour, since the optimizer edited that stub — and `trace_capture_selftest` hits a
+`FileNotFoundError` on `_captured/tts_backbone/args.pt`, which the isolation worktree never staged.)*
 
 ---
 
