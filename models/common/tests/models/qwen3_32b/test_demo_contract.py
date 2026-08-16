@@ -304,7 +304,7 @@ def test_demo_resolves_qwen3_trace_region_and_matches_ring_fabric():
     assert '"trace_region_size": 50_000_000' not in _DEMO_SOURCE
     assert "ttnn.FabricConfig.FABRIC_1D_RING" in _DEMO_SOURCE
     assert resolve_trace_region_size("qwen3-32b", "T3K") == 90_000_000
-    assert resolve_trace_region_size("qwen3-32b", "P150x4") == 90_000_000
+    assert resolve_trace_region_size("qwen3-32b", "P150x4") == 100_000_000
 
 
 def test_demo_exposes_p150x4_and_uses_canonical_device_naming():

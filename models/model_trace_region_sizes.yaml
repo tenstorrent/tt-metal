@@ -100,7 +100,10 @@ sizes:
       bh_p300:
         trace_region_size: 90000000
       p300x2:
-        trace_region_size: 90000000
+        # performance-batch-32-ci captured 92,299,264 bytes on a physical
+        # P300_X2 quietbox. Keep measured headroom for repeatable full-trace
+        # capture instead of relying on the former 90 MB estimate.
+        trace_region_size: 100000000
       bh_loudbox:
         trace_region_size: 90000000
 
