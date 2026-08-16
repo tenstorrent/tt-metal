@@ -80,6 +80,11 @@ run order (header-editing layer last):
   prebranch stocknow with `#define TOPK_DISABLE_REPLAY_STEP 1` temporarily
             armed in ckernel_sfpu_topk.h (pre-branch stock behavior);
             needs --allow-header-edit, restored+cache-cleared in `finally`
+  blaze     OPT-IN via --with-blaze: the tt-blaze GLM indexer bench as an
+            external pytest under our Tracy; single cell k=2048 W=65536 (their
+            bench is fixed-shape). Needs /home/nachiket/tt-blaze with a
+            tt-metal symlink into this repo. Runs between stocknow and
+            prebranch. Its row carries the fused-program caveat.
   roofline  constants from tenstorrent/llm_perf (aspirational; see table)
 
   # full competition run (three non-editing layers + prebranch)
@@ -124,6 +129,19 @@ REPO = os.environ.get("TT_METAL_HOME", "/home/nachiket/tt-metal")
 SCRIPT_PATH = os.path.abspath(__file__)
 
 CHILD_SPEC_ENV = "CANONICAL_SWEEP_CHILD_SPEC"
+
+
+def _script_md5():
+    """md5 of THIS script's bytes on disk right now. The child stamps it into
+    its manifest and the orchestrator compares per cell: the two processes
+    import the file at different times, so a mid-run edit can make them run
+    DIFFERENT code while looking like one harness (see the HARNESS_BUG note
+    in _build_cell_callable)."""
+    import hashlib
+
+    with open(SCRIPT_PATH, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
 
 # ---------------------------------------------------------------------------
 # A/B arms: the LLK header edit.
@@ -251,6 +269,27 @@ COMPETITION_LAYERS = [
     ("stocknow", "topk_stock", True, None),
     ("prebranch", "topk_stock", True, "disable_replay"),
 ]
+
+# Optional fifth layer (--with-blaze): the tt-blaze GLM indexer bench, run as
+# an EXTERNAL pytest under our Tracy. Single cell only -- their bench is
+# fixed-shape (k=2048, 64K global context), so it maps to the k=2048 W=65536
+# table row and nowhere else; fabricating other cells would be inventing data.
+# The bench's own printout falls back to host wall-clock on this machine (no
+# IOMMU -> no realtime profiler), so it is IGNORED: the Tracy CSV is the datum
+# (median DEVICE KERNEL DURATION of the GenericOpDeviceOperation rows;
+# validated 24.5 us median of 9 on 2026-08-16).
+BLAZE_ROOT = "/home/nachiket/tt-blaze"
+BLAZE_TEST = (
+    BLAZE_ROOT
+    + "/tests/blaze/micro_ops/dsa/test_indexer_sdpa_local_topk.py"
+    + "::test_glm52_indexer_sdpa_streaming_local_topk[64k]"
+)
+# Verbatim caveat carried by the table row and the .md whenever blaze appears:
+BLAZE_CAVEAT = (
+    "fused SDPA+localTopK program — includes SDPA work the other layers don't; "
+    "blaze-vendored kernels, FusedProgram-locked, not a callable op"
+)
+BLAZE_K, BLAZE_W = 2048, 65536
 
 
 def roofline_us(k, w):
@@ -424,7 +463,7 @@ def run_child(spec_path):
 
     device = ttnn.open_device(device_id=0, l1_small_size=32768)
     arch = ttnn.get_arch_name()
-    manifest = {"arch": arch, "iters": iters, "cells": []}
+    manifest = {"arch": arch, "iters": iters, "cells": [], "child_script_md5": _script_md5()}
     torch.manual_seed(0)
 
     for cell in spec["cells"]:
@@ -468,8 +507,14 @@ def run_child(spec_path):
             entry["status"] = "RAN"
             print(f"SWEEP_OK   {cell['id']}", flush=True)
         except Exception as e:  # noqa: BLE001 - the message IS the result
-            entry["status"] = "UNSUPPORTED" if entry["phase"] in ("setup", "first_call") else "FAILED"
             entry["error"] = f"{type(e).__name__}: {e}".split("\n")[0][:400]
+            if "HARNESS_BUG" in entry["error"]:
+                # Not a property of the op or the shape: the harness itself
+                # misfired (e.g. script edited mid-run). FAILED is retryable
+                # under --resume; UNSUPPORTED would wrongly stick forever.
+                entry["status"] = "FAILED"
+            else:
+                entry["status"] = "UNSUPPORTED" if entry["phase"] in ("setup", "first_call") else "FAILED"
             print(f"SWEEP_FAIL {cell['id']} [{entry['phase']}] :: {entry['error']}", flush=True)
         manifest["cells"].append(entry)
 
@@ -658,7 +703,21 @@ def _build_cell_callable(ttnn, torch, device, cell):
 
         return call, correctness
 
-    raise ValueError(f"unknown op {op}")
+    # Dispatch fall-through is a HARNESS bug, not an op validation result.
+    # Post-mortem (competition run 2026-08-16): cell routed k=2048 W=262144
+    # reported "unknown op topk_routed" while every sibling measured -- the
+    # child re-imports this script from DISK per cell, and a mid-run commit
+    # workflow briefly put a pre-topk_routed version of the file on disk
+    # (routed W=131072 measured 11:18:16, this cell failed 11:18:19, the
+    # commit carrying the branch landed 11:18:46). Two defenses: the
+    # HARNESS_BUG prefix classifies this as FAILED (so --resume RETRIES it
+    # instead of treating it as a deterministic UNSUPPORTED), and the child
+    # stamps its own script md5 into the manifest so the orchestrator can
+    # flag CHILD_SCRIPT_DRIFT explicitly.
+    raise RuntimeError(
+        f"HARNESS_BUG: unknown op {op} -- the child script on disk lacks this op's "
+        "branch (script edited mid-run?); retryable, rerun with --resume"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -977,6 +1036,7 @@ def run_cell(cell, arm, trial, args):
         "notes": "",
     }
     result.update(provenance_stamp())
+    script_md5_at_launch = _script_md5()
     t0 = time.time()
     try:
         with open(log_path, "w") as log:
@@ -1002,10 +1062,19 @@ def run_cell(cell, arm, trial, args):
         return result
 
     with open(manifest_path) as f:
-        entry = json.load(f)["cells"][0]
+        child_manifest = json.load(f)
+    entry = child_manifest["cells"][0]
+    # Mid-run-edit tripwire: the child imported the script AFTER we launched
+    # it; if its md5 differs from what was on disk at launch, orchestrator and
+    # child ran different code and the record says so out loud.
+    child_md5 = child_manifest.get("child_script_md5")
+    if child_md5 and child_md5 != script_md5_at_launch:
+        result["notes"] = (
+            f"CHILD_SCRIPT_DRIFT(child={child_md5[:8]}, launch={script_md5_at_launch[:8]}) " + result["notes"]
+        ).strip()
     result["max_abs_err"] = entry.get("max_abs_err")
     if "index_match_frac" in entry:
-        result["notes"] = f"index_match_frac={entry['index_match_frac']:.3f}"
+        result["notes"] = (result["notes"] + f" index_match_frac={entry['index_match_frac']:.3f}").strip()
     if entry["status"] != "RAN":
         result["status"] = entry["status"]  # UNSUPPORTED, FAILED, or WRONG -- verbatim
         result["error"] = entry.get("error") or entry.get("wrong_detail", "")
@@ -1289,12 +1358,186 @@ def write_reports(rows, arms, outdir):
 # plus the roofline model. Folds the ad-hoc scratchpad loops (layers_grid.sh,
 # kw_grid.sh) into a rerunnable, provenance-stamped mode of this script.
 # ---------------------------------------------------------------------------
+def _blaze_preflight():
+    """Return an error string if the tt-blaze checkout is not usable, else None.
+    The bench imports tt-metal through a symlink INSIDE the blaze tree, so both
+    the checkout and the link must exist and the link must point at THIS repo
+    (a link to a different tt-metal would silently measure someone else's
+    kernels)."""
+    if not os.path.isdir(BLAZE_ROOT):
+        return f"tt-blaze checkout not found at {BLAZE_ROOT}; clone it there (or drop --with-blaze)"
+    link = os.path.join(BLAZE_ROOT, "tt-metal")
+    if not os.path.exists(link):
+        return f"missing symlink {link}; create it with: ln -s {REPO} {link}"
+    if os.path.realpath(link) != os.path.realpath(REPO):
+        return (
+            f"{link} points at {os.path.realpath(link)}, not this repo ({os.path.realpath(REPO)}); "
+            f"fix with: ln -sfn {REPO} {link}"
+        )
+    return None
+
+
+def parse_tracy_blaze(csv_path):
+    """Blaze harvest: median DEVICE KERNEL DURATION over the
+    GenericOpDeviceOperation rows (the FusedProgram dispatches as GenericOp).
+    No warmup-drop -- the validated recipe takes the median over all rows,
+    which is robust to the one cache-miss row (24.5 us median of 9 measured
+    2026-08-16)."""
+    with open(csv_path) as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        return None
+    dur_col = next((c for c in rows[0] if "DEVICE KERNEL DURATION [ns]" == c.strip()), None)
+    if dur_col is None:
+        dur_col = next((c for c in rows[0] if "DEVICE KERNEL DURATION" in c.upper()), None)
+    if dur_col is None:
+        return None
+    matched = []
+    for r in rows:
+        name = (r.get("OP CODE") or "").strip()
+        raw = (r.get(dur_col) or "").strip()
+        if "genericop" not in name.lower().replace("_", "") or not raw:
+            continue
+        try:
+            matched.append({"ns": float(raw), "cores": int(float(r.get("CORE COUNT") or 0))})
+        except ValueError:
+            continue
+    if not matched:
+        return None
+    return {
+        "ns_median": statistics.median(m["ns"] for m in matched),
+        "ns_samples": [m["ns"] for m in matched],
+        "cores": max(m["cores"] for m in matched),
+        "n_rows_total": len(matched),
+        "n_rows_used": len(matched),
+        "attrs": f"GenericOpDeviceOperation median of {len(matched)}",
+        "csv": csv_path,
+    }
+
+
+def run_blaze_cell(cell, args):
+    """The blaze layer: launch their fixed-shape bench as an external pytest
+    under OUR Tracy and harvest the GenericOp rows. Ignore the bench's own
+    printed number -- on this host it falls back to wall-clock (no IOMMU, no
+    realtime profiler); the Tracy CSV is the datum."""
+    outdir = args.out
+    os.makedirs(os.path.join(outdir, "results"), exist_ok=True)
+    os.makedirs(os.path.join(outdir, "work"), exist_ok=True)
+    tag = f"{cell['id']}.blaze.t0"
+    log_path = os.path.join(outdir, "work", f"{tag}.log")
+
+    result = {
+        "cell": cell,
+        "arm": "blaze",
+        "trial": 0,
+        "status": "",
+        "error": "",
+        "ns_median": None,
+        "cores": None,
+        "max_abs_err": None,
+        "notes": BLAZE_CAVEAT,
+    }
+    result.update(provenance_stamp())
+
+    err = _blaze_preflight()
+    if err:
+        result["status"] = "FAILED"
+        result["error"] = err
+        _write_result(outdir, tag, result)
+        return result
+
+    env = dict(os.environ)
+    for var in list(env):
+        if var.startswith("TT_METAL_DPRINT") or var.startswith("TT_METAL_WATCHER"):
+            env.pop(var)
+    env.update(
+        {
+            "BLAZE_BENCH_INDEXER_LOCAL_TOPK": "1",
+            "TT_METAL_HOME": REPO,
+            "TT_METAL_RUNTIME_ROOT": REPO,
+            "PYTHONPATH": f"{BLAZE_ROOT}:{REPO}",
+        }
+    )
+    cmd = [
+        sys.executable,
+        "-m",
+        "tracy",
+        "-r",
+        "-v",
+        "--op-support-count",
+        "4000",
+        "-m",
+        "pytest",
+        BLAZE_TEST,
+        "-x",
+        "-s",
+        f"--rootdir={BLAZE_ROOT}",
+        "-c",
+        os.path.join(BLAZE_ROOT, "pyproject.toml"),
+    ]
+    t0 = time.time()
+    try:
+        with open(log_path, "w") as log:
+            proc = subprocess.run(
+                cmd, cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout, check=False
+            )
+    except subprocess.TimeoutExpired:
+        result["status"] = "FAILED"
+        result["error"] = f"watchdog timeout {args.timeout}s -- device may need tt-smi -r before continuing"
+        _write_result(outdir, tag, result)
+        return result
+
+    csv_path = _newest_report_after(t0)
+    parsed = parse_tracy_blaze(csv_path) if csv_path else None
+    if parsed is None:
+        result["status"] = "FAILED"
+        result["error"] = (
+            f"no GenericOpDeviceOperation rows harvested (pytest rc={proc.returncode}, "
+            f"csv={csv_path}); see {log_path}"
+        )
+    else:
+        result["status"] = "MEASURED"
+        result["ns_median"] = parsed["ns_median"]
+        result["cores"] = parsed["cores"]
+        result["notes"] = f"{parsed['attrs']}; {BLAZE_CAVEAT}"
+    _write_result(outdir, tag, result)
+    return result
+
+
 def build_competition_cells(args):
     ks = sorted(int(x) for x in (args.ks if args.ks != DEFAULT_KS else ",".join(map(str, COMPETITION_KS))).split(","))
     ws = sorted(int(x) for x in (args.ns if args.ns != DEFAULT_NS else ",".join(map(str, COMPETITION_WS))).split(","))
     base_iters = args.iters if args.iters is not None else COMPETITION_DEFAULT_ITERS
     wanted_layers = args.layers_competition.split(",")
+    with_blaze = getattr(args, "with_blaze", False)
+    if "blaze" in wanted_layers and not with_blaze:
+        sys.exit("layer 'blaze' needs --with-blaze (it runs the external tt-blaze checkout)")
+    if with_blaze and "blaze" not in wanted_layers:
+        wanted_layers.append("blaze")
     cells = []
+    if "blaze" in wanted_layers:
+        # ONE cell, by design -- see the BLAZE_* constants block.
+        cells.append(
+            {
+                "id": f"comp_blaze_k{BLAZE_K}_w{BLAZE_W}",
+                "op": "blaze_external",
+                "layer": "blaze",
+                "batch": 1,
+                "n": BLAZE_W,
+                "k": BLAZE_K,
+                "dtype": "bf16",
+                "dim": -1,
+                "anchor": "competition",
+                "valid_length": None,
+                "apriori": "",
+                "expected_factory": "",
+                "composite": False,
+                "strict": False,
+                "seed": None,  # their bench seeds itself; we do not control it
+                "iters": 1,
+                "arm": None,
+            }
+        )
     for layer_index, (layer, child_op, composite, arm) in enumerate(COMPETITION_LAYERS):
         if layer not in wanted_layers:
             continue
@@ -1358,10 +1601,13 @@ def run_competition(args):
         return status in ("MEASURED", "UNSUPPORTED", "WRONG")
 
     header_edited = False
+    # FIXED layer order: op, routed, stocknow, then blaze (external, no header
+    # involvement), then prebranch last (the only one that edits the header).
+    run_order = list(COMPETITION_LAYERS)
+    if any(c["layer"] == "blaze" for c in cells):
+        run_order.insert(3, ("blaze", "blaze_external", False, None))
     try:
-        # FIXED layer order, one layer at a time: op, routed, stocknow, then
-        # prebranch last (the only one that edits the header).
-        for layer, _child_op, _composite, arm in COMPETITION_LAYERS:
+        for layer, _child_op, _composite, arm in run_order:
             layer_cells = sorted((c for c in cells if c["layer"] == layer), key=lambda c: (c["k"], c["n"]))
             if not layer_cells:
                 continue
@@ -1379,7 +1625,10 @@ def run_competition(args):
                 if _done(cell):
                     print(f"SKIP (resume) {cell['id']}", flush=True)
                     continue
-                r = run_cell(cell, cell["layer"], 0, args)
+                if layer == "blaze":
+                    r = run_blaze_cell(cell, args)
+                else:
+                    r = run_cell(cell, cell["layer"], 0, args)
                 print(
                     f"{r['status']:<11} {cell['id']} iters={cell['iters']} "
                     f"{r['ns_median'] or ''} {r['error'][:80]}",
@@ -1410,12 +1659,20 @@ def build_competition_table(cells, outdir):
     provenance_seen = set()
     grid_keys = sorted({(c["k"], c["n"]) for c in cells})
     layer_names = [name for name, _, _, _ in COMPETITION_LAYERS]
+    if any(c["layer"] == "blaze" for c in cells):
+        layer_names.append("blaze")
+    # A layer only participates in a row if it HAS a cell there (blaze is a
+    # single fixed-shape cell; a "PENDING" on every other row would be noise).
+    cell_keys = {(c["k"], c["n"], c["layer"]) for c in cells}
     rows = []
     for k, w in grid_keys:
         row = {"k": k, "W": w}
         statuses = []
         us = {}
         for layer in layer_names:
+            if (k, w, layer) not in cell_keys:
+                row[f"{layer}_us"], row[f"{layer}_cores"] = "", ""
+                continue
             r = results.get((k, w, layer))
             if r is None:
                 row[f"{layer}_us"], row[f"{layer}_cores"] = "", ""
@@ -1453,14 +1710,16 @@ def build_competition_table(cells, outdir):
     elif provenance_seen:
         sha, tree, so = next(iter(provenance_seen))
         drift = f"provenance: head={str(sha)[:12]} tree_diff_md5={str(tree)[:8]} so_md5={str(so)[:8]} (uniform)"
-    return {"rows": rows, "provenance_note": drift}
+    return {"rows": rows, "provenance_note": drift, "layer_names": layer_names}
 
 
 def write_competition_reports(table, outdir):
     rows, note = table["rows"], table["provenance_note"]
     if not rows:
         return
-    layer_names = [name for name, _, _, _ in COMPETITION_LAYERS]
+    # Without --with-blaze, layer_names is exactly the four classic layers, so
+    # the CSV/md schema of existing runs is byte-identical.
+    layer_names = table.get("layer_names") or [name for name, _, _, _ in COMPETITION_LAYERS]
     columns = ["k", "W"]
     for layer in layer_names:
         columns += [f"{layer}_us", f"{layer}_cores"]
@@ -1490,6 +1749,8 @@ def write_competition_reports(table, outdir):
             "(tenstorrent/llm_perf PR 671+676) -- ASPIRATIONAL, no such kernel exists; "
             "gap columns = measured/roofline.\n\n"
         )
+        if "blaze" in layer_names:
+            f.write(f"> blaze: {BLAZE_CAVEAT}\n\n")
         if note:
             f.write(f"> {note}\n\n")
         # Exec summary: the two anchor rows every discussion keeps returning to.
@@ -1554,6 +1815,13 @@ def main():
         "--layers-competition",
         default="op,routed,stocknow,prebranch",
         help="competition layers to (re)run; order of execution is always the fixed one",
+    )
+    p.add_argument(
+        "--with-blaze",
+        action="store_true",
+        help="add the single-cell blaze layer (k=2048 W=65536; needs the tt-blaze checkout at "
+        + BLAZE_ROOT
+        + " with a tt-metal symlink into this repo)",
     )
     p.add_argument(
         "--child", action="store_true", help="internal: run as measurement child (or set " + CHILD_SPEC_ENV + ")"
