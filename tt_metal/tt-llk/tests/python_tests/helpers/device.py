@@ -313,11 +313,19 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
     for idx, entry in enumerate(callstack):
         # Format PC hex like Rust does
         pc = f"0x{entry.pc:016x}" if entry.pc is not None else "0x????????????????"
-        file_path = (TESTS_DIR / Path(entry.file)).resolve()
+        # ttexalens moved file/line/column onto entry.file_info (a DwarfFileLine);
+        # older releases expose them directly on the entry. Tolerate both APIs —
+        # and frames with no source info at all — so a real device assert prints
+        # its callstack instead of dying on an AttributeError here.
+        source = getattr(entry, "file_info", None) or entry
+        file = getattr(source, "file", None)
+        line = getattr(source, "line", "?")
+        column = getattr(source, "column", "?")
+        file_path = (TESTS_DIR / Path(file)).resolve() if file else "<unknown file>"
         # first line: idx, pc, function
         temp_str += f"{idx:>4}: {pc} - {entry.function_name}\n"
         # second line: file, line, column
-        temp_str += f"{' '*25}| at {file_path}:{entry.line}:{entry.column}\n"
+        temp_str += f"{' '*25}| at {file_path}:{line}:{column}\n"
 
     return temp_str
 

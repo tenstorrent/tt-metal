@@ -1172,7 +1172,11 @@ def _classify_edge_pair(mathop, a, b):
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
-    golden = get_golden_generator(BinarySFPUGolden)
+    # Instantiate directly rather than via get_golden_generator: the harness swaps
+    # in a DummyGoldenGenerator (which has no .ops) during compile-producer, and the
+    # class partition must be identical in the producer and consumer passes or the
+    # two would disagree about which variants skip — and thus which ELFs exist.
+    golden = BinarySFPUGolden()
     result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
     if math.isnan(result):
         return _EDGE_CLASS_NAN

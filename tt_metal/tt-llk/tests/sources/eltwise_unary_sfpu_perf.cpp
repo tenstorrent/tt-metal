@@ -226,7 +226,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                         if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
                         {
-                            static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                            // Guard only variants that actually select this branch: a
+                            // discarded `if constexpr` branch is still checked for
+                            // non-dependent expressions, so an unconditional
+                            // static_assert here rejects every APPROX_MODE / fp32-dest
+                            // variant of this kernel (signbit, reciprocal, ...).
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::exponential || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "semantic exp selector supports only non-approx, bf16 dest");
                             SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
                                 is_fp32_dest_acc_en,
@@ -295,7 +302,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Start SFPU operation
                         if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exponential)
                         {
-                            static_assert(!APPROX_MODE && !is_fp32_dest_acc_en);
+                            // Guard only variants that actually select this branch: a
+                            // discarded `if constexpr` branch is still checked for
+                            // non-dependent expressions, so an unconditional
+                            // static_assert here rejects every APPROX_MODE / fp32-dest
+                            // variant of this kernel (signbit, reciprocal, ...).
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::exponential || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "semantic exp selector supports only non-approx, bf16 dest");
                             SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
                                 is_fp32_dest_acc_en,
