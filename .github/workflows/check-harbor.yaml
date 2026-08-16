@@ -89,14 +89,23 @@ jobs:
             HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
           fi
 
-          # Validate the body is actually JSON before parsing it. A 200 with a
-          # non-JSON body (e.g. a proxy/maintenance page served while Harbor is
-          # degraded) is exactly the kind of response most likely when Harbor is
-          # unhealthy — jq would abort the whole script under `set -e` on that
-          # input, hard-failing the job instead of falling back like every other
-          # unavailable/unhealthy case here.
-          if [ -n "$HEALTH_RESPONSE" ] && echo "$HEALTH_RESPONSE" | jq -e . > /dev/null 2>&1; then
-            echo "$HEALTH_RESPONSE" | jq -r '.components[]? | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
+          # Validate the body is not just JSON, but actually *shaped* like Harbor's
+          # health payload, before parsing it further. A 200 with a non-JSON body
+          # (e.g. a proxy/maintenance page) or JSON of the wrong shape (a root
+          # array, a scalar, or an object missing/mistyping .status) is exactly the
+          # kind of response most likely when Harbor is degraded -- checking JSON
+          # syntax alone (`jq -e .`) isn't enough, since a root array or wrong-typed
+          # .status still crashes the .components/.status lookups below with a jq
+          # type error; under `set -e` that hard-fails the job instead of falling
+          # back like every other unavailable/unhealthy case here. This single
+          # guard subsumes the syntax check too (jq itself errors on invalid JSON).
+          if [ -n "$HEALTH_RESPONSE" ] && echo "$HEALTH_RESPONSE" | jq -e 'type == "object" and (.status | type) == "string"' > /dev/null 2>&1; then
+            # Once the guard above passes, .status is known-good, but individual
+            # .components[] entries aren't schema-checked -- wrap each element's
+            # processing in its own `?` so one malformed entry (e.g. a scalar
+            # instead of an object) just produces no warning for that entry,
+            # rather than aborting the whole jq invocation for every component.
+            echo "$HEALTH_RESPONSE" | jq -r '.components[]? | (select(.status != "healthy") | "\(.name):\(.status)")?' | while IFS=: read -r name status; do
               echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"
             done
 
