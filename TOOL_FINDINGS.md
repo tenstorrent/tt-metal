@@ -98,6 +98,7 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
+| **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` against threshold 0.99 — no range check anywhere, and the pytest exit code is deliberately ignored, so the regex scrape is the only signal | **YES — first, one line** | trivial |
 | **F6** | `mcp` is **declared nowhere** → all 10 agent tools silently absent → 11 h stall | **YES — first** | trivial |
 | **F2** | the READY verdict can never fire (`lambda _: []`); best compat report = surest failure | **YES** | one line |
 | **F1** | a local model dir gets a reduced probe → refused 3 stages later, wrong diagnosis | **YES** | small |
@@ -139,8 +140,13 @@ defect.
 | **F40** | the baseline measurement completes (`756.4513 ms`, 8 iters, 4 stages PCC-clean) and is then discarded by a segfault in `close_mesh_device` at teardown; the run reports a missing CSV and optimizes on with no baseline | **YES — with F31** | small |
 | **F41** | the depth-knob sanity check compares op sequences truncated at 50000 and reads the shared limit as "cap never reached the builder"; the knob is also only backbone-deep while its comment claims every stack | **YES** | small |
 
-**If only one thing is taken: F6.** It is the difference between "this tool does not work" and
-"this tool ported a 3.4B model correctly in ten minutes".
+**If only one thing is taken: F42.** One line of range validation. Without it the correctness gate
+can return `pcc_verified: true` on a number that is not a correlation coefficient, and every perf
+win the tool banks rests on that gate. It was found only because the impossible value happened to be
+read by a human; nothing in the system objected.
+
+**If only one thing is taken for BRING-UP: F6.** It is the difference between "this tool does not
+work" and "this tool ported a 3.4B model correctly in ten minutes".
 
 **If one thing is taken from the three-block run: F29** — a one-line default that this document
 measures as the difference between e2e PCC 0.9586 and 0.9986 on the same code. F30 is its
@@ -3709,6 +3715,100 @@ overflows.
    the right fix.
 3. **Wire the whole knob.** Pass `flow_layers` / `vocode_layers` through from `TT_PERF_LAYERS`, or
    change the comment to say only the backbone is capped.
+
+---
+
+## ★★★★ F42 — the correctness gate reported `pcc: 33.612, pcc_verified: true`
+
+**Status: live, observed during the optimize run** · severity: the gate that protects every perf
+edit can return "correctness verified" on a value that is not a correlation coefficient ·
+reported: not yet
+
+This is the most serious finding in this document. Everything the optimize stage banks — every
+"win", every commit — rests on one question: *did the edit preserve correctness?* On 2026-08-16 at
+~02:07 the tool answered that question like this, and handed the answer to the agent verbatim:
+
+```json
+{
+  "status": "ok",
+  "pcc": 33.612,
+  "pcc_verified": true,
+  "threshold": 0.99
+}
+```
+
+A Pearson correlation coefficient is bounded in **[-1, 1]**. `33.612` is not a PCC that is very
+good; it is not a PCC at all. The gate compared it against 0.99, found it larger, and declared
+correctness **verified**.
+
+### Why nothing caught it
+
+Three mechanisms compose, each defensible alone.
+
+**1. The parse is permissive** (`agent/pcc_runner.py:22`):
+
+```python
+_PCC_RE = re.compile(r"(?i)pcc[^\n]*?[:=]\s*(-?\d+\.\d+)")
+```
+
+`pcc[^\n]*?[:=]` allows *arbitrary text* between the word "pcc" and the delimiter, so any line that
+merely mentions pcc and later contains `: <float>` matches — a duration, a percentage, a byte count,
+a core id.
+
+**2. The reduction is `min`, and `min` cannot detect this** (`pcc_runner.py:25-34`). Taking the
+worst observed PCC is good design, and its docstring explains real bugs it fixed. But `min` only
+protects against values that are too *low*. When every match is spurious, the smallest spurious
+value is returned with full confidence — here, 33.612.
+
+**3. The exit code is deliberately not consulted** (`pcc_runner.py:105-117`):
+
+> *"PCC IS the correctness signal for a perf edit. A non-zero pytest EXIT with PCC>=threshold is NOT
+> an edit-induced regression: the e2e gate also enforces BRING-UP checks (Gate-2) and the process
+> prints benign nanobind teardown leaks at interpreter shutdown — BOTH set a non-zero exit while the
+> math is perfect… Gating on the raw return code here rejected every edit. So gate on PCC"*
+
+That reasoning is sound and hard-won. But it means the **parsed number is the only signal left**.
+Once it is wrong, nothing else is watching.
+
+```python
+effective = max(float(threshold or 0.0), _operator_pcc_floor())
+return ({"status": "ok", "pcc": pcc, "pcc_verified": True, "threshold": effective}
+        if pcc >= effective else {"status": "pcc_low", ...})
+```
+
+There is no upper-bound check anywhere in the path.
+
+### What it means
+
+A test run whose output does not contain the expected `e2e PCC=0.9999…` line — because the test
+errored earlier, because a format changed, because a different case ran — but which does contain any
+line matching `pcc…: <number ≥ threshold>` is reported as `status: ok`, `pcc_verified: true`, and
+the edit that produced it is banked as correct. **The failure is silent and it is in the unsafe
+direction.**
+
+The gate does work in the ordinary case: minutes earlier the same gate correctly caught the
+`bfloat8_b` weight experiment at `pcc: 0.349, status: pcc_low`, and the agent reverted it. That is
+what makes this dangerous rather than merely broken — it is right often enough to be trusted.
+
+### Fixes (the first is one line)
+
+1. **Reject out-of-range values as parse failures.** `if pcc is not None and not (-1.0 <= pcc <=
+   1.0): return {"status": "crash", "error": f"parsed PCC {pcc} is out of range — the log line
+   matched was not a correlation"}`. A value above 1.0 is *never* a passing measurement.
+2. **Tighten the regex.** `pcc[^\n]*?[:=]` should not span arbitrary text; require the delimiter to
+   follow `pcc` closely (`pcc\s*[:=]` or `\bpcc\b[^,\n]{0,12}[:=]`).
+3. **Cross-check the exit code when the parse is implausible.** Ignoring the return code is
+   reasonable *given a trustworthy number*; when the number is out of range, the return code is the
+   only remaining evidence and should decide.
+4. **Report `pcc_verified: false` when the value is not in range**, rather than asserting
+   verification of a number the tool cannot have measured.
+
+### Still to establish
+
+Whether the underlying pytest run actually passed at the moment of this reading is **not** settled
+here — the raw output was not retained in the transcript, only the parsed verdict. The port's real
+correctness will be re-measured directly (`pytest …::test_e2e_pcc`) once the device is free, and
+recorded. What is settled is that the gate's answer carried no information either way.
 
 ---
 
