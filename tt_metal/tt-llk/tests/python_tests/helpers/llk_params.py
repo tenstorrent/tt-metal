@@ -758,6 +758,21 @@ class CountArm(Enum):
                 materially lower number means an instruction was silently
                 discarded (SFPLOADMACRO.md:149). Beats binary search only if it
                 lands below 6.0 (three bits at CountD1's 2.0 cyc/vector/bit).
+    HistMacro:  HistNibble's body with its four SOFTWARE instructions relocated
+                into the macro's free MAD/Round/Store slots, so one
+                SFPLOADMACRO per vector retires Load + Simple(SFPEXEXP) +
+                MAD(SFPMUL24) + Round(SFPSHFT2) + Store(SFPSTORE). Expected
+                ~1.0 cyc/vector -- the FOUR-sub-unit corner that MacroTriple
+                (Load+Simple+MAD) and MaskStore (Load+Simple+Store) leave
+                unmeasured, and the only arm that touches the Round sub-unit.
+                It materialises the thermometer rather than accumulating it, so
+                the full 8-bucket histogram costs this arm plus one CountD1-
+                shaped summing pass.
+    HistSum:    the other half of HistMacro -- a plain SFPLOAD of the
+                materialised thermometer tile plus a software SFPIADD into a
+                per-lane running total. Expected 2.0 cyc/vector; HistMacro +
+                HistSum is the end-to-end cost of an 8-bucket cumulative
+                histogram, to be read against HistNibble's single-pass 5.0.
     MultiPass:  ARM_COUNT_D1 chopped into 64-vector segments with a realistic
                 restart between them (pipeline drain, threshold reload, Dst
                 rewind, MOP re-issue). The excess over CountD1's slope, times
@@ -774,6 +789,8 @@ class CountArm(Enum):
     HistNibble = 6
     MultiPass = 7
     PassSync = 8
+    HistMacro = 9
+    HistSum = 10
 
 
 class TopKPerfArm(Enum):
@@ -814,6 +831,11 @@ class TopKPerfArm(Enum):
     GmgTop8 = 4
     GmgTop8Ls = 5
     XlMerge = 6
+    LocalSortHoist = 7
+    LocalSortMop = 8
+    LocalSortRvProbe = 9
+    LocalSortReplayLd = 10
+    LocalSortReplayLs = 11
 
     @property
     def vectors_per_body(self) -> int:
@@ -828,6 +850,14 @@ _TOPK_PERF_VECTORS_PER_BODY = {
     TopKPerfArm.GmgTop8: 4,
     TopKPerfArm.GmgTop8Ls: 4,
     TopKPerfArm.XlMerge: 32,
+    # Same body and same 2-value-tile window as LocalSort; they differ only in
+    # the experimental issue-rate flag ckernel_sfpu_topk.h is built with, so
+    # they must be normalised by the same divisor to be comparable to it.
+    TopKPerfArm.LocalSortHoist: 64,
+    TopKPerfArm.LocalSortMop: 64,
+    TopKPerfArm.LocalSortRvProbe: 64,
+    TopKPerfArm.LocalSortReplayLd: 64,
+    TopKPerfArm.LocalSortReplayLs: 64,
 }
 
 

@@ -613,7 +613,35 @@ device reset:
 | **`PassSync`** | 2.389 | data-dependent restart >= **25.1 cyc** |
 | **`HistNibble`** | 5.000 | 8-bucket exponent histogram |
 
-**Why 2.0 cannot be beaten by an SFPU-only count.** A macro schedules **at most one
+**Why 2.0 cannot be beaten by an SFPU-only count — and the cause is NOT what an earlier
+revision of this document said.** It is not the per-thread frontend dequeue rate; that is
+a red herring, since a *per-thread* limit would have permitted two threads at 1/cycle
+each. The real cause is that **the SFPU has a single shared issue port at the frontend
+mux, global across all three Tensix threads**:
+
+- `Diagrams/Src/TensixFrontend.lua:126-136` annotates `uops = 3` on exactly the
+  per-thread-replicated units (Sync, Configuration, Miscellaneous) and leaves Vector Unit
+  (SFPU), Matrix Unit (FPU), Packers, Unpackers, Scalar Unit and Mover at the default
+  **1**. All three per-thread Wait Gates feed one mux.
+- `WaitGate.md:5` names the exact stall: *"Multiple threads are wanting to dispatch an
+  instruction to the same backend execution unit, but the unit can only accept one
+  instruction per cycle (so one thread will dispatch, and the others will wait)."*
+- `SFPLOADMACRO.md:13`: *"`SFPLOADMACRO` is the **only** mechanism for attaining more than
+  one instruction per cycle"* — unqualified, not "from a single thread". Macro-scheduled
+  sub-unit ops are generated *inside* the SFPU and never traverse the mux; software-issued
+  ops, from any thread, always do.
+
+**So a two-thread split cannot break the floor.** MATH issuing the macro stream and a
+second thread issuing the accumulates still presents 2 instructions/vector to a 1/cycle
+port. The second thread does not add a dispatch slot, it takes one 1:1 — best case a wash,
+realistically worse from arbitration jitter. Cross-thread synchronization is independently
+fatal too: `SyncUnit.md:5-9` throughput-limits `SEMPOST`/`SEMGET`/`SEMWAIT`/`STALLWAIT` to
+one per cycle *globally*, so a per-vector handshake costs >= 2 cyc/vector before any SFPU
+work. (Note `ATGETM`/`ATRELM` are 3/cycle by contrast.) And unsynchronized is worse than
+slow: `SFPGT` and `SFPIADD` are both Simple sub-unit, so a cross-thread collision is a
+**silent undercount** per `SFPLOADMACRO.md:149`.
+
+The remaining structural facts still hold: a macro schedules **at most one
 Simple instruction** (`SFPLOADMACRO.md:5`), so compare and accumulate cannot share one;
 and a macro-scheduled result lands in `macroVD` (clobbered by the next load) or
 `LReg[16]`, readable only by a macro-scheduled `SFPSTORE` — never an ALU input
@@ -659,6 +687,85 @@ so a safe clamp costs +2-4 instructions and makes it worse than binary search ou
 **At N=256, do not threshold — sort.** The 25-cycle data-dependent rendezvous alone
 exceeds the entire 16-cycle data pass. The existing bitonic top-8 micro-op does it with
 no threshold and no L1 round trip. Estimated crossover **N ~ 4000-8000** (not measured).
+
+#### MEASURED: a four-sub-unit macro at 1.000 cyc/vector, and the honest end-to-end number
+
+**Correcting a misleading figure used earlier in this document.** The "~38x faster than
+`ttnn.topk`" claim compared a *single filter pass* (1.003) against a *complete*
+`topk_local_sort` (76.195). That is not a like-for-like comparison. A complete
+threshold-select needs many passes. **The honest end-to-end figure is ~3x**, derived below.
+
+**The new primitive.** Every previous arm used at most a 2-deep macro. `HistMacro` uses
+the full five-instructions-per-cycle corner — Load + Simple + MAD + Round + Store — by
+exploiting the fact that `SFPLOADMACRO.md`'s (†) rule (*"if a Simple and a Round
+instruction execute on the same cycle, one of them needs `VD == 16`"*) constrains
+*counting* but not *mapping*: a Round instruction may legally target `LReg[16]` and exit
+through the Store slot.
+
+```
+t+0  Load                macroVD = x
+t+1  Simple   SFPEXEXP   macroVD = exp(x)
+t+2  MAD      SFPMUL24   macroVD = (4*macroVD) & 0x7FFFFF
+t+4  Round    SFPSHFT2   LReg[16] = SEED << macroVD      (VD=16 satisfies the (†) rule)
+t+5  Store    SFPSTORE   Dst[load addr] = LReg[16]
+```
+
+Delays are 1 and 3 because `SFPMUL24` has 2-cycle latency. `macroVD` is live t..t+4, so the
+register rotation period must exceed 4 and not divide 4 — **P = 8**, which uses all of
+LREG0..7 and forces the loop constants into the programmable-constant file (LReg11/12).
+
+| arm | cyc/vector | vs floor |
+| :--- | ---: | ---: |
+| `ReplayLoad` (control) | 1.000 | 1.000 |
+| `ReplaySwap` (control) | 2.000 | **2.000** — exactly 2.00x, valid |
+| `CountD1` | 1.998 | |
+| `MaskStore` | 1.003 | |
+| `HistNibble` (software histogram) | 5.000 | |
+| **`HistMacro`** (new) | **1.000** | predicted 1.000 |
+| **`HistSum`** (new) | **2.000** | predicted 2.000 |
+
+**`HistMacro` + `HistSum` = 3.000 cyc/vector for the same 8-bucket exponent histogram
+`HistNibble` computes in 5.000.** The entire gain is the three free sub-unit slots:
+`HistNibble` issues four software instructions per vector, `HistMacro` issues none.
+
+| scheme | cyc/vector | bits/pass | **cyc per bit** |
+| :--- | ---: | ---: | ---: |
+| bit-serial binary search (`CountD1`) | 2.000 | 1 | 2.00 |
+| `HistNibble` | 5.000 | 3 | 1.67 |
+| **`HistMacro` + `HistSum`** | **3.000** | **3** | **1.00** |
+
+**End-to-end threshold-select, bf16 (16 key bits), per 32-element vector:**
+
+| stage | cyc |
+| :--- | ---: |
+| premap to monotone-integer key | 1.0 |
+| sign+exponent, 3x (`HistMacro`+`HistSum`) | 9.0 |
+| 7 mantissa bits, bit-serial | 14.0 |
+| final filter / emit | 1.0 |
+| **total** | **~25.0** |
+
+vs `topk_local_sort` end_phase 5 at **76.195** → **~3.0x**, and that 76.195 is only
+`ttnn.topk`'s *local sort*; its merge/rebuild tree sits on top. For fp32 (24 bits) the
+margin narrows to ~1.6-1.9x.
+
+**Arbitrary k costs exactly zero.** k appears only as an integer compared against a count
+on the RISC-V between passes — k=5, 17, 100, 1000 are **bit-identical kernels**. No
+power-of-two W, no padding, no k<=64, no minimum N beyond one vector. Corrections to the
+shipping constraints as stated earlier in this document: k is padded to a multiple of
+**32** (tile width), not a power of two (`topk.cpp:39-41`); and `k<=64` / `W` power-of-two
+/ `W>=8192` are multi-core **selection criteria**, not asserts (`topk_device_operation.cpp:66-75`)
+— so the real penalty for awkward k is a **throughput cliff** onto the single-core factory
+(~num_cores x), not a padding tax.
+
+**Where it loses.** Below N ~ 2048 the fixed cost of RISC-V round trips between passes
+(>=25.1 cyc each, and that is a floor) dominates — the sorting networks win outright, and
+`_topk_xl_merge_` at **2.844** is untouchable there. Bitonic is also *oblivious*: fixed
+schedule, no readback, MOP/replay end to end. Threshold-select is data-dependent at every
+pass, an architectural disadvantage the cycle counts alone hide.
+
+**Instruction census across the shipping BH sort/topk headers: 230 `SFPSWAP` sites,
+ZERO `SFPGT`/`SFPLE`.** The compare-only instruction Blackhole added is used by none of
+them.
 
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 

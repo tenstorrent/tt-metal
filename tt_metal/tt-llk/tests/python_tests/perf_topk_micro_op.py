@@ -119,7 +119,32 @@ _ITER_COUNTS = {
     TopKPerfArm.GmgTop8Ls: [64, 256],
     # 4 body iters x 16 instructions + 2 MOP issues.
     TopKPerfArm.XlMerge: [32, 128],
+    # The three experimental issue-rate variants of LocalSort. Same body, same
+    # points, so their slopes are directly subtractable from LocalSort's.
+    TopKPerfArm.LocalSortHoist: [2, 8],
+    TopKPerfArm.LocalSortMop: [2, 8],
+    TopKPerfArm.LocalSortRvProbe: [2, 8],
+    TopKPerfArm.LocalSortReplayLd: [2, 8],
+    TopKPerfArm.LocalSortReplayLs: [2, 8],
 }
+
+# Every arm that calls _bitonic_topk_phases_steps. They differ only in which
+# #if-guarded knob of ckernel_sfpu_topk.h the header was compiled with, so they
+# share LocalSort's parameter sweep exactly -- otherwise a delta against
+# LocalSort would not be attributable to the knob.
+_LOCAL_SORT_ARMS = (
+    TopKPerfArm.LocalSort,
+    TopKPerfArm.LocalSortHoist,
+    TopKPerfArm.LocalSortMop,
+    TopKPerfArm.LocalSortRvProbe,
+    TopKPerfArm.LocalSortReplayLd,
+    TopKPerfArm.LocalSortReplayLs,
+)
+
+# The subset of _LOCAL_SORT_ARMS built with a knob turned on.
+_EXPERIMENTAL_LOCAL_SORT_ARMS = tuple(
+    a for a in _LOCAL_SORT_ARMS if a is not TopKPerfArm.LocalSort
+)
 
 _ARMS = list(_ITER_COUNTS.keys())
 
@@ -132,7 +157,7 @@ def _end_phases(topk_arm):
     take the `default:` branch of the phase switch -- a different, load/store
     heavier code path than phases 0-3 -- so the pair also prices that branch.
     """
-    return [0, 1, 2, 3, 4, 5] if topk_arm is TopKPerfArm.LocalSort else [5]
+    return [0, 1, 2, 3, 4, 5] if topk_arm in _LOCAL_SORT_ARMS else [5]
 
 
 def _m_iters(topk_arm):
@@ -170,6 +195,12 @@ def _sort_dirs(topk_arm):
     """
     if topk_arm in (TopKPerfArm.CtrlLoad, TopKPerfArm.CtrlSwap, TopKPerfArm.XlMerge):
         return [TopKSortDirection.Descending]
+    # The three experimental LocalSort variants exist to be differenced against
+    # LocalSort, not to re-price an axis LocalSort already prices. Pinning them
+    # to the ttnn direction keeps the sweep to the comparisons that answer a
+    # question.
+    if topk_arm in _EXPERIMENTAL_LOCAL_SORT_ARMS:
+        return [TopKSortDirection.Descending]
     return [TopKSortDirection.Descending, TopKSortDirection.Ascending]
 
 
@@ -186,7 +217,9 @@ def _stables(topk_arm):
     fixed instruction lattice is still well defined, and the lattice is what
     would ship once the correctness bug is fixed.
     """
-    if topk_arm in (TopKPerfArm.LocalSort, TopKPerfArm.Merge):
+    if topk_arm in _EXPERIMENTAL_LOCAL_SORT_ARMS:
+        return [StableSort.No]
+    if topk_arm in _LOCAL_SORT_ARMS or topk_arm is TopKPerfArm.Merge:
         return [StableSort.No, StableSort.Yes]
     return [StableSort.No]
 

@@ -177,6 +177,52 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #define ARM_GMG_TOP8_LS_ID 5
 #define ARM_XL_MERGE_ID    6
 
+// Experimental issue-rate variants of ARM_LOCAL_SORT. Same call, same
+// parameters, same VECTORS_PER_BODY -- the ONLY difference is which of
+// ckernel_sfpu_topk.h's #if-guarded knobs the header is compiled with, so a
+// difference against ARM_LOCAL_SORT in the same sweep is attributable to that
+// knob and nothing else. They are separate ARM IDS rather than an extra
+// parameter because the knobs are preprocessor-level: the header must be
+// compiled differently, which is exactly what a distinct variant id buys.
+//
+//   ARM_LOCAL_SORT_HOIST     TOPK_HOIST_INIT_GUARDS -- peel d == 0 so the
+//                            init branches leave the phase 0/1/2 loop.
+//   ARM_LOCAL_SORT_MOP       TOPK_MOP_INNER_LOOP -- drive that loop from the
+//                            math MOP expander (implies the hoist).
+//   ARM_LOCAL_SORT_RV_PROBE  TOPK_PROBE_RV_NOPS -- DIAGNOSTIC. Injects N
+//                            RISC-V-only instructions per iteration of the
+//                            phase >= 4 compare/exchange loop. Its delta
+//                            against ARM_LOCAL_SORT measures directly whether
+//                            that loop is RISC-V-issue-bound (delta = N x
+//                            iterations) or SFPU-backend-bound (delta = 0).
+//   ARM_LOCAL_SORT_REPLAY_LD TOPK_REPLAY_STEP_LOAD -- replay the phase >= 4
+//                            loop's load16 (1 RISC-V issue per iteration
+//                            instead of 8). This is the arm the RV_PROBE
+//                            result points at.
+#define ARM_LOCAL_SORT_HOIST_ID     7
+#define ARM_LOCAL_SORT_MOP_ID       8
+#define ARM_LOCAL_SORT_RV_PROBE_ID  9
+#define ARM_LOCAL_SORT_REPLAY_LD_ID 10
+//   ARM_LOCAL_SORT_REPLAY_LS TOPK_REPLAY_STEP_STORE -- the same for the loop's
+//                            store16, taking that iteration from 8 RISC-V
+//                            issues to 1 as well. Only pays if the loop is
+//                            STILL issue-bound after the load is replayed.
+#define ARM_LOCAL_SORT_REPLAY_LS_ID 11
+
+// Injected RISC-V instructions per phase >= 4 inner-loop iteration for
+// ARM_LOCAL_SORT_RV_PROBE. At TOPK_END_PHASE 5 that loop runs 48 times per
+// call (phase 4: 4 iters x 4 (face,col); phase 5: 8 x 4), so 8 injects 384
+// instructions -- ~8% of the arm's measured 4876 cycles/call if, and only if,
+// the loop is issue-bound. Far above the run-to-run noise, which the two-point
+// slope reports as ~0.
+#define TOPK_PROBE_RV_NOP_COUNT 8
+
+// True for every arm that calls _bitonic_topk_phases_steps, whatever knob it
+// was built with. Keeps the init block and the timed body written once.
+#define TOPK_ARM_IS_LOCAL_SORT                                                                                                   \
+    (TOPK_PERF_ARM == ARM_LOCAL_SORT_ID || TOPK_PERF_ARM == ARM_LOCAL_SORT_HOIST_ID || TOPK_PERF_ARM == ARM_LOCAL_SORT_MOP_ID || \
+     TOPK_PERF_ARM == ARM_LOCAL_SORT_RV_PROBE_ID || TOPK_PERF_ARM == ARM_LOCAL_SORT_REPLAY_LD_ID || TOPK_PERF_ARM == ARM_LOCAL_SORT_REPLAY_LS_ID)
+
 namespace
 {
 
@@ -227,6 +273,20 @@ inline void mop_run_all()
 // the SFPU index-tracking config write has to come from here). Deliberately NOT
 // pulled in alongside ckernel_sfpu_topk_xl.h: the two are separate trees that
 // are never co-included in-tree.
+// The experimental knobs are preprocessor-level and MUST be defined before the
+// header is included; see the ARM_LOCAL_SORT_* block above.
+#if TOPK_PERF_ARM == ARM_LOCAL_SORT_HOIST_ID
+#define TOPK_HOIST_INIT_GUARDS 1
+#elif TOPK_PERF_ARM == ARM_LOCAL_SORT_MOP_ID
+#define TOPK_MOP_INNER_LOOP 1
+#elif TOPK_PERF_ARM == ARM_LOCAL_SORT_RV_PROBE_ID
+#define TOPK_PROBE_RV_NOPS TOPK_PROBE_RV_NOP_COUNT
+#elif TOPK_PERF_ARM == ARM_LOCAL_SORT_REPLAY_LD_ID
+#define TOPK_REPLAY_STEP_LOAD 1
+#elif TOPK_PERF_ARM == ARM_LOCAL_SORT_REPLAY_LS_ID
+#define TOPK_REPLAY_STEP_STORE 1
+#endif
+
 #if TOPK_PERF_ARM != ARM_XL_MERGE_ID
 #include "sfpu/ckernel_sfpu_topk.h"
 #endif
@@ -262,7 +322,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // below rides on. Must come first.
         _llk_math_eltwise_unary_sfpu_init_once_();
 
-#if TOPK_PERF_ARM == ARM_LOCAL_SORT_ID || TOPK_PERF_ARM == ARM_MERGE_ID
+#if TOPK_ARM_IS_LOCAL_SORT || TOPK_PERF_ARM == ARM_MERGE_ID
         {
             // The topk-specific half of the shipping init: re-asserts
             // ADDR_MOD_7 and adds ADDR_MOD_6 = {dest.incr = 32}, which
@@ -363,7 +423,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel_unpack_template::lA(lltt::replay_insn(0, 2), TT_OP_NOP).program();
             mop_run_all();
         }
-#elif TOPK_PERF_ARM == ARM_LOCAL_SORT_ID
+#elif TOPK_ARM_IS_LOCAL_SORT
         {
 // `unroll 1` on purpose. _bitonic_topk_phases_steps expands to thousands of
 // instructions; letting the compiler unroll ITER_COUNT copies would trade the

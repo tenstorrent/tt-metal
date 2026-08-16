@@ -125,6 +125,8 @@ _DEST_ACC = DestAccumulation.Yes
         CountArm.HistNibble,
         CountArm.MultiPass,
         CountArm.PassSync,
+        CountArm.HistMacro,
+        CountArm.HistSum,
     ],
     iter_count=_ITER_COUNTS,
 )

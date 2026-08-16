@@ -100,6 +100,17 @@
 //   HistNibble  (8-bucket exp histogram)    5.000               6.4
 //   MultiPass   (CountD1, blind restarts)   2.097
 //   PassSync    (CountD1, synced restarts)  2.389
+//   HistMacro   (Load+EXEXP+MUL24+SHFT2+ST) 1.000              32.0
+//   HistSum     (Load + sw SFPIADD)         2.000              16.0
+//
+// HistMacro/HistSum were predicted at 1.000/2.000 from the instruction count
+// BEFORE the run and landed on both. Together they are the same 8-bucket
+// cumulative histogram HistNibble computes, split into a materialise pass and a
+// summing pass, at 3.000 cyc/vector against HistNibble's 5.000 -- i.e. 1.00
+// cycles per bit of threshold resolution, against 1.67 for HistNibble and 2.00
+// for a bit-serial binary search built on CountD1. The gain is entirely the
+// three free sub-unit slots: HistNibble issues four SOFTWARE instructions per
+// vector, HistMacro issues none.
 //
 // The SFPSWAP control landing on 2.000 -- predicted from SFPSWAP.md:110 alone
 // -- is what makes the rest trustworthy.
@@ -216,6 +227,8 @@ constexpr std::uint32_t ARM_MACRO_EXP    = 5; // control: is a macro-scheduled S
 constexpr std::uint32_t ARM_HIST_NIBBLE  = 6; // one-pass packed exponent histogram
 constexpr std::uint32_t ARM_MULTI_PASS   = 7; // per-pass restart overhead of ARM_COUNT_D1
 constexpr std::uint32_t ARM_PASS_SYNC    = 8; // ...plus the RISC-V/backend rendezvous a decision needs
+constexpr std::uint32_t ARM_HIST_MACRO   = 9; // 4-sub-unit histogram materialise, see below
+constexpr std::uint32_t ARM_HIST_SUM     = 10; // the summing pass HistMacro must be paired with
 
 // LReg map. A/B ping-pong as the macro load target; SFPGT overwrites the
 // loaded register with its own -1/0 mask, which the SFPIADD then consumes.
@@ -560,6 +573,172 @@ inline void mop_run_all()
 constexpr std::uint32_t SEGMENTS           = ITER_COUNT / VECTORS_PER_SEGMENT;
 constexpr std::uint32_t PASSES_PER_SEGMENT = VECTORS_PER_SEGMENT / 2;
 
+// ---------------------------------------------------------------------------
+// ARM_HIST_MACRO -- the FOUR-sub-unit macro, and the point of this arm.
+//
+// WHAT IT SETTLES. The file header proves a *count* costs >= 2 instructions per
+// vector and observes that what a macro CAN do at 1.0 is "an arbitrary 4-deep
+// MAP (Load -> Simple -> MAD -> Round -> Store)". No arm measured that:
+// MacroTriple is Load+Simple+MAD, MaskStore is Load+Simple+Store, MacroExp is
+// Load+Simple. All three are 2-deep and none touches the Round sub-unit. This
+// arm is the 4-deep corner, and it is not a synthetic probe -- it is exactly
+// HistNibble's body with its four SOFTWARE instructions relocated into the
+// macro's free MAD/Round/Store slots:
+//
+//   HistNibble (measured 5.000 cyc/vector, 10 instructions per 2 vectors)
+//       macro:    Load + Simple(SFPEXEXP)
+//       software: SFPSHFT(<<2), SFPIADD(-4*base), SFPSHFT2(thermo), SFPIADD(acc)
+//
+//   HistMacro (this arm, ONE instruction per vector)
+//       macro:    Load
+//                 + Simple(SFPEXEXP)      exp(x)
+//                 + MAD   (SFPMUL24 x4)   4*exp   <- replaces the software SFPSHFT
+//                 + Round (SFPSHFT2)      seed << 4*exp   <- the thermometer
+//                 + Store (SFPSTORE)      thermometer -> Dst, in place
+//
+// The accumulate is the one thing that cannot move into the macro (the header's
+// bound), so it is dropped here and paid for by a separate summing pass. The
+// eight-bucket cumulative histogram therefore costs
+//     1.0 (this arm, materialise)  +  2.0 (a CountD1-shaped sum over the
+//                                          thermometer tile)  =  3.0 cyc/vector
+// for 3 bits of threshold resolution, i.e. 1.00 cyc/bit against HistNibble's
+// 1.67 and bit-serial binary search's 2.00.
+//
+// PREDICTION, MADE BEFORE MEASURING: 1.00 cyc/vector. One SFPLOADMACRO per
+// vector, IPC 1, replay+MOP fed; every other instruction rides a free sub-unit.
+//
+// WHY THE ROTATION IS EIGHT DEEP, NOT TWO. The chain is four cycles long:
+//
+//   t+0  load          macroVD = x
+//   t+1  Simple  d=0   macroVD = exp(x)                (SFPEXEXP, latency 1)
+//   t+2  MAD     d=1   macroVD = (4 * macroVD) & 0x7FFFFF   (SFPMUL24)
+//   t+4  Round   d=3   LReg[16] = SEED << macroVD      (SFPSHFT2, LREG mode)
+//   t+5  Store   d=4   Dst[load addr] = LReg[16]
+//
+// The MAD sits at delay 1 and the Round at delay 3 because SFPMUL24 has a
+// 2-cycle latency (VectorUnit.md integer table) -- ckernel_sfpu_mul_int.h:126,128
+// spaces its own MAD and Store by exactly 2 for the same reason. So macroVD is
+// live from t to t+4 and must not be reloaded in between: the rotation period P
+// needs P > 4, and it also needs P not to divide 4 so that the Round's read at
+// cycle t of R[(t-4) mod P] never lands on the same register the load writes at
+// cycle t. P = 8 is the smallest value satisfying both that also divides the
+// swept ITER_COUNTs. VD is capped at 0..7 (SFPLOADMACRO.md:45, bit 3 hard-zero),
+// so all eight rotation slots are LREG0..LREG7 and the two loop constants have
+// to live in the programmable-constant file (LReg11..14, LReg.md) instead.
+//
+// WHY (dagger) IS SATISFIED. SFPLOADMACRO.md:5 footnote: "If a Simple
+// instruction and a Round instruction execute on the same cycle, then one of
+// them needs to have VD == 16 and the other needs to have VD != 16." At one
+// macro per cycle the Simple (t+1) and Round (t+4) sub-units BOTH fire every
+// cycle in steady state, so this is not a theoretical concern -- it is the
+// binding constraint on the whole design. It is met because the Round writes
+// LReg[16] (bit 0x40 set) and the Simple writes macroVD. That is also why the
+// Store slot is mandatory rather than decorative: LReg[16] is readable ONLY by
+// a macro-scheduled SFPSTORE (LReg.md), so the Store is the only way the
+// thermometer can escape.
+//
+// This is also the reason the ACCUMULATE cannot be folded in even in principle.
+// SFPIADD is a Simple instruction, and the Simple slot is spent on SFPEXEXP;
+// moving the accumulate to Round is impossible (Round hosts only SFPSHFT2 and
+// SFPSTOCHRND, neither of which adds) and moving it to MAD is impossible
+// (SFPMUL24 is the only integer op on MAD and it has no addend, while SFPMAD is
+// floating point and the thermometer is a bit pattern). The one instruction
+// that would bridge them, SFPCAST int->float, is itself a Simple instruction.
+//
+// WHAT THIS ARM DOES NOT MEASURE. Correctness. Under MATH_ISOLATE the stimulus
+// is whatever is in Dst, and the store is in-place (SFPLOADMACRO.md:140 forces
+// the scheduled store's address to equal the load's), so each pass consumes its
+// own previous output. That is fine for an issue-rate number and it is also a
+// real constraint on the algorithm: the histogram pass DESTROYS its input, so a
+// production kernel must either run it on a scratch copy or make it the last
+// use of the tile.
+constexpr std::uint32_t HIST_MACRO_ROTATION = 8;
+
+// LREG0..LREG7 are the rotation; the constants move to the programmable file.
+// LReg11..LReg14 are written only through the SFPCONFIG path
+// (_sfpu_load_config32_, ckernel_sfpu_load_config.h:28-35).
+constexpr std::uint32_t L_SEED_C = 11; // thermometer seed 0x11111111
+constexpr std::uint32_t L_FOUR_C = 12; // integer 4, the nibble stride
+
+// Sequence[0] for the four-sub-unit macro.
+//
+//   Simple: 0x80 CLEAR -> Insn.VC = macroVD, which is SFPEXEXP's input operand.
+//           Setting 0x80 would assign VB (a field SFPEXEXP does not have) and
+//           leave VC pointing at the template's stale register -- the same trap
+//           documented for macro 3 above. VD = macroVD (0x40 clear).
+//   MAD:    0x80 SET   -> Insn.VB = macroVD. This one MUST be set: with it clear
+//           the macro would assign Insn.VC = macroVD, and SFPMUL24 requires
+//           VC == 9 (the constant zero) or hardware performs an undocumented
+//           shift/add on the product (SFPMUL24.md:3, "software is strongly
+//           encouraged to turn this operation into a no-op by always setting
+//           VC == 9"). VA stays LREG12 (=4) from the template.
+//   Round:  0x80 CLEAR -> Insn.VC = macroVD, which in SFPSHFT2_MOD1_SHFT_LREG is
+//           the SHIFT AMOUNT (SFPSHFT2.md:120-133, `LReg[VD] = LReg[VB] <<
+//           (LReg[VC] & 31)`), leaving VB = LREG11 (the seed) from the template.
+//           0x40 SET -> VD = LReg[16], which is what satisfies the (dagger)
+//           Simple/Round exclusivity rule.
+//   Store:  selector 3 is the built-in SFPSTORE, no template needed. 0x40 SET ->
+//           Insn.VD = 16, i.e. store LReg[16] rather than macroVD.
+constexpr std::uint32_t SEQ6_SIMPLE = 0x00 | (0u << 3) | 4u; // template[0] SFPEXEXP, delay 0
+constexpr std::uint32_t SEQ6_MAD    = 0x80 | (1u << 3) | 5u; // template[1] SFPMUL24, delay 1
+constexpr std::uint32_t SEQ6_ROUND  = 0x40 | (3u << 3) | 6u; // template[2] SFPSHFT2, delay 3, VD=LReg16
+constexpr std::uint32_t SEQ6_STORE  = 0x40 | (4u << 3) | 3u; // SFPSTORE, delay 4, source LReg16
+constexpr std::uint32_t SEQUENCE_5  = (SEQ6_STORE << 24) | (SEQ6_ROUND << 16) | (SEQ6_MAD << 8) | SEQ6_SIMPLE;
+
+// Misc (SFPLOADMACRO.md:53-57). Bit 4 = UsesLoadMod0ForStore for macro 0, so the
+// store inherits the load's INT32 mode: the thermometer is a raw bit pattern and
+// must not be format-converted on the way out. Bits 8..11 put all four sub-units
+// on WaitForElapsedInstructions -- mandatory here because the delays span four
+// cycles and a single frontend bubble under cycle-counting would slide the Round
+// off its producer.
+constexpr std::uint32_t MISC_WORD_6 = 0xF00 | 0x10;
+
+inline void configure_macro0_histmacro()
+{
+    // template[0] = SFPEXEXP. VC is a placeholder the macro overwrites.
+    TTI_SFPEXEXP(0, L_A, 12, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+
+    // template[1] = SFPMUL24, VA = LREG12 (the constant 4), VB placeholder
+    // (overwritten with macroVD), VC = LCONST_0 == LReg[9] per SFPMUL24.md:3.
+    // Same shape as ckernel_sfpu_mul_int.h:121.
+    TTI_SFPMUL24(L_FOUR_C, 0, ckernel::p_sfpu::LCONST_0, 13, sfpi::SFPMUL24_MOD1_LOWER);
+
+    // template[2] = SFPSHFT2 in LREG mode. The ckernel encoding puts VB in the
+    // imm12 field (see ARM_HIST_NIBBLE's use above), so LREG11 is the seed and
+    // lreg_src_c is the placeholder the macro overwrites with macroVD.
+    TTI_SFPSHFT2(L_SEED_C, 0, 14, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+
+    // Sequence[0] needs all four bytes, so it does not fit the 16-bit immediate
+    // path -- stage it through LReg[0] exactly as configure_macro2_maskstore does.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, SEQUENCE_5 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (SEQUENCE_5 >> 16) & 0xFFFF);
+    TTI_SFPCONFIG(0, 4 + 0, 0);
+
+    TTI_SFPCONFIG(MISC_WORD_6, 8, SFPCFG_IMM16_IS_VALUE);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+// The rotation makes a "pass" eight vectors rather than two, so this arm needs
+// its own MOP chunking. Both swept ITER_COUNTs are multiples of 8, and
+// 2048/8 = 256 still exceeds the 7-bit MOP loop_count ceiling, so the chunking
+// is load-bearing, not decorative.
+constexpr std::uint32_t HM_PASSES = ITER_COUNT / HIST_MACRO_ROTATION;
+constexpr std::uint32_t HM_FULL   = HM_PASSES / MOP_MAX_ITERS;
+constexpr std::uint32_t HM_REM    = HM_PASSES % MOP_MAX_ITERS;
+
+inline void mop_run_hist_macro()
+{
+    for (std::uint32_t i = 0; i < HM_FULL; ++i)
+    {
+        ckernel::ckernel_unpack_template::run(MOP_MAX_ITERS);
+    }
+    if constexpr (HM_REM > 0)
+    {
+        ckernel::ckernel_unpack_template::run(HM_REM);
+    }
+}
+
 // SFPLOADMACRO field packing (ckernel_ops.h:683, SFPLOADMACRO.md:20-26,45):
 //   lreg_ind      = (MacroIndex << 2) | (VD & 3)
 //   dest_reg_addr = (Imm9 << 1) | (VD >> 2)
@@ -625,6 +804,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (COUNT_ARM == ARM_MACRO_EXP)
         {
             configure_macro3_exp<SEQUENCE_3_D0>();
+        }
+        else if constexpr (COUNT_ARM == ARM_HIST_MACRO)
+        {
+            // The two loop constants must sit in LReg11..14: LREG0..LREG7 are
+            // all consumed by the eight-deep macroVD rotation. _sfpu_load_config32_
+            // stages through LReg[0], so it MUST run before anything that wants
+            // LReg[0] to hold data -- here nothing does, since the rotation is
+            // seeded by the loads themselves.
+            ckernel::sfpu::_sfpu_load_config32_(L_SEED_C, THERMOMETER_SEED >> 16, THERMOMETER_SEED & 0xFFFF);
+            ckernel::sfpu::_sfpu_load_config32_(L_FOUR_C, 0, 4);
+            configure_macro0_histmacro();
         }
         else if constexpr (COUNT_ARM == ARM_HIST_NIBBLE)
         {
@@ -725,6 +915,84 @@ void run_kernel(RUNTIME_PARAMETERS params)
             mop_run_all();
 
             // Drain the scheduled Simple (t+1) and Store (t+2).
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+        }
+        else if constexpr (COUNT_ARM == ARM_HIST_MACRO)
+        {
+            // FOUR-SUB-UNIT MACRO. One SFPLOADMACRO per vector retiring
+            // Load + Simple(SFPEXEXP) + MAD(SFPMUL24) + Round(SFPSHFT2) +
+            // Store(SFPSTORE) -- five instructions in one issue slot, which is
+            // the maximum the Vector Unit can retire per cycle
+            // (SFPLOADMACRO.md:13). See the constants block for the schedule,
+            // the (dagger) argument, and the prediction of 1.000 cyc/vector.
+            //
+            // Eight distinct macroVDs, because macroVD stays live for four
+            // cycles after its load. All eight are LREG0..LREG7; the seed and
+            // the nibble stride were pushed into LReg11/LReg12 in INIT.
+            static_assert(ITER_COUNT % HIST_MACRO_ROTATION == 0, "ITER_COUNT must be a whole number of 8-vector rotations");
+            static_assert(HM_PASSES > 0, "ITER_COUNT too small for one rotation");
+
+            load_replay_buf<NoExec>(
+                0,
+                8,
+                []
+                {
+                    LOADMACRO(ckernel::p_sfpu::LREG0, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG1, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG2, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG3, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG4, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG5, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG6, ADDR_MOD_WALK, 0);
+                    LOADMACRO(ckernel::p_sfpu::LREG7, ADDR_MOD_WALK, 0);
+                });
+
+            ckernel_unpack_template::lA(lltt::replay_insn(0, 8), TT_OP_NOP).program();
+            mop_run_hist_macro();
+
+            // Drain the five-deep tail of the final macro (Store fires at t+5).
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+        }
+        else if constexpr (COUNT_ARM == ARM_HIST_SUM)
+        {
+            // THE OTHER HALF OF HistMacro. HistMacro materialises the
+            // thermometer into Dst at 1.0 cyc/vector but cannot accumulate it
+            // (the file header's bound: the accumulate is SFPIADD, a Simple
+            // instruction, and the Simple slot is spent on SFPEXEXP). This arm
+            // is the pass that pays for the accumulate: a plain SFPLOAD of the
+            // thermometer tile plus a software SFPIADD into a per-lane running
+            // total, ping-ponged A/B on the same 1-deep software pipeline as
+            // ARM_COUNT_D1.
+            //
+            // Measured here rather than inferred so that the 8-bucket
+            // cumulative histogram's cost is an END-TO-END number
+            // (HistMacro + HistSum) instead of one measurement plus an argument.
+            //
+            // Expected 2.000 cyc/vector: two instructions per vector, both
+            // IPC 1, and it is exactly ARM_REPLAY_LOAD with one software
+            // instruction interleaved. ARM_COUNT_D1's measured 1.997 is the
+            // same shape with a macro-scheduled SFPGT riding along for free, so
+            // this arm must not come out below it.
+            load_replay_buf<NoExec>(
+                0,
+                4,
+                []
+                {
+                    TTI_SFPLOAD(L_A, ckernel::InstrModLoadStore::INT32, ADDR_MOD_WALK, 0);
+                    TTI_SFPIADD(0, L_B, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
+                    TTI_SFPLOAD(L_B, ckernel::InstrModLoadStore::INT32, ADDR_MOD_WALK, 0);
+                    TTI_SFPIADD(0, L_A, L_ACC, SFPIADD_MOD1_ARG_LREG_DST | SFPIADD_MOD1_CC_NONE);
+                });
+            ckernel_unpack_template::lA(lltt::replay_insn(0, 4), TT_OP_NOP).program();
+            mop_run_all();
+
             TTI_SFPNOP;
             TTI_SFPNOP;
             TTI_SFPNOP;
