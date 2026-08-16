@@ -1164,6 +1164,12 @@ AUDITED_MAPPINGS = {
     # ---- end coverage-parity audited mappings ----
 }
 
+# Rows with a REVIEWED QSR functional mapping (README: QSR is deliberately
+# absent from the compile-gate matrix until then; an all-SKIP_UNMAPPED lane is
+# not green).  Empty until the first reviewed QSR mapping lands: the audited
+# mappings above are BH/WH-audited exact node ids, not QSR evidence.
+QSR_REVIEWED_MAPPINGS = frozenset()
+
 DEFAULT_AUDIT = dict(
     semantic_cpp_class="unmapped",
     semantic_cpp_blocker="No row-specific semantic-C++ conversion audit or paired selector has been completed.",
@@ -1938,6 +1944,23 @@ def main():
         if not selectors:
             records.append(
                 record(r, a.arch, a.mode, "SKIP_UNMAPPED", "no audited module mapping")
+            )
+            continue
+        if a.arch == "qsr" and r["id"] not in QSR_REVIEWED_MAPPINGS:
+            # Doctrine (README): QSR is deliberately absent from the compile-gate
+            # matrix until a row has a REVIEWED QSR functional mapping.  The
+            # audited mappings above are BH/WH-audited exact node ids; running
+            # them in a QSR lane would misattribute another architecture's
+            # compile as QSR coverage.  QSR_REVIEWED_MAPPINGS is empty until the
+            # first reviewed QSR mapping lands.
+            records.append(
+                record(
+                    r,
+                    a.arch,
+                    a.mode,
+                    "SKIP_UNMAPPED",
+                    "no reviewed QSR functional mapping (BH/WH-audited selectors are not QSR evidence)",
+                )
             )
             continue
         if a.mode == "silicon" and (
