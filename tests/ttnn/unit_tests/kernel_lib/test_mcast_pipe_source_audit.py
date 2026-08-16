@@ -244,3 +244,24 @@ def test_interleaved_groupnorm_uses_three_opaque_helper_wires_and_preserves_lega
     for source in factories:
         assert "std::vector<ttnn::kernel_lib::host::Mcast2D>" in source
         assert "mcast_dest_noc" not in source
+
+
+def test_sdpa_decode_read_k_uses_opaque_fixed_star_and_keeps_blackhole_completion():
+    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device"
+    common = (base / "kernels/dataflow/dataflow_common.hpp").read_text()
+    reader = (base / "kernels/dataflow/reader_decode_all.cpp").read_text()
+    factory = (base / "sdpa_decode_program_factory.cpp").read_text()
+    read_k = common[
+        common.index("uint32_t read_k(") : common.index("// Non-multicast path", common.index("uint32_t read_k("))
+    ]
+
+    assert "async_write_multicast" not in read_k
+    assert "SourceL1Guard::CallerManaged" in read_k
+    assert "k_pipe.receive();" in read_k
+    assert "noc.async_write_barrier();" in read_k
+    assert "noc.async_atomic_barrier();" in read_k
+    assert "McastArgs<32, 16>" in reader
+    assert "KMcastArgs::next_runtime_args_offset()" in reader
+    assert "mcast_x" not in reader + factory
+    assert "std::vector<ttnn::kernel_lib::host::Mcast2D> k_mcasts" in factory
+    assert "reader_rt_args.append(k_mcasts[mcast_index].runtime_args(core));" in factory
