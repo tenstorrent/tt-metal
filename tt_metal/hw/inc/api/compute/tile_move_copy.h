@@ -28,6 +28,11 @@ namespace ckernel {
  * does not reconfigure the unpacker data types. Eltwise-unary / SFPU kernels use this same init:
  * compute_kernel_hw_startup(icb, ocb) once, then copy_init(icb).
  *
+ * Numerics: the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src zero-substitution flag
+ * disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact value back out of DST.
+ * Matmul and eltwise-binary re-establish the format-driven default themselves, so this preservation never
+ * leaks into them.
+ *
  * Return value: None
  *
  * | Argument                    | Description                                       | Type     | Valid Range                                                         | Required |
