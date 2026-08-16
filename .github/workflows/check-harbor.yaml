@@ -32,14 +32,26 @@ jobs:
         env:
           HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX }}
           EVENT_NAME: ${{ github.event_name }}
+          # github.event_name reflects the *root* trigger of the whole run, which is
+          # still "schedule" when this reusable workflow is workflow_call'd from another
+          # workflow that itself happens to be cron-triggered (e.g. sanity-tests.yaml).
+          # github.event.schedule carries the actual cron string that fired, so comparing
+          # it against this workflow's own cron is what actually tells apart "I am running
+          # as my own standalone hourly monitor" from "I was called by someone else's cron".
+          SCHEDULE_CRON: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
+
+          OWN_SCHEDULE_RUN=false
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$SCHEDULE_CRON" = "0 * * * *" ]; then
+            OWN_SCHEDULE_RUN=true
+          fi
 
           HARBOR_HEALTHY=false
           if ! command -v jq > /dev/null 2>&1; then
             echo "::error title=Missing jq::jq is required to parse Harbor health responses. Docker pulls will fall back to direct GHCR."
             echo "harbor-prefix=" >> "$GITHUB_OUTPUT"
-            if [ "$EVENT_NAME" = "schedule" ]; then
+            if [ "$OWN_SCHEDULE_RUN" = "true" ]; then
               exit 1
             fi
             exit 0
@@ -83,6 +95,6 @@ jobs:
             echo "Harbor did not respond within timeout. Falling back to direct GHCR." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [ "$HARBOR_HEALTHY" != "true" ] && [ "$EVENT_NAME" = "schedule" ]; then
+          if [ "$HARBOR_HEALTHY" != "true" ] && [ "$OWN_SCHEDULE_RUN" = "true" ]; then
             exit 1
           fi
