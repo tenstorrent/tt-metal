@@ -1001,6 +1001,91 @@ Also found: the rebuild **cannot run in a MATH_ISOLATE harness** without an unpa
 SrcB valid. This hung the device once (`TENSIX TIMED OUT`), was root-caused and fixed.
 It is why `perf_topk_micro_op.py` has no rebuild arm.
 
+#### MEASURED END TO END — and it invalidates the basis of every isolate number above
+
+The single most important result in this document. A pipelined kernel (unpack -> math ->
+compressed pack over a multi-tile stream) with **`_topk_xl_merge_` as an arm inside the
+same kernel**, so the head-to-head is same-kernel, same-session, same-stream.
+`tests/sources/topk_pipeline_perf.cpp`. `L1_TO_L1`, two-point slope over TILE_CNT 16->64,
+5 runs, std 0.00-0.04 raw cycles.
+
+| arm | L1_TO_L1 cyc/vec | note |
+| :--- | ---: | :--- |
+| `unpack_to_dest` alone | **3.938** | the floor nobody escapes |
+| base: stream + pack | 4.078 | `= max(3.938, 1.25)`, **not** the sum 5.19 |
+| **relucomp: + threshold + compaction** | **4.175** | the whole filter costs **0.097 (2.4%)** |
+| sfpu: + `MaskStore` | 5.438 | `~= 3.938 + 1.5` — **serialises** |
+| **xlmerge: `_topk_xl_merge_`** | **6.930** | `~= 3.938 + 2.844` — **serialises** |
+
+The xlmerge arm's MATH_ISOLATE reproduces **2.844 exactly**, which validates the harness.
+
+**Three findings, and the second one demolishes the thesis this document was built on:**
+
+1. **PACK is genuinely concurrent.** `base` = 4.078 = `max(unpack, pack)`, not the sum.
+2. **The SFPU is NOT concurrent with `unpack_to_dest`.** Math and unpack both drive the
+   Dest register file, so they **serialise**. Every `MATH_ISOLATE` number in this document
+   — 1.003, 1.438, 2.844, 76.195 — is measured with the operand *already resident in Dest*.
+   Once it has to come from L1, that time **adds** to the unpacker rather than hiding under
+   it.
+3. **The unpacker is the real floor.** 32-bit `unpack_to_dest` is 3.938 cyc/vector
+   (32.5 B/cyc). **No 32-bit-fused Top-K can beat it, including ours.**
+
+**So the target `max(1.003, 1.648) = 1.65` was never reachable.** It was built from two
+isolate numbers, *neither of which includes the unpacker*. The honest conclusion is
+different, and better in one way and worse in another: the packer path wins **not because
+its SFPU work is faster, but because it uses no SFPU at all**, so nothing serialises
+against the unpacker.
+
+**Head-to-head on equal end-to-end terms: 1.66-1.68x.** One filter pass at 4.175 vs
+`_topk_xl_merge_` at 6.930 (6.997 with the same compressed pack). Real, measured side by
+side, in one kernel.
+
+**Cascade to K=32 at N=32768: ~6,509 cycles**, vs `_topk_xl_merge_` at 7,165 for a
+**single** merge pass (**1.10x**, and generous to topk_xl since a real top-k needs repeated
+merge+rebuild stages) and vs `topk_local_sort` at 78,024 (**12x**).
+
+**Against the literal 2.844 figure it loses 0.45x** — because 2.844 is a MATH_ISOLATE
+number and our design is pinned at 3.938 by the unpacker. Both framings are true; the
+end-to-end one is the one a user experiences.
+
+**Emitted-size verification.** Every arm confirmed against the packer's own
+`PackerTileSize` register, not inferred from timing:
+
+| arm | compress OFF | compress ON |
+| :--- | ---: | ---: |
+| plain bf16, 32 survivors | 2048 B | **384 B** |
+| relu bf16, 32 survivors | 2048 B | **384 B** |
+| **relu32: dense fp32 fused keys** | 4096 B | **640 B** |
+| fused32 int32, dense | 4096 B | 4672 B (grows — nothing to elide) |
+
+**`relu32` is the headline:** a *dense* tile of fused FP32 sort keys `[bf16 value | u16
+index]` packs 4096 -> 640 B via `MIN_THRESHOLD_RELU` + zero-compression — **threshold and
+compaction with zero SFPU instructions.** `ReLU.md` forbids only a negative *threshold*;
+negative *data* is fine. This also corrects the "compression cost is flat in density"
+claim recorded earlier: cheap output is cheap compression (2.383 vs 2.078 vs 1.780
+cyc/vec by emitted size).
+
+**Correctness: 5/5 bit-exact**, all 1024 words compared against a torch golden —
+`allabove` asserting **count == 1024 exactly** (the silent-discard tripwire), negatives,
+exact ties at the threshold, and ±0/±Inf/±NaN/denormals.
+
+**New hardware fact, found by a failing test:** the packer's ReLU compares in the
+**sign-magnitude total order, not IEEE**. Written first against the IEEE reading of
+`ReLU.md` (C floats => NaN comparisons false => NaN survives), the `specials` case
+mismatched on exactly the 64 datums whose fused word is a *negative* NaN, and nothing
+else. +NaN survives, -NaN is zeroed. **The packer orders the same way `SFPGT` does** —
+which is the order Top-K wants.
+
+**Free bonus:** `PackerTileSize` reports the emitted byte count after every pack, so
+*count-above-threshold* — which has a hard 2.0 cyc/vector architectural floor on the SFPU
+— comes at **zero** marginal cost as a side effect of the filter pass. That is precisely
+the piece the threshold-search design was missing.
+
+**Not covered: negative thresholds.** `MIN_THRESHOLD_RELU` cannot express one. The SFPU
+fallback needs a *value-or-zero* filter; the measured 1.003 `MaskStore` writes -1/0 masks
+and destroys the values, so it is a timing probe, not a usable filter. A correct one is
+~2.0 cyc/vector and still additive on top of the unpacker. Analysed, not built.
+
 #### What this does NOT establish — it does not yet beat `ttnn.topk`
 
 A threshold *count* is not Top-K. What has been measured is one filter pass. A working
