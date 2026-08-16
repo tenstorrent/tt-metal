@@ -95,8 +95,12 @@ def test_h2_the_bytes_that_follow_from_it(monkeypatch):
     sys.path.insert(0, str(_PA))
     from agent import perf_target as pt
 
+    # A width is DECLARED now: the ceiling no longer assumes one byte per parameter, because that is
+    # right only for a 1-byte format and a bf16 model was being handed a ceiling above what the
+    # hardware permits. int8 keeps the arithmetic of this test exactly as written (12 GB -> 42.7) while
+    # stating the width instead of assuming it.
     for params, want_bytes, want_ceiling in ((12e9, 12e9, 42.7), (4e9, 4e9, 128.0)):
-        facts = {"total_params": params}
+        facts = {"total_params": params, "dominant_dtype": "int8"}
         b = pt.simple_active_bytes(facts)
         c, _band = pt.rate_and_band(b, 512e9, frac=pt.bw_fraction(facts))
         assert b == pytest.approx(want_bytes)

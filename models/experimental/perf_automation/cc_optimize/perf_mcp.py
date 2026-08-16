@@ -2357,6 +2357,19 @@ def _persist_device_weight_bytes(nbytes: int, complete: bool, bytes_per_param: f
             and (not bytes_per_param or doc.get("bytes_per_param") == float(bytes_per_param))
         ):
             return
+        # THE FIRST COMPLETE CENSUS WINS, and nothing later moves it.
+        #
+        # This is called from _run_full_pipeline_ms, so it fires on EVERY full-pipeline gate -- every
+        # iteration of the loop. The census measures the model AS CURRENTLY BUILT, so the moment a
+        # dtype rung lands (bf16 -> bf8 halves the resident weights) the figure drops. Left
+        # overwriting, the ceiling derived from it would fall in step with the optimisation being
+        # scored against it: the run would chase a target that recedes as it improves, and a report
+        # written at iteration 9 could not be compared with one written at iteration 1.
+        #
+        # The ceiling describes the model the run STARTED with. An incomplete census may still be
+        # replaced -- it is not yet an answer -- but a complete one is the answer for this run.
+        if doc.get("device_weight_bytes") and doc.get("device_census_complete"):
+            return
         doc["device_weight_bytes"] = int(nbytes)
         doc["device_census_complete"] = bool(complete)
         if bytes_per_param and bytes_per_param > 0:

@@ -37,8 +37,19 @@ from agent import perf_target as pt  # noqa: E402
 PEAK = 512e9
 
 
-def _facts(params_b, moe=False):
-    f = {"total_params": params_b * 1e9}
+def _facts(params_b, moe=False, dtype="int8"):
+    """A model must DECLARE its width now; the ceiling no longer assumes one byte per parameter.
+
+    A ONE-BYTE width is declared, so every figure in this file stays exactly as written: these tests
+    are about the SHAPE of the ceiling -- peak / bytes, nothing folded in -- and a 1 B/param model
+    makes that arithmetic checkable by eye (512 / 8 GB = 64.0).
+
+    What changed is that the width is now stated by the model rather than assumed for it. The old
+    rule applied 1.0 to everything, which is right only for a 1-byte format: voxtral is served bf16
+    and streams 2 B/param, so it was handed a ceiling ABOVE what the hardware permits (141.8 tok/s/u
+    against a true ~55). See test_the_ceiling_uses_a_measured_width_not_one_byte.
+    """
+    f = {"total_params": params_b * 1e9, "dominant_dtype": dtype}
     if moe:
         f.update(is_moe=True, active_params=params_b * 1e9)
     return f

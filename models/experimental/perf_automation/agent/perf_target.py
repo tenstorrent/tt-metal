@@ -56,6 +56,10 @@ _DEFAULT_BYTES_PER_ELEM = 2.0
 # dtype-independent, so it needs no such work, and xB -> xGB lands close enough to steer optimization
 # -- conservatively, since a bf4-heavy model streams less than 1 B/param and so has a HIGHER real
 # ceiling than this reports.
+# RETIRED AS A BYTE RULE. Was 1.0 -- one byte per parameter whatever the model is served at -- and
+# nothing computes a byte count from it any more. Kept for one job only: RECOGNISING a ledger anchor
+# that was written by the old rule, so the census can supersede it (see _anchor_is_placeholder). The
+# ledger stores a value and not the rule behind it, so arithmetic is the only way to tell.
 _BYTES_PER_PARAM = 1.0
 
 # The DRAM efficiency each read pattern sustains: ~80% of spec on a dense stream, ~50% on MoE, whose
@@ -327,7 +331,54 @@ def simple_active_bytes(model_facts: dict) -> int:
     _bpp = _scalar(model_facts.get("bytes_per_param", 0.0), 0.0)
     if _bpp > 0 and model_facts.get("device_census_complete", True):
         return int(round(params * float(_bpp)))
-    return int(round(params * _BYTES_PER_PARAM))
+    # NO 1-BYTE CONSTANT. Before the census there is still a declared width, and it is right for the
+    # dtype instead of right for one dtype: params x 1.0 is only ever correct if the model happens to
+    # be served at a 1-byte format. bf16 is 2.0, bf4 is 0.5625, and this model's measured mix is 1.32,
+    # so the constant was wrong for all three -- it published voxtral at 141.8 tok/s/u against a true
+    # ~55, and it survived review because gemma-3's bf8 (1.0625) is within 6% of 1.0 and looked fine.
+    #
+    # dominant_dtype comes from the checkpoint at phase "before", needs no device, and _bytes_per_elem
+    # already resolves its spelling. So the pre-census answer is a real width rather than a placeholder,
+    # and the census still supersedes it above once the built model has been measured.
+    _dt = model_facts.get("dominant_dtype") or model_facts.get("torch_dtype")
+    if _dt:
+        return int(round(params * _bytes_per_elem(_dt)))
+    # Nothing declares a width: the checkpoint's own byte total is the last real evidence available.
+    _wb = _scalar(model_facts.get("weight_bytes", 0), 0)
+    if _wb > 0:
+        return int(round(_wb))
+    # NO CONSTANT LAST RESORT. The xB -> xGB rule (params x 1.0) was a team decision on 2026-07-29,
+    # justified as CONSERVATIVE: TT models are typically served bf8 (1.0625) or bf4 (0.5625), both
+    # under a byte, so assuming one byte under-reports the ceiling and a run keeps optimising.
+    #
+    # That guarantee inverts the moment a model is served bf16. Voxtral-Mini-3B streams 2 bytes per
+    # parameter, so the rule reported a ceiling ABOVE what the hardware permits -- 141.8 tok/s/u
+    # against a true ~55 -- and told the run it had headroom that does not exist. Worse, the width is
+    # not even fixed for one model: a dtype rung moves it mid-run, bf16 -> bf8 -> bf4.
+    #
+    # A width is a property of the model, so it comes FROM the model or not at all: the census
+    # measures it, the checkpoint declares it, or the checkpoint's byte total states it outright. With
+    # none of those there is nothing to be right about, and 0 means "no ceiling" -- which the caller
+    # already renders as a missing roofline rather than inventing a number a reader would act on.
+    return 0
+
+
+def _anchor_is_placeholder(anchored_bytes: int, model_facts: dict) -> bool:
+    """Was this anchor the 1-byte-per-parameter guess, rather than a number derived from evidence?
+
+    Recognised by ARITHMETIC, not by a flag: the ledger records a value, not the rule that produced
+    it, and older entries predate any such flag. params x 1.0 is exact, so an anchor within half a
+    percent of the parameter count is that rule and nothing else -- no real width lands there unless
+    the model genuinely is served at one byte, in which case the census will agree and the swap is a
+    no-op.
+
+    Deliberately narrow. Only the placeholder is overridable; an anchor from the checkpoint's own byte
+    total, from measured per-op bytes, or from a previous census stays exactly as pinned.
+    """
+    params = ceiling_params(model_facts)
+    if not params or not anchored_bytes:
+        return False
+    return abs(float(anchored_bytes) - float(params) * _BYTES_PER_PARAM) <= 0.005 * float(params)
 
 
 def bw_fraction(model_facts: dict) -> float:
@@ -514,6 +565,25 @@ def compute_target(
     if bytes_per_unit and float(bytes_per_unit) > 0:
         ab = int(round(float(bytes_per_unit)))
         src = "anchored baseline bytes"
+        # A PLACEHOLDER ANCHOR IS NOT EVIDENCE. The anchor is written at phase "before", from the
+        # checkpoint alone, because that is when the run needs a ceiling -- and it is write-once so
+        # the report and the stop gate can never score one run against two numbers. Both correct.
+        #
+        # What was wrong is that the anchor outranked the DEVICE CENSUS, which measures the built
+        # model and only becomes available afterwards. Voxtral pinned params x 1.0 = 3.61 GB, the
+        # census later measured 1.72 GB resident, and the census was never consulted: the report then
+        # printed a decode floor of 7.05 ms against a 6.11 ms measurement -- 590.9 GB/s on a 512 GB/s
+        # part, i.e. a physically impossible ceiling that no reader could act on.
+        #
+        # So the anchor is superseded exactly once, by a measurement of the same thing, and only when
+        # it is recognisably the old placeholder. Every anchor derived any other way still wins, and
+        # the value stays pinned for the rest of the run either way -- this replaces a guess with a
+        # measurement before optimisation starts, it does not let the ceiling drift during it.
+        if _anchor_is_placeholder(ab, mf):
+            _dwb = _scalar(mf.get("device_weight_bytes", 0), 0)
+            if _dwb > 0 and mf.get("device_census_complete", True):
+                ab = int(_dwb)
+                src = "device census: %.3g GB resident (superseded a params x 1.0 placeholder anchor)" % (_dwb / 1e9)
     # THE CENSUS OUTRANKS EVERY RULE, because it is not a rule. agent/weight_census walks the BUILT
     # model and sums each resident tensor's element count at its REAL dtype -- the only place the
     # served width exists, since the checkpoint records what was on disk and not what the loader
@@ -529,7 +599,13 @@ def compute_target(
             src = "device census: %.3g GB resident at served dtype" % (_dwb / 1e9)
     if ab <= 0:
         ab = simple_active_bytes(mf)
-        src = "params rule: %.3gB x %.2f B/param" % (ceiling_params(mf) / 1e9, _BYTES_PER_PARAM)
+        _p = ceiling_params(mf) or 0
+        _w = (ab / _p) if (_p and ab) else 0.0
+        src = "params rule: %.3gB x %.4g B/param (%s)" % (
+            _p / 1e9,
+            _w,
+            "device census" if _scalar(mf.get("bytes_per_param", 0.0), 0.0) > 0 else "declared dtype",
+        )
     if ab <= 0:
         ab = active_bytes(mf, seq_len=seq_len)
         src = "per-tensor exact bytes (no param count available)"

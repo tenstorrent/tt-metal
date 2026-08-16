@@ -264,7 +264,8 @@ def test_s6_the_id_determines_the_ceiling(model_id, params_b, ceiling):
 
     total, _active = _M._params_from_model_id(model_id)
     assert total == pytest.approx(params_b * 1e9), f"{model_id} parsed as {total/1e9}B"
-    facts = {"total_params": total}
+    # width DECLARED, not assumed -- see test_the_ceiling_uses_a_measured_width_not_one_byte
+    facts = {"total_params": total, "dominant_dtype": "int8"}
     c, band = pt.rate_and_band(pt.simple_active_bytes(facts), 512e9, frac=pt.bw_fraction(facts))
     assert c == pytest.approx(ceiling, abs=0.15)
     assert band[0] == pytest.approx(c * 0.60, abs=0.05) and band[1] == pytest.approx(c * 0.80, abs=0.05)
@@ -277,6 +278,6 @@ def test_s6_the_gemma3_error_quantified():
     measured = 1000 / 34.82
     out = {}
     for label, p in (("wrong_4b", 4e9), ("right_12b", 12e9)):
-        c, _ = pt.rate_and_band(pt.simple_active_bytes({"total_params": p}), 512e9, frac=0.80)
+        c, _ = pt.rate_and_band(pt.simple_active_bytes({"total_params": p, "dominant_dtype": "int8"}), 512e9, frac=0.80)
         out[label] = round(measured / c * 100)
     assert out["wrong_4b"] == 22 and out["right_12b"] == 67, out

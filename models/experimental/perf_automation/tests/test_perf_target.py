@@ -75,23 +75,30 @@ def test_tp_divides_per_device_bytes():
 
 
 def test_compute_target_ceiling_and_band():
-    # 1B params -> 1 GB under xB -> xGB (NOT 2 GB from params x bf16: the stored dtype is not the
-    # divisor any more). The ceiling is SPEC -- 512/1 = 512.0 -- and the 0.80 sustained fraction sets
-    # the band's top instead of being folded in, so the band is 307.2 - 409.6 and its top is the
-    # number the ceiling used to report.
+    # 1B params served bf16 -> 2 GB. THE DECLARED DTYPE IS THE DIVISOR AGAIN.
+    #
+    # This asserted 1 GB under the xB -> xGB rule, whose safety argument was that TT models are served
+    # under a byte per parameter (bf8 1.0625, bf4 0.5625) so the ceiling would be under-reported and a
+    # run would keep optimising. A bf16 model inverts it: it streams 2 B/param, so the rule published a
+    # ceiling ABOVE what the hardware permits -- voxtral got 141.8 tok/s/u against a true ~55, and the
+    # run was told it had headroom that does not exist. The width also moves DURING a run, bf16 -> bf8
+    # -> bf4 as dtype rungs land, so no constant can stand in for it.
+    #
+    # The ceiling is still SPEC and the 0.80 fraction still sets the band's top; only the byte count
+    # changed, from a constant to what the model says it is served at.
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
     t = pt.compute_target(mf, _BH)
-    assert t.active_bytes == 1_000_000_000
-    assert abs(t.theoretical_rate - 512.0) < 1e-3
-    assert abs(t.band[0] - 0.60 * 512.0) < 1e-3 and abs(t.band[1] - 0.80 * 512.0) < 1e-3
+    assert t.active_bytes == 2_000_000_000
+    assert abs(t.theoretical_rate - 256.0) < 1e-3
+    assert abs(t.band[0] - 0.60 * 256.0) < 1e-3 and abs(t.band[1] - 0.80 * 256.0) < 1e-3
 
 
 def test_status_below_in_above():
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
-    t = pt.compute_target(mf, _BH)  # theo 512.0 tok/s (spec) ; band 307.2 - 409.6
-    below = pt.score(t, forward_ms=1000.0 / 100.0)  # 100 tok/s < 307.2
-    inb = pt.score(t, forward_ms=1000.0 / 350.0)  # 350 tok/s, >=307.2, <=409.6
-    above = pt.score(t, forward_ms=1000.0 / 600.0)  # 600 tok/s > the 512.0 spec ceiling
+    t = pt.compute_target(mf, _BH)  # 2 GB at bf16 -> theo 256.0 tok/s (spec) ; band 153.6 - 204.8
+    below = pt.score(t, forward_ms=1000.0 / 50.0)  # 50 tok/s < 153.6
+    inb = pt.score(t, forward_ms=1000.0 / 175.0)  # 175 tok/s, >=153.6, <=204.8
+    above = pt.score(t, forward_ms=1000.0 / 300.0)  # 300 tok/s > the 256.0 spec ceiling
     assert below["status"] == "BELOW_BAND"
     assert inb["status"] == "IN_BAND"
     assert above["status"] == "ABOVE_BAND"

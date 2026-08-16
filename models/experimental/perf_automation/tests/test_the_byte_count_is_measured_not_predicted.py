@@ -173,7 +173,10 @@ def test_the_measured_width_replaces_the_placeholder():
     which is why this survived: on one model it looked nearly right."""
     E = {"dram_bw_gbps": 512.0}
     vox = {"total_params": 3429000000}
-    assert abs(compute_target(vox, E).theoretical_rate - 149.3) < 1.0
+    # THE PLACEHOLDER IS GONE ENTIRELY, so this no longer publishes 149.3 even before the census: with
+    # no width stated anywhere the byte model assumes bf16, which is the honest default for a
+    # checkpoint that says nothing, and gives the same 74.7 the census confirms below.
+    assert abs(compute_target(vox, E).theoretical_rate - 74.7) < 1.0
     vox_m = dict(vox, bytes_per_param=2.0, device_census_complete=True)
     assert abs(compute_target(vox_m, E).theoretical_rate - 74.7) < 1.0
 
@@ -191,11 +194,16 @@ def test_a_fractional_width_is_not_truncated_to_the_placeholder():
     assert abs(got - 45.8) > 1.0, "1.0625 was truncated to 1 -- the placeholder is back"
 
 
-def test_an_incomplete_census_still_falls_back_to_the_placeholder():
-    """A refusal must cost nothing that is not already the case: the fallback IS today's behaviour."""
+def test_an_incomplete_census_is_refused_without_reviving_the_placeholder():
+    """An incomplete census is still refused -- too few bytes reads as too HIGH a ceiling, which ends
+    a run early believing it is at the wall. What it falls back TO has changed: not params x 1.0
+    (45.8), but the byte model's own bf16 default, which is a width rather than a stand-in for one."""
     E = {"dram_bw_gbps": 512.0}
     f = {"total_params": 11180446320, "bytes_per_param": 0.5, "device_census_complete": False}
-    assert abs(compute_target(f, E).theoretical_rate - 45.8) < 0.5
+    got = compute_target(f, E).theoretical_rate
+    assert abs(got - 22.9) < 0.5, got
+    assert abs(got - 45.8) > 1.0, "params x 1.0 is back"
+    assert abs(got - 91.6) > 1.0, "the refused 0.5 width was used anyway"
 
 
 def test_the_width_survives_the_marker_round_trip():
