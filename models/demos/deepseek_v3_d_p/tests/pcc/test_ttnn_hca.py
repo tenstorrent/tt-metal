@@ -42,8 +42,8 @@ _SEED = 42
 # shortest legal prompt, 130 and 4095 are the padding cases, 1024 needs none, 5120 is the chunk width.
 _SHAPES = [128, 130, 1024, 4095, 5120]
 _COMPRESSOR_SHAPES = [900, 2048, 5120]
-# Single-shot floors. Higher than the chunked ones: one pass accumulates nothing.
-_FORWARD_PCC = 0.998
+# Single-shot floors are higher than the chunked ones: one pass accumulates nothing. The block's is per
+# variant and lives in _VARIANTS; the compressor's holds for both.
 _COMPRESSOR_PCC = 0.999
 # The stored entries, checked at the end of a chunked run. They are written once and never recomputed, so
 # this holds ~0.9997 no matter how deep the run goes.
@@ -72,23 +72,26 @@ def _config(model_config, num_hidden_layers=4):
     return cfg
 
 
-# (id, dimension constants, per-chunk PCC floor, long-run floor). PCC decays with depth on both variants:
-# every chunk inherits the previous one's error through the cache and the carry, and the softmax widens as
-# the cache fills. Pro decays ~2.6x faster, since 128 heads and a 7168-wide hidden make every bf16
-# reduction longer. Over 56K tokens flash goes 0.9989 -> 0.9925 and pro 0.9984 -> 0.9816, the per-chunk
-# drop halving on both while the cache entries hold 0.9997. The two long scenarios split the same 56K
-# differently and land within 1.2e-4, so the floors track depth, not chunk boundaries.
+# (id, dimension constants, per-chunk floor, long-run floor, single-shot floor).
+#
+# PCC decays with depth on both variants: every chunk inherits the previous one's error through the cache
+# and the carry, and the softmax widens as the cache fills. Pro decays ~2.6x faster, since 128 heads and a
+# 7168-wide hidden make every bf16 reduction longer. Over 56K flash goes 0.9989 -> 0.9925 and pro
+# 0.9984 -> 0.9816, the per-chunk drop halving on both while the cache entries hold 0.9997. The two long
+# scenarios split the same 56K differently and land within 1.2e-4, so the floors track depth, not chunk
+# boundaries.
 #
 # TODO: move to a V4 prefill adapter once V4 has a block and a runtime, so build_runtime and
 # allocate_kv_cache become writable. The adapter would own the config, these floors and the golden-trace
 # dir, and serve both the `variant` fixture and whatever runtime is built.
 _VARIANTS = [
-    ("flash", DeepSeekV4FlashConfig, 0.997, 0.99),
-    ("pro", DeepSeekV4ProConfig, 0.994, 0.98),
+    ("flash", DeepSeekV4FlashConfig, 0.997, 0.99, 0.998),
+    ("pro", DeepSeekV4ProConfig, 0.994, 0.98, 0.997),
 ]
-_MODEL_CONFIGS = [pytest.param(cfg, id=name) for name, cfg, _, _ in _VARIANTS]
-_MODEL_CONFIGS_CHUNKED = [pytest.param(cfg, chunked, id=name) for name, cfg, chunked, _ in _VARIANTS]
-_MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long in _VARIANTS]
+_MODEL_CONFIGS = [pytest.param(cfg, id=name) for name, cfg, *_ in _VARIANTS]
+_MODEL_CONFIGS_CHUNKED = [pytest.param(cfg, chunked, id=name) for name, cfg, chunked, _, _ in _VARIANTS]
+_MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long, _ in _VARIANTS]
+_MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, _, fwd in _VARIANTS]
 
 
 # 1x1 needs no fabric (sp=tp=1 skips every collective). On a 32-chip box only 8x4 runs;
@@ -261,8 +264,8 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len, mode
 
 
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
-@pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
-def test_hca_forward(device, seq_len, model_config):
+@pytest.mark.parametrize("model_config, forward_pcc", _MODEL_CONFIGS_FORWARD)
+def test_hca_forward(device, seq_len, model_config, forward_pcc):
     """Single-shot TtHCA.forward against DeepseekV4Attention.forward, on one device: sp=tp=1, so this
     is the only test that runs the block with no collectives and every head on one chip."""
     torch.manual_seed(_SEED)
@@ -314,7 +317,7 @@ def test_hca_forward(device, seq_len, model_config):
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=_FORWARD_PCC)
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=forward_pcc)
     logger.debug(f"HCA block PCC: {pcc_message}")
     assert pcc_passed, f"HCA block PCC test failed: {pcc_message}"
 
@@ -327,8 +330,8 @@ def test_hca_forward(device, seq_len, model_config):
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
-def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_config):
+@pytest.mark.parametrize("model_config, forward_pcc", _MODEL_CONFIGS_FORWARD)
+def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_config, forward_pcc):
     """Single-shot TtHCA.forward, SP+TP sharded, for an ARBITRARY prompt length. This is where padding
     awareness is proven: pad-derived compressed entries get trimmed and pad rows masked out."""
     torch.manual_seed(_SEED)
@@ -386,7 +389,7 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_c
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=_FORWARD_PCC)
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=forward_pcc)
     logger.debug(f"mesh HCA block PCC: {pcc_message}")
     assert pcc_passed, f"HCA mesh block PCC test failed: {pcc_message}"
 
