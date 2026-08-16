@@ -103,6 +103,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/add_rsqrt.h
     inc/api/compute/experimental/compressed_custom_mm.h
     inc/api/compute/experimental/custom_mm.h
+    inc/api/compute/experimental/custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
