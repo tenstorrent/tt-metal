@@ -150,6 +150,8 @@ __attribute__((noinline)) void calculate_unary_max_min_int_fresh_cpp(const std::
         }
         sfpi::dst_reg++;
     }
+}
+
 // Fresh typed-C++ integer add/sub over the sign-magnitude Int32 Dst the binary
 // harness drives (production dispatch: _add_int_/_sub_int_ with
 // InstrModLoadStore::INT32 and SIGN_MAGNITUDE_FORMAT=true).  On Blackhole that
