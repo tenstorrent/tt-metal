@@ -781,7 +781,6 @@ ALWI void initialize_inverse_band_plane(
                     kTileBytes,
                     {.page_id = band_tile_base + source_tile},
                     {});
-                noc.async_read_barrier();
                 continue;
             }
             noc.async_read(
@@ -850,6 +849,7 @@ ALWI void initialize_inverse_band_plane(
             }
         }
     }
+    noc.async_read_barrier();
 }
 
 template <typename LlAccessor, typename LhAccessor, typename HlAccessor, typename HhAccessor>
