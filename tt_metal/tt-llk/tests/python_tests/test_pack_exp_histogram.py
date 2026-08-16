@@ -15,6 +15,7 @@ sum of the four packers' 32-bin histograms against that distribution.
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,10 +41,13 @@ NUM_PACKERS = 4
 NUM_BINS = 32
 POISON = 0x3EAD3EAD
 
+# Reports go to $PEH_REPORT_DIR if set, else a "peh_reports" dir under the system
+# temp dir (never a hardcoded absolute path — the previous default pointed at a
+# session-specific scratchpad that does not exist on other machines).
 REPORT_DIR = Path(
     os.environ.get(
         "PEH_REPORT_DIR",
-        "/tmp/claude-1000/-home-nachiket-tt-metal/d24a23b1-86c2-4faa-aead-36085a95861d/scratchpad",
+        os.path.join(tempfile.gettempdir(), "peh_reports"),
     )
 )
 
