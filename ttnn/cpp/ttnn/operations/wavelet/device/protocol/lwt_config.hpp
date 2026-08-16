@@ -52,6 +52,9 @@ constexpr uint32_t kRouteFlagOutputTileMirror = 1U << 6;
 
 constexpr uint32_t kLwtChunkConfigWordCount = 16;
 constexpr uint32_t kLwtChunkConfigPageBytes = kLwtChunkConfigWordCount * sizeof(uint32_t);
+static_assert(
+    kLwtChunkConfigPageBytes == kRouteConfigPageBytes,
+    "The shared 1D config-page loader requires identical chunk and route page sizes");
 
 enum LwtChunkConfigWord : uint32_t {
     kLwtInitialEvenBegin = 0,

@@ -735,6 +735,14 @@ template <typename Scheme>
     std::vector<tt::tt_metal::CoreCoord> cores =
         select_cores(mesh_device, std::min(core_limit_2d(mesh_device), total_work_items));
     tt::tt_metal::WorkloadDescriptor workload;
+    constexpr size_t expected_route_count = 4U * Scheme::num_steps;
+    for (const auto& chunk : plan.chunks) {
+        TT_FATAL(
+            chunk.routes.size() == expected_route_count,
+            "2D DWT planner produced {} routes, but the kernel ABI requires {}",
+            chunk.routes.size(),
+            expected_route_count);
+    }
     const size_t route_count = plan.chunks.front().routes.size();
     const uint32_t scratch_tile_count = noc_scratch_tile_count(operation_attributes.boundary_mode, false, route_count);
     const size_t config_capacity = static_cast<size_t>(scratch_tile_count) * kTileBytes / 2;
@@ -849,6 +857,15 @@ template <typename Scheme>
     std::vector<tt::tt_metal::CoreCoord> cores =
         select_cores(mesh_device, std::min(core_limit_2d(mesh_device), total_work_items));
     tt::tt_metal::WorkloadDescriptor workload;
+    using InverseScheme = typename Scheme::inverse;
+    constexpr size_t expected_route_count = 4U * InverseScheme::num_steps;
+    for (const auto& chunk : plan.chunks) {
+        TT_FATAL(
+            chunk.routes.size() == expected_route_count,
+            "2D IDWT planner produced {} routes, but the kernel ABI requires {}",
+            chunk.routes.size(),
+            expected_route_count);
+    }
     const size_t route_count = plan.chunks.front().routes.size();
     const uint32_t scratch_tile_count = noc_scratch_tile_count(operation_attributes.boundary_mode, true, route_count);
     const size_t config_capacity = static_cast<size_t>(scratch_tile_count) * kTileBytes / 2;
@@ -893,7 +910,6 @@ template <typename Scheme>
         buffers.plane_tile_counts[slot] =
             checked_u32(plan.allocated_plane_slot_bytes[slot] / kTileBytes, "2D ILWT workspace plane tiles");
     }
-    using InverseScheme = typename Scheme::inverse;
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     auto descriptor = create_program_descriptor(
         core_set(buffers.cores),

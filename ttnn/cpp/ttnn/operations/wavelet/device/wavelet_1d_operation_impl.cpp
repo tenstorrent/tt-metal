@@ -1193,6 +1193,15 @@ template <typename Scheme>
     std::vector<tt::tt_metal::CoreCoord> cores =
         select_cores(mesh_device, std::min(core_limit(mesh_device), total_work_items));
 
+    static_assert(executable_step_count<Scheme>() > 0, "DWT schemes require an executable terminal scale step");
+    constexpr size_t expected_route_count = executable_step_count<Scheme>() - 1U;
+    for (const auto& chunk : plan.chunks) {
+        TT_FATAL(
+            chunk.routes.size() == expected_route_count,
+            "DWT planner produced {} routes, but the kernel ABI requires {}",
+            chunk.routes.size(),
+            expected_route_count);
+    }
     const size_t route_count = plan.chunks.front().routes.size();
     auto route_config =
         create_dram_buffer(mesh_device, plan.chunks.size() * route_count, device_protocol::kRouteConfigPageBytes);
@@ -1303,6 +1312,17 @@ template <typename Scheme>
     std::vector<tt::tt_metal::CoreCoord> cores =
         select_cores(mesh_device, std::min(core_limit(mesh_device), total_work_items));
 
+    static_assert(
+        executable_step_count<InverseScheme>() >= 2,
+        "IDWT schemes require executable terminal and inverse scale steps");
+    constexpr size_t expected_route_count = executable_step_count<InverseScheme>() - 2U;
+    for (const auto& chunk : plan.chunks) {
+        TT_FATAL(
+            chunk.routes.size() == expected_route_count,
+            "IDWT planner produced {} routes, but the kernel ABI requires {}",
+            chunk.routes.size(),
+            expected_route_count);
+    }
     const size_t route_count = plan.chunks.front().routes.size();
     auto route_config =
         create_dram_buffer(mesh_device, plan.chunks.size() * route_count, device_protocol::kRouteConfigPageBytes);
