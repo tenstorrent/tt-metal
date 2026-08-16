@@ -15,7 +15,7 @@ TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 # Example usage:
 #   export PYTEST_CMD="python -m tracy -r -p --dump-device-data-mid-run -m pytest"
 #   source run_single_card_demo_tests.sh
-#   run_resnet_func
+#   run_bge_m3_demo
 # ============================================================================
 PYTEST_CMD="${PYTEST_CMD:-pytest}"
 
@@ -55,68 +55,12 @@ run_yolov11m_func() {
 
 }
 
-run_vgg_func() {
-
-  #VGG11/VGG16
-  $PYTEST_CMD models/demos/vision/classification/vgg/demo/demo.py
-
-}
-
-run_bert_tiny_func() {
-
-  pytest models/demos/wormhole/bert_tiny/demo/demo.py
-
-}
-
-run_bert_func() {
-  fail=0
-
-  $PYTEST_CMD models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
-  $PYTEST_CMD models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-
-}
-
-run_resnet_stability() {
-
-  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
-
-}
-
-run_resnet_func() {
-
-  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/demo/demo.py
-
-}
-
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-}
-
-run_distilbert_func() {
-
-  pytest models/demos/wormhole/distilbert/demo/demo.py
-
-}
-
-
-run_mnist_func() {
-
-  $PYTEST_CMD models/demos/vision/classification/mnist/demo/demo.py
-
-}
-
-run_squeezebert_func() {
-
-  $PYTEST_CMD models/demos/squeezebert/demo/demo.py
-
 }
 
 run_yolov9c_perf() {

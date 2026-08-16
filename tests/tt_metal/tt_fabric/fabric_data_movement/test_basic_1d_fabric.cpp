@@ -1055,7 +1055,7 @@ void RunTestMCastConnAPI(
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
             fixture->RunProgramNonblocking(receiver_device, receiver_program);
             receiver_programs.push_back(std::move(receiver_program));
-            log_info(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
+            log_debug(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
         }
     }
 
@@ -1600,7 +1600,7 @@ void RunTest2DMCastConnAPI(
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
         fixture->RunProgramNonblocking(receiver_device, receiver_program);
         receiver_programs.push_back(std::move(receiver_program));
-        log_info(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
+        log_debug(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
     }
     // Launch sender program and wait for sender to finish
     fixture->RunProgramNonblocking(sender_device, sender_program);
@@ -1632,7 +1632,7 @@ void RunTest2DMCastConnAPI(
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
     for (unsigned int rx_physical_device_id : rx_physical_device_ids) {
-        log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_id);
+        log_debug(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_id);
 
         const auto& receiver_device = fixture->get_device(rx_physical_device_id);
         std::vector<uint32_t> recv_status;
@@ -1814,7 +1814,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
                 receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
             fixture->RunProgramNonblocking(receiver_device, receiver_program);
             receiver_programs.push_back(std::move(receiver_program));
-            log_info(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
+            log_debug(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
         }
     }
 

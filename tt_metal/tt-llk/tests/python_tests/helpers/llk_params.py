@@ -466,6 +466,18 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class DstRoundingMode(Enum):
+    """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
+    on store into a bf16 DEST."""
+
+    Default = "Default"
+    NearestEven = "NearestEven"
+
+    @property
+    def cpp_enum_value(self):
+        return f"ckernel::DstRoundingMode::{self.value}"
+
+
 class Transpose(Enum):
     Yes = True
     No = False
