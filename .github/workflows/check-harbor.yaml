@@ -96,7 +96,7 @@ jobs:
           # input, hard-failing the job instead of falling back like every other
           # unavailable/unhealthy case here.
           if [ -n "$HEALTH_RESPONSE" ] && echo "$HEALTH_RESPONSE" | jq -e . > /dev/null 2>&1; then
-            echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
+            echo "$HEALTH_RESPONSE" | jq -r '.components[]? | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
               echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"
             done
 
