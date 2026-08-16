@@ -298,9 +298,9 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
                                      ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
         }
     } else if (mesh_device) {
-        // Per-device translation: a logical DRAM sender coord resolves to a different physical
-        // subchannel on devices with different DRAM harvest masks, so the mesh-level (reference
-        // device) translation would name the wrong DRISC core.
+        // Per-device translation (see metal_SocDescriptor::dram_bank_endpoint_coords): the
+        // mesh-level translation validates that every device agrees and throws when they do not,
+        // which a logical DRAM coord on a harvested mesh does not.
         IDevice* recv_device = mesh_device->get_device(recv_core_.device_coord);
         recv_device_id = recv_device->id();
         recv_virtual_core = recv_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);

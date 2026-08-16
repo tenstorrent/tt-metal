@@ -402,45 +402,23 @@ TensorPrefetcherManager::~TensorPrefetcherManager() { stop(); }
 
 void TensorPrefetcherManager::enumerate_dram_senders() {
     TT_FATAL(!devices_.empty(), "Tensor prefetcher requires at least one device");
-    const auto context_id = mesh_device_->impl().get_context_id();
-    const auto& cluster = MetalContext::instance(context_id).get_cluster();
-    const auto& soc_desc = cluster.get_soc_desc(devices_.front()->id());
-    const uint32_t num_banks = soc_desc.get_num_dram_views();
-    num_banks_ = num_banks;
+    // dram_grid_size() already TT_FATALs unless every device in the mesh reports the same bank count.
+    num_banks_ = mesh_device_->dram_grid_size().x;
 
     // Logical DRAM coords name an endpoint role, so a bank's two senders have the same logical
     // coords on every device even when their DRAM harvest masks differ; only the physical
-    // subchannel each one resolves to changes. Build the list once from the reference device and
-    // check the rest agree, because everything downstream (socket placement, kernel placement, GCB
-    // sender indices) indexes senders by slot and would otherwise silently drive another device's
-    // wrong DRISC core.
+    // subchannel each one resolves to changes. Build the list from the reference device and check
+    // the rest agree, because everything downstream (socket placement, kernel placement, GCB sender
+    // indices) indexes senders by slot and would otherwise silently drive another device's wrong
+    // DRISC core.
     sender_logical_cores_.clear();
     sender_logical_cores_.reserve(2 * num_banks_);
-    for (uint32_t b = 0; b < num_banks_; ++b) {
-        // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
-        const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(devices_.front(), b);
-        TT_FATAL(
-            bank_senders.size() == 2,
-            "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
-            b,
-            devices_.front()->id(),
-            bank_senders.size());
-        sender_logical_cores_.insert(sender_logical_cores_.end(), bank_senders.begin(), bank_senders.end());
-    }
-    num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
-
+    std::vector<CoreCoord> device_senders;
     for (IDevice* device : devices_) {
-        const uint32_t device_num_banks = cluster.get_soc_desc(device->id()).get_num_dram_views();
-        TT_FATAL(
-            device_num_banks == num_banks_,
-            "Tensor prefetcher requires the same DRAM bank count on every device: reference device {} has {}, "
-            "device {} has {}",
-            devices_.front()->id(),
-            num_banks_,
-            device->id(),
-            device_num_banks);
-
+        device_senders.clear();
+        device_senders.reserve(2 * num_banks_);
         for (uint32_t b = 0; b < num_banks_; ++b) {
+            // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
             const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
             TT_FATAL(
                 bank_senders.size() == 2,
@@ -448,23 +426,20 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
                 b,
                 device->id(),
                 bank_senders.size());
-            for (uint32_t role = 0; role < bank_senders.size(); ++role) {
-                const CoreCoord& expected = sender_logical_cores_[2 * b + role];
-                TT_FATAL(
-                    bank_senders[role] == expected,
-                    "Tensor prefetcher: DRAM bank {} sender role {} is logical core ({}, {}) on reference device {} "
-                    "but ({}, {}) on device {}; sender slots must name the same role on every device",
-                    b,
-                    role,
-                    expected.x,
-                    expected.y,
-                    devices_.front()->id(),
-                    bank_senders[role].x,
-                    bank_senders[role].y,
-                    device->id());
-            }
+            device_senders.insert(device_senders.end(), bank_senders.begin(), bank_senders.end());
+        }
+        if (device == devices_.front()) {
+            sender_logical_cores_ = device_senders;
+        } else {
+            TT_FATAL(
+                device_senders == sender_logical_cores_,
+                "Tensor prefetcher: DRAM sender slots on device {} name different logical cores than on reference "
+                "device {}; every device must resolve slot s to the same (bank, role)",
+                device->id(),
+                devices_.front()->id());
         }
     }
+    num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
 
 std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_gcb(
@@ -1107,8 +1082,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     for (const auto& coord : target_devices) {
         IDevice* device = devices_[device_index_by_coord_.at(coord)];
         for (uint32_t s = 0; s < num_senders_; ++s) {
-            // Per-device translation: the same logical sender coord is a different physical DRAM
-            // subchannel on devices with different harvest masks.
+            // Per-device translation; see metal_SocDescriptor::dram_bank_endpoint_coords.
             const CoreCoord virtual_core =
                 device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
             targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});

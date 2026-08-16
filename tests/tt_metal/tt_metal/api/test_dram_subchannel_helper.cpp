@@ -66,12 +66,10 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
     }
 }
 
-// A logical DRAM coord's y is an index into dram_bank_endpoint_coords, and that table is ordered by
-// endpoint role: the NOC0 worker endpoint, then the NOC1 worker endpoint when it is a different
-// subchannel, then the bank's remaining subchannels ascending. The role ordering is what lets one
-// logical sender coord mean the same thing on every device in a mesh: which raw subchannel serves
-// which role is fixed per descriptor entry, but DRAM harvesting shifts which entry a bank maps to,
-// so a subchannel-ordered y would name a different role from one device to the next.
+// Pins the ordering contract documented on metal_SocDescriptor::dram_bank_endpoint_coords: y=0 is
+// the NOC0 worker endpoint, y=1 the NOC1 worker endpoint when that is a different subchannel, then
+// the bank's remaining subchannels ascending. That role ordering is what lets one logical sender
+// coord mean the same thing on every device in a mesh.
 TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
@@ -82,40 +80,33 @@ TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
     ASSERT_GT(num_banks, 0u);
 
     for (uint32_t bank = 0; bank < num_banks; ++bank) {
-        const auto& endpoints = soc_desc.dram_bank_endpoint_coords.at(bank);
-        ASSERT_EQ(endpoints.size(), num_subchannels) << "bank " << bank;
-
+        SCOPED_TRACE(fmt::format("bank {}", bank));
         const CoreCoord noc0_endpoint = soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank), 0);
         const CoreCoord noc1_endpoint = soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank), 1);
-        EXPECT_EQ(endpoints[0], noc0_endpoint) << "bank " << bank << ": y=0 must be the NOC0 worker endpoint";
-        const uint32_t num_role_entries = (noc1_endpoint == noc0_endpoint) ? 1 : 2;
-        if (num_role_entries == 2) {
-            EXPECT_EQ(endpoints[1], noc1_endpoint) << "bank " << bank << ": y=1 must be the NOC1 worker endpoint";
+
+        // Rebuild the table the contract calls for -- role-named entries first, then the leftover
+        // subchannels ascending -- and compare it whole, rather than re-deriving each entry's
+        // subchannel index and re-checking the ordering rule piecewise.
+        const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank));
+        std::vector<CoreCoord> subchannel_coords;
+        subchannel_coords.reserve(num_subchannels);
+        for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+            const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+                static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+            subchannel_coords.push_back({coord.x, coord.y});
         }
 
-        // The entries past the role-named ones are the leftover subchannels, ascending.
-        const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank));
-        uint32_t prev_subchannel = 0;
-        bool have_prev = false;
-        for (uint32_t idx = num_role_entries; idx < num_subchannels; ++idx) {
-            uint32_t subchannel = num_subchannels;
-            for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
-                const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
-                    static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-                if (CoreCoord{coord.x, coord.y} == endpoints[idx]) {
-                    subchannel = sub;
-                    break;
-                }
-            }
-            ASSERT_LT(subchannel, num_subchannels) << "bank " << bank << ", y=" << idx << " is not a subchannel";
-            EXPECT_NE(endpoints[idx], noc0_endpoint) << "bank " << bank << ", y=" << idx;
-            EXPECT_NE(endpoints[idx], noc1_endpoint) << "bank " << bank << ", y=" << idx;
-            if (have_prev) {
-                EXPECT_GT(subchannel, prev_subchannel) << "bank " << bank << ", y=" << idx << " is out of order";
-            }
-            prev_subchannel = subchannel;
-            have_prev = true;
+        std::vector<CoreCoord> expected{noc0_endpoint};
+        if (noc1_endpoint != noc0_endpoint) {
+            expected.push_back(noc1_endpoint);
         }
+        for (const CoreCoord& coord : subchannel_coords) {
+            if (coord != noc0_endpoint && coord != noc1_endpoint) {
+                expected.push_back(coord);
+            }
+        }
+        ASSERT_EQ(expected.size(), num_subchannels) << "the NOC endpoints are not subchannels of their own bank";
+        EXPECT_EQ(soc_desc.dram_bank_endpoint_coords.at(bank), expected);
     }
 }
 

@@ -116,6 +116,12 @@ def make_recv_contig_weight(
     return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 
+def require_tensor_prefetcher(device):
+    """Skip unless programmable DRAM cores are available on this device."""
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+        pytest.skip("programmable DRAM cores unavailable (need Blackhole and firmware >= 19.12.0.0)")
+
+
 @contextlib.contextmanager
 def tensor_prefetcher_session(device):
     """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)

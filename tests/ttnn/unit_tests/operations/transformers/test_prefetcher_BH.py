@@ -30,7 +30,13 @@ from models.tt_transformers.tt.prefetcher import (
 )
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    bank_receivers_contiguous,
+    bytes_per_tile,
+    require_tensor_prefetcher,
+    ring_grid_cols,
+    tensor_prefetcher_session,
+)
 
 
 def round_up(n, multiple):
@@ -587,18 +593,15 @@ def run_prefetcher_all_matmuls(
 def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     """Minimal public-API data-flow test for per-device harvested DRAM sender placement.
 
-    This drives the prefetcher across a two-device mesh and validates the delivered bytes on
-    every device. Whether it distinguishes per-device sender translation from the mesh-wide
-    reference translation it replaced depends on the silicon: a pair of devices with identical
-    DRAM harvest masks resolves every bank to the same physical sender on both, so this passes
-    either way. The discriminating check -- comparing each bank's resolved sender across the mesh
-    and reporting when the pair is homogeneous -- lives in the C++ regression
-    (DramSenderGCBMultiDeviceFixture.ConfigAndSenderStateUsePerDeviceDramTopology), which can
-    reach the per-device SOC descriptors that are not exposed to Python.
+    Drives the prefetcher across a two-device mesh and validates the delivered bytes on every
+    device. The discriminating check -- comparing each bank's resolved sender across the mesh, and
+    reporting when the device pair is too homogeneous to tell the paths apart -- needs the
+    per-device SOC descriptors, which Python cannot reach; it lives in the C++ regression
+    DramSenderGCBMultiDeviceFixture.ConfigAndSenderStateUsePerDeviceDramTopology.
     """
-    if not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
-        pytest.skip("programmable DRAM cores unavailable (need Blackhole and firmware >= 19.12.0.0)")
+    require_tensor_prefetcher(mesh_device)
 
+    dtype = ttnn.bfloat16
     num_dram_banks = mesh_device.dram_grid_size().x
     ring_size = num_dram_banks
     K = 448
@@ -606,7 +609,7 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     n_tiles_per_receiver = 8
     N = num_dram_banks * n_tiles_per_receiver * ttnn.TILE_SIZE
     k_block_w_tiles = (K_padded // ttnn.TILE_SIZE) // ring_size
-    push_page_size = k_block_w_tiles * n_tiles_per_receiver * 2048  # bfloat16 tile bytes
+    push_page_size = k_block_w_tiles * n_tiles_per_receiver * bytes_per_tile(dtype)
 
     torch.manual_seed(0xC0FFEE)
     pt_weight = torch.zeros(1, 1, K_padded, N)
@@ -624,17 +627,14 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     tt_weight = ttnn.as_tensor(
         pt_weight,
         device=mesh_device,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         memory_config=weight_mem_config,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     bank_to_receivers = [
-        (
-            bank,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0))}),
-        )
+        (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
         for bank in range(num_dram_banks)
     ]
     gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(

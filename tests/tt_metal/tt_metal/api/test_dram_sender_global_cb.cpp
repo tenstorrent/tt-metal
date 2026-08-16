@@ -10,9 +10,6 @@
 
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <cstdlib>
-#include <iterator>
-#include <memory>
 #include <optional>
 #include <vector>
 
@@ -62,22 +59,36 @@ protected:
     distributed::MeshDevice* mesh_device_{};
 };
 
-// MeshDevice1x2Fixture owns a single MeshDevice spanning two chips, which is what makes the
-// per-device fan-out inside one GCB observable. Deriving from a MeshDispatchFixture instead
-// would hand back unit meshes (one 1x1 MeshDevice per chip), collapsing every per-device loop
-// below to a single iteration, and its shared-device suite setup would be torn down twice.
-// Runs under fast dispatch (MeshDevice1x2Fixture's requirement, and what CI defaults to). Nothing
-// here needs slow dispatch: the receiver config lands via a blocking WriteShard and the sender
+// Sender 0's receivers as the physical NOC XY runtime args the smoke sender kernel expects,
+// translated through the device the program will run on.
+std::vector<uint32_t> receiver_noc_xy_rt_args(const experimental::GlobalCircularBuffer& gcb, IDevice* device) {
+    const auto& receivers = experimental::receiver_logical_cores_per_sender(gcb).at(0);
+    std::vector<uint32_t> rt_args;
+    rt_args.reserve(2 * receivers.size());
+    for (const auto& receiver_logical : receivers) {
+        const CoreCoord phys = device->worker_core_from_logical_core(receiver_logical);
+        rt_args.push_back(phys.x);
+        rt_args.push_back(phys.y);
+    }
+    return rt_args;
+}
+
+// One MeshDevice spanning two chips, which is what makes the per-device fan-out inside one GCB
+// observable. A MeshDispatchFixture would hand back unit meshes (one 1x1 MeshDevice per chip),
+// collapsing every per-device loop below to a single iteration, and its shared-device suite setup
+// would be torn down twice.
+// Runs under fast dispatch (MeshDeviceFixtureBase's requirement, and what CI defaults to). Nothing
+// here needs slow dispatch: the receiver config lands via a blocking shard write and the sender
 // state block via cluster.write_core, so both have landed by the time the factory returns and the
 // raw L1 reads below are safe.
-class DramSenderGCBMultiDeviceFixture : public MeshDevice1x2Fixture {
+class DramSenderGCBMultiDeviceFixture : public MeshDeviceFixtureBase {
 protected:
+    DramSenderGCBMultiDeviceFixture() :
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}, .arch = tt::ARCH::BLACKHOLE}) {}
+
     void SetUp() override {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Requires Blackhole";
-        }
-        // Opens the 1x2 mesh, or skips when the system mesh is smaller than two devices.
-        MeshDevice1x2Fixture::SetUp();
+        // Opens the 1x2 mesh, or skips on a non-Blackhole arch / a system mesh smaller than two devices.
+        MeshDeviceFixtureBase::SetUp();
         if (mesh_device_ == nullptr) {
             return;
         }
@@ -97,19 +108,20 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     // view index, so a pair of devices that harvest different late channels still agrees on bank 0
     // while diverging on some later bank; testing one bank can therefore miss the very divergence
     // this test exists to catch.
-    const auto& soc_desc = MetalContext::instance(mesh_device_->impl().get_context_id())
-                               .get_cluster()
-                               .get_soc_desc(mesh_device_->get_devices().front()->id());
-    const uint32_t num_banks = soc_desc.get_num_dram_views();
+    const uint32_t num_banks = mesh_device_->dram_grid_size().x;
     ASSERT_GT(num_banks, 0u);
 
     // Bank b's two receivers are the column (b, 0)..(b, 1), so every bank gets a disjoint receiver
     // pair (one GCB cannot map the same worker to two senders) and the row-wise split inside
     // build_dram_sender_mapping hands (b, 0) to role 0 and (b, 1) to role 1.
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers;
+    std::vector<std::vector<CoreCoord>> receivers_per_bank;
     bank_to_receivers.reserve(num_banks);
+    receivers_per_bank.reserve(num_banks);
     for (uint32_t bank = 0; bank < num_banks; ++bank) {
         bank_to_receivers.emplace_back(bank, CoreRangeSet(CoreRange({bank, 0}, {bank, kSendersPerBank - 1})));
+        receivers_per_bank.push_back(
+            corerange_to_cores(bank_to_receivers.back().second, /*max_cores=*/std::nullopt, /*row_wise=*/true));
     }
 
     auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
@@ -127,29 +139,29 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     // green run read as proof.
     bool any_sender_placement_differs = false;
 
+    IDevice* reference_device = mesh_device_->get_devices().front();
+    auto& cluster = MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
+    std::vector<uint8_t> sender_state_bytes(sizeof(DramSenderStateBlock) + 2 * sizeof(uint32_t));
+
     for (IDevice* device : mesh_device_->get_devices()) {
         for (uint32_t bank = 0; bank < num_banks; ++bank) {
             const std::vector<CoreCoord> device_senders = mesh_device_->impl().dram_sender_logical_cores(device, bank);
             ASSERT_EQ(device_senders.size(), kSendersPerBank);
 
-            const auto receiver_logical_cores =
-                corerange_to_cores(bank_to_receivers[bank].second, /*max_cores=*/std::nullopt, /*row_wise=*/true);
-
             for (uint32_t sender_role = 0; sender_role < kSendersPerBank; ++sender_role) {
+                SCOPED_TRACE(fmt::format("device {}, bank {}, sender role {}", device->id(), bank, sender_role));
                 const size_t mapping_idx = (bank * kSendersPerBank) + sender_role;
 
                 // Logical sender coords name an endpoint role, so they are the same on every device;
                 // only the physical subchannel they resolve to tracks that device's DRAM harvest
                 // mask. The GCB's one mapping is only valid for the whole mesh because of this.
-                EXPECT_EQ(device_senders[sender_role], gcb.sender_receiver_core_mapping()[mapping_idx].first)
-                    << "device " << device->id() << ", bank " << bank << ", sender role " << sender_role;
+                EXPECT_EQ(device_senders[sender_role], gcb.sender_receiver_core_mapping()[mapping_idx].first);
 
                 const CoreCoord expected_sender_virtual =
                     device->virtual_core_from_logical_core(device_senders[sender_role], CoreType::DRAM);
-                const CoreCoord reference_sender_virtual =
-                    mesh_device_->get_devices().front()->virtual_core_from_logical_core(
-                        device_senders[sender_role], CoreType::DRAM);
-                any_sender_placement_differs |= (expected_sender_virtual != reference_sender_virtual);
+                any_sender_placement_differs |=
+                    (expected_sender_virtual !=
+                     reference_device->virtual_core_from_logical_core(device_senders[sender_role], CoreType::DRAM));
 
                 // Each receiver's config page stores the NOC XY to increment when returning
                 // pages_acked credits. With dual senders and two receivers, role s owns receiver s.
@@ -162,36 +174,28 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
                 std::vector<uint32_t> receiver_config;
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     device,
-                    receiver_logical_cores[sender_role],
+                    receivers_per_bank[bank][sender_role],
                     gcb.config_address(),
                     10 * sizeof(uint32_t),
                     receiver_config,
                     CoreType::WORKER);
                 ASSERT_GE(receiver_config.size(), 10u);
-                EXPECT_EQ(receiver_config[8], expected_sender_virtual.x)
-                    << "device " << device->id() << ", bank " << bank << ", sender role " << sender_role;
-                EXPECT_EQ(receiver_config[9], expected_sender_virtual.y)
-                    << "device " << device->id() << ", bank " << bank << ", sender role " << sender_role;
+                EXPECT_EQ(receiver_config[8], expected_sender_virtual.x);
+                EXPECT_EQ(receiver_config[9], expected_sender_virtual.y);
 
                 const CoreCoord expected_receiver_phys =
-                    device->worker_core_from_logical_core(receiver_logical_cores[sender_role]);
-                const size_t sender_state_size = sizeof(DramSenderStateBlock) + 2 * sizeof(uint32_t);
-                std::vector<uint8_t> sender_state_bytes(sender_state_size, 0);
-                MetalContext::instance(mesh_device_->impl().get_context_id())
-                    .get_cluster()
-                    .read_core(
-                        sender_state_bytes.data(),
-                        sender_state_bytes.size(),
-                        tt_cxy_pair(device->id(), expected_sender_virtual),
-                        sender_state_addr);
+                    device->worker_core_from_logical_core(receivers_per_bank[bank][sender_role]);
+                cluster.read_core(
+                    sender_state_bytes.data(),
+                    sender_state_bytes.size(),
+                    tt_cxy_pair(device->id(), expected_sender_virtual),
+                    sender_state_addr);
                 const auto* sender_state = reinterpret_cast<const DramSenderStateBlock*>(sender_state_bytes.data());
                 EXPECT_EQ(sender_state->num_receivers, 1u);
                 const auto* receiver_xy =
                     reinterpret_cast<const uint32_t*>(sender_state_bytes.data() + sizeof(DramSenderStateBlock));
-                EXPECT_EQ(receiver_xy[0], expected_receiver_phys.x)
-                    << "device " << device->id() << ", bank " << bank << ", sender role " << sender_role;
-                EXPECT_EQ(receiver_xy[1], expected_receiver_phys.y)
-                    << "device " << device->id() << ", bank " << bank << ", sender role " << sender_role;
+                EXPECT_EQ(receiver_xy[0], expected_receiver_phys.x);
+                EXPECT_EQ(receiver_xy[1], expected_receiver_phys.y);
             }
         }
     }
@@ -292,13 +296,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
         sender_logical,
         DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
 
-    std::vector<uint32_t> sender_rt_args;
-    sender_rt_args.reserve(2 * kNumReceivers);
-    const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
-    for (const auto& c : receiver_phys) {
-        sender_rt_args.push_back(c.x);
-        sender_rt_args.push_back(c.y);
-    }
+    const std::vector<uint32_t> sender_rt_args = receiver_noc_xy_rt_args(gcb, mesh_device_);
     SetRuntimeArgs(program, sender_kernel_id, sender_logical, sender_rt_args);
 
     CircularBufferConfig cb_config(kPageSize);
@@ -421,12 +419,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
         "tests/tt_metal/tt_metal/test_kernels/misc/gcb_smoke_sender.cpp",
         sender_logical,
         DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
-    std::vector<uint32_t> sender_rt_args;
-    const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
-    for (const auto& c : receiver_phys) {
-        sender_rt_args.push_back(c.x);
-        sender_rt_args.push_back(c.y);
-    }
+    const std::vector<uint32_t> sender_rt_args = receiver_noc_xy_rt_args(gcb, mesh_device_);
     SetRuntimeArgs(sender_program, sender_kernel_id, sender_logical, sender_rt_args);
 
     // --- Receiver program: worker kernel only, with c_31 attached to the GCB ---
@@ -569,12 +562,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
             "tests/tt_metal/tt_metal/test_kernels/misc/gcb_smoke_sender.cpp",
             sender_logical,
             DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args});
-        std::vector<uint32_t> sender_rt_args;
-        const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
-        for (const auto& c : receiver_phys) {
-            sender_rt_args.push_back(c.x);
-            sender_rt_args.push_back(c.y);
-        }
+        const std::vector<uint32_t> sender_rt_args = receiver_noc_xy_rt_args(gcb, mesh_device_);
         SetRuntimeArgs(program, sender_kernel_id, sender_logical, sender_rt_args);
 
         CircularBufferConfig cb_config(kPageSize);
