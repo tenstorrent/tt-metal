@@ -831,7 +831,7 @@ in `tt-metal`:
 |---|---|---|
 | 1 | `ec69581f5d2a28d2eb8a3bf3c90be3e5ccc2a1ab` | the release run against the autoport plus the two shared bugs it exposed. 105 files: `doc/tti_release/` evidence, the new `tt/reasoning_parser.py` + `tests/test_reasoning_parser.py`, the shared seeding fix in `models/common/sampling/tt_sampling.py`, and `.gitignore`. **Its commit message says "run.py exits 1 for the one remaining row" — true when it was written, superseded by round 3.** |
 | 2 | `003e89732c5` | log round 1's SHA into `RUN_NOTES.md` |
-| 3 | `TTI_RELEASE_ROUND3_SHA` | the SPEC_TESTS `known_issues` waiver, the tt-inference-server plumbing that makes it apply, release run 5 (`rc=0`) and its evidence, this round's doc corrections, and `stage_review_round3.md`. **No file under `models/` outside `doc/tti_release/` changed in this round** — the model code is byte-identical to round 1's. |
+| 3 | `77e82b9720f69383517fec2de21c878112d5638b` | the SPEC_TESTS `known_issues` waiver, the tt-inference-server plumbing that makes it apply, release run 5 (`rc=0`) and its evidence, this round's doc corrections, and `stage_review_round3.md`. **No file under `models/` outside `doc/tti_release/` changed in this round** — the model code is byte-identical to round 1's. |
 
 No unrelated dirty state was swept into any of them; the worktree is clean at
 the round-3 SHA.
