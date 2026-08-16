@@ -1,0 +1,11 @@
+{
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "revision": "local Hugging Face cache used by optimized-vLLM",
+  "tokenizer_class": "GemmaTokenizer",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "endpoint": "/v1/chat/completions",
+  "rendering_method": "server-side tokenizer chat template via OpenAI messages",
+  "generation_parameters": {"temperature": 0, "max_tokens": 8},
+  "prompt_source": "Stage 11 TTI external-server smoke"
+}
