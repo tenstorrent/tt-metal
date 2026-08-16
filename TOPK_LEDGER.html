@@ -46,6 +46,7 @@
   .chip { display: inline-block; background: var(--chip); border: 1px solid var(--hairline);
           border-radius: 999px; padding: .04rem .55rem; font-size: .72rem; }
   .commit { color: var(--accent-ink); font-size: .82em; }
+  .prn { font-size: 1.35em; line-height: 1; vertical-align: -0.05em; }
   details { border: 1px solid var(--hairline); border-radius: 6px; margin: .7rem 0; background: var(--panel); }
   details summary { cursor: pointer; padding: .7rem 1rem; font-weight: 700; font-size: .98rem;
                     list-style-position: inside; }
@@ -83,12 +84,12 @@
       <tr><td>callsite</td><td class="n flat">— (model)</td><td class="n flat">— (FusedProgram-internal)</td><td class="n ours gl"><code>topk_large_indices(x, k=…)</code></td><td class="n gr">same call</td><td class="n ours gl"><code>ttnn.topk(x, k, …)</code> — unchanged signature</td><td class="n gr">same call</td></tr>
       <tr><td>returns</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">indices; <code>return_values=True</code> → (values, indices)</td><td class="n gr">indices only</td><td class="n ours gl">(values, indices), as always</td><td class="n gr">(values, indices)</td></tr>
       <tr><td>attribution</td><td class="n flat">Davor Capalija; proven below the bitonic floor</td><td class="n flat">Nikhil/Radomir/Ligang; fused SDPA+topk, not callable</td><td class="n ours gl"><strong>ours:</strong> multi-core factory + log-tree, values, num_slices (op by Pavle Josipović #46833 on blaze TopK-XL LLK)</td><td class="n gr">Pavle Josipović (PR #46833), row-parallel</td><td class="n ours gl"><strong>ours:</strong> internal routing (BH·bf16·last-dim·64&lt;k≤2048·largest·non-stable); else old path bit-for-bit</td><td class="n gr">—</td></tr>
-      <tr><td>upstream PR</td><td class="n flat">—</td><td class="n flat">theirs (#1971)</td><td class="n ours gl"><strong>③</strong> (after ①②)</td><td class="n gr">already upstream</td><td class="n ours gl"><strong>④</strong> (needs ③)</td><td class="n gr">—</td></tr>
+      <tr><td>upstream PR</td><td class="n flat">—</td><td class="n flat">theirs (#1971)</td><td class="n ours gl"><strong><span class="prn">③</span></strong> (after <span class="prn">①</span><span class="prn">②</span>)</td><td class="n gr">already upstream</td><td class="n ours gl"><strong><span class="prn">④</span></strong> (needs <span class="prn">③</span>)</td><td class="n gr">—</td></tr>
       <tr><td>gates</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">op suite 154 ✓ (2 env-gated)</td><td class="n gr">its own nightly suite</td><td class="n ours gl">220/220 ✓</td><td class="n gr">—</td></tr>
     </tbody>
   </table></div>
-  <p class="sub">Micro-op layer (PR ①+②, <span class="commit">d64993c·7257487</span>) is inside the kernels of these columns:
-  ① replay ×1.17 → the stock ttnn.topk column only (631.5 ms is without it; with it: 539.5 ms); ② SFPLOADMACRO ~5–9% → the two ours columns. Factors, not times — already included in the numbers shown.</p>
+  <p class="sub">Micro-op layer (PR <span class="prn">①</span>+<span class="prn">②</span>, <span class="commit">d64993c·7257487</span>) is inside the kernels of these columns:
+  <span class="prn">①</span> replay ×1.17 → the stock ttnn.topk column only (631.5 ms is without it; with it: 539.5 ms); <span class="prn">②</span> SFPLOADMACRO ~5–9% → the two ours columns. Factors, not times — already included in the numbers shown.</p>
   <p class="sub">‡stock topk_large_indices measured as a deterministic competition layer via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core wall time). †blaze runs its fused SDPA+localTopK program at exactly this shape (k=2048, 64K global context) on this box — includes SDPA work the other layers don't, so its row flatters it.</p>
 
   <div class="takeaway">
