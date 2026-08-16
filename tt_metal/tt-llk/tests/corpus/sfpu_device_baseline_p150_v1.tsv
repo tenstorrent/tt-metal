@@ -1,53 +1,73 @@
-# schema=1; chip_class=p150; cycles are scoped device profiler metrics, never whole-test wall time.
-# Seeded from the Lane D post-WP8 2x2 sweep (tt-quietbox-0, 2026-08-16, compiler sha256
-# 4633999c170e1a89…, tt-metal 55ce75be, craq-sim f80a8d64 generic path); see
-# ~/sfpi-uplift/sweep-2x2/evidence-20260816/SCOREBOARD.md. sfpu_device_baseline_v1.tsv is the
-# immutable p100a-era migration source and is deliberately untouched.
+# schema=2; chip_class=p150; cycles are scoped device profiler metrics, never whole-test wall time.
+# Seeded from the Lane D post-WP8 2x2 sweep (tt-quietbox-0, 2026-08-16, tt-metal 55ce75be,
+# craq-sim f80a8d64 generic path); see ~/sfpi-uplift/sweep-2x2/evidence-20260816/SCOREBOARD.md.
+# sfpu_device_baseline_v1.tsv is the immutable p100a-era migration source and is deliberately untouched.
+#
+# COMPILER PROVENANCE (D6): the g++ DRIVER sha256 4633999c170e1a89… is byte-identical across
+# cc1plus-only rebuilds and therefore AMBIGUOUS as a per-row compiler identity. The compiler_sha
+# column records the compiler proper (cc1plus binary sha256) where known: the Lane D/E rows were
+# archived with driver-only provenance (compiler_sha=unrecorded; driver 4633999c…); the two
+# legacy__ckernel_sfpu_reduce_custom rows were measured with the sfpi-gcc bb56f1d7797 gate-fix
+# cc1plus 97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6 (-B hybrid build,
+# gatefix-evidence-20260816/SHA256SUMS). The scheduled sweeps now pin cc1plus directly
+# (sweep_2x2.conf PINNED_CC1PLUS_SHA256 = 33221397ebb2… = the sfpi build of the same bb56f1d7797
+# pin) and re-verify the reduce pair against it via the reduce-sdpa pinpair row.
+#
+# CROSS-CHIP COMPARABILITY (D5): p150 cells are internally-valid same-source 2x2 pairs, but they
+# are NOT same-source with the p100a records: 65d2c873/4ff5c848 changed the measured Min/Max
+# kernel's .text for BOTH impls (verified by recompilation), and the chip class changed — every
+# "p100a … reproduced" annotation below is a RATIO-LEVEL REPRODUCTION ONLY across a changed
+# kernel and chip, never a same-source identity claim.
+#
+# expected_class (D4): the op's class-aware acceptance expectation (win/parity/loss/refusal).
+# report() gates any transition away from win as RED (including win→byte-identical-refusal) and
+# flags refusal→changed as a notice.
 # Selector convention for sweep rows: <op>:<cell> with cells sem_off/sem_on/hand_off/hand_on,
-# scope <marker>_MATH_ISOLATE_PER_TILE, cycles = mean(MATH_ISOLATE)/tile_cnt (cycles/tile).
+# scope <marker>_<metric>_PER_TILE, cycles = mean(<metric>)/tile_cnt (cycles/tile); the reduce
+# rows keep their native selectors and absolute REDUCE_SDPA_BODY mean(PACK_ISOLATE) cycles.
 # Baseline updates are a REVIEWED MANUAL step: nightly/weekly sweeps only report drift.
-id	arch	chip_class	metric	scope	selector	cycles	status	provenance
-legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:sem_off	1289	measured	Lane D 2026-08-16; KERNEL marker (fire-and-forget replay-launch shape; BODY invalid); deterministic x3
-legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:sem_on	1036	measured	Lane D 2026-08-16; causal -19.63%; deterministic x3
-legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:hand_off	1009	measured	Lane D 2026-08-16; hand OFF==ON byte-identical, one physical run fills both cells
-legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:hand_on	1009	measured	Lane D 2026-08-16; identity with sdpa:hand_off
-metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:sem_off	27.758	measured	Lane D 2026-08-16; F32->F32 perf selector; only non-deterministic reading of the sweep (±0.25 cyc)
-metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:sem_on	21.381	measured	Lane D 2026-08-16; planner fires; causal -22.98%, beats hand -5.81%
-metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:hand_off	22.699219	measured	Lane D 2026-08-16; hand OFF==ON byte-identical; measured as the sweep's intentional control pair (EXACT match)
-metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:hand_on	22.699219	measured	Lane D 2026-08-16; control leg, exact match with hand_off
-metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:sem_off	44.629	measured	Lane D 2026-08-16; deterministic x3
-metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:sem_on	36.624	measured	Lane D 2026-08-16; causal -17.94%; parity vs hand (+0.02%)
-metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:hand_off	36.615	measured	Lane D 2026-08-16; hand-perf OFF==ON byte-identical
-metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:hand_on	36.615	measured	Lane D 2026-08-16; identity with addcmul:hand_off
-metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:sem_off	123.719	measured	Lane D 2026-08-16; deterministic x3
-metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:sem_on	99.721	measured	Lane D 2026-08-16; causal -19.40%; +37.61% loss vs hand (open loss row, HANDOFF §7b)
-metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:hand_off	72.468	measured	Lane D 2026-08-16; hand OFF==ON byte-identical
-metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:hand_on	72.468	measured	Lane D 2026-08-16; identity with exp:hand_off
-metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:sem_off	55.849	measured	Lane D 2026-08-16; deterministic x3
-metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:sem_on	45.598	measured	Lane D 2026-08-16; causal -18.35%; +63.68% loss vs hand (open loss row, HANDOFF §7c)
-metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:hand_off	27.856	measured	Lane D 2026-08-16; hand pair CHANGED (autoincr), perf-neutral Δ+0.007%
-metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:hand_on	27.858	measured	Lane D 2026-08-16; hand ON leg measured separately (changed pair)
-metal__ckernel_sfpu_lerp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	lerp:sem_off	72.629	measured	Lane D 2026-08-16; semantic-only row (no distinct hand LLK)
-metal__ckernel_sfpu_lerp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	lerp:sem_on	62.874	measured	Lane D 2026-08-16; win kept and larger than p100a (-13.43% vs -2.75%)
-metal__ckernel_sfpu_expm1	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	expm1:sem_off	155.722	measured	Lane D 2026-08-16; semantic-only row
-metal__ckernel_sfpu_expm1	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	expm1:sem_on	151.846	measured	Lane D 2026-08-16; -2.49% (latsched+autoincr both fire); prior p100a 0.000%
-legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	handwritten_replay	326	measured	Lane D §19.1 re-confirmation 2026-08-16; three fresh samples 326/326/326
-legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	323	measured	Lane D §19.1 re-confirmation; sample 1/3; WIN CONFIRMED (exact absolute reproduction of p100a)
-legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	323	measured	Lane D §19.1 re-confirmation; sample 2/3
-legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	325	measured	Lane D §19.1 re-confirmation; sample 3/3; median 323
-legacy__ckernel_sfpu_binary_bcast	bh	p150	device_cycles	BINARY_BCAST_BODY	handwritten	608	measured	Lane D §19.1 re-confirmation; 608/608/608; PARITY CONFIRMED (exact)
-legacy__ckernel_sfpu_binary_bcast	bh	p150	device_cycles	BINARY_BCAST_BODY	generated	608	measured	Lane D §19.1 re-confirmation; 608/608/608; shape counts match archive
-legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	840	measured	Gate-fix promotion pair (sfpi-gcc bb56f1d7797, 2026-08-16): 840.00 x3; prior Lane D pair was 839 vs 855.5 (same-run pairing rule: both cells from one paired A/B)
-legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	generated	834	measured	REGRESSION FIXED (sfpi-gcc bb56f1d7797): replay-hoist profitability model recalibrated from silicon; D1 hoist fires at default gate (dump 121>=60), pack 9ca4a98c; 834.00 x3 = -0.714% win vs hand 840 — exact reproduction of the archived p100a D1 record
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:sem_off	28.4755859375	measured	Lane E 2026-08-16 nightly-20260816 (first p150 Min/Max perf after harness fix); deterministic x3
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:sem_on	19.728515625	measured	Lane E 2026-08-16; planner fires (derived SFPLOADMACRO); causal -30.72% (p100a record -30.73% CONFIRMED); deterministic x3
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:hand_off	18.2236328125	measured	Lane E 2026-08-16; hand OFF==ON byte-identical, one physical run fills both cells; vs hand +8.26% (p100a +9.0% CONFIRMED)
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:hand_on	18.2236328125	measured	Lane E 2026-08-16; identity with minmax-min:hand_off
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:sem_off	28.4755859375	measured	Lane E 2026-08-16; deterministic x3
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:sem_on	19.728515625	measured	Lane E 2026-08-16; planner fires; causal -30.72%; deterministic x3
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:hand_off	18.2236328125	measured	Lane E 2026-08-16; min of 18.2266/18.2236/18.2236; hand OFF==ON byte-identical
-metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:hand_on	18.2236328125	measured	Lane E 2026-08-16; identity with minmax-max:hand_off
-metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:sem_off	359	measured	Lane E 2026-08-16; first p150 typecast 2x2 (impl-parameterized node test_typecast_device_profile); deterministic x3
-metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:sem_on	325	measured	Lane E 2026-08-16; planner fires; causal -9.47%; vs hand +22.64% loss persists (p100a +17.2/+19.6%); WP8 step 4 descriptor sharing targets this
-metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:hand_off	265	measured	Lane E 2026-08-16; hand OFF==ON byte-identical; exact absolute agreement with the p100a hand record (265)
-metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:hand_on	265	measured	Lane E 2026-08-16; identity with typecast:hand_off
+id	arch	chip_class	metric	scope	selector	cycles	status	expected_class	compiler_sha	provenance
+legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:sem_off	1289	measured	win	unrecorded	Lane D 2026-08-16; KERNEL marker (fire-and-forget replay-launch shape; BODY invalid); deterministic x3
+legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:sem_on	1036	measured	win	unrecorded	Lane D 2026-08-16; causal -19.63%; deterministic x3
+legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:hand_off	1009	measured	win	unrecorded	Lane D 2026-08-16; hand OFF==ON byte-identical, one physical run fills both cells
+legacy__ckernel_sfpu_sdpa_exp_unclamped	bh	p150	device_cycles	KERNEL_MATH_ISOLATE_PER_TILE	sdpa:hand_on	1009	measured	win	unrecorded	Lane D 2026-08-16; identity with sdpa:hand_off
+metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:sem_off	27.758	measured	win	unrecorded	Lane D 2026-08-16; F32->F32 perf selector; only non-deterministic reading of the sweep (±0.25 cyc)
+metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:sem_on	21.381	measured	win	unrecorded	Lane D 2026-08-16; planner fires; causal -22.98%, beats hand -5.81%
+metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:hand_off	22.699219	measured	win	unrecorded	Lane D 2026-08-16; hand OFF==ON byte-identical; measured as the sweep's intentional control pair (EXACT match)
+metal__ckernel_sfpu_signbit	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	signbit:hand_on	22.699219	measured	win	unrecorded	Lane D 2026-08-16; control leg, exact match with hand_off
+metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:sem_off	44.629	measured	win	unrecorded	Lane D 2026-08-16; deterministic x3
+metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:sem_on	36.624	measured	win	unrecorded	Lane D 2026-08-16; causal -17.94%; parity vs hand (+0.02%)
+metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:hand_off	36.615	measured	win	unrecorded	Lane D 2026-08-16; hand-perf OFF==ON byte-identical
+metal__ckernel_sfpu_addcmul	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	addcmul:hand_on	36.615	measured	win	unrecorded	Lane D 2026-08-16; identity with addcmul:hand_off
+metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:sem_off	123.719	measured	win	unrecorded	Lane D 2026-08-16; deterministic x3
+metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:sem_on	99.721	measured	win	unrecorded	Lane D 2026-08-16; causal -19.40%; +37.61% loss vs hand (open loss row, HANDOFF §7b)
+metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:hand_off	72.468	measured	win	unrecorded	Lane D 2026-08-16; hand OFF==ON byte-identical
+metal__ckernel_sfpu_exp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	exp:hand_on	72.468	measured	win	unrecorded	Lane D 2026-08-16; identity with exp:hand_off
+metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:sem_off	55.849	measured	win	unrecorded	Lane D 2026-08-16; deterministic x3
+metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:sem_on	45.598	measured	win	unrecorded	Lane D 2026-08-16; causal -18.35%; +63.68% loss vs hand (open loss row, HANDOFF §7c)
+metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:hand_off	27.856	measured	win	unrecorded	Lane D 2026-08-16; hand pair CHANGED (autoincr), perf-neutral Δ+0.007%
+metal__ckernel_sfpu_sigmoid_appx	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	sigmoidappx:hand_on	27.858	measured	win	unrecorded	Lane D 2026-08-16; hand ON leg measured separately (changed pair)
+metal__ckernel_sfpu_lerp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	lerp:sem_off	72.629	measured	win	unrecorded	Lane D 2026-08-16; semantic-only row (no distinct hand LLK)
+metal__ckernel_sfpu_lerp	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	lerp:sem_on	62.874	measured	win	unrecorded	Lane D 2026-08-16; win kept and larger than p100a (-13.43% vs -2.75%)
+metal__ckernel_sfpu_expm1	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	expm1:sem_off	155.722	measured	win	unrecorded	Lane D 2026-08-16; semantic-only row
+metal__ckernel_sfpu_expm1	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	expm1:sem_on	151.846	measured	win	unrecorded	Lane D 2026-08-16; -2.49% (latsched+autoincr both fire); prior p100a 0.000%
+legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	handwritten_replay	326	measured	win	unrecorded	Lane D §19.1 re-confirmation 2026-08-16; three fresh samples 326/326/326
+legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	323	measured	win	unrecorded	Lane D §19.1 re-confirmation; sample 1/3; WIN on p150 (same absolute value as the p100a record — cross-chip, ratio-level comparability only)
+legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	323	measured	win	unrecorded	Lane D §19.1 re-confirmation; sample 2/3
+legacy__ckernel_sfpu_welfords	bh	p150	device_cycles	WELFORD_BODY	generated	325	measured	win	unrecorded	Lane D §19.1 re-confirmation; sample 3/3; median 323
+legacy__ckernel_sfpu_binary_bcast	bh	p150	device_cycles	BINARY_BCAST_BODY	handwritten	608	measured	parity	unrecorded	Lane D §19.1 re-confirmation; 608/608/608; PARITY on p150 (exact)
+legacy__ckernel_sfpu_binary_bcast	bh	p150	device_cycles	BINARY_BCAST_BODY	generated	608	measured	parity	unrecorded	Lane D §19.1 re-confirmation; 608/608/608; shape counts match archive
+legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	handwritten_replay	840	measured	win	97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6	Gate-fix promotion pair (sfpi-gcc bb56f1d7797 via -B hybrid cc1plus, 2026-08-16): 840.00 x3; prior Lane D pair was 839 vs 855.5 (same-run pairing rule: both cells from one paired A/B); the sweep's reduce-sdpa pinpair row re-verifies this pair against the pinned sfpi-built cc1plus 33221397ebb2…
+legacy__ckernel_sfpu_reduce_custom	bh	p150	device_cycles	REDUCE_SDPA_BODY	generated	834	measured	win	97e94261abd2f2d1928a66e81dee2b926e88e49348c060696e55f1489c0b77b6	REGRESSION FIXED (sfpi-gcc bb56f1d7797): replay-hoist profitability model recalibrated from silicon; D1 hoist fires at default gate (dump 121>=60), pack 9ca4a98c; 834.00 x3 = -0.714% win vs hand 840 — ratio-level reproduction of the archived p100a D1 record pair (cross-chip)
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:sem_off	28.4755859375	measured	win	unrecorded	Lane E 2026-08-16 nightly-20260816 (first p150 Min/Max perf after harness fix); deterministic x3
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:sem_on	19.728515625	measured	win	unrecorded	Lane E 2026-08-16; planner fires (derived SFPLOADMACRO); causal -30.72% — ratio-level reproduction of the p100a -30.73% ONLY (NOT same-source: 65d2c873/4ff5c848 changed the measured kernel's .text for both impls, and the chip changed); deterministic x3
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:hand_off	18.2236328125	measured	win	unrecorded	Lane E 2026-08-16; hand OFF==ON byte-identical, one physical run fills both cells; vs hand +8.26% — ratio-level reproduction of the p100a +9.0% ONLY (changed kernel .text AND chip, see header)
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-min:hand_on	18.2236328125	measured	win	unrecorded	Lane E 2026-08-16; identity with minmax-min:hand_off
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:sem_off	28.4755859375	measured	win	unrecorded	Lane E 2026-08-16; deterministic x3
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:sem_on	19.728515625	measured	win	unrecorded	Lane E 2026-08-16; planner fires; causal -30.72% — ratio-level reproduction across changed kernel .text and chip (see header); deterministic x3
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:hand_off	18.2236328125	measured	win	unrecorded	Lane E 2026-08-16; MIN of 18.2266/18.2236/18.2236 (aggregator: min, the documented baseline convention — the sweep tool aggregates by mean; recorded per PULL_ANALYSIS §2c); hand OFF==ON byte-identical
+metal__ckernel_sfpu_binary_max_min	bh	p150	device_cycles	TILE_LOOP_MATH_ISOLATE_PER_TILE	minmax-max:hand_on	18.2236328125	measured	win	unrecorded	Lane E 2026-08-16; identity with minmax-max:hand_off
+metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:sem_off	359	measured	win	unrecorded	Lane E 2026-08-16; first p150 typecast 2x2 (impl-parameterized node test_typecast_device_profile); deterministic x3; issue-slot check (retro-recorded): 359 >= lb 128 PASS
+metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:sem_on	325	measured	win	unrecorded	Lane E 2026-08-16; planner fires (per-face descriptor, runs=1); causal -9.47%; vs hand +22.64% loss persists (p100a +17.2/+19.6%); ATTRIBUTION (dump on the real node, ~/sfpi-uplift/sweep-2x2/typecast-planner-dump-20260816/): the WP8 step-4 SHARED four-region descriptor does NOT form — the four faces are separate noinline face-function calls, invisible to function-local region discovery, so the descriptor setup executes 4x/tile inside the timed zone (mechanism gap, not a step-4 bug and not fired-but-insufficient); issue-slot check (retro-recorded): 325 >= lb 128 PASS
+metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:hand_off	265	measured	win	unrecorded	Lane E 2026-08-16; hand OFF==ON byte-identical; same absolute value as the p100a hand record (265) — cross-chip, ratio-level comparability only; issue-slot check (retro-recorded): 265 >= lb 128 PASS
+metal__ckernel_sfpu_typecast	bh	p150	device_cycles	TYPECAST_BODY_MATH_ISOLATE_PER_TILE	typecast:hand_on	265	measured	win	unrecorded	Lane E 2026-08-16; identity with typecast:hand_off

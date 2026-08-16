@@ -188,9 +188,14 @@ must be bisected first.
 
 `sweep_2x2.py` regenerates the full `{semantic, hand} × {passes OFF, ON}`
 silicon matrix from `sweep_2x2_ops.tsv` (exact pytest node ids, marker
-discipline, CRAQ arch legs; absent rows are machine-readable SKIPs).  It
-encodes the silicon protocol: pinned-compiler preflight (sha + removed-flag
-probe), changed-binary classification **before** any device job
+discipline, CRAQ arch legs; absent rows are machine-readable SKIPs;
+`kind=pinpair` rows run a paired gen-vs-hand A/B at the row's pinned flag
+set — the Reduce-SDPA 834-vs-840 pin-coherence pair).  It
+encodes the silicon protocol: pinned-compiler preflight (**cc1plus sha is
+the primary pin**, resolved via `g++ -print-prog-name=cc1plus`; the driver
+sha is secondary — the driver binary is identical across cc1plus-only
+changes; plus the removed-flag probe), changed-binary classification
+**before** any device job
 (byte-identical OFF/ON pair ⇒ recorded refusal, no device run), paired CRAQ
 through the generic-path simulator, every device job under both exclusive
 flocks (`/tmp/tt-device.lock` outer, `/tmp/tt-llk-sfpu-silicon.lock` inner),
@@ -205,6 +210,7 @@ post-CSV `mean(MATH_ISOLATE)`/`tile_cnt` = cycles/tile.
 ```bash
 python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
   --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
+  --cc1plus-sha 33221397 \
   --compiler-sha 4633999c \
   --sim-bh ~/sfpi-uplift/craq-sim/src/_out/release_bh/libttsim.so \
   --sim-wh ~/sfpi-uplift/craq-sim/src/_out/release_wh/libttsim.so \
@@ -217,6 +223,30 @@ The run is idempotent and resumable per row/job (`--force` re-runs), supports
 nonzero on any RED (correctness failure, CRAQ gate, win→loss flip vs the
 baseline).  `REPORT.md`, `SCOREBOARD.md`, `scoreboard.{json,tsv}` and
 `SHA256SUMS` land in the evidence root.
+
+Post-review hardening (PULL_ANALYSIS-20260817 §4, D2–D6):
+
+* **Hash-matched resume** — cached device cells are reused only when their
+  archived `.text` hash set equals what this run's compiler produces for the
+  same node/flags; classify/CRAQ verdicts are keyed to the cc1plus (and
+  simulator) sha256 and re-run on mismatch.  Stale-compiler cells re-measure
+  instead of being silently trusted.
+* **Class-aware report (D4)** — baseline rows carry `expected_class`
+  (win/parity/loss/refusal); a prior WIN row that becomes a byte-identical
+  refusal is RED, refusal→changed is a flagged YELLOW notice.  Proven by
+  `selftest_sweep_2x2_report.py` (runs before every scheduled sweep).
+* **Per-knob silicon (D3)** — weekly knob legs run the identical
+  classify → paired BH CRAQ → correctness-then-perf pipeline as main legs,
+  and only for rows whose main CRAQ gate is green.
+* **DejaGnu gate (D2)** — extracted to `dejagnu_gate.sh` (clean→GREEN,
+  failing→RED, missing-.sum→RED), self-tested by `selftest_dejagnu_gate.sh`.
+* **Issue-slot sanity check (HANDOFF §1)** — rows with `issue_slot_lb`
+  (BODY-family markers on macro-launch shapes, e.g. typecast at 128
+  cycles/tile from the planner-dump payload structure) mark any reading
+  below the bound INVALID_MARKER (RED; KERNEL marker required) and record
+  the passing check in the result notes otherwise.
+* **Scoreboard schema 2** — per-cell `compiler_sha` (cc1plus) and
+  `craq_sim_sha` columns.
 
 ### Scheduled sweeps
 
