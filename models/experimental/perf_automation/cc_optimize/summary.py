@@ -880,6 +880,17 @@ def _prefill_batch() -> int:
     Declared rather than observed: trace_replay prints batch on its TRACE_REPLAY_PATH line but that
     is not persisted, so the environment the harness set is the best available source. 1 is the
     honest default -- every model has at least one request in flight."""
+    # WHAT THE RUN SERVED, before what the environment asked for. TT_PERF_BATCH carries 0 -- the
+    # "ask the pipeline" sentinel -- so reading the environment first resolved an eight-user run to 1
+    # and priced every ceiling for a single user against an eight-user measurement.
+    try:
+        from cc_optimize.perf_mcp import read_stage_batch
+
+        _b = int(read_stage_batch() or 0)
+        if _b > 0:
+            return _b
+    except Exception:  # noqa: BLE001 -- not recorded: fall through to what the operator asked for
+        pass
     for var in ("TT_PERF_BATCH", "PERF_MCP_BATCH", "TT_PERF_BATCH_SIZE"):
         raw = str(os.environ.get(var) or "").strip()
         if raw.isdigit() and int(raw) > 0:
@@ -937,25 +948,24 @@ def _section_bytes_cached() -> dict:
 def _stage_units(stage, prompt_tokens) -> int:
     """How many items this stage retires in one unit of work.
 
-    NOT FROM THE NAME. A stage that consumes the prompt retires every prompt token for every request
-    in flight; a recurring stage retires one item. Which is which is a question about the byte model's
-    regimes, and perf_target owns those -- asking it means a regime added there works here with no
-    edit, where a literal `if n == "prefill"` meant this file had to be changed for every new stage
-    and left anything unrecognised at zero, which is what zeroed the FLOPs term for a third tower.
+    FROM WHAT THE RUN RECORDED, not from the stage's name and not inferred from the byte model. The
+    first attempt asked perf_target whether a stage's read set grows with the prompt, and that says
+    yes for a recurring stage too: decode READS the whole KV history to emit one token. It would have
+    priced decode as though it processed 1024 items.
+
+    The run knows: it records the prompt length against the stage that consumed it. A stage with a
+    recorded item count retires that many per request; one without retires a single item, which is
+    what a recurring stage does and the safe answer for a stage nobody has measured that way.
     """
     try:
-        from agent.perf_target import active_bytes as _ab
+        from cc_optimize.perf_mcp import read_stage_isl_map
 
-        _mf = _model_facts() or {}
-        # A prompt-consuming regime is one whose read set GROWS with the prompt. That is a property of
-        # the regime, measurable by asking, rather than a name to recognise.
-        _flat = float(_ab(_mf, regime=str(stage), seq_len=0, batch=1) or 0.0)
-        _long = float(_ab(_mf, regime=str(stage), seq_len=max(1, int(prompt_tokens or 1)), batch=1) or 0.0)
-    except Exception:  # noqa: BLE001 -- unknown regime: one item, which is what a recurring stage does
+        _n = int((read_stage_isl_map() or {}).get(str(stage)) or 0)
+    except Exception:  # noqa: BLE001
+        _n = 0
+    if _n <= 0:
         return 1
-    if prompt_tokens and _long > _flat:
-        return int(prompt_tokens) * max(1, _prefill_batch())
-    return 1
+    return int(_n) * max(1, _prefill_batch())
 
 
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None):

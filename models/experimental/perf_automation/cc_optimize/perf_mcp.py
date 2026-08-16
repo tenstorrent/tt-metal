@@ -2459,6 +2459,21 @@ def read_stage_isl(state_dir_path=None, model="", task="") -> int:
         return 0
 
 
+def read_stage_isl_map(state_dir_path=None, model="", task="") -> dict:
+    """{stage: items it processes in one unit}, as the run recorded them. {} when nothing was recorded.
+
+    A stage that consumes the prompt retires every prompt token; a recurring stage retires one. That
+    cannot be inferred from the byte model -- decode READS a long context while processing a single
+    token, so "does the read set grow with the prompt" says yes for both -- and it must not be
+    inferred from the stage's NAME. The run measured it, so the run states it.
+    """
+    try:
+        got = _read_stage_doc(state_dir_path, model, task).get("isl") or {}
+        return {str(k): int(v) for k, v in got.items() if int(v or 0) > 0}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def read_stage_batch(state_dir_path=None, model="", task="") -> int:
     """The batch the profiled run actually served, or 0 when it was not recorded.
 

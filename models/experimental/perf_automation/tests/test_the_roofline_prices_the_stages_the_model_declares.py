@@ -174,7 +174,7 @@ _MF = {
 }
 
 
-def _roofs_at_batch(monkeypatch, batch):
+def _roofs_at_batch(monkeypatch, batch, items=128):
     """Patch the facts and the prompt length directly, as the stress suite does.
 
     Not via the environment: this file imports the stress module to reach its _render, and executing
@@ -186,6 +186,10 @@ def _roofs_at_batch(monkeypatch, batch):
     monkeypatch.setattr(S, "_model_facts", lambda: _MF)
     monkeypatch.setattr(S, "_prefill_tokens", lambda: 128)
     monkeypatch.setattr(S, "_prefill_batch", lambda: batch)
+    # The item count comes from what the RUN recorded, so it is stated here rather than inferred:
+    # inferring it from the byte model classified decode as processing the whole prompt, because
+    # decode READS the KV history to emit one token.
+    monkeypatch.setattr(S, "_stage_units", lambda st, pt: (items * batch) if st == "prefill" else 1)
     return S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"prefill": 110.1, "decode": 6.11})
 
 
