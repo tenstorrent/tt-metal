@@ -81,7 +81,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     //
     // The mode is signalled to the kernels purely by the "num_active" named compile-time arg below
     // (0 = off), so no preprocessor defines and no compile-time arg layout changes are needed in the
-    // shared reader kernels.
+    // shared reader kernels. Both readers are shared with the dense matmul factories, which pass
+    // {"num_active", 0} for the same reason they already pass an unused "cb_sparsity".
     const bool use_indices = operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
                              tensor_args.optional_input_tensors.at(0).has_value();
     uint32_t num_active = 0;

@@ -102,9 +102,9 @@ void kernel_main() {
     // sparsity DataflowBuffer): the sparsity mask itself is never read in this mode, so reusing those
     // slots keeps the compile-time arg layout of this shared kernel unchanged.
     //
-    // Only the sparse matmul factory supplies "num_active"; every other factory that builds this kernel
-    // leaves it undefined and gets 0, i.e. the unchanged dense sparsity-scan path.
-    constexpr uint32_t num_active = get_named_compile_time_arg_val_or("num_active", 0);
+    // Every factory that builds this kernel passes "num_active"; only the sparse matmul factory ever
+    // sets it non-zero. 0 means not indexed, i.e. the unchanged dense sparsity-scan path.
+    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
     constexpr bool use_indices = num_active > 0;
     constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
 
