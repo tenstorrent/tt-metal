@@ -188,11 +188,35 @@ A final focused defer-versus-change consultation returned no output. Per the app
 deferred and all Tier 2.11 production/test changes were reverted; no gate was waived and no API change
 was attempted.
 
+### C10 — Tier 2.12 interleaved GroupNorm
+
+The architecture consultation used the required Claude command but returned no verdict. No approval was
+inferred from silence. The implementation follows the plan's already-migrated sharded-v2 precedent:
+three API-v11 `Mcast2D` wires partition the mid, first-edge, and last-edge rectangles; the legacy path
+uses separate `send_signal`/`receive_signal` and `send`/`receive` phases, while Welford uses the ordinary
+data exchange. The shared aggregate receiver-ready counter and gather tails remain operation-owned.
+The no-mcast factory emits the same opaque ABI with inactive singleton wires. No helper source or API
+was changed.
+
+Raw matched real-time baselines at 800 MHz used three independent 20-operation sessions after three
+warmups. Median-of-run-medians is 74,173.140 ns for legacy and 103,521.069 ns for Welford. The new
+benchmarks assert that both non-v2 sender/receiver source pairs are JIT-compiled; the existing SDXL
+benchmarks remain sharded-v2 guards.
+
+Post-migration median-of-run-medians is 75,115.544 ns for legacy (+1.271%) and 103,191.783 ns for
+Welford (-0.318%). Both pass the mandatory +2% ceiling, and legacy remains below the +1.5% five-run
+extension threshold. Complete operation, helper-host, helper-device, source-audit, build, and LOC gates
+also pass.
+
+The final fact-complete Claude review used the required command and timed out after 240 seconds without
+output. Silence was not treated as approval. Ledger write-back follows the plan-authorized API-v11
+design and the independently completed mandatory gates; no API expansion was made.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 23 migrated, 2 pending, 79 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 27 migrated, 2 pending, 75 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
@@ -201,6 +225,7 @@ was attempted.
 | Tier 2.9 Conv3D weight sharing | complete | API v11 at `a290ce20281`; exact/full correctness, fresh JIT, helper guards, and both matched performance gates passed |
 | Tier 2.10 Sharded LayerNorm post-allgather | complete | API v11 at `6cc49825476`; exact/full correctness, ABI guards, fresh JIT, host topology, and both matched performance gates passed |
 | Tier 2.11 Plain sharded LayerNorm | deferred-performance | Correctness passed, but single-stage matched performance regressed +2.086%; experimental changes reverted |
+| Tier 2.12 Interleaved GroupNorm | complete | API v11 at `40e209daad9`; all build, LOC, correctness, helper, source-audit, and matched-performance gates passed |
 
 ## Chronological findings
 
@@ -339,3 +364,26 @@ was attempted.
     signaling would weaken the monotone protocol. A focused Claude consultation returned no verdict;
     the approved plan independently requires deferral on any failed gate. The entire Tier 2.11 source
     experiment and temporary profiler shim were reverted, leaving the ledger unchanged at API v11.
+34. Tier 2.12 raw baselines added two route-asserting interleaved GroupNorm cases. Three independent
+    20-operation sessions produced median-of-run-medians of 74,173.140 ns (legacy) and 103,521.069 ns
+    (Welford). Each record names the intended non-v2 sender and receiver sources.
+35. The Tier 2.12 implementation composes mid/first/last API-v11 wires in both mcast and no-mcast
+    factories. Legacy preserves its aggregate ACK plus early-go and later-data phases; Welford keeps
+    its aggregate ACK plus single data phase. The four kernels resume through named opaque CT/RT
+    boundaries, all six touched production files independently satisfy additions < deletions, and the
+    Release host build passed. No helper API changed.
+36. Exact legacy and Welford interleaved nodes passed after fresh compilation. Watcher mode cannot
+    currently compile the generated C++17 vararg accessor because its lightweight ASSERT expands to
+    `asm` in a constexpr function; the same exact nodes pass without `--dev`. The complete DRAM suite
+    passed all 181 valid cases with five architecture skips. Its sole strict XPASS is the pre-existing
+    negative garbage-padding probe, whose contract expects intentionally invalid padding to corrupt the
+    legacy analytic correction. The general GroupNorm inventory passed 345 with ten expected skips.
+37. Tier 2.12 nightly passed 203 with six expected skips; `McastHostFixture.*` passed 34/34; helper
+    device tests passed 80/80 under Watcher; and the expanded source audit passed 19/19. Three migrated
+    performance sessions per algorithm produced 75,115.544 ns legacy (+1.271%) and 103,191.783 ns
+    Welford (-0.318%) median-of-run-medians. Both mandatory +2% gates pass, and no five-run extension
+    is required.
+38. The final Tier 2.12 Claude review timed out after 240 seconds without a verdict; no approval was
+    inferred. The source migration was committed at `40e209daad9`, then the four kernel rows and three
+    host bindings were written back at API v11 from the independently satisfied gates. Rollout state is
+    now 27 migrated, 2 pending, and 75 deferred kernels. API expansion: NO.

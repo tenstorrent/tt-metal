@@ -157,6 +157,33 @@
       "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
     },
     {
+      "id": "groupnorm-interleaved:legacy:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=false",
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "inventory": ["GN-INTERLEAVED-DRAM", "GN-GENERAL", "GN-NIGHTLY", "GN-INTERLEAVED-RT-LEGACY"],
+      "coverage": "complete with exact non-v2 sender/receiver JIT and matched performance"
+    },
+    {
+      "id": "groupnorm-interleaved:welford:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=true",
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "inventory": ["GN-INTERLEAVED-DRAM", "GN-GENERAL", "GN-NIGHTLY", "GN-INTERLEAVED-RT-WELFORD"],
+      "coverage": "complete with exact non-v2 sender/receiver JIT and matched performance"
+    },
+    {
+      "id": "groupnorm-interleaved:no-mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_no_mcast_program_factory.cpp",
+      "dispatch": "interleaved sender-only zero/one-core groups for either algorithm",
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "inventory": ["GN-GENERAL", "GN-NIGHTLY", "source-audit inactive helper ABI"],
+      "coverage": "operation guards plus direct source audit of the inactive three-wire ABI"
+    },
+    {
       "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
       "classification": "required",
       "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
@@ -443,6 +470,31 @@
         "test_layer_norm_sharded_uneven_multicore_logical_width_two_stage"
       ]
     },
+    "GN-INTERLEAVED-DRAM": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py",
+      "tests": ["complete file; legacy and all Welford modes"],
+      "result": "181 valid passed, 5 architecture skips; one unrelated strict XPASS in the deliberate garbage-padding negative probe"
+    },
+    "GN-GENERAL": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
+      "tests": ["complete file, including fixed/default routing, dtype, cache, and no-mcast guards"],
+      "result": "345 passed, 10 expected skips"
+    },
+    "GN-NIGHTLY": {
+      "path": "tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py",
+      "tests": ["complete file"],
+      "result": "203 passed, 6 expected skips"
+    },
+    "GN-INTERLEAVED-RT-LEGACY": {
+      "path": "tests/ttnn/perf_tests/operations/mcast/test_mcast_migration_realtime_perf.py",
+      "tests": ["test_groupnorm_interleaved_mcast_realtime_perf[groupnorm_legacy]"],
+      "result": "exact non-v2 sender/receiver sources asserted; three-run median +1.271% versus raw"
+    },
+    "GN-INTERLEAVED-RT-WELFORD": {
+      "path": "tests/ttnn/perf_tests/operations/mcast/test_mcast_migration_realtime_perf.py",
+      "tests": ["test_groupnorm_interleaved_mcast_realtime_perf[groupnorm_welford]"],
+      "result": "exact non-v2 sender/receiver sources asserted; three-run median -0.318% versus raw"
+    },
     "GN-SHARDED-PARAMETERIZED": {
       "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
       "tests": [
@@ -562,7 +614,6 @@
     }
   ],
   "known_coverage_gaps": [
-    "Interleaved non-v2 GroupNorm sender/receiver kernels are sweep-only and lack direct unit-test coverage.",
     "Ring/joint SDPA and ring-all-gather matmul routes require multiple devices.",
     "Most CCL candidates require a mesh or Galaxy system; single-card moe_compute is the documented exception.",
     "The matmul reuse-mcast and contributed multicast programming-example kernels are exercised by binaries, not pytest."
@@ -651,6 +702,34 @@
       "inventory": "LN-POST-ALLGATHER",
       "coverage": "paired sender/receiver migration with exact fresh-cache artifact",
       "result": "API-v11 migrated with sender at 6cc49825476; complete mapped inventories and helper guards passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched legacy benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 at 40e209daad9; 181 valid DRAM, 345 general, and 203 nightly passed; matched performance +1.271%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched legacy benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 paired legacy receiver at 40e209daad9; all correctness and +2% performance gates passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched Welford benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 at 40e209daad9; 181 valid DRAM, 345 general, and 203 nightly passed; matched performance -0.318%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched Welford benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 paired Welford receiver at 40e209daad9; all correctness and +2% performance gates passed"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",

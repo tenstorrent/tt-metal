@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v11 status carries 23 migrated kernels and 21 host bindings on the self-describing six-word CT wire. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358, and post-allgather by 6cc49825476. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v11 status carries 27 migrated kernels and 24 migrated host bindings on the self-describing six-word CT wire. Interleaved GroupNorm legacy/Welford is anchored by 40e209daad9. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358, and post-allgather by 6cc49825476. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
   "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
   "inventory_group_notes": {
@@ -324,6 +324,71 @@
         "degenerate-sender-only",
         "degenerate-runtime-coverage-gap"
       ]
+    },
+    {
+      "id": "groupnorm-interleaved:legacy:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp"
+      ],
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "build_metal.sh: passed; exact fresh-compile legacy route passed",
+        "DRAM valid 181 passed; general 345 passed; nightly 203 passed",
+        "helper host 34 passed; helper device 80 passed; source audit 19 passed",
+        "matched performance +1.271% versus raw"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.12", "fully-end-to-end", "fixed-three-rectangle-wire"]
+    },
+    {
+      "id": "groupnorm-interleaved:welford:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=true",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp"
+      ],
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "build_metal.sh: passed; exact fresh-compile Welford route passed",
+        "DRAM valid 181 passed; general 345 passed; nightly 203 passed",
+        "helper host 34 passed; helper device 80 passed; source audit 19 passed",
+        "matched performance -0.318% versus raw"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.12", "fully-end-to-end", "fixed-three-rectangle-wire"]
+    },
+    {
+      "id": "groupnorm-interleaved:no-mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_no_mcast_program_factory.cpp",
+      "dispatch": "interleaved sender-only zero/one-core groups for either legacy or Welford",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp"
+      ],
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "general and nightly GroupNorm inventories cover fixed/default routing and program cache",
+        "source audit confirms inactive singleton helper blocks preserve the shared ABI"
+      ],
+      "coverage_confidence": "medium",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.12", "inactive-helper-wire", "shared-cache-abi"]
     },
     {
       "id": "sort:single-row-multi-core:control",
@@ -1243,17 +1308,22 @@
       "op_family": "normalization",
       "role": "sender",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
       "validation_set": [
-        "sweep-only"
+        "Release build and exact fresh-compile interleaved Welford node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 103191.783 ns versus 103521.069 ns raw (-0.318%)"
       ],
-      "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "C2 multi-rect | DEFER-COVERAGE: sweep-only",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved Welford sender. One operation-owned aggregate ACK precedes three mid/first/last helper data sends; gather reads remain operation-owned.",
       "flags": [
-        "coverage-gap"
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
       ]
     },
     {
@@ -1284,17 +1354,22 @@
       "op_family": "normalization",
       "role": "receiver",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
       "validation_set": [
-        "sweep-only"
+        "Release build and exact fresh-compile interleaved Welford node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 103191.783 ns versus 103521.069 ns raw (-0.318%)"
       ],
-      "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "C2 | DEFER-COVERAGE: sweep-only",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved Welford receiver. The selected middle helper pipe owns readiness acknowledgement, Flag wait/reset, and data arrival ordering.",
       "flags": [
-        "coverage-gap"
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
       ]
     },
     {
@@ -1365,17 +1440,23 @@
       "op_family": "normalization",
       "role": "sender",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
       "validation_set": [
-        "sweep-only (interleaved GN routes nowhere from unit tests)"
+        "Release build and exact fresh-compile interleaved legacy node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 75115.544 ns versus 74173.140 ns raw (+1.271%)"
       ],
-      "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "C4 double-flag-per-exchange | DEFER-COVERAGE: sweep-only (interleaved GN routes nowhere from unit tests)",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved legacy sender. One aggregate ACK gates three mid/first/last early-go signals, followed later by three data sends; gather tails remain operation-owned.",
       "flags": [
-        "coverage-gap"
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "two-phase-go-and-data"
       ]
     },
     {
@@ -1383,17 +1464,23 @@
       "op_family": "normalization",
       "role": "receiver",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "40e209daad9",
       "validation_set": [
-        "sweep-only"
+        "Release build and exact fresh-compile interleaved legacy node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 75115.544 ns versus 74173.140 ns raw (+1.271%)"
       ],
-      "coverage_confidence": "none",
-      "last_verified": null,
-      "inventory_note": "C4 | DEFER-COVERAGE: sweep-only",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved legacy receiver. It preserves the operation-owned aggregate readiness ACK, then uses helper receive_signal for go and receive for data.",
       "flags": [
-        "coverage-gap"
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "two-phase-go-and-data"
       ]
     },
     {
