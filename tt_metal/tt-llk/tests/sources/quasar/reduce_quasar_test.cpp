@@ -108,6 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool use_int32_dest_alu             = is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32;
     const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
+    constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
         ZONE_SCOPED("INIT")
@@ -165,13 +166,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                     {
-                        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
                         {
-                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(i, tensor_shape_A);
-                        }
-                        if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
-                        {
-                            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                            const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                            for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                            {
+                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(block_tile, tensor_shape_A);
+                            }
+                            if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                            {
+                                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                            }
                         }
                     }
                 }
@@ -180,13 +185,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
                     {
-                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(i, tensor_shape_A);
-                    }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
-                    {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                        for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                        {
+                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(block_tile, tensor_shape_A);
+                        }
+                        if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                        {
+                            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        }
                     }
                 }
             }
@@ -215,6 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
+    constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
         ZONE_SCOPED("INIT")
@@ -244,13 +254,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
                 {
-                    _llk_pack_(i, i, tensor_shape_A);
-                }
-                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
-                {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
+                    }
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    {
+                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

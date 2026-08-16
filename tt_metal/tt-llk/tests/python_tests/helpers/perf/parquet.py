@@ -5,7 +5,8 @@
 """Parquet output for LLK performance reports
 
 Publishes a run's per-test reports as one immutable, typed Parquet batch whose
-physical schema is the shared wide schema (wide_schema.DB_SCHEMA).
+physical schema is the arch's wide schema: WH/BH use wide_schema.DB_SCHEMA,
+Quasar uses wide_schema_quasar.DB_SCHEMA (selected from provenance ``arch``).
 
 Data flow
 ---------
@@ -61,6 +62,21 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .wide_schema import DB_SCHEMA, DROPPED_COLUMNS, MANDATORY, PROVENANCE
+
+
+def schema_for_arch(arch) -> list:
+    """Published Parquet table for this architecture family.
+
+    Wormhole and Blackhole share ``wide_schema.DB_SCHEMA``. Quasar has its own
+    table so Quasar-only columns are not mixed into the WH/BH schema, and
+    WH/BH-only columns stay out of Quasar batches.
+    """
+    if arch == "quasar":
+        from .wide_schema_quasar import DB_SCHEMA as QSR_SCHEMA
+
+        return QSR_SCHEMA
+    return DB_SCHEMA
+
 
 _BOOL_MAP = {
     True: True,
@@ -157,9 +173,10 @@ def build_run_batch(
 
     ``test_frames`` maps test_name -> that test's report DataFrame. Each frame is
     stamped with run provenance and concatenated; ``to_table`` then aligns the
-    union to DB_SCHEMA (missing columns -> NULL) and casts types. One row is one
-    test configuration in one execution context.
+    union to that arch's published schema (missing columns -> NULL) and casts
+    types. One row is one test configuration in one execution context.
     """
+    columns = schema_for_arch(arch)
     stamped = [
         stamp_provenance(
             df,
@@ -176,9 +193,9 @@ def build_run_batch(
     combined = (
         pd.concat(stamped, ignore_index=True, sort=False)
         if stamped
-        else pd.DataFrame(columns=[c.name for c in DB_SCHEMA])
+        else pd.DataFrame(columns=[c.name for c in columns])
     )
-    table = to_table(combined)
+    table = to_table(combined, columns)
     validate_batch(table)
     return table
 
@@ -249,7 +266,8 @@ def convert_csvs_to_parquet(
     """Convert a run's per-test CSVs into one typed Parquet batch.
 
     Reads each CSV, coerces its columns to the schema types, and reuses
-    build_run_batch to align + stamp provenance + compact.
+    build_run_batch to align + stamp provenance + compact. ``provenance["arch"]``
+    selects the published table (WH/BH vs Quasar).
 
     With strict=True (default) the conversion must be lossless: if any column
     would be dropped (not in the schema) or any value coerced to NULL, it raises
@@ -257,7 +275,8 @@ def convert_csvs_to_parquet(
     conversion that writes anyway. Either way it returns the diagnostics: per
     test, the dropped columns and the coerced values.
     """
-    schema_by_name = {c.name: c for c in DB_SCHEMA}
+    columns = schema_for_arch(provenance.get("arch"))
+    schema_by_name = {c.name: c for c in columns}
     frames = {}
     diagnostics = {"unknown_columns": {}, "coerced_values": {}}
     for path in csv_paths:

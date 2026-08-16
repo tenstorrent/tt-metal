@@ -472,10 +472,12 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
         diagnostics = convert_csvs_to_parquet(
             sorted(raw_csv_paths), parquet_path, strict=False, **prov
         )
-        dropped = sum(len(v) for v in diagnostics["unknown_columns"].values())
-        if dropped:
+        unknown = diagnostics["unknown_columns"]
+        if unknown:
+            dropped = sum(len(v) for v in unknown.values())
+            detail = "; ".join(f"{t}={cols}" for t, cols in sorted(unknown.items()))
             logger.warning(
-                f"perf Parquet: {dropped} column(s) not in the schema were dropped"
+                f"perf Parquet: {dropped} column(s) not in the schema were dropped ({detail})"
             )
         logger.info(f"Wrote run Parquet batch: {parquet_path}")
     except Exception as exc:  # noqa: BLE001 — Parquet is additive; CSV is primary
