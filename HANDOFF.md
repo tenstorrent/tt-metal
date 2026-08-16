@@ -159,6 +159,31 @@ paired arms in one kernel and one run.
 
 ---
 
+## Competition sweep
+
+The ad-hoc K×W "competition table" loops (scratchpad `layers_grid.sh` /
+`kw_grid.sh`) are folded into `_canonical_topk_sweep.py --competition` as a
+deterministic, rerunnable mode: K∈{512,1024,2048} × W∈{2048…262144}, four
+measured layers in fixed order (`op` = topk_large_indices alone, `routed` =
+ttnn.topk largest=True composite, `stocknow` = largest=False on the committed
+header, `prebranch` = same with `TOPK_DISABLE_REPLAY_STEP` temporarily armed —
+header edit gated on `--allow-header-edit`, git-asserted, restored in
+`finally`) plus the llm_perf roofline model (PR 671+676 — aspirational, no
+such kernel exists) as a constants row with gap columns. Per-cell fresh Tracy
+subprocess, seed derived from (k,W,layer), correctness gates timing (WRONG
+cells never enter the table), and every record is stamped with HEAD sha +
+`git diff --stat` md5 + `_ttnn.so` mtime/md5 so a mid-run rebuild is visible
+in the output instead of silently corrupting the A/B. Output:
+`competition_table.{csv,md}` in `--out`, exec-summary anchors at k=512/2048 @
+W=65536.
+
+```bash
+python tests/ttnn/unit_tests/operations/reduction/_canonical_topk_sweep.py \
+    --competition --allow-header-edit --out generated/canonical_sweep/competition
+```
+
+---
+
 ## Post-audit findings (2026-08-16)
 
 From an adversarial audit of this file and `SORTING.md` against the tree, plus the

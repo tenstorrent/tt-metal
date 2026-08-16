@@ -50,7 +50,7 @@ USAGE
 
   # (b) full three-arm A/B, both layers
   python tests/ttnn/unit_tests/operations/reduction/_canonical_topk_sweep.py \
-      --arms baseline,replay_load,replay_store --layers ttnn,llk \
+      --arms baseline,disable_replay --layers ttnn,llk \
       --allow-header-edit --out generated/canonical_sweep/run1
 
   # (c) report-only (rebuild CSV+markdown from an existing out dir)
@@ -65,6 +65,45 @@ The child measurement process is this same file: the orchestrator launches
 at a JSON cell spec. Args ride an env var, not the command line, because
 tracy -r re-invokes via shell=True and mangles anything with spaces
 (docs/profiling.md).
+
+COMPETITION MODE (--competition): HOW TO RERUN
+----------------------------------------------
+Deterministic K x W "competition table" across four measured layers plus the
+llm_perf roofline model. K in {512, 1024, 2048} x W in {2048 ... 262144} by
+default (override with --ks / --ns, where --ns is W). Layers, in the FIXED
+run order (header-editing layer last):
+
+  op        ttnn.experimental.topk_large_indices alone, single row
+  routed    ttnn.topk largest=True  (routes to topk_large_indices; composite)
+  stocknow  ttnn.topk largest=False (stock single-core path, header
+            as-committed: replay ON by default since the branch landed it)
+  prebranch stocknow with `#define TOPK_DISABLE_REPLAY_STEP 1` temporarily
+            armed in ckernel_sfpu_topk.h (pre-branch stock behavior);
+            needs --allow-header-edit, restored+cache-cleared in `finally`
+  roofline  constants from tenstorrent/llm_perf (aspirational; see table)
+
+  # full competition run (three non-editing layers + prebranch)
+  python tests/ttnn/unit_tests/operations/reduction/_canonical_topk_sweep.py \
+      --competition --allow-header-edit --out generated/canonical_sweep/comp1
+
+  # without --allow-header-edit the prebranch layer is SKIPPED, the rest run
+  python ..._canonical_topk_sweep.py --competition --out .../comp1
+
+  # single-layer rerun (e.g. just the routed layer), same out dir
+  python ..._canonical_topk_sweep.py --competition --layers-competition routed \
+      --out .../comp1
+
+  # resume an interrupted run (skips MEASURED/UNSUPPORTED/WRONG cells)
+  python ..._canonical_topk_sweep.py --competition --allow-header-edit \
+      --resume --out .../comp1
+
+Every competition cell record is stamped with the git HEAD sha, an md5 of
+`git diff --stat` (working-tree fingerprint) and the mtime+md5 of
+ttnn/ttnn/_ttnn.so, so a mid-run rebuild or a dirtied tree is visible in the
+output instead of silently corrupting the A/B (we got burned by exactly this).
+Correctness is verified BEFORE timing; a failing cell reports status=WRONG and
+its timing never enters the table. Output: competition_table.csv +
+competition_table.md in --out.
 
 Underscore-prefixed so routine `pytest tests/...` does not collect it.
 """
@@ -92,9 +131,17 @@ CHILD_SPEC_ENV = "CANONICAL_SWEEP_CHILD_SPEC"
 # The #ifdef sites live inside _bitonic_topk_phases_steps, which is the
 # function ttnn.topk's topk_local_sort actually executes; a JIT header change
 # needs no host rebuild (tt_metal/tt-llk/common is on the JIT include path,
-# jit_build/build.cpp:348). TOPK_REPLAY_STEP_STORE implies _LOAD inside the
-# header (ckernel_sfpu_topk.h:64-65), so the arms are strictly ordered:
-# baseline < replay_load < replay_store.
+# jit_build/build.cpp:348).
+#
+# HISTORY: the branch has since COMMITTED the replay optimization default-ON
+# (ckernel_sfpu_topk.h: `#if !defined(TOPK_DISABLE_REPLAY_STEP) &&
+# !defined(TOPK_REPLAY_STEP_STORE)` arms STORE, which implies LOAD). So the
+# arms today are:
+#   baseline        header as-committed = replay ON (the old "replay_store")
+#   disable_replay  TOPK_DISABLE_REPLAY_STEP armed  = pre-branch stock kernel
+# The old replay_load / replay_store arm names are retired: their effect is
+# now the committed default, and inserting their defines would be a no-op
+# that MEASURES AS baseline while claiming to be an arm.
 # ---------------------------------------------------------------------------
 HEADER_RELPATH = "tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h"
 MARKER_BEGIN = "// BEGIN CANONICAL_SWEEP_ARM (auto-managed by _canonical_topk_sweep.py;"
@@ -102,8 +149,7 @@ MARKER_BEGIN_FULL = MARKER_BEGIN + " a stray copy means a sweep died mid-arm -- 
 MARKER_END = "// END CANONICAL_SWEEP_ARM"
 ARM_DEFINES = {
     "baseline": None,
-    "replay_load": "#define TOPK_REPLAY_STEP_LOAD 1",
-    "replay_store": "#define TOPK_REPLAY_STEP_STORE 1",
+    "disable_replay": "#define TOPK_DISABLE_REPLAY_STEP 1",
 }
 KERNEL_CACHE_DIR = os.path.expanduser("~/.cache/tt-metal-cache")
 
@@ -160,6 +206,77 @@ LARGE_INDICES_ANCHORS = [
     ("prod_prefill", 640, 51200, None, 1536),
     ("prod_bounded_cache", 2, 102400, 56320, 1536),
 ]
+
+# ---------------------------------------------------------------------------
+# Competition mode constants.
+# ---------------------------------------------------------------------------
+COMPETITION_KS = [512, 1024, 2048]
+COMPETITION_WS = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
+
+# Roofline: the llm_perf performance model for a hypothetical 128-core top-k.
+# PROVENANCE: tenstorrent/llm_perf main, PR 671 + 676. ASPIRATIONAL -- no such
+# 128-core kernel exists in tt-metal; this row is the model's claim, not a
+# measurement, and the gap columns quantify distance to that claim.
+# Table: (candidates W, us at K=2048); piecewise-linear interpolation in W,
+# then scaled by the K multiplier.
+ROOFLINE_CANDIDATES_US = [
+    (2048, 0.526),
+    (4096, 0.747),
+    (8192, 0.968),
+    (16384, 1.189),
+    (32768, 1.432),
+    (65536, 1.839),
+    (131072, 2.558),
+    (262144, 3.901),
+]
+ROOFLINE_K_MULT = {512: 0.612, 1024: 0.850, 2048: 1.000}
+
+# Iteration-count rule for competition cells: default 5 measured iterations,
+# dropped to 3 when a cell is predicted to exceed 100 ms/iter. The prediction
+# is W*k >= 2**24 on the stock single-core layers ONLY: the 2026-08-16
+# baseline measured the stock kernel at ~158 ms for W*k = 33.5M (65536x512)
+# and ~20 ms at 4.2M, i.e. ~100 ms lands near W*k ~ 21M; 2**24 = 16.8M is the
+# conservative power-of-two threshold below that. The op/routed layers are
+# multi-core and sit in the tens-of-us range -- never slow-classified.
+COMPETITION_SLOW_WK = 1 << 24
+COMPETITION_DEFAULT_ITERS = 5
+COMPETITION_SLOW_ITERS = 3
+
+# Fixed layer run order. The header-editing layer runs LAST so an abort mid-
+# sweep leaves the maximum number of layers measured on the committed header.
+# (layer, child op, composite parse, arm to check out or None)
+COMPETITION_LAYERS = [
+    ("op", "topk_large_indices", False, None),
+    ("routed", "topk_routed", True, None),
+    ("stocknow", "topk_stock", True, None),
+    ("prebranch", "topk_stock", True, "disable_replay"),
+]
+
+
+def roofline_us(k, w):
+    """Piecewise-linear in W over the candidates table (clamped at the ends),
+    scaled by the exact-K multiplier. K outside {512, 1024, 2048} has no
+    model -- return None rather than invent one."""
+    if k not in ROOFLINE_K_MULT:
+        return None
+    pts = ROOFLINE_CANDIDATES_US
+    if w <= pts[0][0]:
+        base = pts[0][1]
+    elif w >= pts[-1][0]:
+        base = pts[-1][1]
+    else:
+        base = None
+        for (w0, u0), (w1, u1) in zip(pts, pts[1:]):
+            if w0 <= w <= w1:
+                base = u0 + (u1 - u0) * (w - w0) / (w1 - w0)
+                break
+    return base * ROOFLINE_K_MULT[k]
+
+
+def competition_seed(k, w, layer_index):
+    """Deterministic per-cell seed: same (k, W, layer) always sees the same
+    input tensor, across reruns and across machines."""
+    return (k * 1_000_003 + w * 97 + layer_index * 7_919) % (2**31)
 
 
 def _is_pow2(x):
@@ -313,6 +430,10 @@ def run_child(spec_path):
     for cell in spec["cells"]:
         entry = dict(cell)
         entry.update({"status": "", "error": "", "phase": ""})
+        # Determinism: competition cells carry a seed derived from
+        # (k, W, layer); the classic grid keeps the historical fixed 0.
+        torch.manual_seed(cell.get("seed", 0))
+        cell_iters = cell.get("iters", iters)
         try:
             entry["phase"] = "setup"
             call, correctness = _build_cell_callable(ttnn, torch, device, cell)
@@ -326,13 +447,21 @@ def run_child(spec_path):
             entry.update(correctness(out))
             ttnn.synchronize_device(device)
 
+            # Correctness gates timing: a WRONG cell's duration is a number
+            # about the wrong computation and must never enter the table.
+            if entry.get("wrong"):
+                entry["status"] = "WRONG"
+                print(f"SWEEP_WRONG {cell['id']} :: {entry.get('wrong_detail', '')}", flush=True)
+                manifest["cells"].append(entry)
+                continue
+
             entry["phase"] = "warmup"
             for _ in range(warmup):
                 call()
             ttnn.synchronize_device(device)
 
             entry["phase"] = "measure"
-            for _ in range(iters):
+            for _ in range(cell_iters):
                 call()
             ttnn.synchronize_device(device)
 
@@ -370,6 +499,42 @@ def _build_cell_callable(ttnn, torch, device, cell):
             vals = ttnn.to_torch(out[0])[..., :k].float()
             ref = torch.topk(t.float(), k=k, dim=-1).values
             return {"max_abs_err": (vals - ref).abs().max().item()}
+
+        return call, correctness
+
+    if op in ("topk_routed", "topk_stock"):
+        # Competition layers. Both are ttnn.topk on a single TILE row; the
+        # `largest` flag is the router: largest=True takes the routed
+        # composite (untilize + TopkLargeIndices + gather + tilize + ... after
+        # the return_values rewire), largest=False keeps the stock single-core
+        # factory on the same shape. Correctness gates timing: exact value
+        # multiset vs torch.topk (bf16 selection is exact, no arithmetic) AND
+        # indices self-consistency (input gathered at the returned indices
+        # must reproduce the returned values).
+        largest = op == "topk_routed"
+        t = torch.randn((1, 1, batch, n), dtype=torch_dt)
+        x = ttnn.from_torch(
+            t, dtype=ttnn_dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        def call():
+            return ttnn.topk(x, k=k, dim=-1, largest=largest, sorted=True)
+
+        def correctness(out):
+            vals = ttnn.to_torch(out[0])[..., :k].float()
+            idx = ttnn.to_torch(out[1]).to(torch.int64)[..., :k]
+            ref = torch.topk(t.float(), k=k, dim=-1, largest=largest).values
+            v_sorted = torch.sort(vals, dim=-1, descending=largest).values
+            r_sorted = torch.sort(ref, dim=-1, descending=largest).values
+            val_err = (v_sorted - r_sorted).abs().max().item()
+            gathered = t.float().gather(-1, idx)
+            idx_err = (gathered - vals).abs().max().item()
+            wrong = val_err > 0 or idx_err > 0
+            return {
+                "max_abs_err": val_err,
+                "wrong": wrong,
+                "wrong_detail": f"val_err={val_err:g} idx_selfconsistency_err={idx_err:g}" if wrong else "",
+            }
 
         return call, correctness
 
@@ -418,7 +583,14 @@ def _build_cell_callable(ttnn, torch, device, cell):
                 masked[..., vl:] = float("-inf")
             ref = torch.topk(masked, k=k, dim=-1).values
             g_sorted = torch.sort(gathered, dim=-1, descending=True).values
-            return {"max_abs_err": (g_sorted - ref).abs().max().item()}
+            err = (g_sorted - ref).abs().max().item()
+            res = {"max_abs_err": err}
+            if cell.get("strict"):
+                # Competition mode: selection must be exact, and a wrong cell
+                # never gets timed.
+                res["wrong"] = err > 0
+                res["wrong_detail"] = f"gathered-vs-torch.topk max_abs_err={err:g}" if err > 0 else ""
+            return res
 
         return call, correctness
 
@@ -522,13 +694,17 @@ def _strip_arm_block(text):
 
 
 def _verify_baseline_header(text):
-    """The pristine header contains exactly ONE `#define TOPK_REPLAY_STEP_LOAD 1`
-    (the STORE->LOAD implication at ckernel_sfpu_topk.h:64-66) and no STORE
-    define. Anything else means some edit outside our markers is arming the
-    replay path -- a 'baseline' measured on top of that is a lie."""
+    """The committed header contains exactly ONE guarded
+    `#define TOPK_REPLAY_STEP_STORE 1` (the default-ON block behind
+    `!defined(TOPK_DISABLE_REPLAY_STEP)`), ONE `#define TOPK_REPLAY_STEP_LOAD 1`
+    (the STORE->LOAD implication), and NO `#define TOPK_DISABLE_REPLAY_STEP`
+    (the token appears only in comments and `!defined(...)` guards). Anything
+    else means an edit outside our markers is flipping the replay path -- a
+    'baseline' measured on top of that is a lie."""
     loads = text.count("#define TOPK_REPLAY_STEP_LOAD 1")
     stores = text.count("#define TOPK_REPLAY_STEP_STORE 1")
-    return loads == 1 and stores == 0
+    disables = sum(1 for line in text.splitlines() if line.strip().startswith("#define TOPK_DISABLE_REPLAY_STEP"))
+    return loads == 1 and stores == 1 and disables == 0
 
 
 def checkout_arm(arm, allow_edit, git_baseline_dirty):
@@ -655,8 +831,115 @@ def parse_tracy_for_cell(csv_path, cell, iters):
     }
 
 
+def parse_tracy_composite(csv_path, cell, iters):
+    """Composite-layer attribution (competition mode). The routed ttnn.topk
+    path is a chain (untilize + TopkLargeIndices + gather + 2x tilize + eq +
+    where + typecast + slice); the stock path is (FillPad + TopK). One
+    iteration's cost is the sum over ALL device ops, anchored on the top-k
+    op's row count -- the logic proven in the ad-hoc layers_grid.sh, made
+    warmup-aware here: each opcode appears an integer number of times per
+    iteration, so per opcode we keep only its last (multiplicity * iters)
+    occurrences. That drops the correctness call and the warmup iterations
+    exactly, opcode by opcode, with no iteration-boundary bookkeeping; ops
+    whose count is below one-per-iteration (JIT-time-only setup ops) are
+    excluded from the steady-state figure."""
+    with open(csv_path) as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        return None
+    dur_col = next((c for c in rows[0] if "DEVICE KERNEL DURATION [ns]" == c.strip()), None)
+    if dur_col is None:
+        dur_col = next((c for c in rows[0] if "DEVICE KERNEL DURATION" in c.upper()), None)
+    if dur_col is None:
+        return None
+    per_op = {}
+    for r in rows:
+        name = (r.get("OP CODE") or "").strip()
+        raw = (r.get(dur_col) or "").strip()
+        if not name or not raw:
+            continue
+        try:
+            per_op.setdefault(name, []).append(
+                {
+                    "call": int(float(r.get("GLOBAL CALL COUNT") or 0)),
+                    "ns": float(raw),
+                    "cores": int(float(r.get("CORE COUNT") or 0)),
+                }
+            )
+        except ValueError:
+            continue
+    if not per_op:
+        return None
+
+    def _norm(s):
+        return s.lower().replace("_", "")
+
+    anchor = next((o for o in per_op if "topklargeindices" in _norm(o)), None)
+    if anchor is None:
+        anchor = next((o for o in per_op if _norm(o).startswith("topk")), None)
+    if anchor is None:
+        return None
+    anchor_occ = sorted(per_op[anchor], key=lambda m: m["call"])
+    n_anchor = len(anchor_occ)
+    used_iters = min(iters, n_anchor)
+
+    total_ns = 0.0
+    parts = []
+    for opcode, occ in sorted(per_op.items()):
+        occ = sorted(occ, key=lambda m: m["call"])
+        mult = len(occ) // n_anchor  # per-iteration multiplicity; 0 = setup-only
+        if mult == 0:
+            continue
+        kept = occ[-mult * used_iters :]
+        op_ns = sum(m["ns"] for m in kept) / used_iters
+        total_ns += op_ns
+        parts.append(f"{opcode}x{mult}={op_ns:.0f}")
+    anchor_meas = anchor_occ[-used_iters:]
+    return {
+        "ns_median": total_ns,  # composite ns per iteration (the layer's number)
+        "ns_samples": [m["ns"] for m in anchor_meas],
+        "cores": max(m["cores"] for m in anchor_meas),
+        "n_rows_total": sum(len(v) for v in per_op.values()),
+        "n_rows_used": used_iters,
+        "attrs": f"anchor={anchor} anchor_ns={statistics.median(m['ns'] for m in anchor_meas):.0f} "
+        + " ".join(parts)[:200],
+        "csv": csv_path,
+    }
+
+
 def result_path(outdir, cell_id, arm, trial):
     return os.path.join(outdir, "results", f"{cell_id}.{arm}.t{trial}.json")
+
+
+# Provenance stamps: a mid-run `./build_metal.sh` or a dirtied working tree
+# invalidates every subsequent number, and nothing in the CSV would show it.
+# Stamp each cell record so the corruption is DETECTABLE in the output.
+# The .so md5 is cached by mtime (hashing ~100 MB once, not once per cell).
+_SO_MD5_CACHE = {}
+
+
+def provenance_stamp():
+    import hashlib
+
+    head = subprocess.run(
+        ["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    diff_stat = subprocess.run(
+        ["git", "-C", REPO, "diff", "--stat"], capture_output=True, text=True, check=False
+    ).stdout
+    tree_md5 = hashlib.md5(diff_stat.encode()).hexdigest()
+    so_path = os.path.join(REPO, "ttnn/ttnn/_ttnn.so")
+    so_mtime, so_md5 = None, None
+    if os.path.exists(so_path):
+        so_mtime = os.path.getmtime(so_path)
+        if so_mtime not in _SO_MD5_CACHE:
+            h = hashlib.md5()
+            with open(so_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            _SO_MD5_CACHE[so_mtime] = h.hexdigest()
+        so_md5 = _SO_MD5_CACHE[so_mtime]
+    return {"head_sha": head, "tree_diff_md5": tree_md5, "so_mtime": so_mtime, "so_md5": so_md5}
 
 
 def run_cell(cell, arm, trial, args):
@@ -670,8 +953,9 @@ def run_cell(cell, arm, trial, args):
     spec_path = os.path.join(workdir, f"{tag}.spec.json")
     manifest_path = os.path.join(workdir, f"{tag}.manifest.json")
     log_path = os.path.join(workdir, f"{tag}.log")
+    effective_iters = cell.get("iters", args.iters)
     with open(spec_path, "w") as f:
-        json.dump({"cells": [cell], "iters": args.iters, "warmup": args.warmup, "manifest": manifest_path}, f)
+        json.dump({"cells": [cell], "iters": effective_iters, "warmup": args.warmup, "manifest": manifest_path}, f)
 
     env = dict(os.environ)
     env[CHILD_SPEC_ENV] = spec_path
@@ -692,6 +976,7 @@ def run_cell(cell, arm, trial, args):
         "max_abs_err": None,
         "notes": "",
     }
+    result.update(provenance_stamp())
     t0 = time.time()
     try:
         with open(log_path, "w") as log:
@@ -722,13 +1007,16 @@ def run_cell(cell, arm, trial, args):
     if "index_match_frac" in entry:
         result["notes"] = f"index_match_frac={entry['index_match_frac']:.3f}"
     if entry["status"] != "RAN":
-        result["status"] = entry["status"]  # UNSUPPORTED or FAILED, message verbatim
-        result["error"] = entry["error"]
+        result["status"] = entry["status"]  # UNSUPPORTED, FAILED, or WRONG -- verbatim
+        result["error"] = entry.get("error") or entry.get("wrong_detail", "")
         _write_result(outdir, tag, result)
         return result
 
     csv_path = _newest_report_after(t0)
-    parsed = parse_tracy_for_cell(csv_path, cell, args.iters) if csv_path else None
+    if cell.get("composite"):
+        parsed = parse_tracy_composite(csv_path, cell, effective_iters) if csv_path else None
+    else:
+        parsed = parse_tracy_for_cell(csv_path, cell, effective_iters) if csv_path else None
     if parsed is None:
         result["status"] = "FAILED"
         result["error"] = (
@@ -996,26 +1284,276 @@ def write_reports(rows, arms, outdir):
 # ---------------------------------------------------------------------------
 # Main.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Competition mode: deterministic K x W table across the four measured layers
+# plus the roofline model. Folds the ad-hoc scratchpad loops (layers_grid.sh,
+# kw_grid.sh) into a rerunnable, provenance-stamped mode of this script.
+# ---------------------------------------------------------------------------
+def build_competition_cells(args):
+    ks = sorted(int(x) for x in (args.ks if args.ks != DEFAULT_KS else ",".join(map(str, COMPETITION_KS))).split(","))
+    ws = sorted(int(x) for x in (args.ns if args.ns != DEFAULT_NS else ",".join(map(str, COMPETITION_WS))).split(","))
+    base_iters = args.iters if args.iters is not None else COMPETITION_DEFAULT_ITERS
+    wanted_layers = args.layers_competition.split(",")
+    cells = []
+    for layer_index, (layer, child_op, composite, arm) in enumerate(COMPETITION_LAYERS):
+        if layer not in wanted_layers:
+            continue
+        for k in ks:
+            for w in ws:
+                if w < k:
+                    continue  # same skip as the ad-hoc grids: k cannot exceed the row
+                iters = base_iters
+                if layer in ("stocknow", "prebranch") and w * k >= COMPETITION_SLOW_WK:
+                    iters = min(base_iters, COMPETITION_SLOW_ITERS)
+                cells.append(
+                    {
+                        "id": f"comp_{layer}_k{k}_w{w}",
+                        "op": child_op,
+                        "layer": layer,
+                        "batch": 1,
+                        "n": w,
+                        "k": k,
+                        "dtype": "bf16",
+                        "dim": -1,
+                        "anchor": "competition",
+                        "valid_length": None,
+                        "apriori": "",
+                        "expected_factory": "",
+                        "composite": composite,
+                        "strict": True,
+                        "seed": competition_seed(k, w, layer_index),
+                        "iters": iters,
+                        "arm": arm,
+                    }
+                )
+    return cells
+
+
+def run_competition(args):
+    cells = build_competition_cells(args)
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "competition_grid.json"), "w") as f:
+        json.dump(cells, f, indent=1)
+
+    if args.report:
+        write_competition_reports(build_competition_table(cells, args.out), args.out)
+        return 0
+
+    git_dirty = set(
+        subprocess.run(
+            ["git", "-C", REPO, "diff", "--name-only"], capture_output=True, text=True, check=True
+        ).stdout.split()
+    )
+    if HEADER_RELPATH in git_dirty and not args.allow_header_edit:
+        sys.exit(f"{HEADER_RELPATH} is already modified; refusing to measure a mystery arm.")
+
+    def _done(cell):
+        path = result_path(args.out, cell["id"], cell["layer"], 0)
+        if not (args.resume and os.path.exists(path)):
+            return False
+        with open(path) as f:
+            status = json.load(f)["status"]
+        # WRONG and UNSUPPORTED are deterministic under a fixed seed; only
+        # FAILED (transient hang / timeout) earns a retry.
+        return status in ("MEASURED", "UNSUPPORTED", "WRONG")
+
+    header_edited = False
+    try:
+        # FIXED layer order, one layer at a time: op, routed, stocknow, then
+        # prebranch last (the only one that edits the header).
+        for layer, _child_op, _composite, arm in COMPETITION_LAYERS:
+            layer_cells = sorted((c for c in cells if c["layer"] == layer), key=lambda c: (c["k"], c["n"]))
+            if not layer_cells:
+                continue
+            if arm is not None:
+                if not args.allow_header_edit:
+                    print(
+                        f"LAYER {layer}: SKIPPED (needs --allow-header-edit to arm {ARM_DEFINES[arm]})",
+                        flush=True,
+                    )
+                    continue
+                checkout_arm(arm, True, git_dirty)
+                header_edited = True
+                clear_kernel_cache()
+            for cell in layer_cells:
+                if _done(cell):
+                    print(f"SKIP (resume) {cell['id']}", flush=True)
+                    continue
+                r = run_cell(cell, cell["layer"], 0, args)
+                print(
+                    f"{r['status']:<11} {cell['id']} iters={cell['iters']} "
+                    f"{r['ns_median'] or ''} {r['error'][:80]}",
+                    flush=True,
+                )
+                # Rewrite the table after every cell: early stop keeps data.
+                write_competition_reports(build_competition_table(cells, args.out), args.out)
+    finally:
+        if header_edited:
+            checkout_arm("baseline", True, git_dirty)
+            clear_kernel_cache()  # never leave prebranch binaries for the next run
+
+    write_competition_reports(build_competition_table(cells, args.out), args.out)
+    return 0
+
+
+def build_competition_table(cells, outdir):
+    """One row per (k, W), layers pivoted into columns, roofline + gap +
+    speedup columns. WRONG/FAILED/UNSUPPORTED timings never enter the numeric
+    columns; the per-layer status is carried alongside."""
+    results = {}
+    for cell in cells:
+        path = result_path(outdir, cell["id"], cell["layer"], 0)
+        if os.path.exists(path):
+            with open(path) as f:
+                results[(cell["k"], cell["n"], cell["layer"])] = json.load(f)
+
+    provenance_seen = set()
+    grid_keys = sorted({(c["k"], c["n"]) for c in cells})
+    layer_names = [name for name, _, _, _ in COMPETITION_LAYERS]
+    rows = []
+    for k, w in grid_keys:
+        row = {"k": k, "W": w}
+        statuses = []
+        us = {}
+        for layer in layer_names:
+            r = results.get((k, w, layer))
+            if r is None:
+                row[f"{layer}_us"], row[f"{layer}_cores"] = "", ""
+                statuses.append(f"{layer}=PENDING")
+                continue
+            provenance_seen.add((r.get("head_sha"), r.get("tree_diff_md5"), r.get("so_md5")))
+            if r["status"] == "MEASURED" and r["ns_median"]:
+                us[layer] = r["ns_median"] / 1000.0
+                row[f"{layer}_us"] = round(us[layer], 2)
+                row[f"{layer}_cores"] = r.get("cores") or ""
+                statuses.append(f"{layer}=MEASURED")
+            else:
+                row[f"{layer}_us"], row[f"{layer}_cores"] = "", ""
+                statuses.append(f"{layer}={r['status']}({r['error'][:60]})" if r["error"] else f"{layer}={r['status']}")
+        rl = roofline_us(k, w)
+        row["roofline_us"] = round(rl, 3) if rl else ""
+        row["gap_op_vs_roofline"] = round(us["op"] / rl, 2) if rl and "op" in us else ""
+        row["gap_routed_vs_roofline"] = round(us["routed"] / rl, 2) if rl and "routed" in us else ""
+        row["speedup_prebranch_over_routed"] = (
+            f"{us['prebranch'] / us['routed']:.2f}x" if "prebranch" in us and "routed" in us else ""
+        )
+        row["speedup_prebranch_over_op"] = (
+            f"{us['prebranch'] / us['op']:.2f}x" if "prebranch" in us and "op" in us else ""
+        )
+        row["status"] = " ".join(statuses)
+        rows.append(row)
+
+    drift = ""
+    if len(provenance_seen) > 1:
+        drift = (
+            f"PROVENANCE DRIFT: {len(provenance_seen)} distinct (head_sha, tree_diff_md5, so_md5) "
+            f"combinations across cells -- the tree or _ttnn.so changed MID-RUN; cross-layer "
+            f"comparisons are suspect. Combos: {sorted(provenance_seen)}"
+        )
+    elif provenance_seen:
+        sha, tree, so = next(iter(provenance_seen))
+        drift = f"provenance: head={str(sha)[:12]} tree_diff_md5={str(tree)[:8]} so_md5={str(so)[:8]} (uniform)"
+    return {"rows": rows, "provenance_note": drift}
+
+
+def write_competition_reports(table, outdir):
+    rows, note = table["rows"], table["provenance_note"]
+    if not rows:
+        return
+    layer_names = [name for name, _, _, _ in COMPETITION_LAYERS]
+    columns = ["k", "W"]
+    for layer in layer_names:
+        columns += [f"{layer}_us", f"{layer}_cores"]
+    columns += [
+        "roofline_us",
+        "gap_op_vs_roofline",
+        "gap_routed_vs_roofline",
+        "speedup_prebranch_over_routed",
+        "speedup_prebranch_over_op",
+        "status",
+    ]
+    csv_path = os.path.join(outdir, "competition_table.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        w.writeheader()
+        for row in rows:
+            w.writerow({c: row.get(c, "") for c in columns})
+
+    md_path = os.path.join(outdir, "competition_table.md")
+    with open(md_path, "w") as f:
+        f.write("# Competition table: top-k layers vs the llm_perf roofline\n\n")
+        f.write(
+            "Layers: op = topk_large_indices alone; routed = ttnn.topk largest=True "
+            "(composite, sums ALL ops per iteration); stocknow = ttnn.topk largest=False "
+            "on the committed header (replay ON); prebranch = same with "
+            "TOPK_DISABLE_REPLAY_STEP armed. roofline = llm_perf model "
+            "(tenstorrent/llm_perf PR 671+676) -- ASPIRATIONAL, no such kernel exists; "
+            "gap columns = measured/roofline.\n\n"
+        )
+        if note:
+            f.write(f"> {note}\n\n")
+        # Exec summary: the two anchor rows every discussion keeps returning to.
+        anchors = [r for r in rows if (r["k"], r["W"]) in ((512, 65536), (2048, 65536))]
+        if anchors:
+            f.write("## Executive summary (anchor rows)\n\n")
+            for r in anchors:
+                bits = [f"k={r['k']} W={r['W']}"]
+                for layer in layer_names:
+                    if r.get(f"{layer}_us") != "":
+                        bits.append(f"{layer}={r[f'{layer}_us']}us/{r.get(f'{layer}_cores', '')}c")
+                if r.get("roofline_us") != "":
+                    bits.append(f"roofline={r['roofline_us']}us")
+                for col in ("gap_op_vs_roofline", "speedup_prebranch_over_op"):
+                    if r.get(col) != "":
+                        bits.append(f"{col}={r[col]}")
+                f.write("- " + "  ".join(str(b) for b in bits) + "\n")
+            f.write("\n")
+        f.write("## Full grid\n\n")
+        hdr = [c for c in columns if any(str(r.get(c, "")) != "" for r in rows)]
+        f.write("| " + " | ".join(hdr) + " |\n")
+        f.write("|" + "|".join("---" for _ in hdr) + "|\n")
+        for r in rows:
+            f.write("| " + " | ".join(str(r.get(c, "")).replace("|", "/") for c in hdr) + " |\n")
+    print(f"REPORT: {csv_path}")
+    print(f"REPORT: {md_path}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--layers", default="ttnn", help="ttnn,llk")
-    p.add_argument("--arms", default="baseline", help="baseline,replay_load,replay_store")
+    p.add_argument("--arms", default="baseline", help="baseline,disable_replay (replay is the committed default)")
     p.add_argument("--ops", default="topk,sort,topk_large_indices,moe_gate")
-    p.add_argument("--ns", default=DEFAULT_NS)
+    p.add_argument("--ns", default=DEFAULT_NS, help="N values; in --competition mode this is W")
     p.add_argument("--ks", default=DEFAULT_KS)
     p.add_argument("--dtypes", default=DEFAULT_DTYPES)
-    p.add_argument("--iters", type=int, default=10)
+    p.add_argument(
+        "--iters",
+        type=int,
+        default=None,
+        help="measured iterations per cell (classic default 10; competition default 5, "
+        "auto-3 on stock cells with W*k >= 2^24 -- see COMPETITION_SLOW_WK)",
+    )
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--trials", type=int, default=3)
     p.add_argument("--timeout", type=int, default=900, help="per-cell watchdog seconds")
     p.add_argument("--out", default=os.path.join(REPO, "generated/canonical_sweep/latest"))
     p.add_argument(
-        "--resume", action="store_true", help="skip cells whose result JSON already says MEASURED/UNSUPPORTED"
+        "--resume", action="store_true", help="skip cells whose result JSON already says MEASURED/UNSUPPORTED/WRONG"
     )
     p.add_argument("--report", action="store_true", help="rebuild CSV/markdown from --out without measuring")
     p.add_argument("--allow-header-edit", action="store_true", help="permit the A/B edit of " + HEADER_RELPATH)
     p.add_argument(
         "--run-llk", action="store_true", help="also RUN the tt-llk perf driver (default: ingest existing perf_data)"
+    )
+    p.add_argument(
+        "--competition",
+        action="store_true",
+        help="deterministic K x W competition table (layers: op/routed/stocknow/prebranch + roofline)",
+    )
+    p.add_argument(
+        "--layers-competition",
+        default="op,routed,stocknow,prebranch",
+        help="competition layers to (re)run; order of execution is always the fixed one",
     )
     p.add_argument(
         "--child", action="store_true", help="internal: run as measurement child (or set " + CHILD_SPEC_ENV + ")"
@@ -1028,6 +1566,11 @@ def main():
     if args.child or spec_path:
         run_child(spec_path or sys.argv[sys.argv.index("--child") + 1])
         return 0
+
+    if args.competition:
+        return run_competition(args)
+    if args.iters is None:
+        args.iters = 10  # classic-grid default; competition resolves its own
 
     arms = args.arms.split(",")
     for arm in arms:
