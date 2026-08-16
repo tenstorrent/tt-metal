@@ -723,6 +723,11 @@ template <ExecBool Exec = NoExec, typename Callable, typename... Args>
     // Send in the user's desired instructions
     callable(std::forward<Args>(args)...);
 
+    // Generates no code.  Marks where the recorded sequence ends, which the
+    // compiler cannot work out by counting when len or the body of callable
+    // depends on a runtime value -- as it does in matmul_configure_mop.
+    lltt::record_end();
+
 #if defined(ENABLE_GATHERING)
     enable_gathering();
 #endif
