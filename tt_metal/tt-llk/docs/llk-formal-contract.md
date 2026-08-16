@@ -8,8 +8,7 @@ Neither side is frozen. Where the math and the code disagree today, §7 lists it
 convergence item. The target: every symbol here maps to one place in the code, and the
 checker tool reads its rules from §5–§6.
 
-Notation: `≜` is "defined as", `⊕` joins named fields into a record, `⊥` is unset,
-`∏` is a product over fields.
+Notation: `≜` is "defined as", `⊕` joins named fields into a record, `⊥` is unset.
 
 ---
 
