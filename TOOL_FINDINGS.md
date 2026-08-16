@@ -251,7 +251,7 @@ defect.
 | # | one line | fix? | effort |
 |---|---|---|---|
 | **F47** | "host-free" is certified by `host_op_selftest` with `early_stop=False`, while the demo takes the `early_stop=True` default and reads one value back to host every frame; matters once F46 lands | **YES** | small |
-| **F45** | `E2E_REQUIRE_TRACE` is satisfied by proving each stage CAN be captured; `run_tts` — the shipped generation path — never calls `execute_trace`, so an eager pipeline (~500 ms/frame per its own README) ships while perf is quoted from trace replay | **YES — first, with F42** | medium |
+| **F45** | `E2E_REQUIRE_TRACE` is satisfied by proving each stage CAN be captured; `run_tts` — the shipped generation path — never calls `execute_trace`, so an eager pipeline ships (**measured 258.26 ms/frame**) while perf is quoted from trace replay | **YES — first, with F42** | medium |
 | **F44** | the optimize objective times a capture-and-verify harness (eager pass + trace capture + 2 readbacks + release + host PCC, ONE decode step) rather than inference — so capture cost is weighted 4×/iteration and the 24-frame decode that dominates deployment enters once | **YES — with F42/F43** | medium |
 | **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
 | **F46** | the profiled decode (`decode_step`, incremental KV, O(1)/frame) and the shipped decode (`run_tts`, full re-prefill of the whole prefix every frame, O(n)/frame) are different algorithms — `decode_step` is called only from the trace harness, never from the demo | **YES — first** | medium |
@@ -4802,9 +4802,11 @@ Every frame re-dispatches the whole 26-layer backbone from the host.
 Timings for the 8-frame gate: build ~30 s, prefill 2.2 s, decode 0.5 s/frame, codec 1.9 s
 ```
 
-**~500 ms per frame, eager.** A hand-written TTNN port of this same model on the same board reports
-**26.9 ms/frame** with trace+1cq (RTF 0.357). Real time is 80 ms/frame, so the tool's port runs at
-roughly **6× slower than real time** while the hand port runs ~3× faster than it.
+That README figure was an estimate for the 8-frame gate. **Measured directly** on the shipped path
+at 24 frames, after the optimize run: **258.26 ms/frame** (297.69 before the 11 commits) — see THE
+COMPARISON. A hand-written TTNN port of this same model on the same board reports **26.9 ms/frame**
+with trace+1cq (RTF 0.357). Real time is 80 ms/frame, so the tool's port runs **3.2× slower than
+real time** while the hand port runs 2.8× faster than it.
 
 Trace replay is not a marginal optimisation on this hardware — removing per-op host dispatch is most
 of the difference between those two numbers. The gap is not solely eager-vs-traced (implementation
@@ -4991,6 +4993,24 @@ directory — and never leave a local absolute path in a shared registry.
 ---
 
 ## Corrections to this document
+
+- **"None of the optimisation work reaches a user" was WRONG.** An earlier draft of F46 said the 11
+  commits improve only `decode_step`, so nothing reached the product. Measurement contradicts it:
+  most commits land in `tt_common.py` and `tt_backbone.py`, which **both** paths execute, and the
+  shipped path improved **297.69 → 258.26 ms/frame (−13.2%)** across those commits. The accurate
+  claim is narrower — the optimizer *reported* −17.2% and the product *received* −13.2%, so the
+  headline overstates by four points and the gains arrive as a side effect of touching shared code
+  rather than because anything measured what ships. Corrected in five places on 2026-08-16.
+- **A strict `[-1, 1]` PCC range check would break valid runs.** F42's fix was first written as
+  `if not (-1.0 <= pcc <= 1.0): reject`. This port's own trace selftest legitimately prints
+  `pcc=1.000017` — rounding can push a real correlation over unity — so the check needs a tolerance
+  (1e-3). Observed bogus values run 1.525 to 47.779, all far outside it.
+- **`test_main_perf.py` is NOT ours.** F31 originally called it "our own hand-written perf test". The
+  optimize stage generates it (`auto-gen perf from pcc (agentic)`), so both profiler crashes are on
+  the tool's own path.
+- **"Every backbone matmul is a different shape" was too broad.** Decode emits one token padded to a
+  32×32 tile, so decode *projections* are `M=32` in both the profiled and shipped runs — tuned at the
+  right shape. Only decode *attention* (context 64 vs 224) and *prefill* (M 32 vs 224) differ.
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
   possible reporting bug before reading `perf_mcp.py:4430`, which stores the agent's argument as
