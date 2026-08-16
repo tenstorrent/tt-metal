@@ -367,9 +367,15 @@ def _validate_gate(
         broadcast_groups=n_tp_devices,
     )
 
+    # Sorted by weight, not left in selection order: the gate ranks by score+bias while the weight it
+    # stores is the unbiased score, so a token's weight vector is not ordered by its own values and
+    # adjacent slots differ by roughly the spread of the whole vector. A near-tie order flip between
+    # two identically-selected experts would then land dissimilar weights in swapped slots and swamp a
+    # position-wise PCC, which measures ordering rather than the weights. The distribution is what the
+    # routed output consumes, and a flip leaves it unchanged; recall_topk_indices covers the selection.
     pcc_scores = validate_composed(
-        host_tt_topk_scores,
-        reference_topk_scores,
+        host_tt_topk_scores.sort(dim=-1, descending=True).values,
+        reference_topk_scores.sort(dim=-1, descending=True).values,
         1,
         n_sp_devices,
         compare_pcc(scores_pcc_threshold, label="pcc_scores"),
@@ -524,10 +530,10 @@ def test_forward_pass(
     else:
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.93
-        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
-        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
-        scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
+        # One bar for every model: comparing the weight distributions rather than the selection order
+        # leaves only genuine expert swaps, which no longer scale with expert count or top-k depth.
+        # The tightest measured case is GPT-OSS at 0.991, so this keeps roughly a point of margin.
+        scores_pcc_threshold = 0.98
 
     _validate_gate(
         mesh_device,
@@ -613,10 +619,10 @@ def test_hash_gate_forward_pass(
     )
     tt_topk_scores, tt_topk_indices, tt_logits = tt_model(tt_input, input_ids=input_ids)
 
-    # Hash indices are a deterministic lookup shared by golden and device, so recall is ~1.0. HASH_HOST
-    # only diverges via the bf16 round-trip; HASH_DEVICE computes logits with a device bf16 matmul, so
-    # its score PCC is looser (matches the DEVICE_FP32 regular-gate tolerance).
-    scores_pcc_threshold = 0.99 if gate_compute_mode == GateComputeMode.HASH_HOST else 0.93
+    # Hash indices are a deterministic lookup shared by golden and device, so recall is ~1.0 and both
+    # modes hold the tight scores bar: HASH_HOST only diverges via the bf16 round-trip, and HASH_DEVICE
+    # gathers at the same lookup, so its device bf16 matmul cannot move the selection either.
+    scores_pcc_threshold = 0.99
     _validate_gate(
         mesh_device,
         tt_topk_scores,
