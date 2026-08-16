@@ -287,6 +287,78 @@ is ignored and the comparison rounds |T| up to the next power of two** — T=-1.
 2.0, T=-1.25 as 2.0, T=-16.0 as 32.0 — with all negative data zeroed as usual. So the
 packer path is genuinely unusable for signed thresholds, and the SFPU fallback is required.
 
+## 0a-quater. The rebuild: 1.069x recovered, ~87% proven irreducible
+
+The rebuild was 374 of 464 cycles (81%) of the `topk_xl` reduction step and had never been
+touched. `tests/sources/topk_rebuild_perf.cpp`, `topk_rebuild_macro_test.cpp`.
+
+**Decomposed for the first time**, and the pieces close to within 2%
+(143 + 102 + 120 = 365 vs 374 measured):
+
+| component | cyc/call | share |
+| :--- | ---: | ---: |
+| `transpose_N_faces` (4 faces) | **143** | 38% |
+| lattice + load/store | 222 | 59% |
+| envelope | 9 | 2% |
+
+**It is at its floor.** `_topk_xl_merge_` is level 1 of a bitonic merge; the rebuild is
+levels 2..10 — **nine levels on 16 vectors = exactly 72 `SFPSWAP`**, which the census
+confirms. 72 x 2 cyc = 144, plus 32 loads + 32 stores (16 vectors touched twice, the
+minimum for 9 levels with only 8 LRegs), plus 8 `SFPTRANSP`.
+
+**The ~1.4x macro bound is refuted; the real ceiling is 1.069x.** A macro-scheduled Simple
+must have `VD == macroVD` — the register that macro's own load just wrote — so only a
+compare-exchange with **both** operands freshly loaded can ride a load. That is the **first
+level only**; level 2 reads level 1's outputs. 4 swaps x 2 cyc − 2 drain `SFPNOP` = 6
+cyc/body x 4 bodies = **24 of 374**.
+
+**`transpose_N_faces` priced for the first time: 143 cycles, and irreducible.** Three of
+the nine levels fall on the 8-lane axis, and **no SFPU instruction moves data along it** —
+`SFPSWAP` is lane-for-lane, `SFPTRANSP` swaps register-index with row, `SFPSHFT2` rotates
++-1 within 8. Both sweeps are load-bearing. Per face, `MOVD2B`/`MOVB2A`/`MOVB2D` cap at
+`MOV_4_ROWS` and Dst is 32-bit while SrcB is not, so 20 Matrix-Unit issues x 2 passes is
+the floor. CFG-hoisting the per-face reconfig made it **worse by 54 cycles**.
+
+**Free capacity found inside the transposes: 24 extra `SFPNOP`s cost exactly 0 cycles**
+(measured 142.996 vs 143.000) — the `MOVD2B`->`TRNSPSRCB` stall is Matrix-Unit-scoped, so
+the SFPU is idle throughout. Spending 4 of those slots on the `InstructionTemplate[]`
+rewrites the phase switch needs is the entire 367 -> 350 difference. **20 free SFPU slots
+remain unspent.**
+
+| level | before | after | |
+| :--- | ---: | ---: | ---: |
+| rebuild alone | 374 | **350** | 1.069x |
+| **reduction step** (with the macro merge, 91 -> 46) | 465 | **396** | **1.174x** |
+
+**Irreducible: ~326 of 374** — 143 transpose, 144 `SFPSWAP` (exactly the comparator count
+for 9 levels), 64 load/store, 8 `SFPTRANSP`.
+
+**Correctness 74/74** against the shipping torch golden (K=512/1024/2048, both directions,
+fused and unfused, num_chunks 2 and 4), with a mutation control, independently re-run on
+device.
+
+### The bug that timing could never have caught — the best cautionary tale of this work
+
+The first version issued the four `SFPLOADMACRO`s back to back, so their scheduled 2-cycle
+`SFPSWAP`s **overlapped** — macro-scheduled swaps are exempt from the auto-stall. It
+measured **faster** than the correct version (86/104 vs 90/108) and **passed every
+single-merge test**.
+
+It passed because **the rebuild only permutes its K survivors**: one merge+rebuild cannot
+change the returned *set* however broken the sort is. Only `num_chunks=4` — three chained
+merge+rebuild pairs, where a mis-ordered run becomes the next merge's supposedly-sorted
+operand — turned it red.
+
+So a faster-and-wrong kernel survived both the timing check and the obvious correctness
+test. **Chained-stage coverage was the only thing that caught it.** Fix: interleave
+plain/macro loads two slots apart plus 2 drain `SFPNOP`s.
+
+**Highest remaining ceiling, unmeasured:** at K >= 1024, `canonical_big_block`'s sub-blocks
+A and B are *single-level* `bitonic_sort_len_k` bodies whose store addresses equal their
+load addresses — so the merge's full trick (swap **and** store on the macro) applies
+wholesale, unlike the multi-level bodies measured here. That is dead weight at K=512
+(rsf=1 skips both) but a large share of the K=2048 rebuild.
+
 ## 0b. Architectural Discoveries
 
 Everything in this section was established on Blackhole silicon during this work and is
