@@ -11,6 +11,20 @@ on:
         type: string
         default: "tt-ubuntu-light"
         description: "Runner label for the Harbor health check job"
+      called-via-workflow-call:
+        required: false
+        type: boolean
+        default: true
+        description: >-
+          Internal marker, do not set explicitly. Defaults to true whenever this
+          workflow is invoked via workflow_call (input defaults are resolved for
+          that trigger); it is unset/empty on this workflow's own standalone
+          `schedule` trigger below, since the `inputs` context does not exist
+          for that event at all. Used to tell apart "I am check-harbor's own
+          hourly monitor" from "I was workflow_call'd by a workflow that
+          itself happens to be schedule-triggered" (e.g. sanity-tests.yaml) —
+          github.event_name/github.event.schedule can't distinguish the two,
+          since they're inherited from the whole run's root trigger either way.
     outputs:
       harbor-prefix:
         description: "Harbor pull-through prefix from org vars when healthy; empty to pull GHCR directly"
@@ -32,18 +46,21 @@ jobs:
         env:
           HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX }}
           EVENT_NAME: ${{ github.event_name }}
-          # github.event_name reflects the *root* trigger of the whole run, which is
-          # still "schedule" when this reusable workflow is workflow_call'd from another
-          # workflow that itself happens to be cron-triggered (e.g. sanity-tests.yaml).
-          # github.event.schedule carries the actual cron string that fired, so comparing
-          # it against this workflow's own cron is what actually tells apart "I am running
-          # as my own standalone hourly monitor" from "I was called by someone else's cron".
-          SCHEDULE_CRON: ${{ github.event.schedule }}
+          CALLED_VIA_WORKFLOW_CALL: ${{ inputs.called-via-workflow-call }}
         run: |
           set -euo pipefail
 
+          # Only check-harbor's own standalone hourly monitor should hard-fail on an
+          # unhealthy Harbor (so the failure pages someone); every workflow_call
+          # consumer must always fall back gracefully instead. EVENT_NAME alone can't
+          # tell the two apart (it's inherited from the whole run's root trigger, so
+          # it reads "schedule" even when a schedule-triggered caller like
+          # sanity-tests.yaml workflow_call's us) — CALLED_VIA_WORKFLOW_CALL resolves
+          # to its declared default ("true") only when this run *is* a workflow_call,
+          # since the `inputs` context plainly does not exist on the standalone
+          # `schedule` trigger.
           OWN_SCHEDULE_RUN=false
-          if [ "$EVENT_NAME" = "schedule" ] && [ "$SCHEDULE_CRON" = "0 * * * *" ]; then
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$CALLED_VIA_WORKFLOW_CALL" != "true" ]; then
             OWN_SCHEDULE_RUN=true
           fi
 
@@ -72,7 +89,13 @@ jobs:
             HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
           fi
 
-          if [ -n "$HEALTH_RESPONSE" ]; then
+          # Validate the body is actually JSON before parsing it. A 200 with a
+          # non-JSON body (e.g. a proxy/maintenance page served while Harbor is
+          # degraded) is exactly the kind of response most likely when Harbor is
+          # unhealthy — jq would abort the whole script under `set -e` on that
+          # input, hard-failing the job instead of falling back like every other
+          # unavailable/unhealthy case here.
+          if [ -n "$HEALTH_RESPONSE" ] && echo "$HEALTH_RESPONSE" | jq -e . > /dev/null 2>&1; then
             echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
               echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"
             done
@@ -88,6 +111,11 @@ jobs:
               echo "### Harbor Registry Unhealthy" >> "$GITHUB_STEP_SUMMARY"
               echo "Overall status: \`$OVERALL_STATUS\`. Falling back to direct GHCR." >> "$GITHUB_STEP_SUMMARY"
             fi
+          elif [ -n "$HEALTH_RESPONSE" ]; then
+            echo "::error title=Harbor Unavailable::Harbor registry responded with unparseable data. Docker pulls will fall back to direct GHCR."
+            echo "harbor-prefix=" >> "$GITHUB_OUTPUT"
+            echo "### Harbor Registry Unavailable" >> "$GITHUB_STEP_SUMMARY"
+            echo "Harbor responded, but not with valid JSON (possibly a proxy/maintenance page). Falling back to direct GHCR." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::error title=Harbor Unavailable::Harbor registry did not respond. Docker pulls will fall back to direct GHCR."
             echo "harbor-prefix=" >> "$GITHUB_OUTPUT"
