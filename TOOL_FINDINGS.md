@@ -4144,6 +4144,103 @@ entirely.
 
 ---
 
+## ★★★ HOW THE OPTIMIZE STAGE SHOULD MEASURE — consolidated, in dependency order
+
+F40/F41/F43/F44/F45 are five symptoms of one root problem: **the stage never establishes what a
+production step costs.** It profiles a shrunken, capture-and-verify workload in an execution mode
+the product does not use, then ranks candidate edits by that number. The fixes below are ordered so
+each one is worth doing even if the later ones are not.
+
+### 1. Measure the mode you ship (F45)
+
+Decide, and be consistent: either the generated pipeline replays traces, or it does not.
+
+- If it stays eager, profile and time **eager**. Quoting trace-replay timings for an eager product
+  makes the perf story unfalsifiable from outside.
+- If it should be traced — and for this hardware it should — wire the existing
+  `decode_trace_setup`/`decode_trace_step` hooks into `run_tts`: capture once, replay per frame.
+  The apparatus is already built and proven by `trace_capture_selftest`; only the loop is missing.
+
+Gate on **use**, not capability: fail if `execute_trace` is unreachable from the generation entry
+point, or if a real run replays zero traces.
+
+### 2. Profile a signposted WINDOW inside a real-sized run (F44)
+
+The 12000-marker budget is real, but shrinking the workload is the wrong way to respect it.
+
+The tool already resolves signposts (`agent/probes.py:1295`), scanning `tests/` for
+`signpost("…")` string literals, and `perf_mcp._signposts_usable` verifies they interleave with ops
+rather than clumping. For this model it found **none** and said so at Step 9/10, then continued with
+full capture.
+
+`perf_test_gen` should **emit** them:
+
+```python
+run_to_frame(12)            # real prompt (200 ids), real horizon (24 frames)
+signpost("start")
+one_decode_step()           # ONE step, at a realistic KV depth
+signpost("stop")
+```
+
+One short window per stage — prefill at its real padded capacity, one mid-run decode step, one flow
+step, one vocode call — keeps every capture inside the marker budget while profiling **production
+shapes at production context depth**. Extra signposts between blocks give per-block attribution,
+which is what `_signpost_blocks` exists to consume.
+
+### 3. Rank targets by total contribution, not by per-step cost
+
+Even a perfect per-op profile mis-ranks if each op is counted once. In one utterance a decode op
+runs **24×** and a prefill op runs **1×**; the ladder picks `next_target` by largest `gap_ms`, so
+with a one-step profile it aims at whatever is biggest in a single step.
+
+Rank by `per_op_time × invocations_per_utterance`. The tool already collects the op-signature
+sequence (`_op_sig_probe`), so the multiplicities are in hand — and fixing the truncation in F41 is
+a prerequisite for counting them correctly.
+
+### 4. Time accept/reject on the real workload, separately from profiling
+
+These are two jobs with different constraints, and only one has a marker budget:
+
+| job | profiler | workload |
+|---|---|---|
+| attribute time to ops | Tracy on | short signposted window |
+| decide if an edit is faster | **Tracy off** | **the real 24-frame utterance** |
+
+The accept/reject measurement already runs with Tracy off (`no tracy` in the log), so nothing forces
+it to inherit the profiling workload. `run_tts` already returns
+`timings: {prefill_s, decode_s, codec_s}` — the instrumentation exists.
+
+### 5. Take capture and verification out of the timed region (F44)
+
+`trace_capture_selftest` per stage runs an eager pass, a capture, a replay, two readbacks, a release
+and a host-side PCC. Capture and release are startup costs; the eager pass and the PCC are
+correctness machinery that the PCC gate already runs separately. Time `execute_trace` only.
+
+### 6. Validate the profile before ranking on it
+
+A dropped-marker profile is worse than none, because it looks complete. Two cheap checks:
+
+- **Coverage**: sum of attributed per-op time should approximate the independently measured stage
+  wall time. A large shortfall means markers were dropped — reject the profile rather than rank on
+  it.
+- **Sanity**: a PCC outside [-1, 1] is a parse failure (F42); an op count identical to the
+  truncation limit is a saturated comparison (F41). Both are one-line assertions.
+
+### 7. Never discard a measurement that succeeded (F40)
+
+The baseline run produced `FORWARD_WALL_MS=756.4513` and then segfaulted in `close_mesh_device`
+during teardown; the whole run was reported as failed and the number thrown away. Parse what the run
+printed, and treat a post-measurement teardown crash as a warning rather than a failed measurement.
+
+---
+
+**Net effect.** With 1–4 in place the stage would minimise *time to speak one utterance at
+production shapes in the shipped execution mode*, attribute it to ops weighted by how often they
+actually run, and reject profiles it cannot trust. That is a different — and answerable — question
+from the one it currently asks.
+
+---
+
 ## ★★★★ F45 — the trace gate is satisfied by proving traces are POSSIBLE; the delivered pipeline never uses them
 
 **Status: live** · severity: a model can pass "host-free / trace-capturable" and ship an eager
