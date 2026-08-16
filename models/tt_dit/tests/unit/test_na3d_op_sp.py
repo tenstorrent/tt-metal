@@ -239,3 +239,41 @@ def test_na3d_op_sp_w_matches_host(*, mesh_device, sp_axis, dims, kernel):
 
     assert tuple(actual.shape) == tuple(expected.shape), f"{tuple(actual.shape)} != {tuple(expected.shape)}"
     assert_quality(expected, to_torch_replicated(actual), pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
+@pytest.mark.parametrize("dims, kernel", [((4, 4, 32), (3, 3, 3)), ((2, 8, 32), (3, 3, 5))])
+def test_na3d_op_sp_w_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel):
+    """Sharded-I/O SP-over-W (full-stage building block): q/k/v sharded over W, output sharded, K/V
+    gathered internally over a W-outer flatten. Reassembled, it matches the host full result."""
+    from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded
+
+    T, H, W = dims
+    heads, head_dim = 4, 64
+    sp = list(mesh_device.shape)[sp_axis]
+    if W % sp != 0 or (W // sp) * T * H % 32 != 0:
+        pytest.skip(f"dims={dims} not shardable over sp={sp} with tile-aligned origin")
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, heads * head_dim)
+
+    # Shard input over W (dim 3) along sp_axis; output comes back sharded the same way.
+    shard_axes = [None] * 6
+    shard_axes[3] = sp_axis
+    q_tt, k_tt, v_tt = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=shard_axes)
+        for x in (q, k, v)
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    out = neighborhood_attention_3d_op_sp_w_sharded(
+        q_tt, k_tt, v_tt, dims=dims, kernel_size=kernel, sp_axis=sp_axis, ccl_manager=ccl_manager, scale=1.0
+    )
+
+    # Reassemble the W-sharded output (dim 3 along sp_axis) into the full volume.
+    got = to_torch_replicated(out, mesh_axes=[None, None, None, sp_axis, None])
+    assert_quality(expected, got, pcc=0.999)

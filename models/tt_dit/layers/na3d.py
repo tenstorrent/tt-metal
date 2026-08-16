@@ -742,6 +742,86 @@ def neighborhood_attention_3d_op_sp_w(
     return ttnn.permute(full, (0, 2, 3, 1, 4))  # (B, T, H, W, width)
 
 
+def neighborhood_attention_3d_op_sp_w_sharded(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    dims: tuple[int, int, int],
+    kernel_size: tuple[int, int, int],
+    sp_axis: int,
+    ccl_manager,
+    scale: float | None = None,
+) -> ttnn.Tensor:
+    """SP-over-W with SHARDED input AND output, for full-stage spatial parallelism.
+
+    The W analog of :func:`neighborhood_attention_3d_op_sp_sharded`: ``q``/``k``/``v`` are THIS
+    chip's contiguous W-slice ``(B, T, H, W/sp, NH, HD)`` and the return is this chip's W-slice of
+    the output ``(B, T, H, W/sp, NH*HD)``. K/V are all-gathered to the full W internally (a W window
+    reaches a few columns past a shard edge), but Q and the output stay W-sharded so the block's
+    residual adds and the surrounding pointwise ops all stay 1/sp in both compute and memory.
+    ``dims`` is the FULL ``(T, H, W)``.
+
+    W is the inner spatial axis, so the volume is flattened W-outer (as in
+    :func:`neighborhood_attention_3d_op_sp_w`): a contiguous sequence is then a W-band and the mask
+    is told its grid as ``(W, T, H)`` with the matching ``(kw, kt, kh)`` kernel. Each chip is told
+    its flattened W-outer origin. Requires W divisible by the mesh axis and a tile-aligned shard
+    origin (``(W/sp) * T * H`` a multiple of ``TILE_HEIGHT``).
+    """
+    mesh = q.device()
+    sp = int(list(mesh.shape)[sp_axis])
+    t_full, h_full, w_full = dims
+    batch, t, h, w_local, heads, head_dim = tuple(q.shape)
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+    assert (t, h) == (t_full, h_full), f"q dims {(t, h)} != full {(t_full, h_full)}"
+    assert w_local * sp == w_full, f"W={w_full} must split evenly over sp={sp} (got W_local={w_local})"
+    width = heads * head_dim
+    seq_local = w_local * t_full * h_full  # W-outer flatten of this chip's band
+    tile_height = 32
+    assert seq_local % tile_height == 0, f"shard origin (W/sp)*T*H={seq_local} must be a multiple of {tile_height}"
+    if scale is None:
+        scale = head_dim**-0.5
+    kt, kh, kw = (min(kk, d) for kk, d in zip(kernel_size, dims))
+
+    # Flatten W-outer so a contiguous sequence is a W-band; heads merged then re-split so the spatial
+    # reorder is one 5D permute. ``w_`` is this chip's W extent (K/V and Q are the same shard here).
+    def to_seq(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (batch, t_full, h_full, w_, width))
+        x = ttnn.permute(x, (0, 3, 1, 2, 4))  # (B, w_, T, H, width)
+        x = ttnn.reshape(x, (batch, w_ * t_full * h_full, heads, head_dim))
+        x = ttnn.permute(x, (0, 2, 1, 3))  # (B, NH, S, HD)
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    # K/V: gather this chip's W-band into the full W the window needs (chip order = W order, so the
+    # concatenation rebuilds the full W-outer sequence). Q stays this chip's W-shard.
+    tk = ccl_manager.all_gather(to_seq(k, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+    tv = ccl_manager.all_gather(to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+    tq = to_seq(q, w_local)
+
+    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
+    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+
+    attended = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        neighborhood_3d=(w_full, t_full, h_full, kw, kt, kh),  # grid given W-outer to match the flatten
+        scale=scale,
+        windowed_q_token_offset=0,
+        windowed_q_token_offset_tensor=off_tt,
+    )
+    for tensor in (tq, tk, tv):
+        ttnn.deallocate(tensor)
+
+    # (B, NH, seq_local, HD) -> W-outer (B, W_local, T, H, width) -> (B, T, H, W_local, width), sharded.
+    attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+    attended = ttnn.permute(attended, (0, 2, 1, 3))
+    attended = ttnn.reshape(attended, (batch, w_local, t_full, h_full, width))
+    return ttnn.permute(attended, (0, 2, 3, 1, 4))  # (B, T, H, W_local, width)
+
+
 def neighborhood_attention_3d_op_sp_sharded(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
