@@ -933,6 +933,7 @@ class TtPrefillRuntime:
             out_len=out_len,
             golden_dir=golden_dir,
             record_only=os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1",
+            rope_convention=dcfg.rope_convention,
         )
 
     def set_layer_completion_sink(self, sink) -> None:
