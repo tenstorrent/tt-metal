@@ -123,6 +123,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         attrs.k,
+        // Selects the with-values kernels, extra CBs, and the second output.
+        attrs.return_values,
         input.dtype(),
         input.layout(),
         input.memory_config().memory_layout(),
@@ -144,21 +146,38 @@ spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
         output_shape_vec.push_back(input_shape[i]);
     }
     output_shape_vec.back() = attrs.k;
+    const ttnn::Shape output_shape(std::move(output_shape_vec));
 
     const auto memory_config = tensor_args.input_tensor.memory_config();
-    return tt::tt_metal::TensorSpec(
-        ttnn::Shape(std::move(output_shape_vec)),
+    spec_return_value_t specs;
+    specs.emplace_back(
+        output_shape,
         tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config));
+    if (attrs.return_values) {
+        specs.emplace_back(
+            output_shape,
+            tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config));
+    }
+    return specs;
 }
 
 tensor_return_value_t TopkLargeIndicesDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input_tensor.device());
+    const auto specs = compute_output_specs(attrs, tensor_args);
+    tensor_return_value_t outputs;
+    outputs.reserve(specs.size());
+    for (const auto& spec : specs) {
+        outputs.push_back(create_device_tensor(spec, tensor_args.input_tensor.device()));
+    }
+    return outputs;
 }
 
 std::tuple<TopkLargeIndicesDeviceOperation::operation_attributes_t, TopkLargeIndicesDeviceOperation::tensor_args_t>
-TopkLargeIndicesDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
-    return {operation_attributes_t{.k = k, .valid_length = valid_length}, tensor_args_t{.input_tensor = input_tensor}};
+TopkLargeIndicesDeviceOperation::invoke(
+    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool return_values) {
+    return {
+        operation_attributes_t{.k = k, .valid_length = valid_length, .return_values = return_values},
+        tensor_args_t{.input_tensor = input_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
@@ -168,10 +187,23 @@ namespace ttnn::experimental {
 Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
-            input_tensor, k, valid_length);
-    return ttnn::device_operation::launch<
-        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
-        operation_attributes, tensor_args);
+            input_tensor, k, valid_length, /*return_values=*/false);
+    auto outputs =
+        ttnn::device_operation::launch<operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
+            operation_attributes, tensor_args);
+    return std::move(outputs[0]);
+}
+
+std::tuple<Tensor, Tensor> topk_large_indices_with_values(
+    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+    auto [operation_attributes, tensor_args] =
+        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
+            input_tensor, k, valid_length, /*return_values=*/true);
+    auto outputs =
+        ttnn::device_operation::launch<operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
+            operation_attributes, tensor_args);
+    // torch convention: (values, indices).
+    return {std::move(outputs[1]), std::move(outputs[0])};
 }
 
 }  // namespace ttnn::experimental

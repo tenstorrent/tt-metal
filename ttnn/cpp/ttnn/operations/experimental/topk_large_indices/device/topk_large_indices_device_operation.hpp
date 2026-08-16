@@ -38,7 +38,7 @@ struct TopkLargeIndicesDeviceOperation {
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length);
+        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool return_values);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
@@ -46,5 +46,10 @@ struct TopkLargeIndicesDeviceOperation {
 namespace ttnn::experimental {
 
 Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
+
+// (values, indices): values are ROW_MAJOR BFLOAT16, sorted descending to match the indices;
+// sentinel-index (-inf) lanes carry exact bf16 -inf values.
+std::tuple<Tensor, Tensor> topk_large_indices_with_values(
+    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
 
 }  // namespace ttnn::experimental

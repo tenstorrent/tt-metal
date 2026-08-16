@@ -6,6 +6,7 @@
 
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 
@@ -33,13 +34,19 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
+    // Also emit the top-k VALUES (ROW_MAJOR BFLOAT16, sorted descending to match the indices;
+    // exact bf16 -inf on the sentinel-index lanes). Changes kernel selection, CBs, and output
+    // specs, so it is part of the program hash. Default off: indices-only, byte-identical
+    // program to before this option existed.
+    bool return_values{false};
 };
 
 struct tensor_args_t {
     Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = tt::tt_metal::TensorSpec;
+// [0] = UINT32 indices (always). [1] = BFLOAT16 values (only when return_values).
+using tensor_return_value_t = std::vector<Tensor>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::operations::experimental::topk_large_indices

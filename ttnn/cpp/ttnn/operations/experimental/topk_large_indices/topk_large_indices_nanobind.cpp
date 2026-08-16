@@ -4,12 +4,32 @@
 
 #include "topk_large_indices_nanobind.hpp"
 
+#include <optional>
+#include <tuple>
+#include <variant>
+
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "topk_large_indices.hpp"
 
 namespace ttnn::operations::experimental::topk_large_indices::detail {
+
+namespace {
+
+// Dispatches on return_values so the default call keeps returning a single
+// indices tensor (backward compatible) while opting in returns a
+// (values, indices) tuple, torch-style.
+std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> topk_large_indices_py(
+    const ttnn::Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool return_values) {
+    if (return_values) {
+        return ttnn::experimental::topk_large_indices_with_values(input_tensor, k, valid_length);
+    }
+    return ttnn::experimental::topk_large_indices(input_tensor, k, valid_length);
+}
+
+}  // namespace
 
 void bind_topk_large_indices(nb::module_& mod) {
     ttnn::bind_function<"topk_large_indices", "ttnn.experimental.">(
@@ -18,13 +38,16 @@ void bind_topk_large_indices(nb::module_& mod) {
         Experimental Top-K over the last dimension of a row-major BFLOAT16 tensor.
         This op is Blackhole-only.
 
-        Returns a ROW_MAJOR UINT32 tensor containing sorted descending top-k indices.
+        Returns a ROW_MAJOR UINT32 tensor containing sorted descending top-k indices,
+        or, with ``return_values=True``, a ``(values, indices)`` tuple where values is
+        a ROW_MAJOR BFLOAT16 tensor sorted descending to match the indices.
         The output shape matches the input shape except that the last dimension is k.
 
         This op is intended for large row-major rows. Internally it snaps k to the
         nearest supported LLK size and streams each input row in LLK-sized windows.
         Input values equal to -inf produce the sentinel index 0xFFFFFFFF when they
-        survive into the final top-k result.
+        survive into the final top-k result; with ``return_values=True`` those lanes
+        carry exact bf16 -inf values.
 
         K constraints:
             * k must be in [16, 2048];
@@ -51,12 +74,15 @@ void bind_topk_large_indices(nb::module_& mod) {
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
+            return_values: also return the top-k values; the result becomes a
+                (values, indices) tuple (default: False, indices tensor only).
         )doc",
-        &ttnn::experimental::topk_large_indices,
+        &topk_large_indices_py,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),
-        nb::arg("valid_length") = std::nullopt);
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("return_values") = false);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

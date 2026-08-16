@@ -83,13 +83,47 @@ uint32_t rows_for_core(
     return 0;
 }
 
+// BFLOAT16 element size of the optional values output.
+constexpr uint32_t values_element_bytes = 2;
+
+// Creates the values-output CB (+ reorder scratch for LLK windows > 512) on `cores`.
+// Mirrors the indices output CBs' structure with bf16-sized rows/slices.
+void create_values_output_cbs(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    LlkTargetK llk_target_k,
+    uint32_t k,
+    uint32_t cb_values,
+    uint32_t cb_values_scratch) {
+    const uint32_t llk_k = to_uint32(llk_target_k);
+    const uint32_t values_cb_row_bytes = llk_k * values_element_bytes;
+    constexpr uint32_t cb_depth = 2;
+    auto values_cb_config =
+        tt::tt_metal::CircularBufferConfig(cb_depth * values_cb_row_bytes, {{cb_values, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_values, values_cb_row_bytes);
+    if (llk_target_k == LlkTargetK::K512) {
+        values_cb_config.set_unpack_face_geometry(cb_values, tt::constants::FACE_HEIGHT, 2);
+    }
+    tt::tt_metal::CreateCircularBuffer(program, cores, values_cb_config);
+
+    if (llk_target_k != LlkTargetK::K512) {
+        const uint32_t values_row_bytes = k * values_element_bytes;
+        const auto values_scratch_cb_config =
+            tt::tt_metal::CircularBufferConfig(values_row_bytes, {{cb_values_scratch, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_values_scratch, values_row_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, cores, values_scratch_cb_config);
+    }
+}
+
 void set_runtime_args(
     tt::tt_metal::Program& program,
     const TopkLargeIndicesSharedVariables& shared,
     const Tensor& input,
-    const Tensor& indices,
+    const tensor_return_value_t& outputs,
     LlkTargetK llk_target_k,
     std::optional<uint32_t> valid_length) {
+    const Tensor& indices = outputs[0];
+    const bool return_values = outputs.size() > 1;
     const auto runtime_args = get_runtime_shape_args(input, llk_target_k, valid_length);
     const auto work_split = tt::tt_metal::split_work_to_cores(
         input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
@@ -122,8 +156,16 @@ void set_runtime_args(
              runtime_args.input_row_bytes});
         tt::tt_metal::SetRuntimeArgs(
             program, shared.compute_kernel_id, core, {rows, runtime_args.num_chunks, runtime_args.tail_elements});
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
+        if (return_values) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.writer_kernel_id,
+                core,
+                {indices.buffer()->address(), start_row, rows, outputs[1].buffer()->address()});
+        } else {
+            tt::tt_metal::SetRuntimeArgs(
+                program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
+        }
 
         start_row += rows;
     }
@@ -143,7 +185,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     auto program = tt::tt_metal::CreateProgram();
 
     const auto& input = tensor_args.input_tensor;
-    auto& indices = tensor_return_value;
+    auto& indices = tensor_return_value[0];
 
     const uint32_t k = operation_attributes.k;
     const auto llk_target_k = snap_to_llk_target_k(k);
@@ -156,9 +198,12 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // Runtime row counts are intentionally patched through runtime args instead of the program hash.
     // Create kernels/CBs across the full worker grid so cache hits can use a different active core subset.
 
+    const bool return_values = operation_attributes.return_values;
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
+    constexpr uint32_t cb_values = tt::CBIndex::c_3;
+    constexpr uint32_t cb_values_scratch = tt::CBIndex::c_4;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -191,6 +236,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
     }
 
+    if (return_values) {
+        create_values_output_cbs(program, all_cores, llk_target_k, k, cb_values, cb_values_scratch);
+    }
+
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
 
@@ -200,10 +249,18 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
+    // return_values swaps in dedicated with-values kernel sources so the
+    // default (indices-only) program's kernel sources — and therefore its JIT
+    // binaries and perf behavior — stay byte-identical.
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k};
+    if (return_values) {
+        compute_compile_args.push_back(cb_values);
+    }
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
+        return_values
+            ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_with_values.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             // TopK XL stores fused BF16-value/u16-index words and unfused UINT32 indices in 32-bit DEST lanes.
@@ -219,11 +276,21 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         source_slices_per_row,
         output_slices_per_row,
         indices_slice_bytes};
+    if (return_values) {
+        writer_compile_args.push_back(cb_values);
+        writer_compile_args.push_back(cb_values_scratch);
+        writer_compile_args.push_back(k * values_element_bytes);
+        writer_compile_args.push_back(row_slice_elements * values_element_bytes);
+    }
     interleaved_accessor_args(indices).append_to(writer_compile_args);
+    if (return_values) {
+        interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
+    }
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
+        return_values ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_with_values.cpp"
+                      : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
@@ -232,7 +299,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
         .cores = cores};
-    set_runtime_args(program, shared, input, indices, llk_target_k, operation_attributes.valid_length);
+    set_runtime_args(program, shared, input, tensor_return_value, llk_target_k, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -368,9 +435,11 @@ void set_runtime_args_multi_core(
     tt::tt_metal::Program& program,
     const TopkLargeIndicesMultiCoreSharedVariables& shared,
     const Tensor& input,
-    const Tensor& indices,
+    const tensor_return_value_t& outputs,
     LlkTargetK llk_target_k,
     std::optional<uint32_t> valid_length) {
+    const Tensor& indices = outputs[0];
+    const bool return_values = outputs.size() > 1;
     const uint32_t llk_k = to_uint32(llk_target_k);
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
@@ -417,8 +486,16 @@ void set_runtime_args_multi_core(
 
     tt::tt_metal::SetRuntimeArgs(program, shared.reader_final_kernel_id, shared.final_core, {num_rows});
     tt::tt_metal::SetRuntimeArgs(program, shared.compute_final_kernel_id, shared.final_core, {num_rows, num_slices});
-    tt::tt_metal::SetRuntimeArgs(
-        program, shared.writer_final_kernel_id, shared.final_core, {indices.buffer()->address(), 0, num_rows});
+    if (return_values) {
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            shared.writer_final_kernel_id,
+            shared.final_core,
+            {indices.buffer()->address(), 0, num_rows, outputs[1].buffer()->address()});
+    } else {
+        tt::tt_metal::SetRuntimeArgs(
+            program, shared.writer_final_kernel_id, shared.final_core, {indices.buffer()->address(), 0, num_rows});
+    }
 }
 
 }  // namespace
@@ -430,7 +507,8 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     auto program = tt::tt_metal::CreateProgram();
 
     const auto& input = tensor_args.input_tensor;
-    auto& indices = tensor_return_value;
+    auto& indices = tensor_return_value[0];
+    const bool return_values = operation_attributes.return_values;
 
     const uint32_t k = operation_attributes.k;
     const auto llk_target_k = snap_to_llk_target_k(k);
@@ -467,6 +545,9 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     constexpr uint32_t cb_gathered_indices = tt::CBIndex::c_4;
     constexpr uint32_t cb_local_values = tt::CBIndex::c_5;
     constexpr uint32_t cb_local_indices = tt::CBIndex::c_6;
+    // Final-core values output CBs (return_values only).
+    constexpr uint32_t cb_values_out = tt::CBIndex::c_8;
+    constexpr uint32_t cb_values_scratch = tt::CBIndex::c_9;
     constexpr uint32_t cb_neginf_scratch = tt::CBIndex::c_7;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
@@ -540,6 +621,10 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         tt::tt_metal::CreateCircularBuffer(program, final_core_set, indices_scratch_cb_config);
     }
 
+    if (return_values) {
+        create_values_output_cbs(program, final_core_set, llk_target_k, k, cb_values_out, cb_values_scratch);
+    }
+
     // Gather flow control (see writer_local.cpp / reader_final.cpp).
     const uint32_t receiver_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t sender_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -602,11 +687,17 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         final_core_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_final_compile_args));
 
-    const std::vector<uint32_t> compute_final_compile_args = {
-        cb_gathered_values, cb_gathered_indices, cb_indices_out, llk_k};
+    // return_values swaps in dedicated with-values kernel sources on the
+    // final core so the default program's kernel binaries stay byte-identical.
+    std::vector<uint32_t> compute_final_compile_args = {cb_gathered_values, cb_gathered_indices, cb_indices_out, llk_k};
+    if (return_values) {
+        compute_final_compile_args.push_back(cb_values_out);
+    }
     auto compute_final_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_final.cpp",
+        return_values
+            ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_final_with_values.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_final.cpp",
         final_core_set,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = true, .dst_full_sync_en = true, .compile_args = compute_final_compile_args});
@@ -618,10 +709,20 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         source_slices_per_row,
         output_slices_per_row,
         indices_slice_bytes};
+    if (return_values) {
+        writer_final_compile_args.push_back(cb_values_out);
+        writer_final_compile_args.push_back(cb_values_scratch);
+        writer_final_compile_args.push_back(k * values_element_bytes);
+        writer_final_compile_args.push_back(row_slice_elements * values_element_bytes);
+    }
     interleaved_accessor_args(indices).append_to(writer_final_compile_args);
+    if (return_values) {
+        interleaved_accessor_args(tensor_return_value[1]).append_to(writer_final_compile_args);
+    }
     auto writer_final_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
+        return_values ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_with_values.cpp"
+                      : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         final_core_set,
         tt::tt_metal::WriterDataMovementConfig(writer_final_compile_args));
 
@@ -634,7 +735,8 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         .writer_final_kernel_id = writer_final_kernel,
         .local_cores = local_cores,
         .final_core = final_core};
-    set_runtime_args_multi_core(program, shared, input, indices, llk_target_k, operation_attributes.valid_length);
+    set_runtime_args_multi_core(
+        program, shared, input, tensor_return_value, llk_target_k, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }

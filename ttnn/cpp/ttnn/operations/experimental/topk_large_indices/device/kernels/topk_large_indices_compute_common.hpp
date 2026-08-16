@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Shared compute helpers for the COLUMN-PARALLEL topk_large_indices kernels
-// (compute_local.cpp / compute_final.cpp).
+// (compute_local.cpp / compute_final.cpp) and the return_values kernel
+// variants (compute_with_values.cpp / compute_final_with_values.cpp).
 //
 // NOTE: compute.cpp (the row-parallel kernel) deliberately keeps its own
 // byte-identical copies of these helpers instead of including this header —
@@ -83,6 +84,23 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t idst, uint32_t indices_c
     transpose_dest_init<true, false>(indices_cb);
     for (uint32_t t = 0; t < tiles_per_sequence; ++t) {
         transpose_dest<true, false>(idst + tiles_per_sequence + t);
+    }
+}
+
+// Transposes the FP32 value tiles of the final DST sequence into the same
+// rank-order layout as the indices, for the optional values output.
+// The value words are moved with the 32-bit (INT-mode) transpose so the moves
+// are bit-exact; the fp32->bf16 conversion happens later in the packer.
+// PRECONDITION: materialize_index_rank_order already ran this row (it programs
+// the shared 32-bit transpose_dest init, which this reuses), and
+// mark_neginf_indices ran before EITHER transpose (it reads the value words in
+// the pre-transpose engine layout).
+template <uint32_t K>
+FORCE_INLINE void materialize_values_rank_order(uint32_t idst) {
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
+    for (uint32_t t = 0; t < tiles_per_sequence; ++t) {
+        transpose_dest<true, false>(idst + t);
     }
 }
 

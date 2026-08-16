@@ -718,3 +718,144 @@ def test_topk_large_indices_column_and_row_parallel_programs_coexist_in_cache(de
         _assert_topk_matches_torch(multi_row, tt_multi, k)
     finally:
         device.disable_and_clear_program_cache()
+
+
+# ---------------------------------------------------------------------------
+# return_values=True: the op also emits the top-k VALUES (ROW_MAJOR BFLOAT16,
+# sorted descending to match the indices; exact bf16 -inf on sentinel lanes).
+# Default (return_values=False) is unchanged: a single indices tensor from the
+# byte-identical indices-only program.
+# ---------------------------------------------------------------------------
+
+
+def _run_return_values_case(device, torch_input, k, valid_length=None):
+    values, indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, valid_length=valid_length, return_values=True
+    )
+
+    expected_shape = [torch_input.shape[0], k]
+    assert values.dtype == ttnn.bfloat16
+    assert values.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert list(values.shape) == expected_shape
+    _assert_index_metadata(indices, expected_shape)
+
+    torch_values = ttnn.to_torch(values)
+    torch_indices = ttnn.to_torch(indices, dtype=torch.uint32).to(torch.int64)
+
+    search = torch_input if valid_length is None else torch_input[:, :valid_length]
+    ref_values, _ = torch.topk(search.float(), k, dim=-1, largest=True, sorted=True)
+    # Values: exact, order included — both sides sorted descending, so this
+    # holds even under ties (tie index order is unspecified, value order isn't).
+    assert_equal(torch_values.float(), ref_values)
+
+    # Index/value consistency on non-sentinel lanes: input[index] == value.
+    sentinel_mask = torch_indices == 0xFFFFFFFF
+    safe_indices = torch.where(sentinel_mask, torch.zeros_like(torch_indices), torch_indices)
+    gathered = torch.gather(torch_input, dim=-1, index=safe_indices)
+    assert_equal(
+        torch.where(sentinel_mask, torch_values, gathered),
+        torch.where(sentinel_mask, torch_values, torch_values),
+    )
+    # Sentinel lanes must carry exact bf16 -inf values.
+    assert torch.isneginf(torch_values.float()[sentinel_mask]).all()
+    return torch_values, torch_indices
+
+
+@pytest.mark.parametrize(
+    "k,num_rows,n",
+    [
+        (256, 2, 2048),  # llk 512, k < window (row-parallel, contiguous writer path)
+        (512, 2, 4096),  # llk 512 exact (row-parallel)
+        (1024, 2, 8192),  # llk 1024 (row-parallel, reordered writer path)
+        (2048, 2, 8192),  # llk 2048, 2 value tiles per sequence (row-parallel)
+        (1536, 3, 51200),  # k below the llk window at production-like width (row-parallel)
+    ],
+)
+def test_topk_large_indices_return_values_row_parallel(device, k, num_rows, n):
+    torch.manual_seed(0)
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    _run_return_values_case(device, torch_input, k)
+
+
+@pytest.mark.parametrize("k", [512, 2048])
+def test_topk_large_indices_return_values_column_parallel(device, k):
+    # Single wide row engages the column-parallel factory (final-core
+    # materialization emits the values).
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 65536, dtype=torch.bfloat16)
+    _run_return_values_case(device, torch_input, k)
+
+
+@pytest.mark.parametrize("num_rows,n", [(2, 4096), (1, 65536)])  # row-parallel / column-parallel
+def test_topk_large_indices_return_values_neginf_lanes(device, num_rows, n):
+    # 16 finite values, the rest -inf: values must be the finite prefix
+    # descending then exact bf16 -inf; -inf lanes carry the sentinel index.
+    k, finite_count = 512, 16
+    torch_input = torch.full((num_rows, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, :finite_count] = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+
+    torch_values, torch_indices = _run_return_values_case(device, torch_input, k)
+
+    assert torch.isneginf(torch_values.float()[:, finite_count:]).all()
+    assert (torch_indices[:, finite_count:] == 0xFFFFFFFF).all()
+    expected_prefix = torch.arange(finite_count - 1, -1, -1, dtype=torch.int64).unsqueeze(0).repeat(num_rows, 1)
+    assert_equal(torch_indices[:, :finite_count], expected_prefix)
+
+
+def test_topk_large_indices_return_values_valid_length(device):
+    # Bounded search: values come from the prefix only; lanes past the
+    # prefix's capacity are -inf/sentinel even though the stale tail holds
+    # larger finite values.
+    num_rows, n, k, valid_length = 2, 8192, 512, 300
+    torch_input = torch.zeros(num_rows, n, dtype=torch.bfloat16)
+    torch_input[:, :valid_length] = torch.randn(num_rows, valid_length).to(torch.bfloat16)
+    torch_input[:, valid_length:] = 100.0  # stale tail decoys, must never appear
+
+    torch_values, torch_indices = _run_return_values_case(device, torch_input, k, valid_length=valid_length)
+    assert (torch_values.float() < 100.0).all()
+    finite = torch_indices != 0xFFFFFFFF
+    assert torch_indices[finite].max() < valid_length
+
+
+def test_topk_large_indices_default_stays_indices_only(device):
+    # Backward compatibility: without return_values the result is a single
+    # indices tensor (not a tuple/list).
+    torch_input = _make_bf16_exact_input(num_rows=2, n=1024)
+    result = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=512)
+    assert isinstance(result, ttnn.Tensor)
+    _assert_topk_matches_torch(torch_input, result, 512)
+
+
+def test_topk_large_indices_return_values_program_cache(device):
+    # return_values is in the program hash: flipping it compiles a second
+    # program; repeating either flavor reuses its cache entry.
+    torch.manual_seed(0)
+    num_rows, n, k = 2, 8192, 1024
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        ttnn.experimental.topk_large_indices(tt_input, k=k)
+        entries_indices_only = device.num_program_cache_entries()
+        values, indices = ttnn.experimental.topk_large_indices(tt_input, k=k, return_values=True)
+        entries_with_values = device.num_program_cache_entries()
+        assert entries_indices_only > 0
+        assert entries_with_values == entries_indices_only + 1
+
+        # Cache hits for both flavors: no growth, results still correct.
+        result2 = ttnn.experimental.topk_large_indices(tt_input, k=k)
+        values2, indices2 = ttnn.experimental.topk_large_indices(tt_input, k=k, return_values=True)
+        assert device.num_program_cache_entries() == entries_with_values
+
+        ref_values, _ = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+        assert_equal(ttnn.to_torch(values).float(), ref_values)
+        assert_equal(ttnn.to_torch(values2).float(), ref_values)
+        assert_equal(
+            ttnn.to_torch(indices, dtype=torch.uint32).to(torch.int64),
+            ttnn.to_torch(indices2, dtype=torch.uint32).to(torch.int64),
+        )
+        _assert_index_metadata(result2, [num_rows, k])
+    finally:
+        device.disable_and_clear_program_cache()
