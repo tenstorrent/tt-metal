@@ -88,11 +88,6 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         (shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0),
         "Shard shapes must be multiple of TILE_HEIGHT ");
 
-    // Cross-check the host/kernel tile-count contract: the reader pushes Ht*Wt tiles per core and the
-    // compute kernel consumes (and the output CB holds) num_tile_per_core. These are derived
-    // independently (Ht/Wt from the tile-aligned shard dims, num_tile_per_core with a ceil), so a
-    // future shard-shape or arg-plumbing change that breaks the equality surfaces here as an error
-    // instead of a silent device hang.
     TT_FATAL(
         Ht * Wt == num_tile_per_core,
         "bcast sharded-H tile-count mismatch: reader produces Ht*Wt = {} tiles but compute/output CB "
@@ -218,11 +213,8 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
             core,
             {{"Ht", Ht}, {"Wt", Wt}, {"offset", offset}, {"NC", Ht_per_core}, {"batch_offset", tile_offset}});
 
-        // Compute 'B' must be 1: the reader pushes exactly Ht*Wt tiles per core into both input DFBs,
-        // so the compute kernel (bcast_h.cpp loops b<B, h<Ht, w<Wt) must consume exactly Ht*Wt. This
-        // is layout-independent (Ht is the per-core shard height in tiles). Passing the input's N*C
-        // here would make compute wait for N*C*Ht*Wt tiles that no producer ever pushes, deadlocking
-        // whenever N*C > 1.
+        // B=1: the reader pushes Ht*Wt tiles per core, so compute must consume exactly Ht*Wt.
+        // Batch is already folded into the per-core shard height Ht.
         AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"B", 1u}, {"Ht", Ht}, {"Wt", Wt}});
     }
 
