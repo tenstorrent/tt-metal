@@ -335,14 +335,25 @@ def predict_engine(
     Level 2 (device op): select_program_factory, topk_device_operation.cpp:59-115.
     Returns 'routed' | 'multi_core' | 'single_core'.
     """
-    # ---- Level 1: large-k Blackhole route (topk.cpp:247-295) ----
+    # ---- Level 1: Blackhole route (topk.cpp should_route_to_topk_large_indices) ----
     k_rounded16 = _roundup(k, 16)  # large_k_route_k_multiple, topk.cpp:240,:290
+    # Small-k arm (k <= 64): routes only cells structurally ineligible for the
+    # multi-core bitonic — route-time padded width (tile roundup of the
+    # logical width, BEFORE the host min-64 pad) >= 65535 or non-pow2 — with a
+    # measured floor (small_k_route_min_padded_width = 4096). Eligible pow2
+    # cells and cells failing only verify_multi_core_cost keep the stock path.
+    route_padded_w = _roundup(w, 32)
+    small_k_arm = (
+        k <= 64
+        and (route_padded_w >= UINT16_MAX or not _is_pow2(route_padded_w))
+        and route_padded_w >= 4096  # small_k_route_min_padded_width
+    )
     if (
         largest  # topk.cpp:257-259
         and not stable  # topk.cpp:262-264
         and not (user_indices or prealloc or sub_core_grids)  # topk.cpp:267-269
         and dim_last  # topk.cpp:271-273
-        and 64 < k <= 2048  # topk.cpp:236,:238,:274-276
+        and (64 < k <= 2048 or small_k_arm)  # large-k arm + small-k arm
         and dtype == "bf16"  # topk.cpp:277-279
         and tile_layout  # topk.cpp:280-282
         and not sharded  # topk.cpp:283-285
@@ -681,7 +692,11 @@ def _assert_engine(res, engine, cell_id):
 #   routed:       W=8192, k=96 (should_route_to_topk_large_indices)
 # ---------------------------------------------------------------------------
 STOCK_CELLS_TF = [
-    ("single_core", 10000, 32, True),
+    # W=10000 largest=True routes since the small-k arm (non-pow2 >= 4096
+    # floor, topk.cpp should_route_to_topk_large_indices); largest=False and
+    # below-floor widths keep the single-core factory.
+    ("routed", 10000, 32, True),
+    ("single_core", 2000, 32, True),
     ("single_core", 10000, 32, False),
     ("multi_core", 8192, 32, True),
     ("multi_core", 8192, 32, False),
@@ -910,7 +925,7 @@ def test_contract_ties_boundary(engine, W, k, largest, device):
         assert ((vb == wbit).sum(dim=-1) == 1).all(), f"strict winner bits {wbit:#x} missing from some row"
 
 
-ALL_EQUAL_CELLS = [("single_core", 10000, 32, True), ("multi_core", 8192, 32, True)] + (
+ALL_EQUAL_CELLS = [("routed", 10000, 32, True), ("single_core", 2000, 32, True), ("multi_core", 8192, 32, True)] + (
     [("routed", 8192, 96, True)] if FULL else []
 )
 
@@ -937,7 +952,7 @@ def _finite_specials(n, largest, dtype=torch.bfloat16, seed=0):
 
 INFLEAK_STOCK_CELLS = [
     # (cell_id, W, k, largest, finite_count)
-    ("single-W10000-largest", 10000, 32, True, 10),  # 16 pad lanes at [10000,10016)
+    ("single-W2000-largest", 2000, 32, True, 10),  # 16 pad lanes at [2000,2016); below small-k route floor
     ("single-W10000-smallest", 10000, 32, False, 10),  # +inf mirror
     ("single-W63-hostpad", 63, 32, True, 5),  # host-padded to 64 (topk.cpp:503-519)
 ]
@@ -979,7 +994,7 @@ def test_contract_infleak_routed_sentinel(cell_id, W, k, finite, device):
 # determinism — I13: same input, 3 launches (program-cache-hit path),
 # bit-identical values AND indices (tie choice included)
 # ===========================================================================
-DET_CELLS = [("single_core", 10000, 32), ("multi_core", 8192, 32), ("routed", 8192, 96)]
+DET_CELLS = [("single_core", 2000, 32), ("multi_core", 8192, 32), ("routed", 10000, 32), ("routed", 8192, 96)]
 DET_RUNS = 5 if FULL else 3
 
 
@@ -1032,12 +1047,17 @@ GATE_CELLS = [
     ("k2049-single", 8192, 2049, True, "single_core"),
     # pow2 gate (topk_device_operation.cpp:72)
     ("pow2-multi", 8192, 32, True, "multi_core"),
-    ("nonpow2-single", 8224, 32, True, "single_core"),
+    ("nonpow2-routed-smallk", 8224, 32, True, "routed"),
+    ("nonpow2-single-smallest", 8224, 32, False, "single_core"),
+    # small-k arm floor boundary (small_k_route_min_padded_width = 4096)
+    ("smallk-floor-under", 4064, 32, True, "single_core"),
+    ("smallk-floor-over-nonpow2", 4128, 32, True, "routed"),
     # width/index-dtype boundaries: gate is padded width vs 65535
     # (topk_device_operation.cpp:70,:294; topk.cpp:315-318)
-    ("w65504-u16", 65504, 32, True, "single_core"),
-    ("w65534-u32-padded", 65534, 32, True, "single_core"),  # pads to 65536 -> u32
-    ("w65536-pow2-but-u16-gate", 65536, 32, True, "single_core"),
+    ("w65504-u16-routed", 65504, 32, True, "routed"),  # non-pow2 -> small-k arm; padded <= 65535 -> u16
+    ("w65534-u32-padded-routed", 65534, 32, True, "routed"),  # pads to 65536 >= 65535 -> routed, u32
+    ("w65536-routed-smallk", 65536, 32, True, "routed"),  # the 9.49 ms cliff cell, now ~us-class
+    ("w65536-k8-routed", 65536, 8, True, "routed"),  # k_rounded16 = 16 lower bound
     # host-pad path (W < 64 padded to 64, topk.cpp:503-519) + k=W degenerate
     ("w63-hostpad", 63, 32, True, "single_core"),
     ("w64-kW", 64, 64, True, "single_core"),
@@ -1073,7 +1093,7 @@ def test_contract_gates(cell_id, W, k, largest, exp_engine, device):
         )
 
 
-SORTED_NOOP_CELLS = [("single_core", 10000, 32), ("multi_core", 8192, 32), ("routed", 8192, 96)]
+SORTED_NOOP_CELLS = [("single_core", 2000, 32), ("multi_core", 8192, 32), ("routed", 8192, 96)]
 
 
 @pytest.mark.parametrize("engine,W,k", SORTED_NOOP_CELLS, ids=[f"{e}-W{w}-k{k}" for e, w, k in SORTED_NOOP_CELLS])

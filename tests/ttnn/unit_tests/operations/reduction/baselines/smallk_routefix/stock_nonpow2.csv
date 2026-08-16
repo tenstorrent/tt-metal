@@ -1,0 +1,5 @@
+layer,op,batch,n,k,dtype,dim,anchor,expected_factory,cores,baseline_ns_mean,baseline_ns_std,speedup,llk_cyc_per_vec_base,llk_cyc_per_vec_ours,max_abs_err,status,notes
+ttnn,topk,1,5000,32,bf16,-1,,single_core(pred),1,695022.8,32.0,,,,0.0,MEASURED,
+ttnn,topk,1,10000,32,bf16,-1,,single_core(pred),1,1380564.8,35.1,,,,0.0,MEASURED,
+ttnn,topk,1,20000,32,bf16,-1,,single_core(pred),1,2751593.8,32.8,,,,0.0,MEASURED,
+ttnn,topk,1,50000,32,bf16,-1,,single_core(pred),1,6873785.7,79.6,,,,0.0,MEASURED,
