@@ -98,10 +98,10 @@ defect.
 
 | # | one line | fix? | effort |
 |---|---|---|---|
-| **F46** | the profiled decode (`decode_step`, incremental KV, O(1)/frame) and the shipped decode (`run_tts`, full re-prefill of the whole prefix every frame, O(n)/frame) are different algorithms — `decode_step` is called only from the trace harness, never from the demo | **YES — first** | medium |
 | **F45** | `E2E_REQUIRE_TRACE` is satisfied by proving each stage CAN be captured; `run_tts` — the shipped generation path — never calls `execute_trace`, so an eager pipeline (~500 ms/frame per its own README) ships while perf is quoted from trace replay | **YES — first, with F42** | medium |
 | **F44** | the optimize objective times a capture-and-verify harness (eager pass + trace capture + 2 readbacks + release + host PCC, ONE decode step) rather than inference — so capture cost is weighted 4×/iteration and the 24-frame decode that dominates deployment enters once | **YES — with F42/F43** | medium |
 | **F43** | `TRACE_PER_TOKEN_MS` is the per-CALL time, not per token — inflated by OSL (4×) plus prefill; `per_token_ms == forward_wall_ms` in the ledger is the signature, and `tokens_per_sec` inherits it | **YES — with F42** | one line |
+| **F46** | the profiled decode (`decode_step`, incremental KV, O(1)/frame) and the shipped decode (`run_tts`, full re-prefill of the whole prefix every frame, O(n)/frame) are different algorithms — `decode_step` is called only from the trace harness, never from the demo | **YES — first** | medium |
 | **F42** | the correctness gate returned `pcc: 33.612, pcc_verified: true` against threshold 0.99 — no range check anywhere, and the pytest exit code is deliberately ignored, so the regex scrape is the only signal | **YES — first, one line** | trivial |
 | **F6** | `mcp` is **declared nowhere** → all 10 agent tools silently absent → 11 h stall | **YES — first** | trivial |
 | **F2** | the READY verdict can never fire (`lambda _: []`); best compat report = surest failure | **YES** | one line |
@@ -144,7 +144,12 @@ defect.
 | **F40** | the baseline measurement completes (`756.4513 ms`, 8 iters, 4 stages PCC-clean) and is then discarded by a segfault in `close_mesh_device` at teardown; the run reports a missing CSV and optimizes on with no baseline | **YES — with F31** | small |
 | **F41** | the depth-knob sanity check compares op sequences truncated at 50000 and reads the shared limit as "cap never reached the builder"; the knob is also only backbone-deep while its comment claims every stack | **YES** | small |
 
-**If only one thing is taken: F42.** One line of range validation. Without it the correctness gate
+**If only one thing is taken: F46.** The optimize stage spent twelve hours improving a decode
+function the product never calls, while the shipped generation loop recomputes the entire prompt
+plus every prior frame, for every frame. No perf number in this report describes the delivered
+model. F42 is the next one, and is a one-line fix.
+
+**On the correctness half: F42.** One line of range validation. Without it the correctness gate
 can return `pcc_verified: true` on a number that is not a correlation coefficient, and every perf
 win the tool banks rests on that gate. It was found only because the impossible value happened to be
 read by a human; nothing in the system objected.
@@ -4153,6 +4158,45 @@ never calls · reported: not yet
 This subsumes the shape and mode concerns of F44/F45. Those describe a measurement taken at the
 wrong size, in the wrong execution mode. This one is worse: **the code being measured is not the
 code that runs.**
+
+### VERIFIED — the exhaustive check, reproducible in four commands
+
+This claim is large enough that it was checked exhaustively rather than read off one function.
+
+**(a) Every reference to the fast path in the whole demo directory:**
+
+```
+$ grep -rn "decode_step\|decode_prefill" models/demos/voxtral_tts_full --include=*.py
+tests/e2e/test_tts_perf.py:7   docstring: "The unit is ONE decode frame: … decode_step"
+tt/pipeline.py:258             comment on the _kv field
+tt/pipeline.py:470,502,507     definitions + an assert
+tt/pipeline.py:536             self.decode_prefill(...)      <- inside decode_trace_setup
+tt/pipeline.py:545             return self.decode_step(...)  <- inside decode_trace_step
+```
+
+**Two call sites, both inside the trace harness.** Nothing else in the port reaches them.
+
+**(b) The demo calls the other one** — `demo/demo_tts.py:66` is `pipe.run_tts(...)`, and the file's
+own header states: *"Runs the SAME `tt/pipeline.py::run_tts` the e2e test asserts on — there is
+exactly one copy of it."* So demo and correctness test agree with each other, and both differ from
+what is profiled.
+
+**(c) No KV cache exists on the shipped path.** `_stubs/tts_backbone.py` iterates
+`layer(x, causal=True)` with no cache argument, and `_stubs/decoder_layer.py` **accepts a cache and
+discards it**:
+
+```python
+def __call__(self, x, cis=None, bias=None, cache=None):
+    return self.layer(x, causal=bias is not None)     # `cache` is never used
+```
+
+So even if a caller supplied one it would be silently dropped. The `cache`/`cache_key` parameters on
+the attention stub (`_stubs/attention.py:44`) are likewise unreached from `run_tts`.
+
+**(d) Both perf tests target the fast path.** `test_main_perf.py` times `trace_capture_selftest`
+(→ `decode_trace_step` → `decode_step`), and `test_tts_perf.py` says so in its first line: *"The unit
+is ONE decode frame: `tt/pipeline.py::decode_step` advancing a single position against [the resident
+cache]."* Neither times `run_tts`.
 
 ### Two decode implementations, only one of them reachable
 
