@@ -2308,6 +2308,44 @@ def test_cmd_is_device_kernel_classification():
 
 
 @case
+def test_parse_cmd_both_log_formats():
+    # jit_build logs a shell-free `fmt::join(argv," ")` — no `cd <dir> &&` prefix, the
+    # build dir only in `-o`. Pinning just the legacy shape let the tier silently stop
+    # capturing: every TU skipped while the suite stayed green.
+    kt_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kernel_tier"
+    )
+    sys.path.insert(0, kt_dir)
+    import capture
+
+    new = (
+        "/sfpi/bin/riscv-tt-elf-g++ -O3 -I. -DTENSIX_FIRMWARE -c "
+        "-o /home/u/.cache/ttm/ab/brisc/brisc.o /repo/kernel.cpp -MF /x/brisc.d"
+    )
+    cwd, src, incs, defs = capture._parse_cmd(new)
+    assert cwd == "/home/u/.cache/ttm/ab/brisc", cwd
+    assert (src, incs, defs) == ("/repo/kernel.cpp", ["-I."], ["-DTENSIX_FIRMWARE"])
+
+    # legacy shape still works; the cd prefix wins over the -o dirname
+    old = "cd /b && riscv-tt-elf-g++ -I. -c -o brisc.o k.cpp -MF brisc.d"
+    assert capture._parse_cmd(old)[0] == "/b"
+
+    # defines carry LITERAL quotes and must round-trip; shell-splitting strips them
+    argv = [
+        '-DFULL_KERNEL_NAME="ttnn_binary/reader"',
+        '-DKERNEL_COMPILE_TIME_ARG_MAP={"cb",1},',
+    ]
+    _, _, _, defs = capture._parse_cmd(
+        "riscv-tt-elf-g++ " + " ".join(argv) + " -c -o /d/k.o /s/k.cpp"
+    )
+    assert defs == argv, defs
+
+    # a joined -o carrying no directory must not end the scan before the real -o
+    stray = "riscv-tt-elf-g++ -ok.o -c -o /home/u/.cache/ttm/cd/nc/k.o k.cpp"
+    assert capture._parse_cmd(stray)[0] == "/home/u/.cache/ttm/cd/nc", stray
+
+
+@case
 def test_noc_atomic_exit():
     K = "ttnn/cpp/x/writer_fused.cpp"
     # A remote atomic (Semaphore.up, argc>=2) is the last NoC op in kernel_main with

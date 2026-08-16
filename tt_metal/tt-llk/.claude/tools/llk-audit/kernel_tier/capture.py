@@ -29,7 +29,6 @@ import glob
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 
@@ -41,7 +40,8 @@ EXTRACT_TIMEOUT_SEC = (
 )
 
 # The one line tt-metal emits per kernel compile (build.cpp), e.g.
-#   ... g++ compile cmd: cd <dir> && <gpp> <flags> -c -o obj src -MF dep <defines>
+#   ... g++ compile cmd: <gpp> <flags> <defines> -c -o obj src -MF dep
+# A shell-free `fmt::join(argv, " ")`; older logs prefixed it with `cd <dir> && `.
 _CMD_RE = re.compile(r"g\+\+ compile cmd:\s*(.*\S)\s*$")
 
 
@@ -197,15 +197,33 @@ def tu_ledger_status(all_facts: list, pe: int):
 
 
 def _parse_cmd(cmd: str):
-    """From a `cd <dir> && <gpp> ...` command, return (cwd, src, [-I..], [-D..])."""
+    """From a logged compile command, return (cwd, src, [-I..], [-D..]).
+
+    Whitespace-split, never shlex: the log space-joins already-final argv elements
+    whose values carry LITERAL quotes (-DFULL_KERNEL_NAME="<name>" on every kernel,
+    -DKERNEL_COMPILE_TIME_ARG_MAP={"cb",1} for named args), and shell-splitting would
+    strip them. The build dir comes from `-o <dir>/<obj>.o`; a legacy `cd` prefix wins.
+    """
     cwd = None
     m = re.match(r"cd\s+(\S+)\s*&&\s*(.*)", cmd)
     if m:
         cwd, cmd = m.group(1), m.group(2)
-    toks = shlex.split(cmd)[1:]  # drop the compiler (argv0)
+    toks = cmd.split()[1:]  # drop the compiler (argv0)
     incs = [t for t in toks if t.startswith("-I")]
     defs = [t for t in toks if t.startswith("-D")]
     srcs = [t for t in toks if t.endswith((".cc", ".cpp"))]  # the .o is not .cc
+    if cwd is None:
+        for i, t in enumerate(toks):
+            obj = None
+            if t == "-o" and i + 1 < len(toks):
+                obj = toks[i + 1]
+            elif t.startswith("-o") and len(t) > 2:
+                obj = t[2:]
+            # Only stop on a candidate that yields a directory: a joined -o with no
+            # directory component must not end the scan before the real output path.
+            if obj and os.path.dirname(obj):
+                cwd = os.path.dirname(obj)
+                break
     return cwd, (srcs[0] if srcs else None), incs, defs
 
 
@@ -289,15 +307,7 @@ def main(argv=None) -> int:
     with open(facts_path, "w") as merged:
         for cmd in uniq:
             short = cmd[:60]  # single label width — the skip ledgers can't drift
-            # shlex.split (in _parse_cmd) raises ValueError on POSIX-unbalanced
-            # quotes — reachable, since build.cpp single-quotes each -D value without
-            # escaping. Catch it as a NAMED skip of THIS command, not an unhandled
-            # exception that aborts main() and discards EVERY kernel's facts.
-            try:
-                cwd, src, incs, defs = _parse_cmd(cmd)
-            except ValueError:
-                ledger.append((short, "SKIP-noparse", 0, 0))
-                continue
+            cwd, src, incs, defs = _parse_cmd(cmd)
             if not src or not cwd or not os.path.isdir(cwd):
                 ledger.append((short, "SKIP-noparse", 0, 0))
                 continue
