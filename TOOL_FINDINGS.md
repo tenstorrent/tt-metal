@@ -3896,10 +3896,24 @@ what makes this dangerous rather than merely broken — it is right often enough
 {"pcc": {"status": "ok", "pcc": 1.525}}
 ```
 
-**Three instances in roughly ten hours of optimisation — `33.612`, `47.779`, `1.525` — all
-`status: ok`.** This is not rare. Nothing was banked during any of the three windows (the commit
-count held at 9 throughout), but that is luck rather than design: the gate was open each time and
-happened not to be asked for a verdict that mattered.
+**Four instances in roughly twelve hours of optimisation — `33.612`, `47.779`, `1.525`, `11.021` —
+all `status: ok`.** Roughly one every three hours. This is not rare.
+
+**And the reason nothing was banked is not the correctness gate.** In all four windows the *other*
+gate independently said no:
+
+| # | pcc verdict | full_pipeline verdict | banked? |
+|---|---|---|---|
+| 33.612 | ok (bogus) | regressed | no — blocked by perf |
+| 47.779 | ok (bogus) | regressed | no — blocked by perf |
+| 1.525 | ok (bogus) | regressed | no — blocked by perf |
+| 11.021 | ok (bogus) | regressed | no — blocked by perf |
+
+`gates_allow_banking()` requires **both** `pcc.status == "ok"` and `full_pipeline.status == "ok"`.
+The two are meant to be independent checks on different properties. Across four observed instances
+**only one of them was actually functioning**, and it happened to be the one saying no. Had any of
+those edits been faster as well as unverified, it would have been committed as a correctness-checked
+win. The protection here came from the edits being slow, not from the correctness gate.
 
 **The third value is the dangerous one.** `33.612` is self-evidently not a correlation; anyone
 glancing at it would stop. `1.525` looks almost plausible — close enough to unity that a reader
