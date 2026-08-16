@@ -816,7 +816,7 @@ inline void configure_pack(
         1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
-        cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
+        cfg_store(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i, pack_counters.val); // disable auto last generation
     }
 
     pck_edge_offset_u pck_edge_offset;
@@ -824,7 +824,7 @@ inline void configure_pack(
     pck_edge_offset.f.mask = 0xffff;
 
     cfg_store(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, pck_edge_offset.val);
-    cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+    cfg_store(cfg, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32, 0x0); // All packers use row set mapping 0, edge offset 0 mask
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;
