@@ -1,28 +1,55 @@
-# experimental/conv3d/device/kernels/writer.cpp — DEFERRED (design gap)
+# Conv3D weight sharing — migrated at API v11
 
-## Verdict: deferred (helper design gap — NOT migrated, file untouched)
+Date: 2026-08-16
 
-In-scope path: only the `WeightShareMode::Mcast` rectangle-mcast (lines 197-253); the Chain/unicast
-forwarding and Disabled paths are explicitly out of scope.
+## Verdict
 
-The Mcast mode has three roles:
-- **McastSender** (199-246): pre-wait `weights_mcast_sender_sem.wait(mcast_num_dests)` + DRAM read +
-  EXCLUDE_SRC data mcast (count `mcast_num_dests`) + flag `set_multicast` (count `mcast_num_dests`),
-  linked, no barrier (same VC). Structurally a clean `SenderPipe::send()`.
-- **McastReceiver** (247-252) and **McastPassive** (138-148): ack `up(...,1)` + `wait(1)` + `set(0)`,
-  exactly `ReceiverPipe::receive()` with PRE_HANDSHAKE=true (VALID=1, INVALID=0 confirmed).
+Migrated in `a290ce202811f6867a0c18e1ebcb19285369881c`. Only `WeightShareMode::Mcast` moved to
+`Mcast2D`; the Disabled path and the point-to-point Chain transport remain operation-owned and
+unchanged. The historical v7 runtime-recipient-count gap is obsolete because API v11 derives fan-out
+from the runtime rectangle and accepts the ACK override carried by `McastArgs`.
 
-BLOCKER (runtime recipient count — known v7 design gap): `mcast_num_dests` is a **RUNTIME arg**
-(line 93, `get_arg_val<uint32_t>(argidx++)`) used as BOTH the mcast dest count and the sender's
-ack-wait count. The v7 `SenderPipe<NOC_ID, DATA_READY_SEM_ID, NUM_ACTIVE_RECEIVER_CORES, ...>` takes
-`NUM_ACTIVE_RECEIVER_CORES` as a **compile-time template param**. A runtime num_dests cannot be passed.
-Inexpressible (the documented runtime-per-rect-recipient-count gap; cf. gn_v2/welford deferrals).
+## Protocol mapping
 
-The McastReceiver/McastPassive sides ARE individually expressible as ReceiverPipe (no count needed),
-but migrating only the receiver/passive halves while the sender stays raw splits the handshake
-protocol across helper + open-code for marginal gain — the SenderPipe emitter, the heart of the block,
-is the gap. Defer the whole kernel.
+- Each logical group strip is one independent dense `Mcast2D` rectangle with a fixed, staggered sender.
+  The host retains the original semaphore allocation order and adopts those IDs as helper data-ready
+  and consumer-ready semaphores.
+- One representative helper compile-time block is appended after the three TensorAccessor blocks. Each
+  group is asserted active and compile-time-identical to the representative, so all strips safely share
+  one writer binary.
+- The four-word helper runtime block starts at operation slot 19 on every core, including Chain and
+  Disabled modes. The kernel resumes operation-owned parsing at
+  `WeightMcastArgs::next_runtime_args_offset()`; the trailing iteration/worker ABI remains fixed.
+- The sender reads the weight block from DRAM, then uses default `SourceL1Guard` for
+  `send(local_addr, local_addr, bytes)`. This preserves source lifetime until the next receiver-ACK gate;
+  using caller-managed source lifetime here would permit the next DRAM fill to reuse the one-block CB
+  before the next round's ACK wait.
+- Active and passive receivers call the helper receiver once per multicast iteration. Passive cores
+  consume no CB slots and retain the original final atomic barrier.
+- The factory asserts that the weight CB is allocated over the complete core rectangle. Therefore every
+  destination—including passive cores—has a valid, identical destination L1 address.
 
-Sem ids (weights_mcast_sender_sem_id / receiver_sem_id) ARE compile-time — not the blocker.
+## Validation
 
-## Action: no edit, ledger status=deferred, flag design-gap.
+- Production LOC: factory 44 additions / 49 deletions; kernel 15 additions / 58 deletions.
+- `./build_metal.sh` passed.
+- A cold exact `k333_s111_g1_zeros_c64_c64` run passed with PCC `0.9999914190473849` and 0/25 JIT
+  hits. Compile output identified the writer's Mcast variant (`CT[22]=2`) on NOC1, proving the intended
+  branch was newly built.
+- The focused shape sweep passed 12/12. The complete unit file passed 27 with one pre-existing
+  Blackhole skip. The complete nightly file passed 1606 with five expected skips and two pre-existing
+  width-sharded page-alignment xfails.
+- Shared guards passed: `McastHostFixture.*` 32/32, `test_mcast_pipe.py` 80/80 under Watcher, and the
+  source audit 18/18 after adding the Conv3D fixed-ABI guard.
+- Matched Tracy at 800 MHz used three independent 25-iteration sessions per source state and shape,
+  discarding the first five Conv3d samples in every session:
+  - non-grouped `k333_s222_g1_zeros_c64_c64`: raw 14,977 ns, migrated 14,855 ns, -0.815%;
+  - grouped `k333_s111_g4_replicate_c64_c64`: raw 70,343 ns, migrated 70,133.5 ns, -0.298%.
+
+## Claude consultation
+
+The architecture review returned REVISE and required default `SourceL1Guard`, complete rectangle CB
+allocation, a fixed four-word helper ABI with named next offset, compile-time equality checks across
+strips, and adoption of the existing semaphore IDs without changing allocation order. All five were
+implemented. Two broad final-review attempts timed out without verdict and were not treated as approval;
+a final bounded decision returned PASS, API EXPANSION NO, LEDGER YES.

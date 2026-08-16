@@ -647,6 +647,28 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
       "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified"]
+    },
+    {
+      "id": "conv3d:weight-share-mcast",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp",
+      "dispatch": "WeightShareMode::Mcast group strips; fixed sender with active and passive receivers",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp"
+      ],
+      "migration_unit": "conv3d-weight-sharing-mcast",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a290ce202811f6867a0c18e1ebcb19285369881c",
+      "validation_set": [
+        "fresh-JIT exact Mcast writer route passed with PCC 0.9999914190473849 and CT variant Mcast/NOC1 proof",
+        "focused shape sweep 12/12; complete unit file 27 passed / 1 pre-existing skip",
+        "complete nightly file 1606 passed / 5 expected skips / 2 pre-existing width-sharded page-alignment xfails",
+        "helper guards: McastHostFixture 32/32, device suite under Watcher 80/80, source audit 18/18 with Conv3D fixed-ABI guard",
+        "matched 800 MHz Tracy: non-grouped -0.815%, grouped -0.298%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified", "chain-path-out-of-scope"]
     }
   ],
   "entries": [
@@ -1053,18 +1075,27 @@
       "op_family": "conv",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a290ce202811f6867a0c18e1ebcb19285369881c",
       "validation_set": [
-        "tests/ttnn/unit_tests/operations/conv/test_conv3d.py"
+        "./build_metal.sh: passed",
+        "fresh-JIT exact k333_s111_g1_zeros_c64_c64 passed with PCC 0.9999914190473849 and Mcast/NOC1 writer compile proof",
+        "focused shape sweep: 12 passed",
+        "tests/ttnn/unit_tests/operations/conv/test_conv3d.py: 27 passed / 1 pre-existing Blackhole skip",
+        "tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py: 1606 passed / 5 expected skips / 2 pre-existing width-sharded page-alignment xfails",
+        "McastHostFixture 32/32; test_mcast_pipe.py 80/80 under Watcher; source audit 18/18 with Conv3D fixed-ABI guard",
+        "800 MHz matched Tracy non-grouped median of three run medians: raw 14977 ns vs migrated 14855 ns (-0.815%)",
+        "800 MHz matched Tracy grouped median of three run medians: raw 70343 ns vs migrated 70133.5 ns (-0.298%)"
       ],
-      "coverage_confidence": "med",
-      "last_verified": "2026-06-20",
-      "inventory_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope | DEFER-DESIGN-GAP: Mcast-mode McastSender emitter uses mcast_num_dests as a RUNTIME arg (get_arg_val, line 93) for both mcast dest count and ack wait, but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param. Runtime recipient count inexpressible. Receiver/Passive halves are ReceiverPipe-expressible but not worth splitting the protocol. Needs helper change (out of scope).",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Only WeightShareMode::Mcast migrated at API v11. Each group strip is an independent fixed-sender Mcast2D; active and passive receiver roles use the helper, while Chain unicast forwarding and Disabled/local loading remain unchanged and out of helper scope. The host asserts complete weight-CB rectangle allocation and identical helper CT words across strips; all modes retain one unconditional four-word helper RT block.",
       "flags": [
-        "tier:2b",
-        "design-gap"
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "chain-path-out-of-scope"
       ]
     },
     {

@@ -285,6 +285,15 @@
       "migration_unit": "group-attn-matmul-rotating-mcast",
       "inventory": ["GROUP-ATTN-MATMUL"],
       "coverage": "complete; exact fresh-cache helper JIT proof, 322 passed / 132 expected skips, and matched q16/q48 performance gates passed 2026-08-16"
+    },
+    {
+      "id": "conv3d:weight-share-mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp",
+      "dispatch": "WeightShareMode::Mcast group strips with sender, active receiver, and passive receiver roles",
+      "migration_unit": "conv3d-weight-sharing-mcast",
+      "inventory": ["CONV3D-WEIGHT-MCAST"],
+      "coverage": "complete; exact fresh-cache writer proof, focused and complete correctness, and matched grouped/non-grouped performance passed 2026-08-16"
     }
   ],
   "inventory_definitions": {
@@ -485,6 +494,24 @@
         "remaining duplicate COL_MAJOR cases with both inputs interleaved": 36
       },
       "result": "322 passed, 132 expected skips, 299 deselected; warm JIT 351/351"
+    },
+    "CONV3D-WEIGHT-MCAST": {
+      "paths": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv3d.py",
+        "tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py"
+      ],
+      "compile_focused": "k333_s111_g1_zeros_c64_c64 from an empty isolated TT_METAL_CACHE; writer artifact must encode WeightShareMode::Mcast and NOC1",
+      "tests": [
+        "focused 12-shape sweep spanning grouped/non-grouped routes and padding/stride variants",
+        "complete unit file",
+        "complete nightly file"
+      ],
+      "expected_nonpasses": {
+        "unit Blackhole skip": 1,
+        "nightly expected skips": 5,
+        "nightly pre-existing width-sharded page-alignment xfails": 2
+      },
+      "result": "focused 12 passed; unit 27 passed / 1 skip; nightly 1606 passed / 5 skips / 2 xfails"
     }
   },
   "additional_candidate_routes": [
@@ -492,11 +519,6 @@
       "candidate": "reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
       "confidence": "discovery-only",
       "route": "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py; confirm the exact JIT path"
-    },
-    {
-      "candidate": "experimental/conv3d writer.cpp",
-      "confidence": "discovery-only",
-      "route": "tests/ttnn/unit_tests/operations/conv/test_conv3d.py; parallelism mode is derived, so confirm the full JIT path"
     },
     {
       "candidate": "sdpa reader_interleaved.cpp",
@@ -706,6 +728,13 @@
       "inventory": "GROUP-ATTN-MATMUL",
       "coverage": "high; exact fresh-cache helper JIT proof, complete group-attention inventory, and two matched performance routes",
       "result": "API v11 migrated; exact --dev passed, complete inventory 322 passed / 132 expected skips, q16 -32.20%, q48 -27.31%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
+      "status": "migrated",
+      "inventory": "CONV3D-WEIGHT-MCAST",
+      "coverage": "high; exact fresh-cache Mcast/NOC1 writer proof, focused and complete Conv3D inventories, and two matched performance routes",
+      "result": "API v11 migrated; focused 12 passed, unit 27 passed / 1 skip, nightly 1606 passed / 5 skips / 2 xfails, non-grouped -0.815%, grouped -0.298%"
     }
   ],
   "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."

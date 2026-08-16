@@ -138,17 +138,30 @@ The independently verified API-v11 decision was KEEP:
 Correctness, fresh-JIT, LOC, build, and two matched 800 MHz performance gates all passed. API expansion:
 NO.
 
+### C7 — Tier 2.9 Conv3D weight sharing
+
+The initial architectural consultation returned REVISE. It required the migration to use default
+`SourceL1Guard`, prove that the weight CB exists on every rectangle core, keep an unconditional
+four-word helper runtime ABI and resume through `next_runtime_args_offset()`, assert that every group
+strip shares the representative compile-time helper configuration, and adopt the existing semaphore IDs
+without changing descriptor allocation order. All five conditions were implemented before validation.
+
+Two broad post-validation reviews timed out after three minutes and 150 seconds without verdict; neither
+was treated as approval. A final bounded, fact-complete review returned PASS, API EXPANSION NO, LEDGER
+YES. Claude confirmed that active Mcast roles use existing API-v11 `Mcast2D`, the Chain/Disabled paths
+remain untouched, and the evidence justifies write-back.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 20 migrated, 2 pending, 82 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 21 migrated, 2 pending, 81 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
 | Tier 2.7 DRAM-sharded Matmul | deferred-design-gap | API v11 cannot preserve sender-only EXCLUDE plus type-2 signal-only INCLUDE behavior; API expansion is not authorized |
 | Tier 2.8 group-attention Matmul | complete | API v11 at `6e8eb763885`; exact/full correctness, fresh JIT, barrier proof, and both matched performance gates passed |
-| Tier 2.9 Conv3D weight sharing | pending | Required behavior and test collection not started |
+| Tier 2.9 Conv3D weight sharing | complete | API v11 at `a290ce20281`; exact/full correctness, fresh JIT, helper guards, and both matched performance gates passed |
 
 ## Chronological findings
 
@@ -225,3 +238,21 @@ NO.
     plus post-Flag full barrier explains the measured speedup; both profiles retained 25 operation rows
     and 110 cores. The 132 skips are 96 optional-preallocated sharded-output exclusions plus 36 remaining
     duplicate COL_MAJOR interleaved-input cases.
+20. Migrated Tier 2.9 in `a290ce20281`: each Conv3D weight-sharing group strip is now an independent
+    fixed-sender `Mcast2D`. The factory adopts the existing semaphore IDs, appends helper CT arguments
+    after the three TensorAccessor blocks, and supplies one fixed four-word helper RT block at slot 19
+    for every mode. The kernel resumes through the helper's named next offset. Chain unicast forwarding
+    and Disabled/local loading remain unchanged. Production files shrank independently (factory 49
+    deletions / 44 additions; kernel 58 deletions / 15 additions).
+21. The sender uses default `SourceL1Guard` because its one-block CB can be refilled before the next
+    iteration's ACK wait. The host now asserts that all rectangle cores own the weight CB and that every
+    exact group helper is active and compile-time-identical to the representative. Passive receivers use
+    semaphore-only `receive()` iterations and retain the final atomic barrier.
+22. Tier 2.9 validation passed: Release build; a zero-hit exact Mcast/NOC1 writer compile with PCC
+    `0.9999914190473849`; 12/12 focused shapes; unit 27 passed / 1 pre-existing skip; nightly 1606 passed
+    / 5 expected skips / 2 pre-existing width-sharded page-alignment xfails; helper host 32/32, helper
+    device 80/80 under Watcher, and source audit 18/18 after adding the Conv3D fixed-ABI guard.
+23. Matched 800 MHz Tracy used three independent 25-iteration sessions per source state and shape,
+    discarding the first five Conv3d samples per session. The non-grouped median improved from 14,977 ns
+    to 14,855 ns (-0.815%); the grouped median improved from 70,343 ns to 70,133.5 ns (-0.298%). Claude's
+    final decision was PASS with no API expansion and approval for ledger write-back.

@@ -6,6 +6,21 @@ feedback round lands.
 
 ---
 
+## Round 30 — approved Tier 0/1/2 rollout completion (2026-08-16)
+
+- Reconciled the approved plan inventory to 104 kernel paths, advanced the existing migrated fleet to
+  API v11 after complete verification, and retained the two interleaved Matmul paths as pending because
+  their historical matched-performance checkout was not separately authorized.
+- Completed Tier 0.2 block-sharded Matmul, Tier 1.6 DeepSeek sampling, Tier 2.8 rotating group-attention
+  Matmul, and Tier 2.9 Conv3D weight multicast. Tier 2.7 DRAM-sharded Matmul remains deferred because
+  preserving its forced self-inclusion/exclusion combinations would require an unauthorized API change.
+- Conv3D commit `a290ce20281` replaces only the rectangle weight multicast with fixed-sender `Mcast2D`
+  instances. Chain and Disabled modes remain unchanged. Build, fresh-JIT, focused and complete Conv3D
+  correctness, 32 host tests, 80 Watcher device tests, 18 source audits, and two matched 800 MHz
+  performance routes passed; non-grouped and grouped medians improved 0.815% and 0.298%.
+- The helper API remains v11. Final rollout state: 21 migrated, 2 pending, and 81 deferred kernel rows;
+  21 migrated and 5 pending host bindings.
+
 ## Round 29 — revert experimental Conv streaming send (2026-08-14)
 
 - Reverted the complete experimental chain with commits `f003c5c3687`,

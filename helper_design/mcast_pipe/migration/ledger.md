@@ -17,9 +17,9 @@ its plan-mandated historical matched performance baseline requires a separately 
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v11 | 20 | 20 |
+| migrated at ledger API v11 | 21 | 21 |
 | pending | 2 | 5 |
-| deferred | 82 | 0 |
+| deferred | 81 | 0 |
 | quarantined | 0 | 0 |
 
 All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
@@ -59,6 +59,11 @@ not authorized. Tier 2.8 `group-attn-matmul-rotating-mcast` is migrated at v11 i
 Fresh-JIT and complete correctness passed (322 passed / 132 categorized expected skips), as did the
 helper/source/host guards. Matched 800 MHz q16 and q48 device-kernel medians improved 32.20% and 27.31%.
 
+Tier 2.9 `conv3d-weight-sharing-mcast` is migrated at v11 in `a290ce20281`. The fixed-sender group
+strips now use independent `Mcast2D` objects with an unconditional four-word runtime ABI; Chain and
+Disabled paths remain unchanged. Fresh-JIT, focused and complete correctness, and all helper guards
+passed. Matched 800 MHz non-grouped and grouped medians improved 0.815% and 0.298%.
+
 ## Closed `needs_recheck`
 
 | Unit | Kernels | Reason |
@@ -86,7 +91,7 @@ design gap and continues to use the established raw primitive path.
 
 ## Deferred backlog
 
-Eighty-two entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+Eighty-one entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
 The major classes are:
 
 - genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;
@@ -98,7 +103,8 @@ Before changing the helper for any deferred kernel, state the required behavior 
 current implementation and verify that the existing helper cannot express it through a different
 factory, ABI, channel split, or data flow.
 
-## Next action
+## Scoped rollout complete
 
-Proceed with approved Tier 2.9 Conv3D weight sharing. Keep the two interleaved Matmul kernels and five
-bindings pending until a future instruction separately authorizes the historical performance checkout.
+Tier 0, Tier 1.6, and Tier 2.7-2.9 have reached their approved terminal dispositions. Keep the two
+interleaved Matmul kernels and five bindings pending until a future instruction separately authorizes
+the historical performance checkout.

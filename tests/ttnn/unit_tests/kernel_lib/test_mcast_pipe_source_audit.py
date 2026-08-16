@@ -188,6 +188,18 @@ def test_block_sharded_matmul_keeps_receiver_geometry_separate_from_sender_span(
     assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_2d, re.DOTALL)
 
 
+def test_conv3d_mcast_preserves_fixed_abi_and_scoped_weight_share_modes():
+    factory = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp").read_text()
+    kernel = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp").read_text()
+
+    assert "using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 19>;" in kernel
+    assert "argidx = WeightMcastArgs::next_runtime_args_offset();" in kernel
+    assert "writer_args.append(weights_mcast_runtime_args);" in factory
+    assert "weights_mcast_template.runtime_args(core)" in factory
+    assert "mcast_bbox_start_x" not in factory + kernel
+    assert "mcast_num_dests" not in factory + kernel
+
+
 def test_sender_pipe_degenerate_copy_preserves_async_write_semantics():
     source = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.inl").read_text()
     start = source.index("    local_copy_(uint32_t src_l1")
