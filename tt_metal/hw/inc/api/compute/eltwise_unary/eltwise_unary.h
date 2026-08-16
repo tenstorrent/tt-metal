@@ -46,7 +46,7 @@ namespace ckernel {
 // clang-format on
 [[deprecated(
     "Use compute_kernel_hw_startup(icb, ocb) once at kernel start, then copy_init(icb). This will be removed after "
-    "15-09-2026.")]] ALWI void
+    "20-09-2026.")]] ALWI void
 unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     compute_kernel_hw_startup(icb, ocb);
     copy_init(icb, 0 /*transpose*/, 0 /*transpose_within_16x16_face*/, call_line);
@@ -67,7 +67,7 @@ unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_
 // clang-format on
 [[deprecated(
     "Use compute_kernel_hw_startup(icb, ocb) once at kernel start, then copy_init(icb). This will be removed after "
-    "15-09-2026.")]] ALWI void
+    "20-09-2026.")]] ALWI void
 init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     compute_kernel_hw_startup(icb, ocb);
     copy_init(icb, 0 /*transpose*/, 0 /*transpose_within_16x16_face*/, call_line);

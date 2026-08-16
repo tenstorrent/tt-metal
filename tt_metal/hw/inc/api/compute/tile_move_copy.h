@@ -157,7 +157,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  * | cbid     | The identifier of the input circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-[[deprecated("Renamed to copy_init(). This will be removed after 15-09-2026.")]] ALWI void copy_tile_init(
+[[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
     uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     copy_init(cbid, 0, false, call_line);
@@ -176,7 +176,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face       | uint32_t | Any positive value will indicate transpose within 16x16 face is set | False    |
  */
 // clang-format on
-[[deprecated("Renamed to copy_init(). This will be removed after 15-09-2026.")]] ALWI void copy_tile_to_dst_init_short(
+[[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_to_dst_init_short(
     uint32_t cbid,
     uint32_t transpose = 0,
     uint32_t transpose_within_16x16_face = false,
@@ -201,7 +201,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
 #ifndef ARCH_QUASAR
 [[deprecated(
     "Call reconfig_data_format_srca(old, new) then copy_init(new, transpose). This will be removed after "
-    "15-09-2026.")]] ALWI void
+    "20-09-2026.")]] ALWI void
 copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
     LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
