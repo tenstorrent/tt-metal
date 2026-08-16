@@ -1,0 +1,212 @@
+[
+  {
+    "depth": 128,
+    "k_chunk": null,
+    "worst_user_pcc": 0.9996998310089111
+  },
+  {
+    "depth": 128,
+    "k_chunk": 32,
+    "worst_user_pcc": 0.9996819496154785
+  },
+  {
+    "depth": 128,
+    "k_chunk": 64,
+    "worst_user_pcc": 0.9996978640556335
+  },
+  {
+    "depth": 128,
+    "k_chunk": 128,
+    "worst_user_pcc": 0.9996978640556335
+  },
+  {
+    "depth": 128,
+    "k_chunk": 256,
+    "worst_user_pcc": 0.9996978640556335
+  },
+  {
+    "depth": 128,
+    "k_chunk": 512,
+    "worst_user_pcc": 0.9996978640556335
+  },
+  {
+    "depth": 128,
+    "k_chunk": 1024,
+    "worst_user_pcc": 0.9996978640556335
+  },
+  {
+    "depth": 256,
+    "k_chunk": null,
+    "worst_user_pcc": 0.9996821880340576
+  },
+  {
+    "depth": 256,
+    "k_chunk": 32,
+    "worst_user_pcc": 0.9996885657310486
+  },
+  {
+    "depth": 256,
+    "k_chunk": 64,
+    "worst_user_pcc": 0.9996809959411621
+  },
+  {
+    "depth": 256,
+    "k_chunk": 128,
+    "worst_user_pcc": 0.9996809959411621
+  },
+  {
+    "depth": 256,
+    "k_chunk": 256,
+    "worst_user_pcc": 0.9996809959411621
+  },
+  {
+    "depth": 256,
+    "k_chunk": 512,
+    "worst_user_pcc": 0.9996809959411621
+  },
+  {
+    "depth": 256,
+    "k_chunk": 1024,
+    "worst_user_pcc": 0.9996809959411621
+  },
+  {
+    "depth": 512,
+    "k_chunk": null,
+    "worst_user_pcc": 0.9995964765548706
+  },
+  {
+    "depth": 512,
+    "k_chunk": 32,
+    "worst_user_pcc": 0.9995904564857483
+  },
+  {
+    "depth": 512,
+    "k_chunk": 64,
+    "worst_user_pcc": 0.9995967149734497
+  },
+  {
+    "depth": 512,
+    "k_chunk": 128,
+    "worst_user_pcc": 0.9995967149734497
+  },
+  {
+    "depth": 512,
+    "k_chunk": 256,
+    "worst_user_pcc": 0.9995967149734497
+  },
+  {
+    "depth": 512,
+    "k_chunk": 512,
+    "worst_user_pcc": 0.9995967149734497
+  },
+  {
+    "depth": 512,
+    "k_chunk": 1024,
+    "worst_user_pcc": 0.9995967149734497
+  },
+  {
+    "depth": 1024,
+    "k_chunk": null,
+    "worst_user_pcc": 0.9996398091316223
+  },
+  {
+    "depth": 1024,
+    "k_chunk": 32,
+    "worst_user_pcc": 0.9996707439422607
+  },
+  {
+    "depth": 1024,
+    "k_chunk": 64,
+    "worst_user_pcc": 0.9996419548988342
+  },
+  {
+    "depth": 1024,
+    "k_chunk": 128,
+    "worst_user_pcc": 0.9996419548988342
+  },
+  {
+    "depth": 1024,
+    "k_chunk": 256,
+    "worst_user_pcc": 0.9996419548988342
+  },
+  {
+    "depth": 1024,
+    "k_chunk": 512,
+    "worst_user_pcc": 0.9996419548988342
+  },
+  {
+    "depth": 1024,
+    "k_chunk": 1024,
+    "worst_user_pcc": 0.9996419548988342
+  },
+  {
+    "depth": 2048,
+    "k_chunk": null,
+    "worst_user_pcc": 0.9996911287307739
+  },
+  {
+    "depth": 2048,
+    "k_chunk": 32,
+    "worst_user_pcc": 0.9995918869972229
+  },
+  {
+    "depth": 2048,
+    "k_chunk": 64,
+    "worst_user_pcc": 0.9996903538703918
+  },
+  {
+    "depth": 2048,
+    "k_chunk": 128,
+    "worst_user_pcc": 0.9996903538703918
+  },
+  {
+    "depth": 2048,
+    "k_chunk": 256,
+    "worst_user_pcc": 0.9996903538703918
+  },
+  {
+    "depth": 2048,
+    "k_chunk": 512,
+    "worst_user_pcc": 0.9996903538703918
+  },
+  {
+    "depth": 2048,
+    "k_chunk": 1024,
+    "worst_user_pcc": 0.9996903538703918
+  },
+  {
+    "depth": 4096,
+    "k_chunk": null,
+    "worst_user_pcc": 0.9995946884155273
+  },
+  {
+    "depth": 4096,
+    "k_chunk": 32,
+    "worst_user_pcc": 0.9996724724769592
+  },
+  {
+    "depth": 4096,
+    "k_chunk": 64,
+    "worst_user_pcc": 0.9995958209037781
+  },
+  {
+    "depth": 4096,
+    "k_chunk": 128,
+    "worst_user_pcc": 0.9995958209037781
+  },
+  {
+    "depth": 4096,
+    "k_chunk": 256,
+    "worst_user_pcc": 0.9995958209037781
+  },
+  {
+    "depth": 4096,
+    "k_chunk": 512,
+    "worst_user_pcc": 0.9995958209037781
+  },
+  {
+    "depth": 4096,
+    "k_chunk": 1024,
+    "worst_user_pcc": 0.9995958209037781
+  }
+]

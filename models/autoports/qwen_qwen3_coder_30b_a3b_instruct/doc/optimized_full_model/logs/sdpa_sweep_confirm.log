@@ -1,0 +1,143 @@
+2026-08-15 06:09:24.911 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:09:25.496 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:09:25.496 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:09:25.496 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:09:25.496 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:09:25.507 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 06:09:25.507 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:09:25.586 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:09:25.586 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:09:25.586 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:09:25.586 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:09:25.588 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:09:25.828 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:09:25.944 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:09:25.944 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:09:25.944 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:09:25.944 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:09:25.944 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+
+=== cur_pos 127 ===
+  None           23.71 us (min    23.67 max    24.07)    1.00x  PCC 0.999674
+  k512/c16       19.78 us (min    19.76 max    20.02)    1.20x  PCC 0.999716
+  k1024/c16      27.28 us (min    27.25 max    27.88)    0.87x  PCC 0.999716
+  k256/c16       21.61 us (min    21.38 max    22.58)    1.10x  PCC 0.999716
+  k512/c32       20.70 us (min    20.56 max    24.10)    1.15x  PCC 0.999716
+  k512/c8        21.83 us (min    19.29 max    22.36)    1.09x  PCC 0.999716
+  k32/c8         20.22 us (min    19.10 max    20.60)    1.17x  PCC 0.999692
+  k128/c32       24.06 us (min    21.26 max    25.90)    0.99x  PCC 0.999716
+
+=== cur_pos 255 ===
+  None           37.57 us (min    37.54 max    37.72)    1.00x  PCC 0.999766
+  k512/c16       20.27 us (min    19.71 max    22.97)    1.85x  PCC 0.999735
+  k1024/c16      27.33 us (min    27.30 max    27.39)    1.37x  PCC 0.999735
+  k256/c16       22.01 us (min    17.69 max    23.13)    1.71x  PCC 0.999735
+  k512/c32       20.60 us (min    20.48 max    20.76)    1.82x  PCC 0.999735
+  k512/c8        19.37 us (min    19.30 max    22.91)    1.94x  PCC 0.999735
+  k32/c8         22.83 us (min    22.78 max    24.49)    1.65x  PCC 0.999639
+  k128/c32       21.54 us (min    19.37 max    24.70)    1.74x  PCC 0.999726
+
+=== cur_pos 511 ===
+  None           65.23 us (min    65.20 max    65.44)    1.00x  PCC 0.999677
+  k512/c16       19.73 us (min    19.70 max    21.73)    3.31x  PCC 0.999711
+  k1024/c16      27.38 us (min    27.23 max    29.10)    2.38x  PCC 0.999711
+  k256/c16       19.20 us (min    18.90 max    23.34)    3.40x  PCC 0.999739
+  k512/c32       21.12 us (min    20.68 max    25.75)    3.09x  PCC 0.999711
+  k512/c8        19.59 us (min    19.31 max    21.44)    3.33x  PCC 0.999711
+  k32/c8         26.41 us (min    26.36 max    26.45)    2.47x  PCC 0.999704
+  k128/c32       20.99 us (min    20.36 max    26.94)    3.11x  PCC 0.999708
+
+=== cur_pos 1023 ===
+  None          120.72 us (min   120.47 max   120.88)    1.00x  PCC 0.999740
+  k512/c16       23.51 us (min    22.26 max    24.07)    5.13x  PCC 0.999678
+  k1024/c16      27.37 us (min    27.33 max    27.45)    4.41x  PCC 0.999637
+  k256/c16       21.91 us (min    21.85 max    22.56)    5.51x  PCC 0.999687
+  k512/c32       23.15 us (min    23.03 max    26.89)    5.22x  PCC 0.999678
+  k512/c8        21.87 us (min    21.85 max    22.37)    5.52x  PCC 0.999678
+  k32/c8         33.31 us (min    33.23 max    33.47)    3.62x  PCC 0.999685
+  k128/c32       24.48 us (min    23.86 max    24.78)    4.93x  PCC 0.999696
+
+=== cur_pos 2047 ===
+  None          231.16 us (min   231.11 max   231.43)    1.00x  PCC 0.999708
+  k512/c16       25.53 us (min    25.39 max    25.60)    9.06x  PCC 0.999748
+  k1024/c16      29.73 us (min    29.55 max    30.58)    7.78x  PCC 0.999695
+  k256/c16       25.40 us (min    25.37 max    25.49)    9.10x  PCC 0.999727
+  k512/c32       26.48 us (min    26.15 max    28.23)    8.73x  PCC 0.999748
+  k512/c8        25.05 us (min    25.03 max    25.35)    9.23x  PCC 0.999748
+  k32/c8         47.07 us (min    47.02 max    47.13)    4.91x  PCC 0.999733
+  k128/c32       27.91 us (min    27.85 max    28.09)    8.28x  PCC 0.999753
+
+=== cur_pos 4095 ===
+  None          453.96 us (min   453.89 max   454.12)    1.00x  PCC 0.999462
+  k512/c16       28.91 us (min    28.88 max    29.00)   15.70x  PCC 0.999657
+  k1024/c16      32.44 us (min    32.39 max    32.51)   14.00x  PCC 0.999572
+  k256/c16       29.38 us (min    29.33 max    29.43)   15.45x  PCC 0.999629
+  k512/c32       29.75 us (min    29.65 max    29.87)   15.26x  PCC 0.999657
+  k512/c8        28.60 us (min    28.54 max    28.61)   15.87x  PCC 0.999657
+  k32/c8         74.37 us (min    74.35 max    74.60)    6.10x  PCC 0.999647
+  k128/c32       33.46 us (min    33.35 max    33.50)   13.57x  PCC 0.999635
+
+=== cur_pos 8191 ===
+  None          897.94 us (min   897.76 max   898.07)    1.00x  PCC 0.998972
+  k512/c16       33.18 us (min    33.07 max    71.47)   27.06x  PCC 0.999589
+  k1024/c16      35.77 us (min    35.64 max    36.11)   25.11x  PCC 0.999548
+  k256/c16       34.66 us (min    34.63 max    34.76)   25.91x  PCC 0.999580
+  k512/c32       33.89 us (min    33.84 max    33.99)   26.50x  PCC 0.999589
+  k512/c8        35.99 us (min    35.91 max    36.15)   24.95x  PCC 0.999609
+  k32/c8        129.07 us (min   129.05 max   129.15)    6.96x  PCC 0.999601
+  k128/c32       37.92 us (min    37.73 max    37.99)   23.68x  PCC 0.999608
+
+=== cur_pos 16383 ===
+  None         1785.86 us (min  1785.71 max  1786.39)    1.00x  PCC 0.993455
+  k512/c16       41.07 us (min    40.95 max    41.27)   43.49x  PCC 0.999558
+  k1024/c16      40.44 us (min    40.41 max    40.75)   44.16x  PCC 0.999516
+  k256/c16       45.21 us (min    45.09 max    45.22)   39.50x  PCC 0.999564
+  k512/c32       43.33 us (min    43.30 max    43.50)   41.22x  PCC 0.999573
+  k512/c8        50.83 us (min    50.80 max    50.97)   35.13x  PCC 0.999601
+  k32/c8        239.56 us (min   239.47 max   239.61)    7.45x  PCC 0.999533
+  k128/c32       46.27 us (min    46.06 max    46.97)   38.59x  PCC 0.999591
+
+=== cur_pos 32767 ===
+  None         3561.91 us (min  3560.88 max  3562.59)    1.00x  PCC 0.990526
+  k512/c16       55.92 us (min    55.88 max    56.24)   63.69x  PCC 0.999666
+  k1024/c16      55.38 us (min    55.20 max    55.69)   64.32x  PCC 0.999633
+  k256/c16       66.08 us (min    66.04 max    66.36)   53.91x  PCC 0.999694
+  k512/c32       56.78 us (min    56.72 max    57.13)   62.73x  PCC 0.999667
+  k512/c8        80.73 us (min    80.67 max    80.89)   44.12x  PCC 0.999666
+  k32/c8        459.81 us (min   459.47 max   460.61)    7.75x  PCC 0.999536
+  k128/c32       62.67 us (min    62.55 max    62.96)   56.83x  PCC 0.999680
+nanobind: leaked 1 instances!
+ - leaked instance 0x752b927ea268 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function "item"
+ - leaked function "is_allocated"
+ - leaked function ""
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "create_matmul_attributes"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:09:31.074 | info     |    BuildKernels | JIT cache stats: 58/58 hits (100.0%) [58 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:09:31.074 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:09:31.091 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:09:31.091 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:09:31.661 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:09:31.661 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:09:31.661 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

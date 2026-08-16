@@ -1,0 +1,377 @@
+2026-08-15 04:01:13.529 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 04:01:13.657 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 04:01:13.657 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 04:01:13.657 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 04:01:13.657 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 04:01:13.668 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 04:01:13.669 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 04:01:13.747 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 04:01:13.747 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 04:01:13.747 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 04:01:13.747 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 04:01:13.749 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 04:01:14.013 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 04:01:14.134 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 04:01:14.134 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 04:01:14.134 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 04:01:14.134 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 04:01:14.134 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 04:01:14.175 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 04:01:14.206 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 04:01:14.206 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+host fp32 vs bf16 argmax disagree on slots [4]
+baseline_force_argmax            {'ms': 1.1432275059632957, 'matches_host_fp32': '31/32', 'matches_host_bf16': '32/32', 'disagree_slots_vs_fp32': [4]}
+distributed_argmax               {'ms': 0.6275280029512942, 'matches_host_fp32': '31/32', 'matches_host_bf16': '32/32', 'disagree_slots_vs_fp32': [4]}
+distributed_argmax_u32_rm_out    {'ms': 0.6302130059339106, 'matches_host_fp32': '31/32', 'matches_host_bf16': '32/32', 'disagree_slots_vs_fp32': [4]}
+distributed_argmax_links2        {'ms': 0.6270770099945366, 'matches_host_fp32': '31/32', 'matches_host_bf16': '32/32', 'disagree_slots_vs_fp32': [4]}
+distributed_argmax_reduce_value  {'ms': 1.0900010238401592, 'matches_host_fp32': '31/32', 'matches_host_bf16': '32/32', 'disagree_slots_vs_fp32': [4]}
+distributed_argmax_no_untilize   {'ms': 23.252062499523163, 'matches_host_fp32': '31/32', 'matches_host_bf16': '32/32', 'disagree_slots_vs_fp32': [4]}
+comp_local_max_via_ttnn_max_37984 0.4944 ms
+comp_local_max_via_gather_rm     0.0590 ms
+comp_local_max_via_gather_tile   19.0551 ms
+comp_untilize_local_37984        0.0750 ms
+comp_argmax_local_rm_37984       0.3712 ms
+comp_gather_1lane_bf16           0.0767 ms
+comp_gather_1lane_int32          0.0782 ms
+comp_cross_die_tail              0.0585 ms
+comp_full_vocab_gather_151936    0.2211 ms
+--- tie tests ---
+tie:cross_die_tie      expect 38061    device [38061] -> PASS
+tie:within_die_tie     expect 76268    device [76268] -> PASS
+tie:triple_tie         expect 11       device [11] -> PASS
+tie:ttnn.argmax_first  expect 40 per die, got {'die0': [40], 'die1': [40], 'die2': [40], 'die3': [40]} -> PASS
+
+speedup distributed_argmax over baseline: 1.82x (1.1432 -> 0.6275 ms)
+{
+  "reference": {
+    "fp32_vs_bf16_host_argmax_disagree_slots": [
+      4
+    ],
+    "note": "the device ranks a bf16 tensor; fp32/bf16 host argmax disagreement is the probe's own reference, not a leg's error"
+  },
+  "baseline_force_argmax": {
+    "ms": 1.1432275059632957,
+    "matches_host_fp32": "31/32",
+    "matches_host_bf16": "32/32",
+    "disagree_slots_vs_fp32": [
+      4
+    ],
+    "tokens": [
+      36885,
+      38973,
+      74758,
+      125781,
+      68114,
+      13606,
+      35431,
+      126611,
+      83378,
+      94326,
+      54240,
+      88101,
+      144729,
+      57842,
+      131513,
+      79285,
+      118222,
+      144380,
+      145449,
+      134436,
+      132330,
+      11663,
+      17980,
+      107492,
+      54747,
+      108829,
+      16640,
+      54013,
+      37820,
+      78397,
+      101865,
+      90577
+    ]
+  },
+  "distributed_argmax": {
+    "ms": 0.6275280029512942,
+    "matches_host_fp32": "31/32",
+    "matches_host_bf16": "32/32",
+    "disagree_slots_vs_fp32": [
+      4
+    ],
+    "tokens": [
+      36885,
+      38973,
+      74758,
+      125781,
+      68114,
+      13606,
+      35431,
+      126611,
+      83378,
+      94326,
+      54240,
+      88101,
+      144729,
+      57842,
+      131513,
+      79285,
+      118222,
+      144380,
+      145449,
+      134436,
+      132330,
+      11663,
+      17980,
+      107492,
+      54747,
+      108829,
+      16640,
+      54013,
+      37820,
+      78397,
+      101865,
+      90577
+    ]
+  },
+  "distributed_argmax_u32_rm_out": {
+    "ms": 0.6302130059339106,
+    "matches_host_fp32": "31/32",
+    "matches_host_bf16": "32/32",
+    "disagree_slots_vs_fp32": [
+      4
+    ],
+    "tokens": [
+      36885,
+      38973,
+      74758,
+      125781,
+      68114,
+      13606,
+      35431,
+      126611,
+      83378,
+      94326,
+      54240,
+      88101,
+      144729,
+      57842,
+      131513,
+      79285,
+      118222,
+      144380,
+      145449,
+      134436,
+      132330,
+      11663,
+      17980,
+      107492,
+      54747,
+      108829,
+      16640,
+      54013,
+      37820,
+      78397,
+      101865,
+      90577
+    ]
+  },
+  "distributed_argmax_links2": {
+    "ms": 0.6270770099945366,
+    "matches_host_fp32": "31/32",
+    "matches_host_bf16": "32/32",
+    "disagree_slots_vs_fp32": [
+      4
+    ],
+    "tokens": [
+      36885,
+      38973,
+      74758,
+      125781,
+      68114,
+      13606,
+      35431,
+      126611,
+      83378,
+      94326,
+      54240,
+      88101,
+      144729,
+      57842,
+      131513,
+      79285,
+      118222,
+      144380,
+      145449,
+      134436,
+      132330,
+      11663,
+      17980,
+      107492,
+      54747,
+      108829,
+      16640,
+      54013,
+      37820,
+      78397,
+      101865,
+      90577
+    ]
+  },
+  "distributed_argmax_reduce_value": {
+    "ms": 1.0900010238401592,
+    "matches_host_fp32": "31/32",
+    "matches_host_bf16": "32/32",
+    "disagree_slots_vs_fp32": [
+      4
+    ],
+    "tokens": [
+      36885,
+      38973,
+      74758,
+      125781,
+      68114,
+      13606,
+      35431,
+      126611,
+      83378,
+      94326,
+      54240,
+      88101,
+      144729,
+      57842,
+      131513,
+      79285,
+      118222,
+      144380,
+      145449,
+      134436,
+      132330,
+      11663,
+      17980,
+      107492,
+      54747,
+      108829,
+      16640,
+      54013,
+      37820,
+      78397,
+      101865,
+      90577
+    ]
+  },
+  "distributed_argmax_no_untilize": {
+    "ms": 23.252062499523163,
+    "matches_host_fp32": "31/32",
+    "matches_host_bf16": "32/32",
+    "disagree_slots_vs_fp32": [
+      4
+    ],
+    "tokens": [
+      36885,
+      38973,
+      74758,
+      125781,
+      68114,
+      13606,
+      35431,
+      126611,
+      83378,
+      94326,
+      54240,
+      88101,
+      144729,
+      57842,
+      131513,
+      79285,
+      118222,
+      144380,
+      145449,
+      134436,
+      132330,
+      11663,
+      17980,
+      107492,
+      54747,
+      108829,
+      16640,
+      54013,
+      37820,
+      78397,
+      101865,
+      90577
+    ]
+  },
+  "tie_cross_die_tie": {
+    "expected_torch_argmax": 38061,
+    "device_tokens_unique": [
+      38061
+    ],
+    "pass": true
+  },
+  "tie_within_die_tie": {
+    "expected_torch_argmax": 76268,
+    "device_tokens_unique": [
+      76268
+    ],
+    "pass": true
+  },
+  "tie_triple_tie": {
+    "expected_torch_argmax": 11,
+    "device_tokens_unique": [
+      11
+    ],
+    "pass": true
+  },
+  "ttnn_argmax_returns_first_occurrence": {
+    "per_die_indices": {
+      "die0": [
+        40
+      ],
+      "die1": [
+        40
+      ],
+      "die2": [
+        40
+      ],
+      "die3": [
+        40
+      ]
+    },
+    "pass": true
+  }
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x75078bb477f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 44 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 349 functions!
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "init_device_compute_kernel_config"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function ""
+ - leaked function "deallocate_buffers"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 04:01:19.305 | info     |    BuildKernels | JIT cache stats: 226/227 hits (99.6%) [226 cached, 61 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 04:01:19.305 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 04:01:19.318 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 04:01:19.318 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 04:01:19.817 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 04:01:19.817 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 04:01:19.817 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

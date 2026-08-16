@@ -1,0 +1,30 @@
+2026-08-15 09:19:42.282 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 09:19:43.766 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 09:19:43.766 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 09:19:43.766 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 09:19:43.766 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 09:19:43.777 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 09:19:43.778 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 09:19:43.858 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 09:19:43.858 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 09:19:43.858 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 09:19:43.858 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 09:19:43.859 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 09:19:43.962 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:318)
+2026-08-15 09:19:44.054 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 09:19:44.172 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 09:19:44.172 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 09:19:44.172 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 09:19:44.172 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 09:19:44.172 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 09:19:44.214 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 09:19:44.242 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 09:19:44.242 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+ctx   8192  cur_pos   8191  default  k_chunk=None  PCC vs HF 0.999405
+ctx   8192  cur_pos   8191  adopted  k_chunk=256  PCC vs HF 0.999438
+ctx  16384  cur_pos  16383  default  k_chunk=None  PCC vs HF 0.999294
+ctx  16384  cur_pos  16383  adopted  k_chunk=256  PCC vs HF 0.999363

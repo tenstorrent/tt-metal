@@ -1,0 +1,885 @@
+{
+  "mode": "decode",
+  "layers": 48,
+  "window_rows": 14048,
+  "devices": 4,
+  "ops_per_device": {
+    "0": 3512,
+    "1": 3512,
+    "2": 3512,
+    "3": 3512
+  },
+  "device_kernel_us": {
+    "0": 18889.492,
+    "1": 18888.504,
+    "2": 18888.316,
+    "3": 18886.785
+  },
+  "device_spread_us": 2.7069999999985157,
+  "device_spread_percent": 0.014330718899155763,
+  "iteration_us": 18889.492,
+  "op_code_us": {
+    "SparseMatmulDeviceOperation": {
+      "us": 3874.9630000000025,
+      "n": 96
+    },
+    "ReshapeViewDeviceOperation": {
+      "us": 2169.250999999999,
+      "n": 192
+    },
+    "ReduceScatterMinimalAsyncDeviceOperation": {
+      "us": 1952.5530000000003,
+      "n": 96
+    },
+    "MatmulDeviceOperation": {
+      "us": 1626.4849999999997,
+      "n": 241
+    },
+    "TopKDeviceOperation": {
+      "us": 1265.1149999999998,
+      "n": 48
+    },
+    "UnaryDeviceOperation": {
+      "us": 1132.5889999999995,
+      "n": 288
+    },
+    "AllGatherAsyncDeviceOperation": {
+      "us": 1129.6110000000006,
+      "n": 96
+    },
+    "LayerNormDeviceOperation": {
+      "us": 1021.5100000000007,
+      "n": 193
+    },
+    "BinaryNgDeviceOperation": {
+      "us": 1001.4729999999992,
+      "n": 293
+    },
+    "SdpaDecodeDeviceOperation": {
+      "us": 429.687,
+      "n": 48
+    },
+    "ShardedToInterleavedDeviceOperation": {
+      "us": 371.5369999999997,
+      "n": 385
+    },
+    "SliceDeviceOperation": {
+      "us": 359.4709999999999,
+      "n": 290
+    },
+    "InterleavedToShardedDeviceOperation": {
+      "us": 340.28199999999987,
+      "n": 339
+    },
+    "UntilizeWithUnpaddingDeviceOperation": {
+      "us": 296.6689999999999,
+      "n": 201
+    },
+    "TilizeWithValPaddingDeviceOperation": {
+      "us": 294.8519999999999,
+      "n": 54
+    },
+    "PagedUpdateCacheDeviceOperation": {
+      "us": 269.084,
+      "n": 96
+    },
+    "FillPadDeviceOperation": {
+      "us": 258.78799999999995,
+      "n": 51
+    },
+    "RotaryEmbeddingHfDeviceOperation": {
+      "us": 181.37000000000012,
+      "n": 96
+    },
+    "NLPCreateQKVHeadsDecodeDeviceOperation": {
+      "us": 174.30900000000003,
+      "n": 48
+    },
+    "TypecastDeviceOperation": {
+      "us": 167.424,
+      "n": 99
+    },
+    "CloneOperation": {
+      "us": 164.67399999999998,
+      "n": 96
+    },
+    "ScatterDeviceOperation": {
+      "us": 147.07300000000004,
+      "n": 48
+    },
+    "ReduceDeviceOperation": {
+      "us": 104.69100000000002,
+      "n": 50
+    },
+    "NLPConcatHeadsDecodeDeviceOperation": {
+      "us": 58.39799999999998,
+      "n": 48
+    },
+    "UntilizeDeviceOperation": {
+      "us": 38.256,
+      "n": 3
+    },
+    "AllBroadcastDeviceOperation": {
+      "us": 19.971,
+      "n": 2
+    },
+    "EmbeddingsDeviceOperation": {
+      "us": 13.389000000000001,
+      "n": 3
+    },
+    "ArgMaxDeviceOperation": {
+      "us": 10.35,
+      "n": 1
+    },
+    "TransposeDeviceOperation": {
+      "us": 4.127000000000001,
+      "n": 2
+    },
+    "ConcatDeviceOperation": {
+      "us": 3.484,
+      "n": 2
+    },
+    "PermuteDeviceOperation": {
+      "us": 3.081,
+      "n": 2
+    },
+    "GatherDeviceOperation": {
+      "us": 2.075,
+      "n": 1
+    },
+    "PlusOneDeviceOperation": {
+      "us": 1.24,
+      "n": 2
+    },
+    "PadDeviceOperation": {
+      "us": 0.886,
+      "n": 1
+    },
+    "CopyDeviceOperation": {
+      "us": 0.774,
+      "n": 1
+    }
+  },
+  "regions_us": {
+    "terminal_pre": 53.008,
+    "layer_stack": 18469.969,
+    "terminal_post": 366.515
+  },
+  "regions_percent": {
+    "terminal_pre": 0.2806216281517788,
+    "layer_stack": 97.77906679544375,
+    "terminal_post": 1.94031157640449
+  },
+  "per_layer_us": 384.79102083333333,
+  "per_layer_us_all_devices": {
+    "0": 384.79102083333333,
+    "1": 384.7324375,
+    "2": 384.784625,
+    "3": 384.65247916666664
+  },
+  "lm_head_us": 226.13,
+  "lm_head_us_all_devices": {
+    "0": 226.13,
+    "1": 225.932,
+    "2": 225.253,
+    "3": 236.428
+  },
+  "sampler_us": 126.20700000000001,
+  "norm_and_lm_head_us": 240.308,
+  "composite_gather_us": 41.058,
+  "composite_gather_rows": 16,
+  "layout_churn": {
+    "us_per_layer": 53.44427083333333,
+    "ms_per_iteration": 2.5653249999999996,
+    "percent_of_iteration": 13.580698729219398,
+    "labels": [
+      "ReshapeView 1x1x32x768",
+      "ReshapeView 1x32x32x1536",
+      "ReshapeView 1x32x32x2048",
+      "TilizeWithValPadding 1x1x1x128",
+      "UntilizeWithUnpadding 1x1x32x128",
+      "UntilizeWithUnpadding 1x1x32x32"
+    ]
+  },
+  "per_layer_ranking": [
+    {
+      "op": "SparseMatmul 1x1x32x2048 @ 1x32x2048x1536",
+      "us": 1978.3149999999996,
+      "us_per_layer": 41.21489583333332,
+      "n": 48,
+      "cores": [
+        48
+      ],
+      "percent": 10.47309795308418
+    },
+    {
+      "op": "ReduceScatterMinimalAsync 1x1x32x2048",
+      "us": 1952.5530000000003,
+      "us_per_layer": 40.67818750000001,
+      "n": 96,
+      "cores": [
+        6
+      ],
+      "percent": 10.336715248880175
+    },
+    {
+      "op": "SparseMatmul 1x32x32x768 @ 1x32x768x2048",
+      "us": 1896.6479999999995,
+      "us_per_layer": 39.513499999999986,
+      "n": 48,
+      "cores": [
+        64
+      ],
+      "percent": 10.040757051592493
+    },
+    {
+      "op": "TopK 1x1x32x128",
+      "us": 1265.1149999999998,
+      "us_per_layer": 26.356562499999995,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 6.697453801298626
+    },
+    {
+      "op": "AllGatherAsync 1x1x32x512",
+      "us": 1129.6110000000006,
+      "us_per_layer": 23.533562500000013,
+      "n": 96,
+      "cores": [
+        6
+      ],
+      "percent": 5.980102588253832
+    },
+    {
+      "op": "ReshapeView 1x32x32x2048",
+      "us": 787.1559999999998,
+      "us_per_layer": 16.39908333333333,
+      "n": 48,
+      "cores": [
+        64
+      ],
+      "percent": 4.1671634155116495
+    },
+    {
+      "op": "ReshapeView 1x32x32x1536",
+      "us": 780.9339999999999,
+      "us_per_layer": 16.26945833333333,
+      "n": 48,
+      "cores": [
+        48
+      ],
+      "percent": 4.134224467232893
+    },
+    {
+      "op": "Unary 1x32x32x1536",
+      "us": 674.3089999999996,
+      "us_per_layer": 14.04810416666666,
+      "n": 96,
+      "cores": [
+        110
+      ],
+      "percent": 3.5697571962231684
+    },
+    {
+      "op": "LayerNorm 1x1x32x2048",
+      "us": 631.405,
+      "us_per_layer": 13.154270833333333,
+      "n": 96,
+      "cores": [
+        8
+      ],
+      "percent": 3.342625624871225
+    },
+    {
+      "op": "Matmul 1x1x32x2048 @ 1x1x2048x1280",
+      "us": 466.83599999999996,
+      "us_per_layer": 9.72575,
+      "n": 48,
+      "cores": [
+        80
+      ],
+      "percent": 2.471405795349076
+    },
+    {
+      "op": "ReshapeView 1x1x32x768",
+      "us": 437.9730000000001,
+      "us_per_layer": 9.124437500000003,
+      "n": 48,
+      "cores": [
+        110
+      ],
+      "percent": 2.318606556491832
+    },
+    {
+      "op": "Matmul 1x1x32x1024 @ 1x1x1024x2048",
+      "us": 432.463,
+      "us_per_layer": 9.009645833333334,
+      "n": 48,
+      "cores": [
+        80
+      ],
+      "percent": 2.289436899626523
+    },
+    {
+      "op": "SdpaDecode 1x1x32x128",
+      "us": 429.687,
+      "us_per_layer": 8.9518125,
+      "n": 48,
+      "cores": [
+        110
+      ],
+      "percent": 2.274740898272966
+    },
+    {
+      "op": "BinaryNg 1x1x32x32",
+      "us": 421.404,
+      "us_per_layer": 8.77925,
+      "n": 96,
+      "cores": [
+        110
+      ],
+      "percent": 2.230891121899943
+    },
+    {
+      "op": "LayerNorm 1x1x32x128",
+      "us": 383.52200000000005,
+      "us_per_layer": 7.990041666666667,
+      "n": 96,
+      "cores": [
+        1
+      ],
+      "percent": 2.030345760489483
+    },
+    {
+      "op": "Matmul 1x1x32x2048 @ 1x1x2048x128",
+      "us": 317.11999999999995,
+      "us_per_layer": 6.606666666666666,
+      "n": 48,
+      "cores": [
+        8
+      ],
+      "percent": 1.6788169845965153
+    },
+    {
+      "op": "TilizeWithValPadding 1x1x1x128",
+      "us": 273.229,
+      "us_per_layer": 5.692270833333333,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 1.4464602859621636
+    },
+    {
+      "op": "PagedUpdateCache 128x1x32x128",
+      "us": 269.084,
+      "us_per_layer": 5.605916666666666,
+      "n": 96,
+      "cores": [
+        1
+      ],
+      "percent": 1.4245168689555021
+    },
+    {
+      "op": "Unary 1x1x128x32",
+      "us": 240.26199999999997,
+      "us_per_layer": 5.0054583333333325,
+      "n": 96,
+      "cores": [
+        110
+      ],
+      "percent": 1.2719346819914479
+    },
+    {
+      "op": "FillPad 1x1x32x128",
+      "us": 233.91099999999997,
+      "us_per_layer": 4.873145833333333,
+      "n": 48,
+      "cores": [
+        4
+      ],
+      "percent": 1.238312814341434
+    },
+    {
+      "op": "BinaryNg 1x1x128x2048",
+      "us": 221.18899999999996,
+      "us_per_layer": 4.608104166666666,
+      "n": 96,
+      "cores": [
+        110
+      ],
+      "percent": 1.1709632000691177
+    },
+    {
+      "op": "BinaryNg 1x1x32x2048",
+      "us": 209.003,
+      "us_per_layer": 4.354229166666666,
+      "n": 48,
+      "cores": [
+        110
+      ],
+      "percent": 1.1064511422541168
+    },
+    {
+      "op": "Matmul 1x1x32x128 @ 1x1x128x32",
+      "us": 183.93599999999986,
+      "us_per_layer": 3.831999999999997,
+      "n": 96,
+      "cores": [
+        1
+      ],
+      "percent": 0.9737477323371104
+    },
+    {
+      "op": "RotaryEmbeddingHf 1x1x32x128",
+      "us": 181.37000000000012,
+      "us_per_layer": 3.778541666666669,
+      "n": 96,
+      "cores": [
+        1
+      ],
+      "percent": 0.9601634601925776
+    },
+    {
+      "op": "NLPCreateQKVHeadsDecode 1x1x32x1280",
+      "us": 174.30900000000003,
+      "us_per_layer": 3.6314375000000005,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 0.9227828890263435
+    },
+    {
+      "op": "UntilizeWithUnpadding 1x1x32x32",
+      "us": 172.49600000000007,
+      "us_per_layer": 3.593666666666668,
+      "n": 144,
+      "cores": [
+        1
+      ],
+      "percent": 0.913184960188448
+    },
+    {
+      "op": "Clone 1x1x32x2048",
+      "us": 164.67399999999998,
+      "us_per_layer": 3.430708333333333,
+      "n": 96,
+      "cores": [
+        64
+      ],
+      "percent": 0.8717756941266604
+    },
+    {
+      "op": "ReshapeView 1x1x32x32",
+      "us": 163.18799999999993,
+      "us_per_layer": 3.3997499999999987,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 0.8639088864856712
+    },
+    {
+      "op": "InterleavedToSharded 1x1x32x2048",
+      "us": 150.49299999999997,
+      "us_per_layer": 3.135270833333333,
+      "n": 96,
+      "cores": [
+        8
+      ],
+      "percent": 0.796702208825944
+    },
+    {
+      "op": "Slice 1x1x32x1536",
+      "us": 150.46099999999998,
+      "us_per_layer": 3.134604166666666,
+      "n": 96,
+      "cores": [
+        24
+      ],
+      "percent": 0.7965328024702835
+    },
+    {
+      "op": "Scatter 1x1x1x128",
+      "us": 147.07300000000004,
+      "us_per_layer": 3.064020833333334,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 0.778596904564718
+    },
+    {
+      "op": "ShardedToInterleaved 1x1x32x2048",
+      "us": 139.07,
+      "us_per_layer": 2.8972916666666664,
+      "n": 96,
+      "cores": [
+        8
+      ],
+      "percent": 0.7362294338037254
+    },
+    {
+      "op": "BinaryNg 1x1x32x768",
+      "us": 132.725,
+      "us_per_layer": 2.7651041666666667,
+      "n": 48,
+      "cores": [
+        110
+      ],
+      "percent": 0.7026393298453977
+    },
+    {
+      "op": "Slice 1x1x32x32",
+      "us": 125.32999999999996,
+      "us_per_layer": 2.6110416666666656,
+      "n": 144,
+      "cores": [
+        1
+      ],
+      "percent": 0.6634905798419565
+    },
+    {
+      "op": "Unary 1x1x32x768",
+      "us": 118.76400000000001,
+      "us_per_layer": 2.47425,
+      "n": 48,
+      "cores": [
+        110
+      ],
+      "percent": 0.628730513239848
+    },
+    {
+      "op": "InterleavedToSharded 1x1x32x128",
+      "us": 113.54199999999992,
+      "us_per_layer": 2.3654583333333314,
+      "n": 192,
+      "cores": [
+        1
+      ],
+      "percent": 0.6010855135754838
+    },
+    {
+      "op": "UntilizeWithUnpadding 1x1x32x128",
+      "us": 113.537,
+      "us_per_layer": 2.3653541666666666,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 0.6010590438324123
+    },
+    {
+      "op": "ShardedToInterleaved 1x1x32x128",
+      "us": 107.40299999999993,
+      "us_per_layer": 2.237562499999999,
+      "n": 192,
+      "cores": [
+        1
+      ],
+      "percent": 0.5685859630317213
+    },
+    {
+      "op": "Typecast 1x1x32x128",
+      "us": 102.00400000000002,
+      "us_per_layer": 2.125083333333334,
+      "n": 48,
+      "cores": [
+        4
+      ],
+      "percent": 0.5400039344626103
+    },
+    {
+      "op": "Reduce 1x1x32x2048",
+      "us": 101.70600000000002,
+      "us_per_layer": 2.1188750000000005,
+      "n": 48,
+      "cores": [
+        64
+      ],
+      "percent": 0.5384263377755211
+    },
+    {
+      "op": "Unary 1x1x128x128",
+      "us": 99.25399999999998,
+      "us_per_layer": 2.067791666666666,
+      "n": 48,
+      "cores": [
+        110
+      ],
+      "percent": 0.5254455757730276
+    },
+    {
+      "op": "Slice 1x1x32x1024",
+      "us": 78.84500000000003,
+      "us_per_layer": 1.6426041666666673,
+      "n": 48,
+      "cores": [
+        32
+      ],
+      "percent": 0.41740137850186776
+    },
+    {
+      "op": "InterleavedToSharded 1x1x32x1024",
+      "us": 73.404,
+      "us_per_layer": 1.52925,
+      "n": 48,
+      "cores": [
+        8
+      ],
+      "percent": 0.38859700409095177
+    },
+    {
+      "op": "ShardedToInterleaved 1x1x32x1024",
+      "us": 63.434000000000005,
+      "us_per_layer": 1.3215416666666668,
+      "n": 48,
+      "cores": [
+        8
+      ],
+      "percent": 0.33581633640544706
+    },
+    {
+      "op": "Typecast 1x1x32x32",
+      "us": 62.23,
+      "us_per_layer": 1.2964583333333333,
+      "n": 48,
+      "cores": [
+        1
+      ],
+      "percent": 0.32944242227371706
+    },
+    {
+      "op": "ShardedToInterleaved 1x1x32x1280",
+      "us": 60.594,
+      "us_per_layer": 1.262375,
+      "n": 48,
+      "cores": [
+        8
+      ],
+      "percent": 0.3207815223405691
+    },
+    {
+      "op": "NLPConcatHeadsDecode 1x1x32x128",
+      "us": 58.39799999999998,
+      "us_per_layer": 1.2166249999999996,
+      "n": 48,
+      "cores": [
+        8
+      ],
+      "percent": 0.3091560111833605
+    }
+  ],
+  "terminal_post_ranking": [
+    {
+      "op": "Matmul 1x1x32x2048 @ 1x1x2048x37984",
+      "us": 226.13,
+      "n": 1,
+      "cores": [
+        108
+      ],
+      "percent": 1.197120600172837
+    },
+    {
+      "op": "FillPad 1x1x32x32",
+      "us": 19.981,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.10577838726419961
+    },
+    {
+      "op": "AllBroadcast 1x1x32x32",
+      "us": 19.971,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.10572544777805566
+    },
+    {
+      "op": "BinaryNg 1x1x32x32",
+      "us": 17.152,
+      "n": 5,
+      "cores": [
+        110
+      ],
+      "percent": 0.09080180663407995
+    },
+    {
+      "op": "Untilize 1x1x32x37984",
+      "us": 16.943,
+      "n": 1,
+      "cores": [
+        108
+      ],
+      "percent": 0.08969537137367169
+    },
+    {
+      "op": "UntilizeWithUnpadding 1x1x32x32",
+      "us": 10.635999999999997,
+      "n": 9,
+      "cores": [
+        1
+      ],
+      "percent": 0.056306437462690886
+    },
+    {
+      "op": "ArgMax 1x1x1x37984",
+      "us": 10.35,
+      "n": 1,
+      "cores": [
+        110
+      ],
+      "percent": 0.054792368158974314
+    },
+    {
+      "op": "LayerNorm 1x1x32x2048",
+      "us": 6.583,
+      "n": 1,
+      "cores": [
+        8
+      ],
+      "percent": 0.034850063728553426
+    },
+    {
+      "op": "TilizeWithValPadding 1x1x1x1",
+      "us": 5.209,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.027576178332376543
+    },
+    {
+      "op": "TilizeWithValPadding 1x1x1x4",
+      "us": 5.156,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.02729559905581368
+    },
+    {
+      "op": "FillPad 1x1x32x2048",
+      "us": 4.896,
+      "n": 1,
+      "cores": [
+        64
+      ],
+      "percent": 0.025919172416071327
+    },
+    {
+      "op": "Concat 1x1x1x1",
+      "us": 3.484,
+      "n": 2,
+      "cores": [
+        4
+      ],
+      "percent": 0.018444116972547487
+    },
+    {
+      "op": "Slice 1x1x32x37984",
+      "us": 3.094,
+      "n": 1,
+      "cores": [
+        1
+      ],
+      "percent": 0.016379477012933963
+    },
+    {
+      "op": "Permute 1x1x4x1",
+      "us": 3.081,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.016310655680946848
+    },
+    {
+      "op": "Reduce 1x1x32x32",
+      "us": 2.9850000000000003,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.01580243661396506
+    },
+    {
+      "op": "Gather 1x1x1x37984",
+      "us": 2.075,
+      "n": 1,
+      "cores": [
+        1
+      ],
+      "percent": 0.010984943374866833
+    },
+    {
+      "op": "Typecast 1x1x1x1",
+      "us": 1.839,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.00973557150186993
+    },
+    {
+      "op": "InterleavedToSharded 1x1x32x2048",
+      "us": 1.663,
+      "n": 1,
+      "cores": [
+        8
+      ],
+      "percent": 0.008803836545736647
+    },
+    {
+      "op": "Typecast 1x1x32x32",
+      "us": 1.351,
+      "n": 1,
+      "cores": [
+        1
+      ],
+      "percent": 0.007152124578045826
+    },
+    {
+      "op": "PlusOne 1x1x1x1",
+      "us": 1.24,
+      "n": 2,
+      "cores": [
+        1
+      ],
+      "percent": 0.006564496281848131
+    },
+    {
+      "op": "ShardedToInterleaved 1x1x32x2048",
+      "us": 1.036,
+      "n": 1,
+      "cores": [
+        8
+      ],
+      "percent": 0.005484530764511826
+    },
+    {
+      "op": "Pad 1x1x1x1",
+      "us": 0.886,
+      "n": 1,
+      "cores": [
+        1
+      ],
+      "percent": 0.004690438472352777
+    },
+    {
+      "op": "Copy 1x1x1x32",
+      "us": 0.774,
+      "n": 1,
+      "cores": [
+        1
+      ],
+      "percent": 0.004097516227540688
+    }
+  ]
+}

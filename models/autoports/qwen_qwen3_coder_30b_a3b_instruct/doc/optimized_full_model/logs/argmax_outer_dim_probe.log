@@ -1,0 +1,188 @@
+2026-08-15 16:27:52.372 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 16:27:52.497 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 16:27:52.497 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 16:27:52.497 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 16:27:52.497 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 16:27:52.508 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 16:27:52.508 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 16:27:52.587 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 16:27:52.587 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 16:27:52.587 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 16:27:52.587 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 16:27:52.589 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 16:27:52.793 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 16:27:52.913 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 16:27:52.913 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 16:27:52.913 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 16:27:52.913 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 16:27:52.913 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 16:27:52.955 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 16:27:52.982 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 16:27:52.982 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+untilize_37984                           75.1 us
+argmax_keepdim_true                     371.0 us   32/32
+argmax_keepdim_false                    308.8 us   32/32
+argmax_keepdim_false_plus_reshape       315.0 us   32/32
+argmax_kd_true_cores8                  2735.5 us   32/32
+argmax_kd_true_cores16                 1429.5 us   32/32
+argmax_kd_true_cores32                  792.2 us   32/32
+rm_slice1_then_argmax                    57.9 us   1/1
+rm_slice2_then_argmax                    57.9 us   2/2
+rm_slice4_then_argmax                    65.6 us   4/4
+rm_slice8_then_argmax                   122.9 us   8/8
+rm_slice1_only                           58.1 us
+tile_slice1_plus_untilize                71.6 us
+2026-08-15 16:27:55.608 | critical |          Always | TT_FATAL: The input must be in tiled format (assert.hpp:104)
+topk_k1_rm_32rows: FAILED TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/topk_device_operation.cpp:166: input_tensor.layout() == Layout::TILE
+info:
+The i
+topk_k32_tile_32rows                   6047.1 us
+pad_token_1_to_32                        57.9 us
+full_shipped_keepdim_true               630.5 us   32/32
+full_candidate_keepdim_false            575.2 us   32/32
+Building ncrisc, compile step:
+/home/raahem/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/raahem/tt-metal/ -I/home/raahem/tt-metal/ttnn -I/home/raahem/tt-metal/ttnn/cpp -I/home/raahem/tt-metal/tt_metal -I/home/raahem/tt-metal/tt_metal/hw/inc -I/home/raahem/tt-metal/tt_metal/tt-llk/common -I/home/raahem/tt-metal/tt_metal/hostdevcommon/api -I/home/raahem/tt-metal/tt_metal/api/ -I/home/raahem/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/raahem/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/raahem/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/raahem/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/raahem/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DROUTING_MODE=145 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="gather_reader_rm_single_row_single_core/14514845902550300627/" -DKERNEL_COMPILE_TIME_ARGS=0,1,2,1,37984,1,1,2,4,2,2,64 -c -o /home/raahem/.cache/tt-metal-cache/1801534666104373800/kernels/gather_reader_rm_single_row_single_core/14514845902550300627/ncrisc/ncrisck.14241649305550579224_1424732.o /home/raahem/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/raahem/.cache/tt-metal-cache/1801534666104373800/kernels/gather_reader_rm_single_row_single_core/14514845902550300627/ncrisc/ncrisck.14241649305550579224_1424732.d
+In file included from ../kernel_includes.hpp:1,
+                 from /home/raahem/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_rm_single_row_single_core.cpp: In function 'void kernel_main()':
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_rm_single_row_single_core.cpp:53:58: warning: 'void tt::data_movement::common::noc_async_read_sharded(uint32_t, AddrGenType, uint32_t, uint32_t, uint32_t) [with AddrGenType = TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false> >; uint32_t = long unsigned int]' is deprecated: Use the overload with leading Noc parameter instead. [-Wdeprecated-declarations]
+   53 |         tt::data_movement::common::noc_async_read_sharded(
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+   54 |             input_index_cb.get_write_ptr(),
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |             input_index_accessor,
+      |             ~~~~~~~~~~~~~~~~~~~~~
+   56 |             /*src_id=*/h,
+      |             ~~~~~~~~~~~~~
+   57 |             /*offset=*/0,
+      |             ~~~~~~~~~~~~~
+   58 |             /*size=*/input_index_stick_size_bytes);
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_rm_single_row_single_core.cpp:11:
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp:407:19: note: declared here
+  407 | FORCE_INLINE void noc_async_read_sharded(
+      |                   ^~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/raahem/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/raahem/tt-metal/ -I/home/raahem/tt-metal/ttnn -I/home/raahem/tt-metal/ttnn/cpp -I/home/raahem/tt-metal/tt_metal -I/home/raahem/tt-metal/tt_metal/hw/inc -I/home/raahem/tt-metal/tt_metal/tt-llk/common -I/home/raahem/tt-metal/tt_metal/hostdevcommon/api -I/home/raahem/tt-metal/tt_metal/api/ -I/home/raahem/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/raahem/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/raahem/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/raahem/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/raahem/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/raahem/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DROUTING_MODE=145 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="gather_writer_rm_single_row_single_core/1369195531713307412/" -DKERNEL_COMPILE_TIME_ARGS=0,2,1,37984,1,1,2,2,2,75968,2,64 -c -o /home/raahem/.cache/tt-metal-cache/1801534666104373800/kernels/gather_writer_rm_single_row_single_core/1369195531713307412/brisc/brisck.14241649305550579224_1424732.o /home/raahem/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/raahem/.cache/tt-metal-cache/1801534666104373800/kernels/gather_writer_rm_single_row_single_core/1369195531713307412/brisc/brisck.14241649305550579224_1424732.d
+In file included from ../kernel_includes.hpp:1,
+                 from /home/raahem/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:22:
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp: In function 'void kernel_main()':
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp:53:58: warning: 'void tt::data_movement::common::noc_async_read_sharded(uint32_t, AddrGenType, uint32_t, uint32_t, uint32_t) [with AddrGenType = TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false> >; uint32_t = long unsigned int]' is deprecated: Use the overload with leading Noc parameter instead. [-Wdeprecated-declarations]
+   53 |         tt::data_movement::common::noc_async_read_sharded(
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+   54 |             input_cb.get_write_ptr(),
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |             input_accessor,
+      |             ~~~~~~~~~~~~~~~
+   56 |             /*src_id=*/h,
+      |             ~~~~~~~~~~~~~
+   57 |             /*offset=*/0,
+      |             ~~~~~~~~~~~~~
+   58 |             /*size=*/input_stick_size_bytes);
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp:9:
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp:407:19: note: declared here
+  407 | FORCE_INLINE void noc_async_read_sharded(
+      |                   ^~~~~~~~~~~~~~~~~~~~~~
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp:63:59: warning: 'void tt::data_movement::common::noc_async_write_sharded(uint32_t, AddrGenType, uint32_t, uint32_t, uint32_t) [with AddrGenType = TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false> >; uint32_t = long unsigned int]' is deprecated: Use the overload with leading Noc parameter instead. [-Wdeprecated-declarations]
+   63 |         tt::data_movement::common::noc_async_write_sharded(
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+   64 |             output_cb.get_read_ptr(),
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~
+   65 |             output_accessor,
+      |             ~~~~~~~~~~~~~~~~
+   66 |             /*dest_id=*/h,
+      |             ~~~~~~~~~~~~~~
+   67 |             /*offset=*/0,
+      |             ~~~~~~~~~~~~~
+   68 |             /*size=*/output_stick_size_bytes);
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp:361:19: note: declared here
+  361 | FORCE_INLINE void noc_async_write_sharded(
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~
+2026-08-15 16:27:58.410 | critical |          Always | TT_FATAL: Invalid arguments to reshape (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe.py", line 441, in <module>
+    main()
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe.py", line 428, in main
+    run(mesh, ccl, args.reps, results)
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe.py", line 353, in run
+    ms, out = traced_ms(mesh, lambda kd=kd, rows=rows: full(kd, rows), reps)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe.py", line 98, in traced_ms
+    out = fn()
+          ^^^^
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe.py", line 353, in <lambda>
+    ms, out = traced_ms(mesh, lambda kd=kd, rows=rows: full(kd, rows), reps)
+                                                       ^^^^^^^^^^^^^^
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe.py", line 344, in full
+    token = ttnn.pad(ttnn.reshape(token, (1, 1, 1, rows)), [(0, 0), (0, 0), (0, 0), (0, SLOTS - rows)], value=0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/raahem/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp:50: new_volume == old_volume
+info:
+Invalid arguments to reshape
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)
+ --- ttnn::operations::data_movement::detail::infer_dims_for_reshape(ttnn::Tensor const&, std::span<int const, 18446744073709551615ul>)
+ --- ttnn::reshape(ttnn::Tensor const&, std::span<int const, 18446744073709551615ul>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<unsigned int, float> > const&, ttnn::TileReshapeMapMode, std::optional<tt::tt_metal::CoreRangeSet> const&, bool)
+ --- ttnn::operations::data_movement::detail::reshape_shape_vector_wrapper(ttnn::Tensor const&, ttsl::SmallVector<int, 8ul> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<unsigned int, float> > const&, ttnn::TileReshapeMapMode, std::optional<tt::tt_metal::CoreRangeSet> const&, bool)
+ --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x4969a6) [0x7afa6aa969a6]
+ --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x7afa6a9604d5]
+ --- python(_PyObject_Call_Prepend+0xa0) [0x189b9f0]
+ --- python() [0x189b92e]
+ --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]
+ --- python(_PyObject_Call_Prepend+0xa0) [0x189b9f0]
+ --- python() [0x189b92e]
+ --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]
+ --- python(PyEval_EvalCode+0xde) [0x1896b20]
+ --- python() [0x18b1949]
+ --- python() [0x19fc785]
+ --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]
+ --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]
+ --- python() [0x19fc278]
+ --- python() [0x19fc171]
+ --- python() [0x1ae94a3]
+ --- python() [0x1979298]
+ --- python() [0x19790ac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7afaaec2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7afaaec2a28b]
+ --- python(_start+0x29) [0x19c1ea9]
+
+nanobind: leaked 1 instances!
+ - leaked instance 0x7afa16b58108 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 43 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "merge"
+ - leaked function "pad_to_tile"
+ - leaked function "from_json"
+ - leaked function "get_fabric_node_id"
+ - leaked function "__eq__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function "open_device"
+ - leaked function "compute_with_storage_grid_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 16:27:58.887 | info     |    BuildKernels | JIT cache stats: 196/226 hits (86.7%) [196 cached, 87 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 16:27:58.887 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 16:27:58.900 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 16:27:58.900 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 16:27:59.513 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 16:27:59.513 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 16:27:59.513 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

@@ -1,0 +1,191 @@
+2026-08-15 06:06:26.704 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:06:26.842 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:06:26.842 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:06:26.842 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:06:26.842 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:06:26.854 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 06:06:26.854 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:06:26.932 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:06:26.932 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:06:26.932 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:06:26.932 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:06:26.933 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:06:27.104 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:06:27.219 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:06:27.219 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:06:27.219 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:06:27.219 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:06:27.219 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+grid 11-10  allocated depth 65536
+
+=== cur_pos 127 ===
+  None             31.41 us    1.00x  PCC 0.999708  max|d| 1.56e-02
+  k32/c8           23.32 us    1.35x  PCC 0.999778  max|d| 1.15e-02
+  k32/c16          27.76 us    1.13x  PCC 0.999778  max|d| 1.15e-02
+  k32/c32          36.19 us    0.87x  PCC 0.999778  max|d| 1.15e-02
+  k32/c64          36.08 us    0.87x  PCC 0.999778  max|d| 1.15e-02
+  k64/c8           30.82 us    1.02x  PCC 0.999760  max|d| 1.42e-02
+  k64/c16          29.36 us    1.07x  PCC 0.999760  max|d| 1.42e-02
+  k64/c32          28.68 us    1.10x  PCC 0.999760  max|d| 1.42e-02
+  k64/c64          30.46 us    1.03x  PCC 0.999760  max|d| 1.42e-02
+  k128/c8          26.07 us    1.21x  PCC 0.999696  max|d| 1.63e-02
+  k128/c16         30.80 us    1.02x  PCC 0.999696  max|d| 1.63e-02
+  k128/c32         31.23 us    1.01x  PCC 0.999696  max|d| 1.63e-02
+  k128/c64         33.89 us    0.93x  PCC 0.999696  max|d| 1.63e-02
+  k256/c8          31.05 us    1.01x  PCC 0.999696  max|d| 1.63e-02
+  k256/c16         26.33 us    1.19x  PCC 0.999696  max|d| 1.63e-02
+  k256/c32         27.72 us    1.13x  PCC 0.999696  max|d| 1.63e-02
+  k256/c64         39.77 us    0.79x  PCC 0.999696  max|d| 1.63e-02
+  k512/c8          25.11 us    1.25x  PCC 0.999696  max|d| 1.63e-02
+  k512/c16         26.18 us    1.20x  PCC 0.999696  max|d| 1.63e-02
+  k512/c32         51.81 us    0.61x  PCC 0.999696  max|d| 1.63e-02
+  k512/c64         39.16 us    0.80x  PCC 0.999696  max|d| 1.63e-02
+  k1024/c8         31.29 us    1.00x  PCC 0.999696  max|d| 1.63e-02
+  k1024/c16        29.23 us    1.07x  PCC 0.999696  max|d| 1.63e-02
+  k1024/c32        31.32 us    1.00x  PCC 0.999696  max|d| 1.63e-02
+  k1024/c64        35.77 us    0.88x  PCC 0.999696  max|d| 1.63e-02
+
+=== cur_pos 1023 ===
+  None            122.88 us    1.00x  PCC 0.999617  max|d| 6.93e-03
+  k32/c8           34.42 us    3.57x  PCC 0.999488  max|d| 1.18e-02
+  k32/c16          31.54 us    3.90x  PCC 0.999540  max|d| 1.13e-02
+  k32/c32          33.70 us    3.65x  PCC 0.999537  max|d| 1.04e-02
+  k32/c64          34.07 us    3.61x  PCC 0.999537  max|d| 1.04e-02
+  k64/c8           28.02 us    4.39x  PCC 0.999484  max|d| 1.08e-02
+  k64/c16          28.34 us    4.34x  PCC 0.999474  max|d| 1.13e-02
+  k64/c32          28.74 us    4.28x  PCC 0.999474  max|d| 1.13e-02
+  k64/c64          30.72 us    4.00x  PCC 0.999474  max|d| 1.13e-02
+  k128/c8          24.54 us    5.01x  PCC 0.999460  max|d| 1.18e-02
+  k128/c16         25.14 us    4.89x  PCC 0.999460  max|d| 1.18e-02
+  k128/c32         25.16 us    4.88x  PCC 0.999460  max|d| 1.18e-02
+  k128/c64        177.33 us    0.69x  PCC 0.999460  max|d| 1.18e-02
+  k256/c8          36.07 us    3.41x  PCC 0.999610  max|d| 8.89e-03
+  k256/c16         33.68 us    3.65x  PCC 0.999610  max|d| 8.89e-03
+  k256/c32         31.82 us    3.86x  PCC 0.999610  max|d| 8.89e-03
+  k256/c64         32.07 us    3.83x  PCC 0.999610  max|d| 8.89e-03
+  k512/c8          23.98 us    5.12x  PCC 0.999584  max|d| 7.91e-03
+  k512/c16         26.39 us    4.66x  PCC 0.999584  max|d| 7.91e-03
+  k512/c32         27.81 us    4.42x  PCC 0.999584  max|d| 7.91e-03
+  k512/c64         32.04 us    3.84x  PCC 0.999584  max|d| 7.91e-03
+  k1024/c8         27.26 us    4.51x  PCC 0.999559  max|d| 5.96e-03
+  k1024/c16        28.05 us    4.38x  PCC 0.999559  max|d| 5.96e-03
+  k1024/c32        30.09 us    4.08x  PCC 0.999559  max|d| 5.96e-03
+  k1024/c64        34.64 us    3.55x  PCC 0.999559  max|d| 5.96e-03
+
+=== cur_pos 4095 ===
+  None            454.31 us    1.00x  PCC 0.999492  max|d| 3.97e-03
+  k32/c8           75.74 us    6.00x  PCC 0.999531  max|d| 3.89e-03
+  k32/c16          52.56 us    8.64x  PCC 0.999572  max|d| 3.83e-03
+  k32/c32          44.48 us   10.21x  PCC 0.999618  max|d| 3.41e-03
+  k32/c64          46.11 us    9.85x  PCC 0.999597  max|d| 3.41e-03
+  k64/c8           50.31 us    9.03x  PCC 0.999556  max|d| 3.28e-03
+  k64/c16          39.55 us   11.49x  PCC 0.999571  max|d| 3.89e-03
+  k64/c32          38.15 us   11.91x  PCC 0.999604  max|d| 3.66e-03
+  k64/c64          43.02 us   10.56x  PCC 0.999563  max|d| 3.85e-03
+  k128/c8          37.10 us   12.25x  PCC 0.999543  max|d| 3.77e-03
+  k128/c16         33.07 us   13.74x  PCC 0.999587  max|d| 3.89e-03
+  k128/c32         34.71 us   13.09x  PCC 0.999594  max|d| 3.65e-03
+  k128/c64         36.00 us   12.62x  PCC 0.999594  max|d| 3.65e-03
+  k256/c8          31.65 us   14.36x  PCC 0.999581  max|d| 3.49e-03
+  k256/c16         30.49 us   14.90x  PCC 0.999562  max|d| 3.58e-03
+  k256/c32         31.31 us   14.51x  PCC 0.999562  max|d| 3.58e-03
+  k256/c64         32.55 us   13.96x  PCC 0.999562  max|d| 3.58e-03
+  k512/c8          29.52 us   15.39x  PCC 0.999555  max|d| 3.28e-03
+  k512/c16         30.08 us   15.10x  PCC 0.999555  max|d| 3.28e-03
+  k512/c32         30.83 us   14.74x  PCC 0.999555  max|d| 3.28e-03
+  k512/c64         33.90 us   13.40x  PCC 0.999555  max|d| 3.28e-03
+  k1024/c8         32.59 us   13.94x  PCC 0.999620  max|d| 3.48e-03
+  k1024/c16        33.26 us   13.66x  PCC 0.999620  max|d| 3.48e-03
+  k1024/c32        34.87 us   13.03x  PCC 0.999620  max|d| 3.48e-03
+  k1024/c64        40.61 us   11.19x  PCC 0.999620  max|d| 3.48e-03
+
+=== cur_pos 16383 ===
+  None           1785.44 us    1.00x  PCC 0.993688  max|d| 1.38e-02
+  k32/c8          240.44 us    7.43x  PCC 0.999533  max|d| 1.66e-03
+  k32/c16         135.73 us   13.15x  PCC 0.999593  max|d| 1.54e-03
+  k32/c32          85.29 us   20.93x  PCC 0.999529  max|d| 1.29e-03
+  k32/c64          66.74 us   26.75x  PCC 0.999546  max|d| 1.17e-03
+  k64/c8          137.53 us   12.98x  PCC 0.999524  max|d| 1.78e-03
+  k64/c16          83.50 us   21.38x  PCC 0.999600  max|d| 1.50e-03
+  k64/c32          59.82 us   29.85x  PCC 0.999567  max|d| 1.42e-03
+  k64/c64          54.38 us   32.83x  PCC 0.999570  max|d| 1.17e-03
+  k128/c8          86.13 us   20.73x  PCC 0.999592  max|d| 1.50e-03
+  k128/c16         57.61 us   30.99x  PCC 0.999583  max|d| 1.72e-03
+  k128/c32         47.21 us   37.82x  PCC 0.999574  max|d| 1.28e-03
+  k128/c64         52.34 us   34.12x  PCC 0.999564  max|d| 1.26e-03
+  k256/c8          62.78 us   28.44x  PCC 0.999592  max|d| 1.56e-03
+  k256/c16         46.41 us   38.47x  PCC 0.999559  max|d| 1.84e-03
+  k256/c32         45.41 us   39.32x  PCC 0.999548  max|d| 1.35e-03
+  k256/c64         51.28 us   34.82x  PCC 0.999551  max|d| 1.35e-03
+  k512/c8          51.89 us   34.41x  PCC 0.999500  max|d| 1.74e-03
+  k512/c16         41.95 us   42.56x  PCC 0.999542  max|d| 1.59e-03
+  k512/c32         44.23 us   40.37x  PCC 0.999537  max|d| 1.47e-03
+  k512/c64         46.35 us   38.52x  PCC 0.999537  max|d| 1.47e-03
+  k1024/c8         47.62 us   37.49x  PCC 0.999465  max|d| 1.74e-03
+  k1024/c16        41.48 us   43.05x  PCC 0.999420  max|d| 1.84e-03
+  k1024/c32        43.60 us   40.95x  PCC 0.999420  max|d| 1.84e-03
+  k1024/c64        48.30 us   36.96x  PCC 0.999420  max|d| 1.84e-03
+
+=== cur_pos 32767 ===
+  None           3554.65 us    1.00x  PCC 0.986820  max|d| 3.58e-02
+  k32/c8          462.40 us    7.69x  PCC 0.999442  max|d| 1.08e-03
+  k32/c16         246.45 us   14.42x  PCC 0.999479  max|d| 1.11e-03
+  k32/c32         140.68 us   25.27x  PCC 0.999554  max|d| 8.93e-04
+  k32/c64          93.97 us   37.83x  PCC 0.999523  max|d| 1.05e-03
+  k64/c8          254.86 us   13.95x  PCC 0.999498  max|d| 1.01e-03
+  k64/c16         142.54 us   24.94x  PCC 0.999541  max|d| 1.11e-03
+  k64/c32          89.52 us   39.71x  PCC 0.999575  max|d| 9.84e-04
+  k64/c64          69.65 us   51.03x  PCC 0.999519  max|d| 1.05e-03
+  k128/c8         152.48 us   23.31x  PCC 0.999495  max|d| 1.12e-03
+  k128/c16         90.78 us   39.16x  PCC 0.999587  max|d| 8.72e-04
+  k128/c32         63.69 us   55.81x  PCC 0.999571  max|d| 1.42e-03
+  k128/c64         64.28 us   55.30x  PCC 0.999574  max|d| 1.05e-03
+  k256/c8         104.88 us   33.89x  PCC 0.999559  max|d| 9.60e-04
+  k256/c16         67.33 us   52.79x  PCC 0.999595  max|d| 9.22e-04
+  k256/c32         57.63 us   61.68x  PCC 0.999575  max|d| 7.95e-04
+  k256/c64         64.58 us   55.04x  PCC 0.999531  max|d| 9.43e-04
+  k512/c8          81.89 us   43.41x  PCC 0.999546  max|d| 1.02e-03
+  k512/c16         56.85 us   62.52x  PCC 0.999513  max|d| 1.02e-03
+  k512/c32         57.58 us   61.73x  PCC 0.999522  max|d| 9.28e-04
+  k512/c64         63.54 us   55.94x  PCC 0.999495  max|d| 9.28e-04
+  k1024/c8         71.33 us   49.83x  PCC 0.999454  max|d| 1.15e-03
+  k1024/c16        56.02 us   63.45x  PCC 0.999474  max|d| 1.09e-03
+  k1024/c32        57.40 us   61.92x  PCC 0.999448  max|d| 1.06e-03
+  k1024/c64        59.19 us   60.05x  PCC 0.999448  max|d| 1.06e-03
+
+wrote /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/sdpa_sweep_probe.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x781174fe71c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "__init__"
+ - leaked function "ClearKernelCache"
+ - leaked function ""
+ - leaked function "__eq__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "element_size"
+ - leaked function "from_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:06:52.411 | info     |    BuildKernels | JIT cache stats: 23/143 hits (16.1%) [23 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:06:52.411 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:06:52.425 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:06:52.425 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:06:53.039 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:06:53.039 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:06:53.039 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

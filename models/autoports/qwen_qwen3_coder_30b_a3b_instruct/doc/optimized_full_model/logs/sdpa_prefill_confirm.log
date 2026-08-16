@@ -1,0 +1,81 @@
+2026-08-15 06:16:25.557 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:16:26.153 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:16:26.153 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:16:26.153 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:16:26.153 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:16:26.164 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 06:16:26.164 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:16:26.244 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:16:26.244 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:16:26.244 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:16:26.244 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:16:26.245 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:16:26.482 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:16:26.598 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:16:26.598 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:16:26.598 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:16:26.598 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:16:26.598 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+seq    128  None=    23.92( 1.00x)  q128/k128=    25.72( 0.93x)  q256/k256=    32.68( 0.73x)  q128/k256=    37.83( 0.63x)  q256/k128=    28.06( 0.85x)
+seq    256  None=    36.11( 1.00x)  q128/k128=    38.94( 0.93x)  q256/k256=    36.47( 0.99x)  q128/k256=    46.95( 0.77x)  q256/k128=    39.57( 0.91x)
+seq    384  None=    38.30( 1.00x)  q128/k128=    35.82( 1.07x)  q256/k256=    83.47( 0.46x)  q128/k256=    49.63( 0.77x)  q256/k128=    84.14( 0.46x)
+seq    512  None=    58.96( 1.00x)  q128/k128=    54.14( 1.09x)  q256/k256=    87.18( 0.68x)  q128/k256=    68.60( 0.86x)  q256/k128=    98.23( 0.60x)
+seq    768  None=   116.58( 1.00x)  q128/k128=    70.17( 1.66x)  q256/k256=    84.58( 1.38x)  q128/k256=    84.15( 1.39x)  q256/k128=    95.38( 1.22x)
+seq   1024  None=   230.58( 1.00x)  q128/k128=    88.36( 2.61x)  q256/k256=   127.54( 1.81x)  q128/k256=    96.47( 2.39x)  q256/k128=   149.09( 1.55x)
+seq   1536  None=   421.39( 1.00x)  q128/k128=   134.78( 3.13x)  q256/k256=   166.97( 2.52x)  q128/k256=   145.28( 2.90x)  q256/k128=   196.40( 2.15x)
+seq   2048  None=   741.08( 1.00x)  q128/k128=   216.03( 3.43x)  q256/k256=   207.28( 3.58x)  q128/k256=   228.26( 3.25x)  q256/k128=   246.72( 3.00x)
+seq   3072  None=  1614.18( 1.00x)  q128/k128=   452.93( 3.56x)  q256/k256=   297.70( 5.42x)  q128/k256=   471.04( 3.43x)  q256/k128=   351.75( 4.59x)
+seq   4096  None=  2850.25( 1.00x)  q128/k128=   882.61( 3.23x)  q256/k256=   451.04( 6.32x)  q128/k256=   904.70( 3.15x)  q256/k128=   474.41( 6.01x)
+seq   8192  None= 10938.43( 1.00x)  q128/k128=  2907.58( 3.76x)  q256/k256=  1956.15( 5.59x)  q128/k256=  2946.45( 3.71x)  q256/k128=  2141.75( 5.11x)
+
+=== arbitrary (non-aligned) sequence lengths, q128/k128 and q256/k256 ===
+  seq      1  None PCC 0.999998   q128/k128 PCC 0.999998   q256/k256 PCC 0.999998
+  seq      3  None PCC 0.999947   q128/k128 PCC 0.999947   q256/k256 PCC 0.999947
+  seq     31  None PCC 0.999867   q128/k128 PCC 0.999867   q256/k256 PCC 0.999867
+  seq     33  None PCC 0.999865   q128/k128 PCC 0.999865   q256/k256 PCC 0.999865
+  seq    100  None PCC 0.999829   q128/k128 PCC 0.999830   q256/k256 PCC 0.999830
+  seq    129  None PCC 0.999840   q128/k128 PCC 0.999833   q256/k256 PCC 0.999833
+  seq    255  None PCC 0.999815   q128/k128 PCC 0.999811   q256/k256 PCC 0.999810
+  seq    257  None PCC 0.999816   q128/k128 PCC 0.999816   q256/k256 PCC 0.999816
+  seq   1000  None PCC 0.999795   q128/k128 PCC 0.999791   q256/k256 PCC 0.999783
+  seq   1023  None PCC 0.999794   q128/k128 PCC 0.999779   q256/k256 PCC 0.999777
+  seq   1025  None PCC 0.999798   q128/k128 PCC 0.999788   q256/k256 PCC 0.999787
+  seq   2049  None PCC 0.999778   q128/k128 PCC 0.999791   q256/k256 PCC 0.999794
+  seq   4095  None PCC 0.999740   q128/k128 PCC 0.999762   q256/k256 PCC 0.999755
+  seq   4097  None PCC 0.999776   q128/k128 PCC 0.999775   q256/k256 PCC 0.999776
+  seq   5000  None PCC 0.999755   q128/k128 PCC 0.999766   q256/k256 PCC 0.999777
+nanobind: leaked 1 instances!
+ - leaked instance 0x7700a9592e68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "devices"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_matmul_attributes"
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:17:32.889 | info     |    BuildKernels | JIT cache stats: 141/525 hits (26.9%) [141 cached, 383 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:17:32.889 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:17:32.903 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:17:32.903 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:17:33.527 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:17:33.527 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:17:33.527 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

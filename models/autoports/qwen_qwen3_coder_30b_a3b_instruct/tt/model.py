@@ -39,11 +39,12 @@ What the wrapper adds, and where each new boundary lives:
     **Column-parallel over the vocabulary**: die *d* owns columns
     ``37984*d .. 37984*d+37983`` of ``[2048, 151936]``. 151936 = 4 * 37984 and
     37984 = 32 * 1187, so the split is exact and needs no vocabulary padding.
-    **Logits never reach the host on the token-out path.** They do get gathered
-    *on device*: the greedy strategy all-gathers the 37984-wide shard and takes
-    a device argmax, and the top-k/top-p strategy all-gathers 32 candidate
-    values and indices instead. Which of the two is faster here was measured,
-    not assumed -- see ``sample_greedy_argmax``.
+    **Logits never reach the host on the token-out path, and neither strategy
+    all-gathers them.** Both reduce first and gather the survivors: greedy takes
+    a per-die argmax and all-gathers four candidate values and indices
+    (``_WatcherCleanSampling1D._sample_argmax``), top-k/top-p takes a per-die
+    top-32 and all-gathers 32 values and indices. Which of the two is faster here
+    was measured, not assumed -- see ``sample_greedy_argmax``.
 
 ``rotary`` (decode only)
     ``ttnn.experimental.rotary_embedding_hf(is_decode_mode=True)`` reading a
@@ -120,10 +121,128 @@ LM_HEAD_WEIGHT_DTYPE = ttnn.bfloat8_b
 EMBED_WEIGHT_DTYPE = ttnn.bfloat16
 
 
+#: ``_WatcherCleanSampling1D._sample_argmax``'s "not a winner" sentinel. Any value
+#: strictly greater than the vocabulary works; 2**20 is exact in int32 and leaves
+#: ``idx - BIG`` far from overflow.
+_DIST_ARGMAX_BIG = 1 << 20
+
+
 class _WatcherCleanSampling1D(Sampling1D):
     """``Sampling1D`` with the force-argmax gather spelled the way this layer spells it.
 
-    **Why this subclass exists.** ``ttnn.experimental.all_gather_async`` trips a
+    Two overrides, for two different reasons.
+
+    ------------------------------------------------------------------------
+    ``_sample_argmax`` -- reduce first, gather second
+    ------------------------------------------------------------------------
+
+    ``Sampling1D._sample_argmax`` all-gathers the whole column-parallel logit
+    shard (37984 bf16 columns per die) up to the full 151936 on **every** die,
+    untilizes 151936 columns and runs one ``ttnn.argmax`` over them.
+    ``doc/full_model/tt_perf_report_full_model_decode.txt`` shows those two ops
+    at ``AllGatherAsync 889 us`` and ``ArgMax 859 us``. **Neither number is a
+    share of a token-out step, and the two must not be summed against one.**
+    That report is stage 05's **2-layer** window, which charges the terminal
+    path against two layers instead of 48 and so over-weights it by
+    construction -- the two rows are 27.5% and 26.5% of *that* window. And the
+    column is per-op device-kernel time summed over the op's own cores (2 for
+    the gather, 110 for the argmax), which is a different accounting from the
+    wall clock of a decode step. An earlier revision of this docstring set
+    ``889 + 859`` against "the 1.87 ms of non-layer work in a 22.079 ms
+    token-out step"; the near-agreement was a coincidence between two
+    incommensurable measurements and the claim is withdrawn.
+
+    The full 48-layer profile is the accounting that means something. On the
+    shipped tree ``doc/optimized_full_model/probes/profile_summary_decode.json``
+    puts the *whole* terminal block -- final norm, LM head, this sampler and the
+    token feedback -- at **366.5 us of an 18889.5 us decode iteration, 1.94%**,
+    of which this sampler is **126.2 us**. The baseline path was replaced before
+    that profile was taken and so has no 48-layer op row of its own; its
+    in-model price is a token-out delta and is quoted as one under
+    ``sample_greedy_argmax``.
+
+    The override computes the same token by reducing on each die first and
+    all-gathering only the four survivors::
+
+        rm         = untilize(local_shard)          # bf16   [1,1,32,37984]
+        rm         = rm[:, :, :B, :]                # bf16   [1,1,B,37984]
+        local_idx  = argmax(rm, -1, keepdim)        # uint32 [1,1,B,1]
+        local_max  = gather(rm, -1, local_idx)      # bf16   [1,1,B,1]
+        global_idx = local_idx + rank*37984         # int32, sharded constant
+        vals4      = all_gather(local_max)          # bf16   [1,1,B,4]
+        idx4       = all_gather(global_idx)         # int32  [1,1,B,4]
+        gmax       = max(vals4, -1, keepdim)
+        mask       = (vals4 == gmax)                # int32 0/1
+        token      = min(BIG + mask*(idx4 - BIG), -1)
+        token      = pad(token, to=32, value=0)     # uint32 [1,1,32]
+
+    ``doc/optimized_full_model/probes/distributed_argmax_probe.py`` measures the
+    two against each other at the shipped shape, trace-captured, median of 100:
+    **1.1432 ms baseline against 0.6275 ms, 1.82x**. Five things in that spelling
+    are load-bearing and were each established on the device, not assumed:
+
+    * **The local maximum must come from ``ttnn.gather``, not ``ttnn.max``.**
+      ``ttnn.max`` over the 37984-wide shard costs 0.494 ms -- more than the
+      ``ttnn.argmax`` over the same tensor (0.371 ms). ``ttnn.gather`` at the
+      index the argmax already produced costs 0.059 ms. That single substitution
+      is the difference between 1.05x and 1.82x.
+    * **Only the live user rows are reduced.** The logit tile is logically 32
+      rows because ``ttnn.sampling`` addresses 32 slots, but at batch ``B`` the
+      other ``32-B`` are zero-logit padding and reduce to token 0 by
+      construction. ``ttnn.argmax``'s kernel compares scalar-wise on a
+      data-movement RISC, so the cost is linear in rows: the whole reduction is
+      **631.6 us over 32 rows and 250.8 us over 1**, and the ``ttnn.pad(value=0)``
+      that restores the 32 slots writes back exactly the values the 32-row
+      reduction produced. ``argmax_outer_dim_probe.py`` checks that on the
+      device rather than asserting it.
+    * **Untilize before the argmax.** ``ttnn.argmax``'s multicore path needs
+      ROW_MAJOR; the TILE path is single-core and the whole leg becomes 23.25 ms.
+      The untilize itself is 0.075 ms.
+    * **Indices are INT32 end to end.** FLOAT32 elementwise rounds an index
+      through bf16 (36885 -> 36864), and ``ttnn.where`` on int32 operands returns
+      bit garbage -- hence the arithmetic select ``BIG + mask*(idx-BIG)`` rather
+      than a ``where``. ``ttnn.gather`` in turn demands a UINT32 index, which is
+      exactly what ``ttnn.argmax`` emits, so no cast happens on that edge.
+    * **The cross-die reduction is a ``min`` over masked indices, never a sum.**
+      On an exact tie both lanes survive the mask; ``sum(mask*idx)`` would add
+      the two indices together, ``min`` keeps the lower one. Because the dies own
+      contiguous ascending vocabulary ranges and ``ttnn.argmax`` returns the
+      first occurrence within a die, that is precisely ``torch.argmax``'s
+      first-maximal rule. The probe checks it with crafted cross-die, within-die
+      and triple ties, and checks the first-occurrence property of ``ttnn.argmax``
+      itself.
+
+    **Output contract.** The base writes the token into the caller's
+    ``tt_out_tok`` via ``ttnn.argmax(output_tensor=...)`` and returns it. The
+    traced decode loop feeds that same buffer back as the next token's input, so
+    returning a *new* tensor would silently break token feedback
+    (``models/common/sampling/generator.py::_validate_trace_inputs`` checks
+    identity, and this model's trace binds ``token`` as both sampler output and
+    model input). The override therefore ends in ``ttnn.copy`` into the caller's
+    buffer and returns that exact object -- same dtype (uint32), layout
+    (ROW_MAJOR), shape and buffer address.
+
+    **Fallback.** The fast path is only taken when the reduction it performs is
+    provably the same function as the base's. It falls back to
+    ``super()._sample_argmax`` whenever ``valid_vocab_size < vocab_size`` (a
+    padded vocabulary needs the invalid tail masked *before* the local argmax,
+    which ``_mask_invalid_vocab_logits`` /
+    ``_can_slice_valid_vocab_for_argmax`` do around the base's gather and this
+    path does not reproduce), whenever any invalid-vocab mask buffer is present,
+    on a single device, or when the logits do not arrive as an exact even shard.
+    For this model ``valid_vocab_size == vocab_size == 151936 == 4*37984``, so
+    the fast path is what runs -- but a token id >= the real vocabulary stays
+    impossible either way, because a padded vocabulary never reaches it.
+
+    ------------------------------------------------------------------------
+    ``_argmax_all_gather`` -- no ``Topology::Linear`` + ``num_workers_per_link=1``
+    ------------------------------------------------------------------------
+
+    Still overridden, still needed: the split top-k/top-p path is live for any
+    request with ``top_k > 1`` or ``top_p > 0`` (``sample_split``), and
+    ``_sample_argmax``'s fallback branch above uses it too.
+
+    ``ttnn.experimental.all_gather_async`` trips a
     BRISC ``ASSERT`` in ``minimal_default_writer.cpp`` when it is given
     ``topology=Topology::Linear`` **together with** ``num_workers_per_link=1``.
     Neither alone does it; the pair does, at any width. The full A/B matrix is
@@ -174,6 +293,194 @@ class _WatcherCleanSampling1D(Sampling1D):
             # num_buffers_per_channel. Pinning num_workers_per_link=1 is the half
             # of the tripping pair we control. See the class docstring.
         )
+
+    # -- distributed argmax ---------------------------------------------------
+
+    def _distributed_argmax_local_vocab(self):
+        """Per-die vocabulary width if the distributed argmax applies, else ``None``.
+
+        Every condition here is a condition under which the reduction below is
+        *provably* the same function as ``Sampling1D._sample_argmax``'s. Anything
+        else falls back to the base implementation rather than being approximated.
+        """
+        cfg = self.config
+        if getattr(self, "_invalid_vocab_mask", None) is not None:
+            return None
+        if getattr(self, "_invalid_vocab_tail_mask", None) is not None:
+            return None
+        valid = cfg.valid_vocab_size if cfg.valid_vocab_size is not None else cfg.vocab_size
+        if valid != cfg.vocab_size:
+            # A padded vocabulary needs the invalid tail masked before the *local*
+            # argmax, which this path does not do. The base masks/slices around
+            # its full gather and stays correct; use it.
+            return None
+        num_devices = cfg.mesh_device.get_num_devices()
+        if num_devices < 2 or cfg.vocab_size % num_devices != 0:
+            return None
+        local = cfg.vocab_size // num_devices
+        if local % ttnn.TILE_SIZE != 0:
+            return None
+        return local
+
+    #: Live user rows in the sampler's 32-slot logit tile. ``None`` means "all 32"
+    #: and reproduces the pre-row-slicing behaviour exactly. The model sets it to
+    #: its own ``max_batch_size`` (1 by default) -- see ``_sample_argmax``, and
+    #: ``doc/optimized_full_model/probes/argmax_outer_dim_probe.py`` for why it is
+    #: worth 2.5x on the whole sampler.
+    _dist_active_rows = None
+
+    def _distributed_argmax_active_rows(self, slots: int) -> int:
+        rows = self._dist_active_rows
+        if rows is None:
+            return int(slots)
+        return max(1, min(int(rows), int(slots)))
+
+    def load_device_buffers(self):
+        """Base buffers, plus the per-die vocabulary offset the reduction adds.
+
+        Built here rather than lazily in ``_sample_argmax`` because the first
+        ``_sample_argmax`` may already be inside ``begin_trace_capture``, and
+        ``ttnn.from_torch`` inside a capture raises and leaves the capture open.
+        """
+        already_loaded = self._device_buffers_loaded
+        super().load_device_buffers()
+        if already_loaded and getattr(self, "_dist_die_offset", None) is not None:
+            return
+        local_vocab = self._distributed_argmax_local_vocab()
+        if local_vocab is None:
+            self._dist_die_offset = None
+            return
+        cfg = self.config
+        num_devices = cfg.mesh_device.get_num_devices()
+        # ``_dist_active_rows`` rows, not ``cfg.max_batch_size``: the reduction
+        # below runs over the live user rows only and the shapes must match
+        # exactly, because an H-broadcast here would silently re-expand the
+        # result back to 32 rows. See ``_sample_argmax``.
+        rows = self._distributed_argmax_active_rows(cfg.max_batch_size)
+        offsets = (
+            (
+                torch.arange(num_devices, dtype=torch.int64)
+                .reshape(1, 1, 1, num_devices)
+                .expand(1, 1, rows, num_devices)
+                * local_vocab
+            )
+            .contiguous()
+            .to(torch.int32)
+        )
+        # Sharded on the last dim: die d holds the single column ``d*local_vocab``.
+        self._dist_die_offset = ttnn.from_torch(
+            offsets,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            device=cfg.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(cfg.mesh_device, dim=-1),
+        )
+        self._dist_local_vocab = local_vocab
+
+    def _sample_argmax(self, logits, tt_out_tok):
+        """Distributed argmax: reduce per die, all-gather 4 candidates, reduce again.
+
+        Honours ``Sampling1D._sample_argmax``'s contract exactly -- writes the
+        caller's ``tt_out_tok`` in place and returns ``(tt_out_tok, None)``; the
+        argmax path never emits logprobs. See the class docstring for why each
+        step is spelled the way it is and for the measured 1.82x.
+        """
+        self.load_device_buffers()
+        die_offset = getattr(self, "_dist_die_offset", None)
+        if die_offset is None or int(logits.shape[-1]) != self._dist_local_vocab:
+            # Not an even per-die shard (already gathered, padded vocab, 1x1
+            # mesh, ...): the base path is the one that is still correct.
+            return super()._sample_argmax(logits, tt_out_tok)
+
+        # -- per-die reduction, over this die's own columns only ---------------
+        # ROW_MAJOR because ttnn.argmax's TILE path is single-core (23 ms).
+        rm = ttnn.untilize(logits, use_multicore=True)
+        # **Reduce the live user rows, not the padding.** ``decode_terminal``
+        # hands the sampler a logically-32-row tile because ``ttnn.sampling``
+        # addresses 32 fixed slots, but at batch B only the first B rows carry a
+        # user: the rest are the zero rows ``ttnn.pad(..., value=0.0)`` put on the
+        # pre-head hidden, and ``lm_head`` has no bias, so their logits are exactly
+        # zero. ``ttnn.argmax``'s multicore kernel does the comparison as a scalar
+        # C++ ``>`` loop on the RISCV_1 *data-movement* core -- 32 x 37984 values
+        # over 110 cores is ~11k compares each, and that, not the 32-round
+        # semaphore barrier, is why the op costs 366 us and sits 75x off
+        # bandwidth. Dropping the padding rows drops the work proportionally.
+        #
+        # Measured standalone at the shipped shape
+        # (``doc/optimized_full_model/probes/argmax_outer_dim_probe.py``,
+        # trace-captured, median of 60; the harness floor is ~58 us):
+        #
+        #   argmax over 32 rows                        371.1 us
+        #   argmax over 32 rows, keepdim=False         309.3    (one barrier, not 32)
+        #   ROW_MAJOR slice to 1 row + argmax           58.0    (i.e. at the floor)
+        #   whole reduction, 32 rows                   631.6
+        #   whole reduction, 1 row                     250.8    **2.52x**
+        #
+        # ``keepdim=False`` is a real but small effect and is *not* taken: it buys
+        # 62 us on its own and nothing at all once the rows are sliced (251.0 vs
+        # 250.8), while costing a ``[1,1,B] -> [1,1,B,1]`` reshape.
+        #
+        # The substitution is exact, not an approximation. The probe's
+        # ``padding_rows_produce_token_zero`` leg checks on the device that a
+        # zero logit row reduces to token **0** on the shipped 32-row path -- all
+        # four dies tie at 0.0, so the masked ``min`` keeps global index 0 -- which
+        # is precisely the value the ``ttnn.pad`` below writes back.
+        slots = int(rm.shape[-2])
+        active = self._distributed_argmax_active_rows(slots)
+        if active < slots:
+            live = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, active, self._dist_local_vocab])
+            ttnn.deallocate(rm)
+            rm = live
+        local_idx = ttnn.argmax(rm, dim=-1, keepdim=True)  # uint32 RM [1,1,B,1]
+        # ttnn.gather, NOT ttnn.max: 0.059 ms against 0.494 ms. This is the win.
+        local_max = ttnn.to_layout(ttnn.gather(rm, dim=-1, index=local_idx), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(rm)
+        # INT32, not FLOAT32: fp32 elementwise rounds the index through bf16.
+        local_idx_i32 = ttnn.to_layout(ttnn.typecast(local_idx, ttnn.int32), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(local_idx)
+        global_idx = ttnn.add(local_idx_i32, die_offset)
+        ttnn.deallocate(local_idx_i32)
+
+        # -- gather 4 candidates, not the whole vocabulary ---------------------
+        vals4 = self._argmax_all_gather(local_max)  # bf16  [1,1,B,4]
+        idx4 = self._argmax_all_gather(global_idx)  # int32 [1,1,B,4]
+        ttnn.deallocate(local_max)
+        ttnn.deallocate(global_idx)
+
+        # -- cross-die reduction ----------------------------------------------
+        gmax = ttnn.max(vals4, dim=-1, keepdim=True)
+        mask = ttnn.typecast(ttnn.eq(vals4, gmax), ttnn.int32)  # 0/1
+        # NOT sum(mask*idx): on a tie that adds the tied indices together.
+        # BIG + mask*(idx-BIG) sends losers to BIG and leaves every tied winner at
+        # its own global index, so min() keeps the lowest -- the first-maximal one,
+        # because die ranges ascend.
+        sel = ttnn.add(ttnn.multiply(mask, ttnn.subtract(idx4, _DIST_ARGMAX_BIG)), _DIST_ARGMAX_BIG)
+        token = ttnn.min(sel, dim=-1, keepdim=False)  # int32 TILE
+        for scratch in (vals4, idx4, gmax, mask, sel):
+            ttnn.deallocate(scratch)
+
+        # -- match ttnn.argmax's output contract: UINT32 / ROW_MAJOR ------------
+        token = ttnn.typecast(ttnn.to_layout(token, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint32)
+        if active < slots:
+            # Restore the 32-slot vector ``tt_out_tok`` is. 0 is not a convenient
+            # filler, it is the token the shipped 32-row reduction *already*
+            # produces for a padding row (see the comment above the slice), so the
+            # buffer's contents are unchanged slot for slot. It also keeps every
+            # slot a valid id: ``embed_decode`` runs ``ttnn.embedding`` over all 32
+            # before slicing to ``batch``, and an out-of-vocabulary id there would
+            # be an out-of-bounds table read.
+            padded = ttnn.pad(token, [(0, 0), (0, 0), (0, slots - active)], value=0)
+            ttnn.deallocate(token)
+            token = padded
+        if tt_out_tok is None:
+            return token, None
+        # Write **into the caller's buffer**. The traced decode loop feeds this
+        # exact tensor back as the next token, so the object and its address must
+        # survive; returning a new tensor breaks token feedback silently.
+        ttnn.copy(ttnn.reshape(token, tt_out_tok.shape), tt_out_tok)
+        ttnn.deallocate(token)
+        return tt_out_tok, None
 
 
 def _lm_head_compute_config(device):
@@ -362,6 +669,13 @@ class Qwen3CoderModel:
                 pad_to_power_of_2=False,
             )
         )
+        # ``max_batch_size=32`` above is the *slot* count ``ttnn.sampling`` and
+        # ``decode_terminal`` address; this is how many of those slots carry a
+        # user. The distributed argmax reduces only those rows -- the rest are the
+        # zero-logit padding ``decode_terminal`` adds -- which is worth 2.52x on
+        # the whole sampler at batch 1. Set before ``load_device_buffers`` because
+        # the per-die offset constant is built to this row count.
+        self.sampler._dist_active_rows = self.max_batch_size
         self.sampler.load_device_buffers()
         self.kv_cache: list[KVCache] | None = None
 
@@ -839,21 +1153,40 @@ class Qwen3CoderModel:
         )[0]
 
     def sample_greedy_argmax(self, logits, *, tt_out_tok=None):
-        """``Sampling1D``'s force-argmax path: all-gather the full vocabulary, argmax.
+        """``Sampling1D``'s force-argmax path, on this model's distributed override.
 
         Still the common module, still on device, still traced, still writes the
         sampled token straight into ``tt_out_tok`` -- it is a different strategy
-        inside the same implementation, not a custom sampler.
+        inside the same implementation, not a custom sampler. The strategy body
+        is ``_WatcherCleanSampling1D._sample_argmax``: reduce on each die, then
+        all-gather the four survivors instead of all-gathering the vocabulary.
 
-        **This is what greedy uses**, because at this vocabulary it is 5.5x
-        faster than the top-k/top-p split path (1.125 ms against 6.155 ms in the
-        48-layer model, both rows of ``doc/full_model/probes/perf_full_model.csv``;
-        the standalone sweep is ``doc/full_model/probes/sampler_probe.log``) and
-        produces the same token. It gathers 151936 bf16 columns per die where
-        the split path gathers 32 values plus 32 indices, so the trade is
-        bandwidth against a 37984-wide ``ttnn.topk``, and on this mesh the
-        bandwidth is cheaper. The moment any slot asks for ``top_k > 1`` or
-        ``top_p > 0`` the generator switches back to ``sample_split``.
+        **This is what greedy uses**, because at this vocabulary it is 6.6x
+        faster than the top-k/top-p split path (0.928 ms against 6.155 ms in the
+        48-layer model, both rows of
+        ``doc/optimized_full_model/probes/perf_full_model.csv``, which is the
+        **shipped** measurement) and produces the same token -- both rows sample
+        token 16 on that run. Whole-model ``token_out`` on that same run is
+        **19.693 ms, 50.78 t/s/u**.
+
+        Stage 05 shipped the same choice at 1.125 ms against 6.155 ms, and two
+        changes inside this override moved the greedy row since, each with its
+        own token-out delta at a like-for-like context:
+
+        * the **distributed reduction** above -- 22.079 ms to 21.461 ms
+          (45.29 -> 46.60 t/s/u), both at ``context`` 4096,
+          ``../full_model/probes/perf_full_model.json`` against
+          ``doc/optimized_full_model/probes/perf_full_model_part1_preadoption.json``;
+        * the **live-row slice** (reduce ``max_batch_size`` rows, not 32) --
+          20.146 ms to 19.693 ms at ``context`` 8192,
+          ``doc/optimized_full_model/probes/perf_full_model_p128_after.json``
+          against
+          ``doc/optimized_full_model/probes/perf_full_model_p128_argmaxrows.json``.
+
+        The remaining step between them is the paged SDPA program config in
+        ``tt/multichip_decoder.py`` and is not this sampler's. The moment any
+        slot asks for ``top_k > 1`` or ``top_p > 0`` the generator switches back
+        to ``sample_split``.
         """
         return self.sampler.decode_forward(logits, tt_out_tok=tt_out_tok, enable_log_probs=False)[0]
 
@@ -875,7 +1208,10 @@ class Qwen3CoderModel:
                 "vocab_padding": 0,
                 "decode_rope": "rotary_embedding_hf(is_decode_mode=True), device position gather",
                 "decode_rope_position_source": "device tensor advanced by ttnn.plus_one inside the trace",
-                "sampling_greedy": "Sampling1D force-argmax (all-gather vocab -> ttnn.argmax), traced, tt_out_tok",
+                "sampling_greedy": (
+                    "Sampling1D force-argmax, distributed: per-die untilize/argmax/gather -> "
+                    "all-gather 4 candidates -> masked-min, traced, writes tt_out_tok"
+                ),
                 "sampling_topk_topp": "Sampling1D split (local topk -> all-gather 32 candidates -> ttnn.sampling)",
                 "sampling_pad_to_power_of_2": False,
                 "host_logit_readback_on_token_out_path": False,

@@ -1,0 +1,156 @@
+2026-08-15 19:13:33.281 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 19:13:34.679 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 19:13:34.679 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 19:13:34.679 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 19:13:34.679 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 19:13:34.691 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 19:13:34.691 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 19:13:34.769 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 19:13:34.769 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 19:13:34.769 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 19:13:34.769 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 19:13:34.771 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 19:13:34.930 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 19:13:35.051 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 19:13:35.051 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 19:13:35.051 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 19:13:35.051 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 19:13:35.051 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 19:13:35.094 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 19:13:35.122 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 19:13:35.122 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+weight load 168.0 s (48 layers)
+{
+  "layers": 48,
+  "context": 8192,
+  "prompt_len": 128,
+  "audit": {
+    "batch": "1",
+    "dram_sharded_qkv": "(2048, 1280)",
+    "dram_sharded_wo": "(1024, 2048)",
+    "dram_sharded_taken": "True",
+    "gate_up_in0_block_w": "16",
+    "down_in0_block_w": "12",
+    "expert_intermediate_buffer": "L1",
+    "local_heads": "(8, 1)",
+    "local_experts": "32",
+    "norm_shard_cores": "8",
+    "norm_shard_feeds_qkv_directly": "True",
+    "decode_ccl_buffers_persistent": "True",
+    "num_layers": "48",
+    "embedding": "replicated_bf16_no_collective",
+    "residual_contract": "replicated [1,1,B,2048] bf16 TILE DRAM, no inter-layer collective",
+    "final_norm": "replicated, width-sharded decode kernel",
+    "lm_head_parallelism": "column_parallel_over_vocab",
+    "lm_head_local_vocab": "37984",
+    "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+    "vocab_padding": "0",
+    "decode_rope": "rotary_embedding_hf(is_decode_mode=True), device position gather",
+    "decode_rope_position_source": "device tensor advanced by ttnn.plus_one inside the trace",
+    "sampling_greedy": "Sampling1D force-argmax, distributed: per-die untilize/argmax/gather -> all-gather 4 candidates -> masked-min, traced, writes tt_out_tok",
+    "sampling_topk_topp": "Sampling1D split (local topk -> all-gather 32 candidates -> ttnn.sampling)",
+    "sampling_pad_to_power_of_2": "False",
+    "host_logit_readback_on_token_out_path": "False",
+    "host_argmax_on_token_out_path": "False",
+    "kv_cache_dtype": "bfloat16",
+    "kv_cache_paged": "True",
+    "page_block_size": "32",
+    "collective_topology": "Topology.Ring",
+    "prefill_num_links": "2",
+    "decode_num_links": "1"
+  },
+  "steady_state_two_tokens": {
+    "counters_before": {
+      "captures": 1,
+      "replays": 1,
+      "releases": 0,
+      "decode_warmups": 1,
+      "token_host_copies": 0,
+      "token_device_copies": 4,
+      "position_host_copies": 4,
+      "rotary_position_host_copies": 4,
+      "page_table_host_copies": 4,
+      "sampling_param_host_copies": 0,
+      "caller_token_readbacks": 0,
+      "explicit_synchronizations": 7,
+      "resets": 1
+    },
+    "counters_after": {
+      "captures": 1,
+      "replays": 3,
+      "releases": 0,
+      "decode_warmups": 1,
+      "token_host_copies": 0,
+      "token_device_copies": 4,
+      "position_host_copies": 4,
+      "rotary_position_host_copies": 4,
+      "page_table_host_copies": 4,
+      "sampling_param_host_copies": 0,
+      "caller_token_readbacks": 0,
+      "explicit_synchronizations": 7,
+      "resets": 1
+    },
+    "counters_that_moved": {
+      "replays": [
+        1,
+        3
+      ]
+    },
+    "only_replays_moved": true
+  },
+  "stage06_measured_path": {
+    "sampler_class": "_WatcherCleanSampling1D",
+    "sampler_dist_active_rows": 1,
+    "sampler_dist_local_vocab": 37984,
+    "sampler_distributed_argmax_taken": true,
+    "sdpa_decode_paged": true,
+    "sdpa_decode_k_chunk_tuned": 256,
+    "sdpa_decode_k_chunk_used": 256,
+    "sdpa_decode_k_chunk_clamped": false,
+    "sdpa_decode_cache_depth_per_user": 8192,
+    "sdpa_decode_max_cores_per_head_batch": 16,
+    "sdpa_decode_q_chunk": 32,
+    "sdpa_decode_program_config": "SDPAProgramConfig(compute_with_storage_grid_size=(11, 10), q_chunk_size=32, k_chunk_size=256, max_cores_per_head_batch=16)",
+    "sdpa_decode_program_config_type": "SDPAProgramConfig",
+    "sdpa_decode_config_cache_entries": 1,
+    "sdpa_prefill_program_config_passed": "None",
+    "sdpa_prefill_crossover_if_ever_adopted": 2048
+  }
+}
+
+wrote /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/runtime_fallback_audit.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x77b221e8ceb8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "bounding_box"
+ - leaked function "get_dram_alignment"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "SetRootDir"
+ - leaked function ""
+ - leaked function "clear_program_cache"
+ - leaked function "create_descriptor"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 19:16:25.332 | info     |    BuildKernels | JIT cache stats: 557/557 hits (100.0%) [557 cached, 291 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 19:16:25.332 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 19:16:25.350 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 19:16:25.350 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 19:16:25.811 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 19:16:25.811 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 19:16:25.811 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

@@ -1,0 +1,25 @@
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "GetDefaultDevice"
+ - leaked function "compute_program_hash"
+ - leaked function "__init__"
+ - leaked function "sfpu_inf"
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function "matmul_select_program_factory"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 05:50:31.456 | info     |    BuildKernels | JIT cache stats: 17/38 hits (44.7%) [17 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 05:50:31.456 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 05:50:31.468 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 05:50:31.468 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 05:50:31.907 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 05:50:31.907 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 05:50:31.907 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

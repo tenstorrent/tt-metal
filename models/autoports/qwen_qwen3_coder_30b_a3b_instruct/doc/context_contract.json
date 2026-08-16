@@ -4,8 +4,8 @@
   "current_supported_context": 262144,
   "capability_reduction": false,
   "limiting_reason": null,
-  "stage": "full_model",
-  "scope": "the complete 48-layer causal LM on the full 4-die P300_X2 mesh (1x4), batch 1: embeddings, 48 stage-04 multichip decoder layers, final norm, column-parallel lm_head and on-device traced sampling. The single-layer stage-02/03/04 numbers below are retained unchanged.",
+  "stage": "optimized_full_model",
+  "scope": "the complete 48-layer causal LM on the full 4-die P300_X2 mesh (1x4), batch 1, AFTER the stage-06 optimizations: embeddings, 48 stage-04 multichip decoder layers, final norm, column-parallel lm_head and on-device traced sampling with a distributed argmax. The single-layer stage-02/03/04 numbers and the stage-05 full-model numbers below are retained unchanged; the stage06_* fields are the shipped ones.",
   "device": {
     "arch": "blackhole",
     "board": "p300 x2 (ClusterType.P300_X2), 4 dies",
@@ -61,7 +61,17 @@
     "doc/full_model/README.md and work_log.md",
     "doc/full_model/probes/footprint_262144.json (the allocation this file quotes)",
     "doc/full_model/probes/perf_full_model.csv and .json",
-    "doc/full_model/run_prefill_check.log, run_teacher_forcing.log, run_autoregressive.log"
+    "doc/full_model/run_prefill_check.log, run_teacher_forcing.log, run_autoregressive.log",
+    "doc/optimized_full_model/README.md and work_log.md",
+    "doc/optimized_full_model/profile_48layer_work_log.md (the lever analysis; its op-level figures are the pre-adoption ones)",
+    "doc/optimized_full_model/ops_perf_full_model_48layer_decode.csv.gz (the verified one-iteration decode window)",
+    "doc/optimized_full_model/ops_perf_full_model_48layer_prefill_s128.csv.gz (the 48-layer prefill window)",
+    "doc/optimized_full_model/probes/profile_summary_decode.json and profile_summary_prefill.json",
+    "doc/optimized_full_model/probes/perf_full_model_p{128,1024,4096}_{before,after,argmaxrows}.json",
+    "doc/optimized_full_model/probes/footprint_262144.json (the allocation this file quotes)",
+    "doc/optimized_full_model/probes/runtime_fallback_audit.json",
+    "doc/optimized_full_model/probes/sdpa_sweep_confirm_bf16.json and sdpa_hf_pcc_at_depth.json",
+    "doc/optimized_full_model/logs/run_prefill_check_argmaxrows.log, run_teacher_forcing_argmaxrows.log, run_autoregressive_argmaxrows.log, check_degenerate_argmaxrows.log"
   ],
   "expert_weight_dtype": "bfloat4_b",
   "optimized_note": "Stage 02 changed expert weight dtype to bfloat4_b, attention projection dtype to bfloat8_b, the expert matmul block widths, expert math fidelity to LoFi, and the decode attention projections to a DRAM-sharded program config. None of these touches the KV cache layout, dtype, or paging, so the measured context limits carry over unchanged. Per-layer weight DRAM: expert weights shrink ~3.6x (bf16 to bfloat4_b, which is 0.5625 B/elem once each 16-element block's exponent byte is counted). Decode additionally needs a second, DRAM-width-sharded copy of wqkv/wo; at bfloat8_b (1.0625 B/elem) each copy is 20.05 MB, so the pair is 40.11 MB against the single bf16 copy stage 01 held at 37.75 MB -- a 2.36 MB increase, not a wash, and an earlier revision of this file called it one by rounding bfloat8_b to 1 B/elem. Against 24 GB of usable DRAM it changes nothing: no capability reduction.",
@@ -116,7 +126,7 @@
     "weight_load_note": "48 layers streamed one at a time out of the sharded safetensors checkpoint; the 61 GB checkpoint is never fully materialised on the host.",
     "rope_table_note": "the probe builds the model with the default rope_cache_len of 8192, so the RoPE tables inside weights_embed_lm_head_rope_gb_per_die are the 8192-row pair (0.004 GB/die). Growing them to the full 262144 context costs 0.134 GB/die (262144 * 128 * 2 B * 2 tables), taking the total to 11.889 GB/die and the headroom to 21.985. No capability reduction; the tables grow on demand via Qwen3CoderModel.ensure_rope_capacity, and tt/generator.py's decode_forward takes decode_horizon= so a low-level caller grows them once before any trace is captured."
   },
-  "full_model_context_note": "NO REDUCTION. The advertised 262144 context is allocated and held by the running 48-layer model with 22.119 GB/die free. What has NOT been done at the full stack is a 262144-token prefill: prefill is single-shot (no internal chunking), and the longest prompt actually pushed through all 48 layers in this stage is 1000 tokens. The 262144-token single-layer prefill probe in measured.prefill_probe above still stands, and the KV cache, page tables and positions are sized and exercised for the full context. This is a coverage gap in the evidence, not a capability reduction, and it is named as limitation 1 of doc/full_model/README.md.",
+  "full_model_context_note": "NO REDUCTION. The advertised 262144 context is allocated and held by the running 48-layer model with 22.119 GB/die free. What has NOT been done at the full stack is a 262144-token prefill: prefill is single-shot (no internal chunking), and the longest prompt actually pushed through all 48 layers in this stage is 1000 tokens. The 262144-token single-layer prefill probe in measured.prefill_probe above still stands, and the KV cache, page tables and positions are sized and exercised for the full context. This is a coverage gap in the evidence, not a capability reduction, and it is named as limitation 1 of doc/full_model/README.md. STAGE 06: still no reduction, and the 262144 context is now usable rather than only allocatable -- decode is nearly flat in context (1.04x from 128 to 4096, against 1.96x before). See stage06_context_flatness for exactly how deep that was measured and what is still unmeasured.",
   "full_model_batch": {
     "primary": 1,
     "primary_note": "every performance figure in doc/full_model/README.md is batch 1.",
@@ -158,5 +168,97 @@
     },
     "bar": "top5 >= 0.98 and top100 == 1.00; both met at 1.000"
   },
-  "full_model_policy_note": "Stage 05 changed NOTHING about the decoder layer's dtype, fidelity, KV, activation or CCL policy, the paged-cache dtype split, the rejection ledger, or the inter-layer residual layout. The one edit to tt/multichip_decoder.py is an optional rope= parameter defaulting to the op it already called, and the stage-04 suite re-runs at 112 passed / 0 failed on this tree. What the full model adds is a replicated bf16 embedding (0.622 GB/die, no collective), a replicated final norm, a column-parallel bfloat8_b lm_head with zero vocabulary padding (151936 = 4 x 37984), growable replicated RoPE tables, and two captured traces plus their persistent inputs -- 0.006 GB/die of traces and buffers in total. Decode rotary moved from ttnn.experimental.rotary_embedding (Python-int position, unreplayable in a trace) to ttnn.experimental.rotary_embedding_hf over a device-gathered cos/sin pair; both are HF rotate_half and the swap is bit-identical at max|diff| 0.000e+00 and PCC 1.0 at every position tested, so the KV cache channel convention is untouched."
+  "full_model_policy_note": "Stage 05 changed NOTHING about the decoder layer's dtype, fidelity, KV, activation or CCL policy, the paged-cache dtype split, the rejection ledger, or the inter-layer residual layout. The one edit to tt/multichip_decoder.py is an optional rope= parameter defaulting to the op it already called, and the stage-04 suite re-runs at 112 passed / 0 failed on this tree. What the full model adds is a replicated bf16 embedding (0.622 GB/die, no collective), a replicated final norm, a column-parallel bfloat8_b lm_head with zero vocabulary padding (151936 = 4 x 37984), growable replicated RoPE tables, and two captured traces plus their persistent inputs -- 0.006 GB/die of traces and buffers in total. Decode rotary moved from ttnn.experimental.rotary_embedding (Python-int position, unreplayable in a trace) to ttnn.experimental.rotary_embedding_hf over a device-gathered cos/sin pair; both are HF rotate_half and the swap is bit-identical at max|diff| 0.000e+00 and PCC 1.0 at every position tested, so the KV cache channel convention is untouched.",
+  "stage06_note": "Stage 06 changed NOTHING this file measures about capability. No capability reduction. What it changed, all three measured: (1) the greedy sampler stopped all-gathering the 151936-wide logit row and now reduces per die and all-gathers four candidate values and indices (tt/model.py, _WatcherCleanSampling1D._sample_argmax); (2) the PAGED SDPA-decode call got the program config it never had -- q_chunk_size 32, k_chunk_size min(256, per-user cache depth), max_cores_per_head_batch 16, memoised on the compute grid (tt/multichip_decoder.py, _sdpa_program_config); (3) that same reduction now runs over the live user rows instead of the 32 fixed sampler slots. KV-cache dtype, layout, paging and bytes/token are untouched; so are expert and attention weight dtypes, math fidelity, activation memory configs, the CCL policy (Topology.Ring, no num_workers_per_link pinned, 2 links prefill / 1 decode) and the inter-layer residual layout. tt/functional_decoder.py gained an sdpa_program_config= seam on attention_prefill that defaults to None and is passed None -- the prefill lever is built, measured and NOT adopted. Evidence: doc/optimized_full_model/README.md and work_log.md.",
+  "stage06_performance": {
+    "workload": "prompt 128 / generate 128 / batch 1, 48 layers, 1x4 P300_X2, FABRIC_1D_RING",
+    "source": "doc/optimized_full_model/probes/perf_full_model_p128_argmaxrows.json (128 timed reps, median)",
+    "ttft_ms_warmed": 125.431,
+    "ttft_ms_cold": 221.494,
+    "decode_logits_only_ms": 19.567,
+    "decode_logits_only_tps_user": 51.107,
+    "decode_token_out_ms": 19.693,
+    "decode_token_out_tps_user": 50.781,
+    "decode_token_out_with_readback_ms": 19.71,
+    "decode_token_out_with_readback_tps_user": 50.735,
+    "teacher_forcing_decode_tps_user": 42.25,
+    "teacher_forcing_note": "run_teacher_forcing uploads a forced token and reads the prediction back every step, so it is a correctness gate that prints a rate and is NOT the same measurement as token-out. It moved 38.50 -> 42.25 t/s/u (doc/full_model/run_teacher_forcing.log, doc/optimized_full_model/logs/run_teacher_forcing_argmaxrows.log).",
+    "against_stage05": {
+      "source": "doc/full_model/probes/perf_full_model.json",
+      "decode_token_out_ms": 22.079,
+      "decode_token_out_tps_user": 45.292,
+      "ttft_ms_warmed": 126.695,
+      "token_out_speedup": 1.1212,
+      "note": "the stage-05 run allocated a 4096-position KV cache and the stage-06 runs allocate 8192. SDPA-decode cost is independent of ALLOCATED depth and linear in cur_pos, measured directly at doc/optimized_full_model/probes/sdpa_depth_probe.json, so the comparison holds; the stage-06 before/after legs are all at 8192 and are like-for-like throughout."
+    },
+    "layer_stack_lower_bound_ms": 18.47,
+    "layer_stack_lower_bound_basis": "48 x the OPTIMIZED IN-MODEL per-layer device-kernel time, 384.791 us, from the verified one-iteration window at doc/optimized_full_model/ops_perf_full_model_48layer_decode.csv.gz (summary: probes/profile_summary_decode.json, regions_us.layer_stack). This REPLACES the stage-05 basis of 48 x 0.4286 ms = 20.573 ms, which multiplied a WALL figure for a one-layer traced model and so charged 48 layers for one iteration's dispatch overhead -- which is why stage 05 appeared to be under its own lower bound. The stage-04 layer's isolated device-kernel content is 362.83 us (doc/optimized_multichip_decoder/window_decode.txt); the in-model layer is 6.1% dearer than that.",
+    "bound_plus_terminal_ms": 18.889,
+    "gap_to_token_out_ms": 0.803,
+    "gap_to_token_out_percent": 4.08,
+    "gap_note": "dispatch and op-to-op gap across 3512 device ops -- 0.23 us each. The stage goal flags >10-15% as needing action; this is 4.08%.",
+    "prefill_profile": {
+      "source": "doc/optimized_full_model/probes/profile_summary_prefill.json",
+      "note": "stage 05 shipped with prefill unprofiled and disclosed it as a gap; stage 06 closes it. One verified 48-layer prefill of a 128-token prompt, boundary-checked by requiring the preceding pass to be the identical sequence of op codes row for row on all four devices, plus 56 per-device tallies.",
+      "device_kernel_ms": 122.921,
+      "share_of_ttft_percent": 98.0,
+      "expert_sparse_matmul_percent": 61.44,
+      "collectives_percent": 3.13,
+      "sdpa_percent": 0.58
+    },
+    "watcher": "clean. TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 pytest tests/ -m 'not models_performance_bare_metal' -q is 145 passed with zero tripped asserts (doc/optimized_full_model/logs/watcher_argmaxrows.log.gz)."
+  },
+  "stage06_context_flatness": {
+    "claim": "The advertised 262144-token context is now USABLE, not merely allocatable. Before stage 06 decode cost grew 1.96x between a 128-token context and a 4096-token one; after it, 1.04x. That is the difference between a context you can hold and a context you can serve.",
+    "token_out_ms": {
+      "128": 19.6925,
+      "1024": 19.9787,
+      "4096": 20.505
+    },
+    "token_out_tps_user": {
+      "128": 50.781,
+      "1024": 50.053,
+      "4096": 48.768
+    },
+    "token_out_ms_before_stage06": {
+      "128": 21.4776,
+      "1024": 26.1432,
+      "4096": 42.0623
+    },
+    "ratio_4096_over_128": 1.0413,
+    "ratio_4096_over_128_before_stage06": 1.9584,
+    "cause": "the PAGED SDPA-decode call ran at the op default, whose cost is linear in cur_pos. With k_chunk_size=256 / max_cores_per_head_batch=16 it is nearly flat. Sources: doc/optimized_full_model/probes/sdpa_sweep_confirm_bf16.json (the op) and the three perf_full_model_p*_{before,argmaxrows}.json pairs (the model).",
+    "measured_to_context_tokens": 4096,
+    "measured_to_context_basis": "END TO END, this is how deep it was actually measured: prompt 4096, generate 128, batch 1, through the real 48-layer model, 128 timed reps (doc/optimized_full_model/probes/perf_full_model_p4096_argmaxrows.json). Decode beyond a 4096-token context has NOT been run end to end at 48 layers. The 262144 claim beyond that point rests on the three narrower measurements below, and this field exists so nobody reads the flatness claim as an end-to-end measurement at the advertised context.",
+    "op_level_evidence_to_cur_pos": 32767,
+    "op_level_evidence_basis": "the shipped SDPA-decode configuration measured at the real per-die decode shapes and the real bfloat16 cache dtype out to cur_pos 32767: 74.13 us against the op default's 3545.05 us, a 47.8x, with the configured leg's PCC holding at 0.9997 where the default's has decayed to 0.9897. doc/optimized_full_model/probes/sdpa_sweep_confirm_bf16.json. This is the op, not the model.",
+    "in_model_pcc_to_cur_pos": 16383,
+    "in_model_pcc_basis": "the real multichip layer against a HuggingFace reference with a prefill-primed paged cache: PCC 0.999363 at cur_pos 16383 on the adopted path (0.999294 on the default). doc/optimized_full_model/logs/sdpa_hf_pcc_at_depth_deep.log; the 128/1024/4096 legs are in probes/sdpa_hf_pcc_at_depth.json. 32768 was attempted and the HOST was OOM-killed building the torch reference, not the device -- the same reference-side ceiling pcc_validation_note records.",
+    "capacity_evidence": "the full 262144-token paged KV cache is allocated and held by the running 48-layer model, with both decode traces captured and a token run through it: doc/optimized_full_model/probes/footprint_262144.json.",
+    "still_not_measured": "a 262144-token PREFILL through all 48 layers (prefill is single-shot, and the longest 48-layer prompt run is 4096); end-to-end decode at contexts above 4096; and any of this at batch > 1. These are coverage gaps in the evidence, not capability reductions, and they are named as limitations in doc/optimized_full_model/README.md."
+  },
+  "stage06_measured": {
+    "method": "doc/optimized_full_model/probes/footprint_probe.py --context 262144, re-run on the SHIPPED tree. Same probe as stage 05's, copied rather than imported so it writes beside this stage's evidence. It builds the real model -- real weights, real embed_tokens, real lm_head, the real paged KV cache at the advertised context, the real RoPE tables -- captures both decode traces and runs a token through it. GB = 1e9, as the allocator reports it.",
+    "weights_embed_lm_head_rope_gb_per_die": 5.311,
+    "kv_cache_at_262144_batch1_gb_per_die": 6.443,
+    "traces_and_persistent_buffers_gb_per_die": 0.006,
+    "total_gb_per_die": 11.76,
+    "headroom_gb_per_die": 22.119,
+    "dram_per_die_gb_reported": 33.879,
+    "sum_note": "the three stage rows in doc/optimized_full_model/probes/footprint_262144.json sum to 11.759906816, bit-identical to total_gb_per_die. Any residual visible when the 3dp values above are added by hand is this file's display rounding and nothing else; doc/optimized_full_model/probes/check_published_figures.py asserts the raw rows equal the raw total exactly.",
+    "kv_formula_check": "1 local kv head * head_dim(128) * 2 bytes * 2 tensors (K and V) = 512 B/token/layer/die, x 48 layers x 262144 tokens = 6.442450944 GB/die of KV at batch 1 -- which is what the allocator reports, so the paged cache carries no per-block overhead worth a digit. Unchanged by stage 06: the KV dtype, the block size and the head split are all untouched.",
+    "comparison_to_stage05": "stage 05 measured 11.759 GB/die total and 22.119 free for the same contents. Stage 06 adds one small constant to the model -- the distributed argmax's per-die vocabulary offset, a [1,1,rows,4] int32 sharded to one tile-padded column per die -- and no new activation, cache or collective buffer. Any difference between the two totals is that constant plus allocator placement, and it is far below the headroom either way.",
+    "rope_table_note": "the probe builds the model with the default rope_cache_len of 8192, so the RoPE tables inside weights_embed_lm_head_rope_gb_per_die are the 8192-row pair (0.004 GB/die). Growing them to the full 262144 context costs 0.134 GB/die (262144 * 128 * 2 B * 2 tables). No capability reduction; the tables grow on demand via Qwen3CoderModel.ensure_rope_capacity, and tt/generator.py's decode_forward takes decode_horizon= so a low-level caller grows them once before any trace is captured."
+  },
+  "stage06_runtime_audit": {
+    "source": "doc/optimized_full_model/probes/runtime_fallback_audit.json",
+    "host_logit_readback_on_token_out_path": false,
+    "host_argmax_on_token_out_path": false,
+    "sampling_greedy": "Sampling1D force-argmax, distributed: per-die untilize/argmax/gather -> all-gather 4 candidates -> masked-min, traced, writes tt_out_tok",
+    "sdpa_decode_program_config": "SDPAProgramConfig(compute_with_storage_grid_size=(11, 10), q_chunk_size=32, k_chunk_size=256, max_cores_per_head_batch=16)",
+    "sdpa_decode_k_chunk_clamped_at_shipped_context": false,
+    "sdpa_prefill_program_config_passed": "None",
+    "steady_state_only_replays_moved": true,
+    "note": "runtime_fallback_audit() itself does not yet carry the two properties stage 06 introduced -- the paged SDPA program config and the sampler's live-row count -- because adding fields would change a dict tests/test_full_model.py::test_runtime_fallback_audit_is_clean pins field by field. They are recorded here and in the JSON above instead, read off the modules that own them."
+  }
 }

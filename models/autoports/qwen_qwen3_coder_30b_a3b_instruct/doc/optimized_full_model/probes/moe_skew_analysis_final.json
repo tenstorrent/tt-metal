@@ -1,0 +1,144 @@
+{
+  "expert_count_recovery": {
+    "base_us": 29.351,
+    "step_us": 6.85,
+    "per_layer_sum_over_dies": [
+      [
+        8,
+        48
+      ]
+    ],
+    "sums_to_top_k_in_every_layer": true
+  },
+  "reduce_scatter_is_wait": {
+    "attn_rs_mean_us": 12.446260416666666,
+    "moe_rs_mean_us": 24.246015625000002,
+    "moe_rs_min_us": 6.251,
+    "moe_rs_max_us": 73.384,
+    "corr_lag_vs_moe_rs": 0.9878160438606736,
+    "corr_lag_vs_attn_rs": 0.06339439413922603,
+    "slope_us_moe_rs_per_us_lag": 1.0457336137225395,
+    "all_gather_mean_us": [
+      11.674151041666667,
+      12.500229166666669
+    ]
+  },
+  "most_balanced_layer": {
+    "layer": 26,
+    "work_spread_us": 1.3290000000000077,
+    "moe_rs_us_all_dies": [
+      14.43,
+      12.319,
+      10.687,
+      12.113
+    ],
+    "attn_rs_mean_us": 12.446260416666666
+  },
+  "skew_is_combinatorial": {
+    "measured_k_histogram": [
+      [
+        0,
+        16
+      ],
+      [
+        1,
+        50
+      ],
+      [
+        2,
+        66
+      ],
+      [
+        3,
+        45
+      ],
+      [
+        4,
+        11
+      ],
+      [
+        5,
+        1
+      ],
+      [
+        6,
+        3
+      ]
+    ],
+    "uniform_k_marginal": {
+      "0": 0.1001,
+      "1": 0.267,
+      "2": 0.3115,
+      "3": 0.2076,
+      "4": 0.0865,
+      "5": 0.0231,
+      "6": 0.0038,
+      "7": 0.0004,
+      "8": 0.0
+    },
+    "measured_mean_max_k": 3.4375,
+    "uniform_expected_max_k": 3.5380859375,
+    "uniform_max_pmf": {
+      "2": 0.0385,
+      "3": 0.5127,
+      "4": 0.3397,
+      "5": 0.0923,
+      "6": 0.0154,
+      "7": 0.0015,
+      "8": 0.0001
+    },
+    "chi2_vs_uniform": 4.063771805232231,
+    "chi2_pooled_from_k": 5,
+    "chi2_observed_pooled": {
+      "0": 16,
+      "1": 50,
+      "2": 66,
+      "3": 45,
+      "4": 11,
+      "5": 4
+    },
+    "chi2_expected_pooled": {
+      "0": 19.2217,
+      "1": 51.2578,
+      "2": 59.8008,
+      "3": 39.8672,
+      "4": 16.6113,
+      "5": 5.2412
+    },
+    "chi2_bins": 6,
+    "chi2_df": 5,
+    "chi2_p_value": 0.5402714213887277,
+    "per_die_total_active_experts": [
+      81,
+      111,
+      102,
+      90
+    ],
+    "per_die_expected": 96.0,
+    "per_die_chi2": 5.4375,
+    "per_die_df": 3,
+    "per_die_p_value": 0.14242496743175073,
+    "perfect_balance_max_k": 2.0,
+    "independence_caveat": "The 192 die-layer counts are NOT 192 independent Binomial(8, 1/4) draws: within each layer the 4 counts sum to 8 by construction, and all 48 layers come from a single decode token. The effective sample is 48 layers of one token. Both p-values below are therefore optimistic about their own precision, and neither is evidence *for* uniformity -- only a failure to reject it. moe_routing_across_tokens_probe.py is the probe that samples many tokens.",
+    "why_the_lever_looked_like_zero_and_is_not": "The sound argument does not need the routing to be uniform. If routing is exchangeable over experts -- no expert is systematically hotter than another -- then every relabelling of experts to dies induces the identical distribution of per-die counts, so the expected saving from a permutation is exactly 0 by construction and not by measurement. What that rests on is exchangeability, which this one-token sample can only fail to reject; persistent per-expert hotness across tokens is the one thing that would break it and it is invisible here. IT IS BROKEN. moe_routing_across_tokens_probe.py sampled 128 tokens on each of three prompts and found hotness that persists strongly (a layer's 8 hottest experts take 47.5-57.4% of its selections against 6.2% under uniform routing), so routing is NOT exchangeable, the argument above does not apply, and the lever is NOT zero -- it is 0.024-0.112 ms/iteration held out on routing the fit never saw. This key used to be named why_the_lever_is_zero, which contradicted its own last sentence and the stage's conclusion; the round-2 review caught the name."
+  },
+  "budget": {
+    "measured_idle_us_per_layer": 9.846874999999999,
+    "measured_idle_ms_per_iteration": 0.47264999999999996,
+    "uniform_routing_floor_us_per_layer": 10.535888671875,
+    "uniform_routing_floor_ms_per_iteration": 0.50572265625,
+    "moe_rs_total_ms_per_iteration": 1.1638087499999998,
+    "attn_rs_total_ms_per_iteration": 0.5974204999999999,
+    "moe_rs_excess_over_attn_ms": 0.5663882499999999,
+    "cost_of_removing_it_by_computing_all_experts": "16x the expert FLOPs (128 expert-slots per layer instead of 8)",
+    "shipped_vs_uniform_expectation": {
+      "measured_mean_max_k": 3.4375,
+      "uniform_expected_max_k": 3.5380859375,
+      "sd_of_max_over_layers": 0.8481832901071685,
+      "standard_error_of_the_mean": 0.12242471271637906,
+      "z": -0.8216146500831668,
+      "two_sided_p": 0.4112962486982684,
+      "reading": "The measured mean maximum is below the uniform expectation by less than one standard error. This is NOT evidence that the shipped contiguous windows beat an arbitrary partition, and the earlier claim that it was has been withdrawn."
+    }
+  }
+}

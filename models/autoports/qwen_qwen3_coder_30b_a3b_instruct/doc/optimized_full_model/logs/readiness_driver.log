@@ -1,0 +1,4 @@
+done run_prefill_check rc=0
+done run_teacher_forcing rc=0
+done run_autoregressive rc=0
+done check_degenerate rc=0

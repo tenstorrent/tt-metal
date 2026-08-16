@@ -1,0 +1,85 @@
+2026-08-15 16:29:06.263 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 16:29:06.388 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 16:29:06.388 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 16:29:06.388 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 16:29:06.388 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 16:29:06.399 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 16:29:06.399 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 16:29:06.477 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 16:29:06.477 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 16:29:06.477 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 16:29:06.477 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 16:29:06.478 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 16:29:06.703 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 16:29:06.823 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 16:29:06.823 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 16:29:06.823 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 16:29:06.823 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 16:29:06.823 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 16:29:06.864 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 16:29:06.892 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 16:29:06.892 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+untilize_37984                           75.1 us
+argmax_keepdim_true                     371.1 us   32/32
+argmax_keepdim_false                    309.3 us   32/32
+argmax_keepdim_false_plus_reshape       315.4 us   32/32
+rm_slice1_then_argmax                    58.0 us   1/1
+rm_slice2_then_argmax                    58.2 us   2/2
+rm_slice4_then_argmax                    65.5 us   4/4
+rm_slice8_then_argmax                   122.8 us   8/8
+rm_slice1_only                           58.4 us
+tile_slice1_plus_untilize                71.5 us
+2026-08-15 16:29:07.726 | critical |          Always | TT_FATAL: The input must be in tiled format (assert.hpp:104)
+topk_k1_rm_32rows: FAILED TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/topk_device_operation.cpp:166: input_tensor.layout() == Layout::TILE
+info:
+The i
+topk_k32_tile_32rows                   6047.3 us
+pad_token_1_to_32                        57.9 us
+full_shipped_keepdim_true               631.6 us   32/32
+full_candidate_keepdim_false            575.1 us   32/32
+full_candidate_batch1                   250.8 us   1/1
+full_candidate_batch1_kdfalse           251.0 us   1/1
+padding rows -> tokens [0]  PASS
+tie cross_die_tie/keepdim_true: expected 38061, got [38061] -> PASS
+tie cross_die_tie/keepdim_false: expected 38061, got [38061] -> PASS
+tie within_die_tie/keepdim_true: expected 76268, got [76268] -> PASS
+tie within_die_tie/keepdim_false: expected 76268, got [76268] -> PASS
+tie triple_tie/keepdim_true: expected 11, got [11] -> PASS
+tie triple_tie/keepdim_false: expected 11, got [11] -> PASS
+
+wrote models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/argmax_outer_dim_probe_b.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x758f7af102b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 43 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "create_submesh"
+ - leaked function "load_sub_device_manager"
+ - leaked function "__len__"
+ - leaked function "__hash__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "GetDefaultDevice"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 16:29:09.066 | info     |    BuildKernels | JIT cache stats: 223/225 hits (99.1%) [223 cached, 87 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 16:29:09.066 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 16:29:09.078 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 16:29:09.078 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 16:29:09.626 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 16:29:09.626 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 16:29:09.626 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

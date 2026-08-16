@@ -1,0 +1,91 @@
+iteration device-kernel-time totals, all devices (spread check):
+  device 0: total  18,889.5 us = pre    53.0 + 48 layers  18,470.0 + terminal   366.5   (per layer 384.791 us)
+  device 1: total  18,888.5 us = pre    53.1 + 48 layers  18,467.2 + terminal   368.3   (per layer 384.732 us)
+  device 2: total  18,888.3 us = pre    52.2 + 48 layers  18,469.7 + terminal   366.5   (per layer 384.785 us)
+  device 3: total  18,886.8 us = pre    53.1 + 48 layers  18,463.3 + terminal   370.3   (per layer 384.652 us)
+
+=== terminal-pre (embedding + rope cos/sin gather): 53.0 us over 12 ops (0.28% of the 18,889.5 us iteration) ===
+       us  %iter     n  us/call      cores  op
+     21.3  0.11%     2   10.657         64  Untilize 1x1x4096x128
+     11.3  0.06%     2    5.629          1  TilizeWithValPadding 1x1x1x128
+     11.2  0.06%     1   11.199          1  Embeddings 1x1x1x32
+      4.1  0.02%     2    2.064          4  Transpose 1x1x32x128
+      2.2  0.01%     2    1.095          1  Embeddings 1x1x1x1
+      1.7  0.01%     1    1.741         64  Slice 1x1x32x2048
+      1.2  0.01%     2    0.590          1  InterleavedToSharded 1x1x32x128
+
+=== 48-layer stack: 18,470.0 us over 3456 ops (97.78% of the 18,889.5 us iteration) ===
+       us  %iter     n  us/call  us/layer      cores  op
+   1978.3 10.47%    48   41.215    41.215         48  SparseMatmul 1x1x32x2048 @ 1x32x2048x1536
+   1952.6 10.34%    96   20.339    40.678          6  ReduceScatterMinimalAsync 1x1x32x2048
+   1896.6 10.04%    48   39.513    39.513         64  SparseMatmul 1x32x32x768 @ 1x32x768x2048
+   1265.1  6.70%    48   26.357    26.357          1  TopK 1x1x32x128
+   1129.6  5.98%    96   11.767    23.534          6  AllGatherAsync 1x1x32x512
+    787.2  4.17%    48   16.399    16.399         64  ReshapeView 1x32x32x2048
+    780.9  4.13%    48   16.269    16.269         48  ReshapeView 1x32x32x1536
+    674.3  3.57%    96    7.024    14.048        110  Unary 1x32x32x1536
+    631.4  3.34%    96    6.577    13.154          8  LayerNorm 1x1x32x2048
+    466.8  2.47%    48    9.726     9.726         80  Matmul 1x1x32x2048 @ 1x1x2048x1280
+    438.0  2.32%    48    9.124     9.124        110  ReshapeView 1x1x32x768
+    432.5  2.29%    48    9.010     9.010         80  Matmul 1x1x32x1024 @ 1x1x1024x2048
+    429.7  2.27%    48    8.952     8.952        110  SdpaDecode 1x1x32x128
+    421.4  2.23%    96    4.390     8.779        110  BinaryNg 1x1x32x32
+    383.5  2.03%    96    3.995     7.990          1  LayerNorm 1x1x32x128
+    317.1  1.68%    48    6.607     6.607          8  Matmul 1x1x32x2048 @ 1x1x2048x128
+    273.2  1.45%    48    5.692     5.692          1  TilizeWithValPadding 1x1x1x128
+    269.1  1.42%    96    2.803     5.606          1  PagedUpdateCache 128x1x32x128
+    240.3  1.27%    96    2.503     5.005        110  Unary 1x1x128x32
+    233.9  1.24%    48    4.873     4.873          4  FillPad 1x1x32x128
+    221.2  1.17%    96    2.304     4.608        110  BinaryNg 1x1x128x2048
+    209.0  1.11%    48    4.354     4.354        110  BinaryNg 1x1x32x2048
+    183.9  0.97%    96    1.916     3.832          1  Matmul 1x1x32x128 @ 1x1x128x32
+    181.4  0.96%    96    1.889     3.779          1  RotaryEmbeddingHf 1x1x32x128
+    174.3  0.92%    48    3.631     3.631          1  NLPCreateQKVHeadsDecode 1x1x32x1280
+    172.5  0.91%   144    1.198     3.594          1  UntilizeWithUnpadding 1x1x32x32
+    164.7  0.87%    96    1.715     3.431         64  Clone 1x1x32x2048
+    163.2  0.86%    48    3.400     3.400          1  ReshapeView 1x1x32x32
+    150.5  0.80%    96    1.568     3.135          8  InterleavedToSharded 1x1x32x2048
+    150.5  0.80%    96    1.567     3.135         24  Slice 1x1x32x1536
+    147.1  0.78%    48    3.064     3.064          1  Scatter 1x1x1x128
+    139.1  0.74%    96    1.449     2.897          8  ShardedToInterleaved 1x1x32x2048
+    132.7  0.70%    48    2.765     2.765        110  BinaryNg 1x1x32x768
+    125.3  0.66%   144    0.870     2.611          1  Slice 1x1x32x32
+    118.8  0.63%    48    2.474     2.474        110  Unary 1x1x32x768
+    113.5  0.60%   192    0.591     2.365          1  InterleavedToSharded 1x1x32x128
+    113.5  0.60%    48    2.365     2.365          1  UntilizeWithUnpadding 1x1x32x128
+    107.4  0.57%   192    0.559     2.238          1  ShardedToInterleaved 1x1x32x128
+    102.0  0.54%    48    2.125     2.125          4  Typecast 1x1x32x128
+    101.7  0.54%    48    2.119     2.119         64  Reduce 1x1x32x2048
+     99.3  0.53%    48    2.068     2.068        110  Unary 1x1x128x128
+     78.8  0.42%    48    1.643     1.643         32  Slice 1x1x32x1024
+     73.4  0.39%    48    1.529     1.529          8  InterleavedToSharded 1x1x32x1024
+     63.4  0.34%    48    1.322     1.322          8  ShardedToInterleaved 1x1x32x1024
+     62.2  0.33%    48    1.296     1.296          1  Typecast 1x1x32x32
+     60.6  0.32%    48    1.262     1.262          8  ShardedToInterleaved 1x1x32x1280
+     58.4  0.31%    48    1.217     1.217          8  NLPConcatHeadsDecode 1x1x32x128
+
+=== terminal-post (final norm, LM head, sampler, feedback): 366.5 us over 44 ops (1.94% of the 18,889.5 us iteration) ===
+       us  %iter     n  us/call      cores  op
+    226.1  1.20%     1  226.130        108  Matmul 1x1x32x2048 @ 1x1x2048x37984
+     20.0  0.11%     2    9.991          1  FillPad 1x1x32x32
+     20.0  0.11%     2    9.986          1  AllBroadcast 1x1x32x32
+     17.2  0.09%     5    3.430        110  BinaryNg 1x1x32x32
+     16.9  0.09%     1   16.943        108  Untilize 1x1x32x37984
+     10.6  0.06%     9    1.182          1  UntilizeWithUnpadding 1x1x32x32
+     10.3  0.05%     1   10.350        110  ArgMax 1x1x1x37984
+      6.6  0.03%     1    6.583          8  LayerNorm 1x1x32x2048
+      5.2  0.03%     2    2.604          1  TilizeWithValPadding 1x1x1x1
+      5.2  0.03%     2    2.578          1  TilizeWithValPadding 1x1x1x4
+      4.9  0.03%     1    4.896         64  FillPad 1x1x32x2048
+      3.5  0.02%     2    1.742          4  Concat 1x1x1x1
+      3.1  0.02%     1    3.094          1  Slice 1x1x32x37984
+      3.1  0.02%     2    1.540          1  Permute 1x1x4x1
+      3.0  0.02%     2    1.493          1  Reduce 1x1x32x32
+      2.1  0.01%     1    2.075          1  Gather 1x1x1x37984
+      1.8  0.01%     2    0.919          1  Typecast 1x1x1x1
+      1.7  0.01%     1    1.663          8  InterleavedToSharded 1x1x32x2048
+      1.4  0.01%     1    1.351          1  Typecast 1x1x32x32
+      1.2  0.01%     2    0.620          1  PlusOne 1x1x1x1
+      1.0  0.01%     1    1.036          8  ShardedToInterleaved 1x1x32x2048
+      0.9  0.00%     1    0.886          1  Pad 1x1x1x1
+      0.8  0.00%     1    0.774          1  Copy 1x1x1x32

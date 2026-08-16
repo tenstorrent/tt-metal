@@ -402,11 +402,23 @@ def attention_prefill(
     kv_cache: KVCache | None = None,
     user_id: int = 0,
     compute_kernel_config=None,
+    sdpa_program_config=None,
 ) -> ttnn.Tensor:
     """Causal self-attention over a full sequence. ``x``/return ``[1, 1, S, hidden]``.
 
     When ``kv_cache`` is given, the post-RoPE K and V for the whole sequence are
     written into it so a decode pass can continue from position S.
+
+    ``sdpa_program_config`` is passed straight through to the prefill SDPA op and
+    defaults to ``None`` -- the op default, which is what **every** caller
+    currently uses, including the multichip path, and what every number in this
+    file was measured at. It is a seam, exactly like
+    ``attention_decode_optimized``'s: stage 06 used it to build and measure a
+    length-dependent chunking worth 6.3-6.8x on this op at S >= 4096, and then
+    **did not adopt it** because it costs a top-1 point on ``run_teacher_forcing``
+    and buys nothing at the 158-token prompt that gate uses. See
+    ``multichip_decoder._sdpa_prefill_program_config`` for the numbers and for
+    what it would take to adopt.
     """
     xqkv = ttnn.linear(
         x,
@@ -438,7 +450,7 @@ def attention_prefill(
 
     # GQA is handled inside SDPA: it broadcasts the 4 KV heads across 32 Q heads.
     # Default scale is head_dim ** -0.5, which is what Qwen3 uses.
-    attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
+    attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, program_config=sdpa_program_config)
     for t in (q, k, v):
         ttnn.deallocate(t)
 

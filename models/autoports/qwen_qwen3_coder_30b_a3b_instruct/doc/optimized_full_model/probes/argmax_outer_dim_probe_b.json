@@ -1,0 +1,359 @@
+{
+  "untilize_37984": {
+    "ms": 0.07512344745919108
+  },
+  "argmax_keepdim_true": {
+    "ms": 0.37112401332706213,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_keepdim_false": {
+    "ms": 0.3092804690822959,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_keepdim_false_plus_reshape": {
+    "ms": 0.31541200587525964,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "rm_slice1_then_argmax": {
+    "ms": 0.05798600614070892,
+    "first4": [
+      23971
+    ],
+    "matches_local_ref": "1/1"
+  },
+  "rm_slice2_then_argmax": {
+    "ms": 0.058236008044332266,
+    "first4": [
+      23971,
+      13710
+    ],
+    "matches_local_ref": "2/2"
+  },
+  "rm_slice4_then_argmax": {
+    "ms": 0.06554502760991454,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "4/4"
+  },
+  "rm_slice8_then_argmax": {
+    "ms": 0.12276903726160526,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "8/8"
+  },
+  "rm_slice1_only": {
+    "ms": 0.058447010815143585
+  },
+  "tile_slice1_plus_untilize": {
+    "ms": 0.07146596908569336
+  },
+  "topk_k1_rm_32rows": {
+    "error": "TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/topk_device_operation.cpp:166: input_tensor.layout() == Layout::TILE\ninfo:\nThe input must be in tiled format\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, cha"
+  },
+  "topk_k32_tile_32rows": {
+    "ms": 6.047270027920604
+  },
+  "pad_token_1_to_32": {
+    "ms": 0.0578960170969367,
+    "vals": [
+      23971,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "full_shipped_keepdim_true": {
+    "ms": 0.6315670325420797,
+    "rows_reduced": 32,
+    "matches_host_bf16": "32/32",
+    "tokens": [
+      23971,
+      38192,
+      106254,
+      79802,
+      20769,
+      55143,
+      118842,
+      62953,
+      12431,
+      86711,
+      59546,
+      58335,
+      71005,
+      113006,
+      124507,
+      91409,
+      69432,
+      27432,
+      23017,
+      61943,
+      29478,
+      52349,
+      33401,
+      46415,
+      48988,
+      63764,
+      42805,
+      73088,
+      126378,
+      141964,
+      55394,
+      22204
+    ]
+  },
+  "full_candidate_keepdim_false": {
+    "ms": 0.5751384887844324,
+    "rows_reduced": 32,
+    "matches_host_bf16": "32/32",
+    "tokens": [
+      23971,
+      38192,
+      106254,
+      79802,
+      20769,
+      55143,
+      118842,
+      62953,
+      12431,
+      86711,
+      59546,
+      58335,
+      71005,
+      113006,
+      124507,
+      91409,
+      69432,
+      27432,
+      23017,
+      61943,
+      29478,
+      52349,
+      33401,
+      46415,
+      48988,
+      63764,
+      42805,
+      73088,
+      126378,
+      141964,
+      55394,
+      22204
+    ]
+  },
+  "full_candidate_batch1": {
+    "ms": 0.2507940516807139,
+    "rows_reduced": 1,
+    "matches_host_bf16": "1/1",
+    "tokens": [
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971
+    ]
+  },
+  "full_candidate_batch1_kdfalse": {
+    "ms": 0.2510090125724673,
+    "rows_reduced": 1,
+    "matches_host_bf16": "1/1",
+    "tokens": [
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971,
+      23971
+    ]
+  },
+  "padding_rows_produce_token_zero": {
+    "tokens": [
+      49626,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "rows_1_to_31_all_zero_token": [
+      0
+    ],
+    "pass": true
+  },
+  "ties": {
+    "cross_die_tie_keepdim_true": {
+      "expected": 38061,
+      "device_unique": [
+        38061
+      ],
+      "pass": true
+    },
+    "cross_die_tie_keepdim_false": {
+      "expected": 38061,
+      "device_unique": [
+        38061
+      ],
+      "pass": true
+    },
+    "within_die_tie_keepdim_true": {
+      "expected": 76268,
+      "device_unique": [
+        76268
+      ],
+      "pass": true
+    },
+    "within_die_tie_keepdim_false": {
+      "expected": 76268,
+      "device_unique": [
+        76268
+      ],
+      "pass": true
+    },
+    "triple_tie_keepdim_true": {
+      "expected": 11,
+      "device_unique": [
+        11
+      ],
+      "pass": true
+    },
+    "triple_tie_keepdim_false": {
+      "expected": 11,
+      "device_unique": [
+        11
+      ],
+      "pass": true
+    }
+  }
+}

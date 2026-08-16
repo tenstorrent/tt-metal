@@ -1,0 +1,17 @@
+active-expert recovery: base 29.35 us + 6.85 us/expert
+  per-layer sum over 4 dies == 8 in every layer: True
+attn RS 12.45 us | MoE RS 24.25 us (min 6.25, max 73.38)
+  corr(lag, MoE RS) = 0.988, slope 1.046 us/us
+  corr(lag, attn RS) = 0.063   <- the attention collective does not see the skew
+  most balanced layer 26: work spread 1.33 us, MoE RS [14.43, 12.32, 10.69, 12.11] us -- the collective's floor
+per-die active-expert counts: [(0, 16), (1, 50), (2, 66), (3, 45), (4, 11), (5, 1), (6, 3)]
+  uniform marginal:           [(0, 0.1), (1, 0.267), (2, 0.311), (3, 0.208), (4, 0.087), (5, 0.023), (6, 0.004)]
+  measured mean max_k 3.438 vs uniform 3.538 (perfect balance 2.0)
+  chi2 vs uniform = 6.43 on 6 bins
+
+idle from skew: measured 9.85 us/layer = 0.473 ms/iteration
+floor under *perfectly uniform* routing: 10.54 us/layer = 0.506 ms/iteration
+  -> the shipped layout is already 0.69 us/layer BETTER than the expectation for an arbitrary partition.
+  -> no permutation of experts across dies has anything left to win.
+
+wrote moe_skew_analysis_final.json

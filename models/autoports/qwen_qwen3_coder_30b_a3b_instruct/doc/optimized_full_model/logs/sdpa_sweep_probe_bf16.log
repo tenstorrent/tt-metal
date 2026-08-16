@@ -1,0 +1,196 @@
+2026-08-15 06:59:39.348 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:59:39.477 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:59:39.477 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:59:39.477 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:59:39.477 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:59:39.488 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 06:59:39.488 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:59:39.566 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:59:39.566 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:59:39.566 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:59:39.566 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:59:39.568 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:59:39.722 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:59:39.843 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:59:39.843 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:59:39.843 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:59:39.844 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:59:39.844 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+grid 11-10  allocated depth 65536  cache dtype bfloat16
+
+=== cur_pos 127 ===
+  None             30.17 us    1.00x  PCC 0.999665  max|d| 2.09e-02
+  k32/c8           25.34 us    1.19x  PCC 0.999738  max|d| 1.48e-02
+  k32/c16          25.91 us    1.16x  PCC 0.999738  max|d| 1.48e-02
+  k32/c32          28.49 us    1.06x  PCC 0.999738  max|d| 1.48e-02
+  k32/c64          36.34 us    0.83x  PCC 0.999738  max|d| 1.48e-02
+  k64/c8           24.31 us    1.24x  PCC 0.999699  max|d| 1.76e-02
+  k64/c16          27.20 us    1.11x  PCC 0.999699  max|d| 1.76e-02
+  k64/c32          29.57 us    1.02x  PCC 0.999699  max|d| 1.76e-02
+  k64/c64          35.40 us    0.85x  PCC 0.999699  max|d| 1.76e-02
+  k128/c8          25.96 us    1.16x  PCC 0.999656  max|d| 1.86e-02
+  k128/c16         29.29 us    1.03x  PCC 0.999656  max|d| 1.86e-02
+  k128/c32         29.23 us    1.03x  PCC 0.999656  max|d| 1.86e-02
+  k128/c64         33.49 us    0.90x  PCC 0.999656  max|d| 1.86e-02
+  k256/c8          22.42 us    1.35x  PCC 0.999656  max|d| 1.86e-02
+  k256/c16         20.62 us    1.46x  PCC 0.999656  max|d| 1.86e-02
+  k256/c32         28.75 us    1.05x  PCC 0.999656  max|d| 1.86e-02
+  k256/c64         33.29 us    0.91x  PCC 0.999656  max|d| 1.86e-02
+  k512/c8          24.93 us    1.21x  PCC 0.999656  max|d| 1.86e-02
+  k512/c16         26.44 us    1.14x  PCC 0.999656  max|d| 1.86e-02
+  k512/c32         33.16 us    0.91x  PCC 0.999656  max|d| 1.86e-02
+  k512/c64         36.71 us    0.82x  PCC 0.999656  max|d| 1.86e-02
+  k1024/c8         28.04 us    1.08x  PCC 0.999656  max|d| 1.86e-02
+  k1024/c16        28.63 us    1.05x  PCC 0.999656  max|d| 1.86e-02
+  k1024/c32        32.88 us    0.92x  PCC 0.999656  max|d| 1.86e-02
+2026-08-15 07:00:04.668 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1669120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  k1024/c64    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+
+=== cur_pos 1023 ===
+  None            121.91 us    1.00x  PCC 0.999510  max|d| 8.31e-03
+  k32/c8           34.25 us    3.56x  PCC 0.999619  max|d| 9.29e-03
+  k32/c16          31.74 us    3.84x  PCC 0.999615  max|d| 8.31e-03
+  k32/c32          34.33 us    3.55x  PCC 0.999614  max|d| 7.83e-03
+  k32/c64          34.52 us    3.53x  PCC 0.999614  max|d| 7.83e-03
+  k64/c8           29.86 us    4.08x  PCC 0.999656  max|d| 7.83e-03
+  k64/c16          28.49 us    4.28x  PCC 0.999627  max|d| 8.31e-03
+  k64/c32          28.58 us    4.26x  PCC 0.999627  max|d| 8.31e-03
+  k64/c64          32.52 us    3.75x  PCC 0.999627  max|d| 8.31e-03
+  k128/c8          24.73 us    4.93x  PCC 0.999622  max|d| 9.29e-03
+  k128/c16         24.87 us    4.90x  PCC 0.999622  max|d| 9.29e-03
+  k128/c32         24.98 us    4.88x  PCC 0.999622  max|d| 9.29e-03
+  k128/c64         34.43 us    3.54x  PCC 0.999622  max|d| 9.29e-03
+  k256/c8          23.12 us    5.27x  PCC 0.999573  max|d| 9.29e-03
+  k256/c16         25.34 us    4.81x  PCC 0.999573  max|d| 9.29e-03
+  k256/c32         25.49 us    4.78x  PCC 0.999573  max|d| 9.29e-03
+  k256/c64         29.86 us    4.08x  PCC 0.999573  max|d| 9.29e-03
+  k512/c8          22.83 us    5.34x  PCC 0.999485  max|d| 1.08e-02
+  k512/c16         25.12 us    4.85x  PCC 0.999485  max|d| 1.08e-02
+  k512/c32         25.58 us    4.77x  PCC 0.999485  max|d| 1.08e-02
+  k512/c64         27.78 us    4.39x  PCC 0.999485  max|d| 1.08e-02
+  k1024/c8         27.27 us    4.47x  PCC 0.999465  max|d| 1.08e-02
+  k1024/c16        27.96 us    4.36x  PCC 0.999465  max|d| 1.08e-02
+  k1024/c32        29.67 us    4.11x  PCC 0.999465  max|d| 1.08e-02
+2026-08-15 07:00:04.779 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1669120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  k1024/c64    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+
+=== cur_pos 4095 ===
+  None            453.38 us    1.00x  PCC 0.999504  max|d| 4.21e-03
+  k32/c8           75.82 us    5.98x  PCC 0.999609  max|d| 3.26e-03
+  k32/c16          52.59 us    8.62x  PCC 0.999600  max|d| 3.36e-03
+  k32/c32          44.39 us   10.21x  PCC 0.999578  max|d| 3.77e-03
+  k32/c64          47.77 us    9.49x  PCC 0.999596  max|d| 3.77e-03
+  k64/c8           49.89 us    9.09x  PCC 0.999578  max|d| 3.36e-03
+  k64/c16          39.47 us   11.49x  PCC 0.999601  max|d| 3.36e-03
+  k64/c32          38.28 us   11.84x  PCC 0.999611  max|d| 3.01e-03
+  k64/c64          43.83 us   10.34x  PCC 0.999565  max|d| 3.77e-03
+  k128/c8          37.21 us   12.18x  PCC 0.999584  max|d| 3.26e-03
+  k128/c16         33.45 us   13.55x  PCC 0.999591  max|d| 3.50e-03
+  k128/c32         36.12 us   12.55x  PCC 0.999588  max|d| 3.36e-03
+  k128/c64         37.66 us   12.04x  PCC 0.999588  max|d| 3.36e-03
+  k256/c8          31.64 us   14.33x  PCC 0.999592  max|d| 3.14e-03
+  k256/c16         31.63 us   14.33x  PCC 0.999571  max|d| 3.36e-03
+  k256/c32         32.36 us   14.01x  PCC 0.999571  max|d| 3.36e-03
+  k256/c64         34.02 us   13.33x  PCC 0.999571  max|d| 3.36e-03
+  k512/c8          30.26 us   14.98x  PCC 0.999571  max|d| 3.85e-03
+  k512/c16         30.21 us   15.01x  PCC 0.999571  max|d| 3.85e-03
+  k512/c32         31.00 us   14.62x  PCC 0.999571  max|d| 3.85e-03
+  k512/c64         34.30 us   13.22x  PCC 0.999571  max|d| 3.85e-03
+  k1024/c8         32.66 us   13.88x  PCC 0.999532  max|d| 3.48e-03
+  k1024/c16        33.14 us   13.68x  PCC 0.999532  max|d| 3.48e-03
+  k1024/c32        34.84 us   13.01x  PCC 0.999532  max|d| 3.48e-03
+2026-08-15 07:00:04.904 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1669120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  k1024/c64    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+
+=== cur_pos 16383 ===
+  None           1778.33 us    1.00x  PCC 0.993676  max|d| 1.51e-02
+  k32/c8          241.66 us    7.36x  PCC 0.999524  max|d| 1.92e-03
+  k32/c16         135.26 us   13.15x  PCC 0.999574  max|d| 1.32e-03
+  k32/c32          85.68 us   20.76x  PCC 0.999563  max|d| 1.35e-03
+  k32/c64          68.86 us   25.83x  PCC 0.999548  max|d| 1.35e-03
+  k64/c8          137.74 us   12.91x  PCC 0.999534  max|d| 1.79e-03
+  k64/c16          83.13 us   21.39x  PCC 0.999595  max|d| 1.27e-03
+  k64/c32          60.29 us   29.50x  PCC 0.999561  max|d| 1.30e-03
+  k64/c64          61.92 us   28.72x  PCC 0.999563  max|d| 1.35e-03
+  k128/c8          86.62 us   20.53x  PCC 0.999547  max|d| 1.92e-03
+  k128/c16         58.06 us   30.63x  PCC 0.999601  max|d| 1.55e-03
+  k128/c32         54.29 us   32.76x  PCC 0.999562  max|d| 1.55e-03
+  k128/c64         61.74 us   28.80x  PCC 0.999590  max|d| 1.43e-03
+  k256/c8          63.15 us   28.16x  PCC 0.999564  max|d| 1.57e-03
+  k256/c16         50.41 us   35.28x  PCC 0.999582  max|d| 1.57e-03
+  k256/c32         54.62 us   32.56x  PCC 0.999543  max|d| 1.55e-03
+  k256/c64         59.95 us   29.66x  PCC 0.999540  max|d| 1.47e-03
+  k512/c8          53.45 us   33.27x  PCC 0.999486  max|d| 1.68e-03
+  k512/c16         51.08 us   34.81x  PCC 0.999504  max|d| 1.55e-03
+  k512/c32         53.21 us   33.42x  PCC 0.999468  max|d| 1.35e-03
+  k512/c64         54.82 us   32.44x  PCC 0.999468  max|d| 1.35e-03
+  k1024/c8         52.99 us   33.56x  PCC 0.999445  max|d| 1.45e-03
+  k1024/c16        51.06 us   34.83x  PCC 0.999418  max|d| 1.62e-03
+  k1024/c32        51.49 us   34.54x  PCC 0.999418  max|d| 1.62e-03
+2026-08-15 07:00:05.091 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1669120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  k1024/c64    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+
+=== cur_pos 32767 ===
+  None           3544.91 us    1.00x  PCC 0.987732  max|d| 3.53e-02
+  k32/c8          463.22 us    7.65x  PCC 0.999440  max|d| 1.03e-03
+  k32/c16         245.77 us   14.42x  PCC 0.999520  max|d| 1.15e-03
+  k32/c32         140.92 us   25.15x  PCC 0.999544  max|d| 1.15e-03
+  k32/c64          97.18 us   36.48x  PCC 0.999521  max|d| 1.03e-03
+  k64/c8          254.84 us   13.91x  PCC 0.999506  max|d| 1.28e-03
+  k64/c16         141.76 us   25.01x  PCC 0.999546  max|d| 9.77e-04
+  k64/c32          89.53 us   39.60x  PCC 0.999551  max|d| 9.13e-04
+  k64/c64          84.74 us   41.83x  PCC 0.999552  max|d| 9.24e-04
+  k128/c8         152.44 us   23.25x  PCC 0.999480  max|d| 1.10e-03
+  k128/c16         91.08 us   38.92x  PCC 0.999538  max|d| 1.04e-03
+  k128/c32         76.24 us   46.50x  PCC 0.999579  max|d| 8.40e-04
+  k128/c64         83.05 us   42.68x  PCC 0.999565  max|d| 9.40e-04
+  k256/c8         105.68 us   33.54x  PCC 0.999484  max|d| 1.15e-03
+  k256/c16         75.28 us   47.09x  PCC 0.999572  max|d| 9.71e-04
+  k256/c32         76.37 us   46.42x  PCC 0.999574  max|d| 9.33e-04
+  k256/c64         83.45 us   42.48x  PCC 0.999559  max|d| 9.80e-04
+  k512/c8          84.58 us   41.91x  PCC 0.999496  max|d| 1.16e-03
+  k512/c16         75.10 us   47.20x  PCC 0.999504  max|d| 1.03e-03
+  k512/c32         76.87 us   46.12x  PCC 0.999528  max|d| 9.71e-04
+  k512/c64         82.49 us   42.97x  PCC 0.999526  max|d| 1.04e-03
+  k1024/c8         79.95 us   44.34x  PCC 0.999502  max|d| 1.04e-03
+  k1024/c16        76.42 us   46.39x  PCC 0.999468  max|d| 1.15e-03
+  k1024/c32        76.36 us   46.43x  PCC 0.999451  max|d| 1.05e-03
+2026-08-15 07:00:05.359 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1669120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  k1024/c64    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+
+wrote /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/sdpa_sweep_probe.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x70dbdd723678 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "__hash__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "init_device_compute_kernel_config"
+ - leaked function "to_numpy"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 07:00:05.839 | info     |    BuildKernels | JIT cache stats: 31/156 hits (19.9%) [31 cached, 21 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 07:00:05.839 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 07:00:05.853 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 07:00:05.853 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 07:00:06.473 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 07:00:06.473 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 07:00:06.473 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

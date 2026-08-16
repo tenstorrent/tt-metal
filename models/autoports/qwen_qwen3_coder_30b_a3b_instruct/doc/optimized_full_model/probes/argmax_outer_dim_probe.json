@@ -1,0 +1,227 @@
+{
+  "untilize_37984": {
+    "ms": 0.07506849942728877
+  },
+  "argmax_keepdim_true": {
+    "ms": 0.37097849417477846,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_keepdim_false": {
+    "ms": 0.30877505196258426,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_keepdim_false_plus_reshape": {
+    "ms": 0.31502643832936883,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_kd_true_cores8": {
+    "ms": 2.7354799676686525,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_kd_true_cores16": {
+    "ms": 1.429475552868098,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "argmax_kd_true_cores32": {
+    "ms": 0.7921679643914104,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "32/32"
+  },
+  "rm_slice1_then_argmax": {
+    "ms": 0.05791004514321685,
+    "first4": [
+      23971
+    ],
+    "matches_local_ref": "1/1"
+  },
+  "rm_slice2_then_argmax": {
+    "ms": 0.057850033044815063,
+    "first4": [
+      23971,
+      13710
+    ],
+    "matches_local_ref": "2/2"
+  },
+  "rm_slice4_then_argmax": {
+    "ms": 0.06555550498887897,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "4/4"
+  },
+  "rm_slice8_then_argmax": {
+    "ms": 0.12285949196666479,
+    "first4": [
+      23971,
+      13710,
+      14645,
+      14877
+    ],
+    "matches_local_ref": "8/8"
+  },
+  "rm_slice1_only": {
+    "ms": 0.05813600728288293
+  },
+  "tile_slice1_plus_untilize": {
+    "ms": 0.0715564819984138
+  },
+  "topk_k1_rm_32rows": {
+    "error": "TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/topk_device_operation.cpp:166: input_tensor.layout() == Layout::TILE\ninfo:\nThe input must be in tiled format\nbacktrace:\n --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, cha"
+  },
+  "topk_k32_tile_32rows": {
+    "ms": 6.047105067409575
+  },
+  "pad_token_1_to_32": {
+    "ms": 0.05793105810880661,
+    "vals": [
+      23971,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "full_shipped_keepdim_true": {
+    "ms": 0.6305395509116352,
+    "rows_reduced": 32,
+    "matches_host_bf16": "32/32",
+    "tokens": [
+      23971,
+      38192,
+      106254,
+      79802,
+      20769,
+      55143,
+      118842,
+      62953,
+      12431,
+      86711,
+      59546,
+      58335,
+      71005,
+      113006,
+      124507,
+      91409,
+      69432,
+      27432,
+      23017,
+      61943,
+      29478,
+      52349,
+      33401,
+      46415,
+      48988,
+      63764,
+      42805,
+      73088,
+      126378,
+      141964,
+      55394,
+      22204
+    ]
+  },
+  "full_candidate_keepdim_false": {
+    "ms": 0.5752335418947041,
+    "rows_reduced": 32,
+    "matches_host_bf16": "32/32",
+    "tokens": [
+      23971,
+      38192,
+      106254,
+      79802,
+      20769,
+      55143,
+      118842,
+      62953,
+      12431,
+      86711,
+      59546,
+      58335,
+      71005,
+      113006,
+      124507,
+      91409,
+      69432,
+      27432,
+      23017,
+      61943,
+      29478,
+      52349,
+      33401,
+      46415,
+      48988,
+      63764,
+      42805,
+      73088,
+      126378,
+      141964,
+      55394,
+      22204
+    ]
+  }
+}

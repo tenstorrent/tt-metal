@@ -1,0 +1,12 @@
+--- crossover sweep, depth 16384 ---
+cur_pos    127   None    25.36 us   k512/c32    24.49 us    1.04x
+cur_pos    131   None    28.36 us   k512/c32    24.07 us    1.18x
+cur_pos    255   None    37.98 us   k512/c32    25.78 us    1.47x
+cur_pos    511   None    65.63 us   k512/c32    22.99 us    2.85x
+cur_pos   1023   None   120.90 us   k512/c32    23.43 us    5.16x
+cur_pos   2047   None   231.48 us   k512/c32    26.60 us    8.70x
+cur_pos   4095   None   452.80 us   k512/c32    29.76 us   15.21x
+--- correctness: same output? depth 16384 ---
+cur_pos    131   PCC 0.99981326   max|diff| 1.172e-02
+cur_pos   1023   PCC 0.99970442   max|diff| 4.641e-03
+cur_pos   8191   PCC 0.99852824   max|diff| 5.127e-03

@@ -1,0 +1,42 @@
+[
+  {
+    "allocated_context": 1024,
+    "cur_pos": 128,
+    "ms": 0.028863518964499235
+  },
+  {
+    "allocated_context": 4096,
+    "cur_pos": 128,
+    "ms": 0.030166220385581255
+  },
+  {
+    "allocated_context": 16384,
+    "cur_pos": 128,
+    "ms": 0.028601440135389566
+  },
+  {
+    "allocated_context": 65536,
+    "cur_pos": 128,
+    "ms": 0.02869819989427924
+  },
+  {
+    "allocated_context": 65536,
+    "cur_pos": 128,
+    "ms": 0.02740813884884119
+  },
+  {
+    "allocated_context": 65536,
+    "cur_pos": 1024,
+    "ms": 0.1249804999679327
+  },
+  {
+    "allocated_context": 65536,
+    "cur_pos": 8192,
+    "ms": 0.8984716585837305
+  },
+  {
+    "allocated_context": 65536,
+    "cur_pos": 32768,
+    "ms": 3.5537485405802727
+  }
+]

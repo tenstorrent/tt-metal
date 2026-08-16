@@ -1,0 +1,44 @@
+[
+  {
+    "ctx": 128,
+    "cur_pos": 127,
+    "leg": "default",
+    "k_chunk": null,
+    "pcc_vs_hf": 0.9994146932042725
+  },
+  {
+    "ctx": 128,
+    "cur_pos": 127,
+    "leg": "adopted",
+    "k_chunk": 128,
+    "pcc_vs_hf": 0.9994310603644753
+  },
+  {
+    "ctx": 1024,
+    "cur_pos": 1023,
+    "leg": "default",
+    "k_chunk": null,
+    "pcc_vs_hf": 0.9993561691549278
+  },
+  {
+    "ctx": 1024,
+    "cur_pos": 1023,
+    "leg": "adopted",
+    "k_chunk": 256,
+    "pcc_vs_hf": 0.9993493845903076
+  },
+  {
+    "ctx": 4096,
+    "cur_pos": 4095,
+    "leg": "default",
+    "k_chunk": null,
+    "pcc_vs_hf": 0.999534427787777
+  },
+  {
+    "ctx": 4096,
+    "cur_pos": 4095,
+    "leg": "adopted",
+    "k_chunk": 256,
+    "pcc_vs_hf": 0.9995019656288557
+  }
+]

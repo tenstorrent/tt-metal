@@ -1,0 +1,69 @@
+2026-08-15 06:31:25.282 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:31:25.863 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:31:25.863 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:31:25.863 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:31:25.863 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:31:25.874 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 06:31:25.874 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:31:25.954 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:31:25.954 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:31:25.954 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:31:25.954 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:31:25.956 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:31:26.100 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:31:26.215 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:31:26.215 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:31:26.215 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:31:26.215 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:31:26.215 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+depth    128 (cur_pos    32,     4 pages)  None= 0.999783 k32= 0.999778 k64= 0.999783 k128= 0.999783 k256= 0.999783 k512= 0.999783 k1024= 0.999783
+depth    256 (cur_pos    32,     8 pages)  None= 0.999743 k32= 0.999723 k64= 0.999745 k128= 0.999745 k256= 0.999745 k512= 0.999745 k1024= 0.999745
+depth    512 (cur_pos    32,    16 pages)  None= 0.999798 k32= 0.999793 k64= 0.999798 k128= 0.999798 k256= 0.999798 k512= 0.999798 k1024= 0.999798
+depth   1024 (cur_pos    32,    32 pages)  None= 0.999697 k32= 0.999681 k64= 0.999697 k128= 0.999697 k256= 0.999697 k512= 0.999697 k1024= 0.999697
+depth   2048 (cur_pos    32,    64 pages)  None= 0.999743 k32= 0.999726 k64= 0.999742 k128= 0.999742 k256= 0.999742 k512= 0.999742 k1024= 0.999742
+depth   4096 (cur_pos    32,   128 pages)  None= 0.999705 k32= 0.999722 k64= 0.999707 k128= 0.999707 k256= 0.999707 k512= 0.999707 k1024= 0.999707
+
+=== deep cache (4096), small cur_pos ===
+  cur_pos     0  None= 0.999998 k128= 0.999998 k512= 0.999998
+  cur_pos     1  None= 0.999867 k128= 0.999867 k512= 0.999867
+  cur_pos    31  None= 0.999740 k128= 0.999740 k512= 0.999740
+  cur_pos    32  None= 0.999705 k128= 0.999707 k512= 0.999707
+  cur_pos    33  None= 0.999670 k128= 0.999674 k512= 0.999674
+  cur_pos   127  None= 0.999665 k128= 0.999626 k512= 0.999626
+  cur_pos   511  None= 0.999720 k128= 0.999673 k512= 0.999645
+  cur_pos   513  None= 0.999722 k128= 0.999664 k512= 0.999656
+nanobind: leaked 1 instances!
+ - leaked instance 0x73bbb9bd74c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function ""
+ - leaked function "is_sharded"
+ - leaked function "empty"
+ - leaked function ""
+ - leaked function "to"
+ - leaked function "subtract"
+ - leaked function "pad"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "matmul_select_program_factory"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:32:05.829 | info     |    BuildKernels | JIT cache stats: 28/228 hits (12.3%) [28 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:32:05.829 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:32:05.841 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:32:05.841 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:32:06.444 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:32:06.444 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:32:06.444 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

@@ -1,0 +1,104 @@
+2026-08-15 06:13:24.715 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 06:13:24.846 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 06:13:24.846 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 06:13:24.846 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 06:13:24.846 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 06:13:24.858 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 06:13:24.858 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 06:13:24.937 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 06:13:24.937 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 06:13:24.937 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 06:13:24.937 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 06:13:24.939 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 06:13:25.158 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 06:13:25.276 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 06:13:25.276 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 06:13:25.276 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 06:13:25.277 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 06:13:25.277 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+
+=== prefill seq 128 ===
+  None              25.23 us    1.00x  PCC 0.999827
+  q128/k128         27.94 us    0.90x  PCC 0.999824
+  q256/k256         32.95 us    0.77x  PCC 0.999824
+2026-08-15 06:13:28.435 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1760128 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+  q128/k512         27.09 us    0.93x  PCC 0.999824
+  q512/k128         36.10 us    0.70x  PCC 0.999824
+  q32/k512          38.14 us    0.66x  PCC 0.999824
+
+=== prefill seq 1024 ===
+  None             230.86 us    1.00x  PCC 0.999788
+  q128/k128         88.23 us    2.62x  PCC 0.999784
+  q256/k256        127.16 us    1.82x  PCC 0.999778
+2026-08-15 06:13:33.443 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1891200 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+  q128/k512        114.56 us    2.02x  PCC 0.999774
+  q512/k128        324.79 us    0.71x  PCC 0.999784
+  q32/k512         320.08 us    0.72x  PCC 0.999784
+
+=== prefill seq 4096 ===
+  None            2846.87 us    1.00x  PCC 0.999779
+  q128/k128        883.37 us    3.22x  PCC 0.999784
+  q256/k256        451.28 us    6.31x  PCC 0.999793
+2026-08-15 06:13:40.676 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1891200 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+  q128/k512        948.61 us    3.00x  PCC 0.999774
+  q512/k128        887.53 us    3.21x  PCC 0.999784
+  q32/k512        3153.45 us    0.90x  PCC 0.999786
+
+=== prefill seq 16384 ===
+  None           44456.67 us    1.00x  PCC 0.999325
+  q128/k128      11364.22 us    3.91x  PCC 0.999806
+  q256/k256       6527.48 us    6.81x  PCC 0.999783
+2026-08-15 06:14:06.371 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1891200 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+  q128/k512      11599.54 us    3.83x  PCC 0.999793
+  q512/k128       6864.36 us    6.48x  PCC 0.999806
+  q32/k512       45623.84 us    0.97x  PCC 0.999796
+
+=== non-tile-aligned sequence lengths ===
+  seq 100    None         OK   PCC 0.999829
+2026-08-15 06:14:27.592 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1760128 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  seq 100    q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+  seq 1000   None         OK   PCC 0.999795
+2026-08-15 06:14:28.248 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1891200 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  seq 1000   q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+  seq 4095   None         OK   PCC 0.999740
+2026-08-15 06:14:29.304 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1891200 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  seq 4095   q512/k512    FAILED: TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+nanobind: leaked 1 instances!
+ - leaked instance 0x74671471de18 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "initialize_fast_dispatch"
+ - leaked function ""
+ - leaked function "create_output_tensors"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "remove_sub_device_manager"
+ - leaked function "__init__"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__init__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 06:14:29.802 | info     |    BuildKernels | JIT cache stats: 64/219 hits (29.2%) [64 cached, 107 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 06:14:29.802 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 06:14:29.814 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 06:14:29.814 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 06:14:30.401 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 06:14:30.401 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 06:14:30.401 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

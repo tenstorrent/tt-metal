@@ -1,0 +1,71 @@
+2026-08-15 16:59:27.255 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-15 16:59:27.288 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-15 16:59:27.288 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-15 16:59:27.288 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-15 16:59:27.288 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-15 16:59:27.300 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-15 16:59:27.300 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-15 16:59:27.378 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-15 16:59:27.378 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-15 16:59:27.378 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-15 16:59:27.378 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-15 16:59:27.380 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-15 16:59:27.561 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-15 16:59:27.681 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-15 16:59:27.681 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-15 16:59:27.681 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-15 16:59:27.681 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-15 16:59:27.681 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-15 16:59:27.722 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-15 16:59:27.748 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-15 16:59:27.748 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Prompt (59 tokens):
+Once upon a time, in a small village nestled between two great mountains, there lived a curious young girl named Elena. Every morning, she would climb to the top of the eastern hill and watch the sunrise paint the valley gold. One day, while sitting beneath her favorite oak tree, she noticed
+
+Running HF reference on cpu...
+Loading weights:   0%|          | 0/531 [00:00<?, ?it/s]Loading weights:   1%|          | 5/531 [00:00<00:20, 25.17it/s]Loading weights:   3%|▎         | 16/531 [00:00<00:11, 43.17it/s]Loading weights:   5%|▌         | 27/531 [00:00<00:10, 49.21it/s]Loading weights:   7%|▋         | 38/531 [00:00<00:09, 53.16it/s]Loading weights:   9%|▉         | 49/531 [00:00<00:08, 57.52it/s]Loading weights:  11%|█▏        | 60/531 [00:01<00:07, 60.24it/s]Loading weights:  13%|█▎        | 71/531 [00:01<00:07, 62.48it/s]Loading weights:  15%|█▌        | 82/531 [00:01<00:07, 64.00it/s]Loading weights:  18%|█▊        | 93/531 [00:01<00:06, 65.01it/s]Loading weights:  20%|█▉        | 104/531 [00:01<00:06, 65.13it/s]Loading weights:  22%|██▏       | 115/531 [00:01<00:06, 65.58it/s]Loading weights:  24%|██▎       | 126/531 [00:02<00:06, 66.25it/s]Loading weights:  26%|██▌       | 137/531 [00:02<00:05, 66.68it/s]Loading weights:  28%|██▊       | 148/531 [00:02<00:05, 67.07it/s]Loading weights:  30%|██▉       | 159/531 [00:02<00:05, 67.37it/s]Loading weights:  32%|███▏      | 170/531 [00:02<00:05, 67.38it/s]Loading weights:  34%|███▍      | 181/531 [00:02<00:05, 67.25it/s]Loading weights:  36%|███▌      | 192/531 [00:03<00:05, 66.93it/s]Loading weights:  38%|███▊      | 203/531 [00:03<00:04, 67.32it/s]Loading weights:  40%|████      | 214/531 [00:03<00:04, 67.57it/s]Loading weights:  42%|████▏     | 225/531 [00:03<00:04, 67.81it/s]Loading weights:  44%|████▍     | 236/531 [00:03<00:04, 67.98it/s]Loading weights:  47%|████▋     | 247/531 [00:03<00:04, 68.15it/s]Loading weights:  49%|████▊     | 258/531 [00:04<00:04, 68.23it/s]Loading weights:  51%|█████     | 269/531 [00:04<00:03, 68.32it/s]Loading weights:  53%|█████▎    | 280/531 [00:04<00:03, 68.09it/s]Loading weights:  55%|█████▍    | 291/531 [00:04<00:03, 67.39it/s]Loading weights:  57%|█████▋    | 302/531 [00:04<00:03, 67.67it/s]Loading weights:  59%|█████▉    | 313/531 [00:04<00:03, 67.90it/s]Loading weights:  61%|██████    | 324/531 [00:05<00:03, 67.33it/s]Loading weights:  63%|██████▎   | 335/531 [00:05<00:02, 67.62it/s]Loading weights:  65%|██████▌   | 346/531 [00:05<00:02, 67.86it/s]Loading weights:  67%|██████▋   | 357/531 [00:05<00:02, 67.79it/s]Loading weights:  69%|██████▉   | 368/531 [00:05<00:02, 68.03it/s]Loading weights:  71%|███████▏  | 379/531 [00:05<00:02, 68.23it/s]Loading weights:  73%|███████▎  | 390/531 [00:05<00:02, 68.34it/s]Loading weights:  76%|███████▌  | 401/531 [00:06<00:01, 68.38it/s]Loading weights:  78%|███████▊  | 412/531 [00:06<00:01, 68.42it/s]Loading weights:  80%|███████▉  | 423/531 [00:06<00:01, 68.47it/s]Loading weights:  82%|████████▏ | 434/531 [00:06<00:01, 68.20it/s]Loading weights:  84%|████████▍ | 445/531 [00:06<00:01, 68.36it/s]Loading weights:  86%|████████▌ | 456/531 [00:06<00:01, 68.45it/s]Loading weights:  88%|████████▊ | 467/531 [00:07<00:00, 68.47it/s]Loading weights:  90%|█████████ | 478/531 [00:07<00:00, 68.36it/s]Loading weights:  92%|█████████▏| 489/531 [00:07<00:00, 68.11it/s]Loading weights:  94%|█████████▍| 500/531 [00:07<00:00, 68.28it/s]Loading weights:  96%|█████████▌| 511/531 [00:07<00:00, 68.40it/s]Loading weights:  98%|█████████▊| 522/531 [00:07<00:00, 68.48it/s]Loading weights: 100%|██████████| 531/531 [00:07<00:00, 67.12it/s]
+[transformers] The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+HF produced 128 tokens.
+Building TT generator...
+Running TT autoregressive generation...
+TT produced 128 tokens.
+
+Saved HF completion → /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/hf_completion.txt
+Saved TT completion → /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/tt_completion.txt
+Saved metadata     → /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/autoregressive_meta.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x712150724af8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "volume"
+ - leaked function "__eq__"
+ - leaked function ""
+ - leaked function "get_max_worker_l1_unreserved_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "ClearKernelCache"
+ - leaked function "to_list"
+ - leaked function "reshape"
+ - leaked function "dims"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-15 17:02:56.063 | info     |    BuildKernels | JIT cache stats: 598/598 hits (100.0%) [598 cached, 284 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-15 17:02:56.063 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-15 17:02:56.081 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-15 17:02:56.081 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-15 17:02:56.613 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-15 17:02:56.613 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-15 17:02:56.613 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

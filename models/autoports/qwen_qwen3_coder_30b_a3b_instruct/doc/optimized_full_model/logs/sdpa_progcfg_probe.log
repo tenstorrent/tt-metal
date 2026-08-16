@@ -1,0 +1,15 @@
+grid 11-10
+cur_pos   1024  None (shipped paged path)             125.65 us
+cur_pos   1024  k_chunk=32,max_cores=32                36.91 us
+cur_pos   1024  k_chunk=32,max_cores=64                35.23 us
+cur_pos   1024  k_chunk=128,max_cores=32               28.81 us
+cur_pos   1024  k_chunk=128,max_cores=64               31.53 us
+cur_pos   1024  k_chunk=512,max_cores=32               29.19 us
+cur_pos   1024  k_chunk=512,max_cores=64               31.02 us
+cur_pos   8192  None (shipped paged path)             899.24 us
+cur_pos   8192  k_chunk=32,max_cores=32                57.66 us
+cur_pos   8192  k_chunk=32,max_cores=64                49.57 us
+cur_pos   8192  k_chunk=128,max_cores=32               39.51 us
+cur_pos   8192  k_chunk=128,max_cores=64               43.23 us
+cur_pos   8192  k_chunk=512,max_cores=32               35.45 us
+cur_pos   8192  k_chunk=512,max_cores=64               38.31 us

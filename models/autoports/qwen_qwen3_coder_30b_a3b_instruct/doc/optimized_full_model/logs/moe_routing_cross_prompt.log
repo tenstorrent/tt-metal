@@ -1,0 +1,44 @@
+2026-08-15 22:47:28.654 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+fit on prompt 0, score on prompt 1: shipped 3.4938 -> fitted 3.4204 (+0.0734 experts/layer, +0.0241 ms/iteration)
+fit on prompt 0, score on prompt 2: shipped 3.5430 -> fitted 3.3221 (+0.2209 experts/layer, +0.0726 ms/iteration)
+fit on prompt 1, score on prompt 0: shipped 3.4539 -> fitted 3.3700 (+0.0840 experts/layer, +0.0276 ms/iteration)
+fit on prompt 1, score on prompt 2: shipped 3.5430 -> fitted 3.2051 (+0.3379 experts/layer, +0.1111 ms/iteration)
+fit on prompt 2, score on prompt 0: shipped 3.4539 -> fitted 3.3525 (+0.1014 experts/layer, +0.0333 ms/iteration)
+fit on prompt 2, score on prompt 1: shipped 3.4938 -> fitted 3.2646 (+0.2292 experts/layer, +0.0754 ms/iteration)
+  6 directions: +0.0241 .. +0.1111 ms/iteration (mean +0.0574)
+pooled fit on [1, 2], scored on held-out 0: +0.0577 ms/iteration (best single-prompt fit for the same held-out prompt +0.0333)
+pooled fit on [0, 2], scored on held-out 1: +0.0854 ms/iteration (best single-prompt fit for the same held-out prompt +0.0754)
+pooled fit on [0, 1], scored on held-out 2: +0.1122 ms/iteration (best single-prompt fit for the same held-out prompt +0.1111)
+prompts 0,1: top-8 hot-set overlap 1.458/8, per-expert rank correlation 0.433
+prompts 0,2: top-8 hot-set overlap 2.312/8, per-expert rank correlation 0.485
+prompts 1,2: top-8 hot-set overlap 3.208/8, per-expert rank correlation 0.687
+wrote /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_full_model/probes/moe_routing_cross_prompt.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x7b2f4e2a1ea8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 19 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "DataType"
+ - ... skipped remainder
+nanobind: leaked 250 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function ""
+ - leaked function "enable_program_cache"
+ - leaked function "arch"
+ - leaked function "compute_output_specs"
+ - leaked function "create_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

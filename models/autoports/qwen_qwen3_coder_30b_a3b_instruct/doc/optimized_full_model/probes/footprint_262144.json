@@ -1,0 +1,15 @@
+{
+  "context": 262144,
+  "layers": 48,
+  "stages_gb_per_die": {
+    "weights_embed_lm_head_rope": 5.310811136,
+    "kv_cache": 6.443011072000001,
+    "traces_and_persistent_buffers": 0.006084608000000102
+  },
+  "dram_per_die_gb": 33.8787072,
+  "baseline_gb_per_die": 0.0,
+  "weight_load_s": 167.74589591799304,
+  "prefill_s": 0.2416450009914115,
+  "total_gb_per_die": 11.759906816,
+  "headroom_gb_per_die": 22.118800384
+}

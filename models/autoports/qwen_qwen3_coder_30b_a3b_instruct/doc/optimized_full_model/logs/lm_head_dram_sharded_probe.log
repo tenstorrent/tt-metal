@@ -1,0 +1,8 @@
+RESULT K=2048 N=37984  N/32 tiles = 1187.0  tiles/bank = 148.375  banks=8
+RESULT shipped interleaved              240.62 us
+RESULT dram-sharded as-is N=37984                RAISE TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/tensor/spec/layout/tensor_layout.cpp:168: !shard_align_error.has_value()
+RESULT    TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/tensor/spec/layout/tensor_layout.cpp:168: !shard_align_error.has_value()
+RESULT    info:
+RESULT    Physical shard shape (2048, 4748) must be tile {32, 32} sized!
+RESULT dram-sharded padded N=38912 (=8*32*152)   RAISE TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+RESULT    info:

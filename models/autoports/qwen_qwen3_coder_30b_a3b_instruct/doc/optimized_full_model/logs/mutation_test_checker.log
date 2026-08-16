@@ -1,0 +1,310 @@
+clean tree: 557 checks, 0 failing
+  readme_digits                          ->  242 checks failed  SHOTGUN
+  readme_letters                         ->   61 checks failed  SHOTGUN
+  work_log_digits                        ->    5 checks failed
+  both_docs_digits                       ->  265 checks failed  SHOTGUN
+  both_docs_letters                      ->   66 checks failed  SHOTGUN
+  part1_work_log                         ->    2 checks failed
+  contract_numbers                       ->   16 checks failed
+  profile_decode                         ->   82 checks failed
+  profile_prefill                        ->   32 checks failed
+  profile_decode_small                   ->   69 checks failed
+  perf_shipped                           ->   50 checks failed
+  perf_1024                              ->    6 checks failed
+  perf_4096                              ->    9 checks failed
+  perf_before_128                        ->    4 checks failed
+  perf_before_4096                       ->    4 checks failed
+  perf_after_128                         ->    8 checks failed
+  perf_part1_suffixed                    ->    2 checks failed
+  perf_canonical                         ->    2 checks failed
+  perf_baseline_stage05                  ->   18 checks failed
+  footprint                              ->    6 checks failed
+  moe_skew                               ->   16 checks failed
+  audit                                  ->    7 checks failed
+  argmax_probe                           ->    8 checks failed
+  sdpa_depth                             ->    1 checks failed  (checker aborted early)
+  sdpa_sweep                             ->    5 checks failed  (checker aborted early)
+  sdpa_prefill                           ->    2 checks failed  (checker aborted early)
+  sdpa_pcc                               ->    2 checks failed
+  autoregressive_meta                    ->    3 checks failed
+  window_decode_log                      ->    1 checks failed
+  window_prefill_log                     ->    2 checks failed
+  prefill_check_log                      ->    4 checks failed  (checker aborted early)
+  teacher_forcing_log                    ->    6 checks failed  (checker aborted early)
+  stage05_teacher_forcing_log            ->    3 checks failed
+  stage05_prefill_log                    ->    2 checks failed
+  pytest_log                             ->    2 checks failed
+  degeneracy_log                         ->    2 checks failed
+  tt_perf_report                         ->    7 checks failed
+  part1_ranking                          ->    6 checks failed  (checker aborted early)
+  stage04_window                         ->    4 checks failed
+  stage04_perf_csv                       ->    2 checks failed
+  model_py_docstring_part1               ->    4 checks failed
+  model_py_docstring_cross_accounting    ->    4 checks failed
+  model_py_docstring_drops_window_size   ->    1 checks failed
+  readme_reinstates_closed_disclosures   ->    2 checks failed
+  model_py_docstring_digits              ->    5 checks failed
+  stage05_2layer_report                  ->    1 checks failed
+  stage05_2layer_report_rows             ->    2 checks failed
+  qualitative_json                       ->    3 checks failed
+  qualitative_score_log                  ->    3 checks failed
+  qualitative_probe_local_prompts        ->    2 checks failed
+  qualitative_drop_prompt                ->    4 checks failed
+  mutation_log_incomplete                ->    2 checks failed
+  rename_mutation_log                    ->   11 checks failed  (checker aborted early)
+  rename_qualitative_json                ->    5 checks failed  (checker aborted early)
+  rename_qualitative_score               ->    4 checks failed
+  rename_stage05_qualitative             ->    1 checks failed
+  rename_perf_part1                      ->    1 checks failed
+  model_py_pins_workers                  ->    1 checks failed
+  model_py_sub_core_grids                ->    1 checks failed
+  moe_probe_default_csv                  ->    1 checks failed
+  mutation_tester_unimportable           ->    4 checks failed  (checker aborted early)
+  argmax_probe_guard                     ->    1 checks failed
+  rename_decode_window                   ->    1 checks failed
+  rename_decode_report                   ->    7 checks failed  (checker aborted early)
+  rename_decode_rank                     ->    1 checks failed
+  rename_part1_window                    ->    5 checks failed  (checker aborted early)
+  rename_part1_report                    ->    1 checks failed
+  rename_prefill_window                  ->    1 checks failed
+  rename_prefill_report                  ->    1 checks failed
+  rename_part1_log                       ->    6 checks failed
+  rename_ccl_reproducer                  ->    2 checks failed
+  rename_argmax_reproducer               ->    1 checks failed  (checker aborted early)
+  watcher_tripped                        ->    3 checks failed
+  profile_decode_labels                  ->   19 checks failed  (checker aborted early)
+  profile_prefill_labels                 ->   12 checks failed  (checker aborted early)
+  audit_strings                          ->   18 checks failed
+  argmax_probe_labels                    ->    1 checks failed
+  sdpa_sweep_labels                      ->    4 checks failed  (checker aborted early)
+  sdpa_pcc_leg                           ->    2 checks failed
+  footprint_one_row                      ->    1 checks failed
+  footprint_context                      ->    1 checks failed
+  footprint_headroom                     ->    2 checks failed
+  profile_one_region                     ->    2 checks failed
+  profile_devices                        ->    1 checks failed
+  profile_spread                         ->    2 checks failed
+  profile_ops_per_device                 ->    1 checks failed
+  profile_sampler_us                     ->    5 checks failed
+  prefill_iteration_us                   ->    4 checks failed
+  perf_shipped_token_out                 ->   25 checks failed
+  perf_shipped_context                   ->    2 checks failed
+  perf_shipped_split_token               ->    1 checks failed
+  perf_shipped_split_ms                  ->    4 checks failed
+  perf_4096_token_out_faster             ->    6 checks failed
+  perf_after_128_slower                  ->    5 checks failed
+  perf_before_128_ttft                   ->    2 checks failed
+  perf_part1_matches_shipped             ->    1 checks failed
+  perf_part1_context_differs             ->    1 checks failed
+  perf_canonical_is_superseded           ->    1 checks failed
+  perf_canonical_row_drift               ->    1 checks failed
+  perf_after_128_context                 ->    1 checks failed
+  moe_recovery_flag                      ->    1 checks failed
+  moe_chi2_matches_pass3                 ->    2 checks failed
+  moe_corr                               ->    2 checks failed
+  moe_idle_above_floor                   ->    2 checks failed
+  audit_layers                           ->    1 checks failed
+  audit_host_readback                    ->    1 checks failed
+  audit_vocab_padding                    ->    1 checks failed
+  audit_rows                             ->    1 checks failed
+  audit_clamped                          ->    1 checks failed
+  audit_prefill_wired                    ->    1 checks failed
+  audit_cache_entries                    ->    1 checks failed
+  audit_dist_taken                       ->    1 checks failed
+  audit_steady_state                     ->    1 checks failed
+  audit_replays                          ->    1 checks failed
+  audit_token_copies                     ->    1 checks failed
+  contract_capability_reduction          ->    1 checks failed
+  contract_context                       ->    1 checks failed
+  contract_measured_depth                ->    2 checks failed
+  contract_op_depth                      ->    1 checks failed
+  meta_token_count                       ->    1 checks failed
+  window_decode_log_got                  ->    8 checks failed
+  window_prefill_log_got                 ->    2 checks failed
+  window_decode_log_devices              ->    2 checks failed
+  prefill_repeat_counts                  ->    1 checks failed
+  pytest_watcher_tally_differs           ->    2 checks failed
+  stage04_window_label                   ->    4 checks failed  (checker aborted early)
+  stage04_csv_ctx                        ->    2 checks failed
+  tt_perf_report_no_lm_row               ->    4 checks failed  (checker aborted early)
+  degeneracy_metrics_only                ->    4 checks failed  (checker aborted early)
+  prefill_check_aggregate                ->    4 checks failed  (checker aborted early)
+  teacher_forcing_rate                   ->    2 checks failed
+  profile_post_largest                   ->    1 checks failed
+  prefill_sdpa_share                     ->    2 checks failed
+  decode_sdpa_biggest                    ->    6 checks failed
+  lm_head_far_off_bandwidth              ->    5 checks failed
+  prefill_tally_family_missing           ->    1 checks failed
+  decode_tally_family_missing            ->    1 checks failed
+  accuracy_bar_top5_decode               ->    3 checks failed
+  accuracy_bar_top100_prefill            ->    3 checks failed
+  pytest_trailing_failure                ->    1 checks failed
+  watcher_trailing_failure               ->    1 checks failed
+  sdpa_depth_one_leg                     ->    2 checks failed
+  sdpa_sweep_flat_default                ->    2 checks failed
+  sdpa_prefill_config_wins               ->    1 checks failed
+  sdpa_pcc_leg_name                      ->    1 checks failed
+  argmax_keepdim_faster                  ->    2 checks failed
+  argmax_slice_slower                    ->    1 checks failed
+  argmax_slice_token                     ->    1 checks failed
+  argmax_probe_drop_leg                  ->    1 checks failed  (checker aborted early)
+  part1_ranking_matches_shipped          ->    5 checks failed
+  part1_sdpa_row                         ->    6 checks failed
+  part1_argmax_cheap                     ->    2 checks failed
+  audit_vocab_not_prime                  ->    6 checks failed
+  audit_topology                         ->    2 checks failed
+  audit_kv_dtype                         ->    2 checks failed
+  audit_kv_paged                         ->    2 checks failed
+  audit_lm_dtype                         ->    2 checks failed
+  audit_sampling_line                    ->    1 checks failed
+  audit_max_cores                        ->    1 checks failed
+  meta_four_matches                      ->    5 checks failed
+  accuracy_bar_top5                      ->    3 checks failed
+  accuracy_bar_top100_decode             ->    3 checks failed
+  teacher_forcing_rate_gone              ->    4 checks failed  (checker aborted early)
+  stage05_teacher_forcing_rate_gone      ->    4 checks failed  (checker aborted early)
+  watcher_not_a_session                  ->    1 checks failed
+  prefill_summary_ops                    ->    1 checks failed
+  composite_gather_share                 ->    3 checks failed
+  device_spread_us                       ->    1 checks failed
+  rename_window_decode_log               ->   12 checks failed
+  rename_window_prefill_log              ->    6 checks failed
+  rename_degeneracy_log                  ->    6 checks failed  (checker aborted early)
+  rename_pytest_log                      ->    1 checks failed  (checker aborted early)
+  rename_watcher_log                     ->    2 checks failed  (checker aborted early)
+  rename_part1_rank                      ->    8 checks failed  (checker aborted early)
+  rename_autoregressive_meta             ->    4 checks failed  (checker aborted early)
+  argmax_probe_a_numbers                 ->    3 checks failed
+  argmax_probe_a_labels                  ->    4 checks failed  (checker aborted early)
+  argmax_sub_core_not_monotonic          ->    1 checks failed
+  argmax_topk_k1_built                   ->    2 checks failed
+  argmax_tile_slice_wins                 ->    1 checks failed
+  argmax_padding_rows_nonzero            ->    1 checks failed
+  argmax_ties_missing                    ->    1 checks failed
+  argmax_drop_full_shipped               ->    4 checks failed  (checker aborted early)
+  readme_mutation_count                  ->    2 checks failed
+  readme_figure_count                    ->    1 checks failed
+  readme_assertion_count                 ->    1 checks failed
+  composite_gather_rows                  ->    2 checks failed
+  lm_head_slow_device                    ->    5 checks failed
+  lm_head_reported_device                ->    1 checks failed
+  stage05_agreement                      ->    1 checks failed
+  meta_matching_indices                  ->    3 checks failed
+  qualitative_all_collapse               ->    2 checks failed
+  argmax_drop_padding_leg                ->    2 checks failed
+  perf_before_1024                       ->    3 checks failed
+  perf_after_1024                        ->    2 checks failed
+  perf_after_4096                        ->    1 checks failed
+  sdpa_depth_leg_1                       ->    2 checks failed
+  sdpa_depth_leg_2                       ->    2 checks failed
+  sdpa_depth_leg_3                       ->    2 checks failed
+  sdpa_sweep_leg_1                       ->    1 checks failed
+  sdpa_sweep_leg_255_default             ->    1 checks failed
+  sdpa_sweep_leg_255_configured          ->    2 checks failed
+  sdpa_prefill_leg_0                     ->    2 checks failed
+  sdpa_prefill_leg_1                     ->    1 checks failed
+  profile_terminal_post                  ->    7 checks failed
+  profile_lm_head_us                     ->    5 checks failed
+  part1_rank_device0_line                ->   10 checks failed
+  stage04_ctx128_median                  ->    2 checks failed
+  readme_drops_figure_claim              ->    2 checks failed
+  stage04_window_kernel_time             ->    4 checks failed
+  prefill_check_top1                     ->    3 checks failed
+  teacher_forcing_top1                   ->    3 checks failed
+  watcher_tally_only                     ->    2 checks failed
+  tt_perf_report_lm_bandwidth            ->    1 checks failed
+  tt_perf_report_lm_device               ->    6 checks failed
+  lm_head_devices_equal                  ->    5 checks failed
+  lm_head_drop_slow_device               ->    6 checks failed
+  lm_head_reported_device_disagrees      ->    1 checks failed
+  moe_independence_caveat                ->    1 checks failed
+  moe_chi2_df                            ->    1 checks failed
+  moe_chi2_p                             ->    1 checks failed
+  moe_per_die_chi2                       ->    1 checks failed
+  moe_per_die_p                          ->    1 checks failed
+  moe_per_die_totals                     ->    1 checks failed
+  moe_chi2_pooling                       ->    1 checks failed
+  argmax_candidate_batch1                ->    1 checks failed
+  readme_drops_host_boundary_fields      ->    1 checks failed
+  readme_drops_audit_section             ->    5 checks failed
+  readme_drops_bug_list                  ->    5 checks failed
+  readme_drops_part1_perf_name           ->    1 checks failed
+  readme_reinstates_arbitrary_partition  ->    1 checks failed
+  readme_drops_one_token_caveat          ->    1 checks failed
+  part1_csv_drops_a_collective           ->    4 checks failed
+  part1_csv_reduce_scatter_slower        ->    3 checks failed
+  rename_stage05_degeneracy_log          ->    2 checks failed
+  mutation_log_shotgun_only              ->    1 checks failed
+  mutation_log_dead_mutation             ->    1 checks failed
+  mutation_log_targeted_tally            ->    1 checks failed
+  routing_run1_numbers                   ->    5 checks failed
+  routing_run2_numbers                   ->    4 checks failed
+  routing_run3_numbers                   ->    4 checks failed
+  routing_one_token_only                 ->    1 checks failed
+  routing_hotness_uniform                ->    1 checks failed
+  routing_per_die_counts                 ->    1 checks failed
+  routing_no_overfitting_gap             ->    1 checks failed
+  routing_held_out_gain                  ->    1 checks failed
+  cross_prompt_numbers                   ->   15 checks failed
+  cross_prompt_min                       ->    4 checks failed
+  cross_prompt_max                       ->    2 checks failed
+  cross_prompt_mean                      ->    1 checks failed
+  cross_prompt_directions                ->    1 checks failed
+  cross_prompt_pooling_worse             ->    1 checks failed
+  cross_prompt_pooled_gain               ->    7 checks failed
+  cross_prompt_pooled_leaks              ->    1 checks failed
+  readiness_qualitative_moved            ->    2 checks failed
+  readiness_qualitative_drifts           ->    1 checks failed
+  cross_prompt_structure_overlap         ->    2 checks failed
+  cross_prompt_structure_chance          ->    2 checks failed
+  cross_prompt_structure_rank_corr       ->    1 checks failed
+  cross_prompt_pooled_ceiling            ->    6 checks failed
+  readme_drops_published_range           ->    1 checks failed
+  readme_drops_published_percent         ->    1 checks failed
+  readme_undeclines_the_lever            ->    1 checks failed
+  mutation_log_shotgun_breadth           ->    2 checks failed
+  mutation_log_coverage_gap              ->    1 checks failed
+  prefill_iteration_only                 ->    3 checks failed
+  argmax_candidate_only                  ->    2 checks failed
+  routing_p2_no_overfitting_gap          ->    1 checks failed
+  routing_p3_no_overfitting_gap          ->    1 checks failed
+  routing_p3_duplicates_p2               ->    1 checks failed
+  readme_drops_moe_ledger_row            ->    2 checks failed
+  readme_miscounts_perturbations         ->    1 checks failed
+  readme_miscounts_corruptions           ->    1 checks failed
+  readme_reinstates_two_prompt_range     ->    1 checks failed
+  readme_reinstates_zero_ms              ->    1 checks failed
+  argmax_drop_ledger_legs                ->    7 checks failed  (checker aborted early)
+  readme_limitation10_breadths           ->    1 checks failed
+  readme_shotgun_section_breadths        ->    1 checks failed
+  readme_widest_profile_decode           ->    1 checks failed
+  readme_widest_profile_decode_small     ->    1 checks failed
+  readme_widest_perf_shipped             ->    1 checks failed
+  mutation_log_drops_widest              ->    4 checks failed  (checker aborted early)
+  mutation_log_launders_bootstrap        ->    1 checks failed
+  unname_ops_perf_full_model_48layer_decode ->    1 checks failed
+  unname_tt_perf_report_full_model_48layer_decode ->    1 checks failed
+  unname_rank_full_model_48layer_decode  ->    1 checks failed
+  unname_ops_perf_full_model_48layer_decode_part1_preadoption ->    1 checks failed
+  unname_tt_perf_report_full_model_48layer_decode_part1_preadoption ->    1 checks failed
+  unname_rank_full_model_48layer_decode_part1_preadoption ->    1 checks failed
+  unname_ops_perf_full_model_48layer_prefill_s128 ->    1 checks failed
+  unname_tt_perf_report_full_model_48layer_prefill_s128 ->    1 checks failed
+  unname_profile_48layer_work_log        ->    1 checks failed
+
+557 assertions; 557 were made to fail by at least one mutation
+557 of those were made to fail by a mutation that is not one of the 4 shotguns (both_docs_digits, both_docs_letters, readme_digits, readme_letters)
+
+measured breadth of the 4 declared shotguns: 61-265 assertions (both_docs_digits 265, both_docs_letters 66, readme_digits 242, readme_letters 61)
+widest mutations NOT declared shotgun: profile_decode 82, profile_decode_small 69, perf_shipped 50, profile_prefill 32, perf_shipped_token_out 25
+  -- so breadth and 'corrupts a whole document' are different axes, and the gate is the
+     second one. The narrowest coverage each assertion has, by measured breadth:
+       narrowest mutation trips         1 assertions: 123 of 557
+       narrowest mutation trips       2-5 assertions: 211 of 557
+       narrowest mutation trips      6-20 assertions: 131 of 557
+       narrowest mutation trips     21-50 assertions:  48 of 557
+       narrowest mutation trips    51-557 assertions:  44 of 557
+     92 of 557 assertions have NO mutation narrower than 21 assertions covering them.
+     That is a real weakness in this evidence and it is a named limitation in the README,
+     not a failure here: the gate is the declared-shotgun one above.
+every assertion was made to fail by at least one mutation

@@ -1,0 +1,165 @@
+{
+  "runs": [
+    {
+      "prompt": "Write a short technical explanation of how a mixture-of-experts transformer routes tokens to experts, and then give a Python function that computes the top-k indices of a vector without using any library call. Explain the complexity of your implementation.",
+      "tokens": 128,
+      "layers": 48
+    },
+    {
+      "prompt": "Once upon a time in a small village at the edge of a great forest, there lived a clockmaker who had never once been late. Continue the story for several paragraphs, and keep the tone gentle.",
+      "tokens": 128,
+      "layers": 48
+    },
+    {
+      "prompt": "Summarise the causes of the decline of the Western Roman Empire, listing the main economic, military and political factors, and briefly assess which historians consider most important.",
+      "tokens": 128,
+      "layers": 48
+    }
+  ],
+  "cross_prompt": [
+    {
+      "fitted_on": "Write a short technical explanation of how a mixture-of-expe",
+      "scored_on": "Once upon a time in a small village at the edge of a great f",
+      "fitted_on_index": 0,
+      "scored_on_index": 1,
+      "shipped_mean_max_k": 3.4938151041666665,
+      "fitted_mean_max_k": 3.42041015625,
+      "gain_in_max_k_per_layer": 0.07340494791666667,
+      "gain_us_per_layer": 0.5028238932291667,
+      "gain_ms_per_iteration": 0.024135546875
+    },
+    {
+      "fitted_on": "Write a short technical explanation of how a mixture-of-expe",
+      "scored_on": "Summarise the causes of the decline of the Western Roman Emp",
+      "fitted_on_index": 0,
+      "scored_on_index": 2,
+      "shipped_mean_max_k": 3.54296875,
+      "fitted_mean_max_k": 3.3221028645833335,
+      "gain_in_max_k_per_layer": 0.22086588541666666,
+      "gain_us_per_layer": 1.5129313151041666,
+      "gain_ms_per_iteration": 0.07262070312499999
+    },
+    {
+      "fitted_on": "Once upon a time in a small village at the edge of a great f",
+      "scored_on": "Write a short technical explanation of how a mixture-of-expe",
+      "fitted_on_index": 1,
+      "scored_on_index": 0,
+      "shipped_mean_max_k": 3.4539388020833335,
+      "fitted_mean_max_k": 3.3699544270833335,
+      "gain_in_max_k_per_layer": 0.083984375,
+      "gain_us_per_layer": 0.57529296875,
+      "gain_ms_per_iteration": 0.0276140625
+    },
+    {
+      "fitted_on": "Once upon a time in a small village at the edge of a great f",
+      "scored_on": "Summarise the causes of the decline of the Western Roman Emp",
+      "fitted_on_index": 1,
+      "scored_on_index": 2,
+      "shipped_mean_max_k": 3.54296875,
+      "fitted_mean_max_k": 3.205078125,
+      "gain_in_max_k_per_layer": 0.337890625,
+      "gain_us_per_layer": 2.31455078125,
+      "gain_ms_per_iteration": 0.1110984375
+    },
+    {
+      "fitted_on": "Summarise the causes of the decline of the Western Roman Emp",
+      "scored_on": "Write a short technical explanation of how a mixture-of-expe",
+      "fitted_on_index": 2,
+      "scored_on_index": 0,
+      "shipped_mean_max_k": 3.4539388020833335,
+      "fitted_mean_max_k": 3.3525390625,
+      "gain_in_max_k_per_layer": 0.10139973958333333,
+      "gain_us_per_layer": 0.6945882161458332,
+      "gain_ms_per_iteration": 0.03334023437499999
+    },
+    {
+      "fitted_on": "Summarise the causes of the decline of the Western Roman Emp",
+      "scored_on": "Once upon a time in a small village at the edge of a great f",
+      "fitted_on_index": 2,
+      "scored_on_index": 1,
+      "shipped_mean_max_k": 3.4938151041666665,
+      "fitted_mean_max_k": 3.2646484375,
+      "gain_in_max_k_per_layer": 0.22916666666666666,
+      "gain_us_per_layer": 1.5697916666666665,
+      "gain_ms_per_iteration": 0.07535
+    }
+  ],
+  "shared_structure": {
+    "per_pair": [
+      {
+        "prompts": [
+          0,
+          1
+        ],
+        "mean_top8_overlap": 1.4583333333333333,
+        "mean_per_expert_rank_correlation": 0.43293109809050984
+      },
+      {
+        "prompts": [
+          0,
+          2
+        ],
+        "mean_top8_overlap": 2.3125,
+        "mean_per_expert_rank_correlation": 0.48502098152426526
+      },
+      {
+        "prompts": [
+          1,
+          2
+        ],
+        "mean_top8_overlap": 3.2083333333333335,
+        "mean_per_expert_rank_correlation": 0.6874103813832612
+      }
+    ],
+    "mean_top8_overlap_over_pairs": 2.326388888888889,
+    "mean_rank_correlation_over_pairs": 0.5351208203326787,
+    "top8_overlap_under_independent_routing": 0.5,
+    "reading": "Two prompts' 8 hottest experts in a layer would overlap in 0.50 experts on average if routing carried no shared structure at all. Measured over every prompt pair it is several times that, and the rank correlation over all 128 experts is well above 0. This is structural corroboration of the cross-prompt fit, arrived at without a search: shared hotness exists, which is why the permutation lever is not zero, and it is partial, which is why the lever is small."
+  },
+  "directions": 6,
+  "gain_ms_per_iteration_min": 0.024135546875,
+  "gain_ms_per_iteration_max": 0.1110984375,
+  "gain_ms_per_iteration_mean": 0.057359830729166665,
+  "pooled_fit_held_out": [
+    {
+      "held_out": "Write a short technical explanation of how a mixture-of-expe",
+      "held_out_index": 0,
+      "pooled_over_indices": [
+        1,
+        2
+      ],
+      "shipped_mean_max_k": 3.4539388020833335,
+      "pooled_fit_mean_max_k": 3.2784830729166665,
+      "pooled_gain_ms_per_iteration": 0.05768984375,
+      "best_single_prompt_fit_gain_ms_per_iteration": 0.03334023437499999,
+      "pooling_transfers_better": true
+    },
+    {
+      "held_out": "Once upon a time in a small village at the edge of a great f",
+      "held_out_index": 1,
+      "pooled_over_indices": [
+        0,
+        2
+      ],
+      "shipped_mean_max_k": 3.4938151041666665,
+      "pooled_fit_mean_max_k": 3.2340494791666665,
+      "pooled_gain_ms_per_iteration": 0.08541093749999999,
+      "best_single_prompt_fit_gain_ms_per_iteration": 0.07535,
+      "pooling_transfers_better": true
+    },
+    {
+      "held_out": "Summarise the causes of the decline of the Western Roman Emp",
+      "held_out_index": 2,
+      "pooled_over_indices": [
+        0,
+        1
+      ],
+      "shipped_mean_max_k": 3.54296875,
+      "pooled_fit_mean_max_k": 3.20166015625,
+      "pooled_gain_ms_per_iteration": 0.112222265625,
+      "best_single_prompt_fit_gain_ms_per_iteration": 0.1110984375,
+      "pooling_transfers_better": true
+    }
+  ],
+  "reading": "A shipped expert-to-die layout is fixed at weight-load time, so the gain that counts is one that survives being fitted on routing the layout will not see again. Over the 6 single-prompt -> single-prompt directions this sample can produce, that is 0.0241-0.1111 ms/iteration (mean 0.0574). The stage originally published only the two directions an n=2 sample can produce and read them as the range; the round-2 review's third prompt showed they were the two smallest of the six. Note also that fit-on-ONE-prompt is the WORST case for a fixed layout and not the representative one: a fit pooled over the other prompts transfers strictly BETTER to a genuinely unseen prompt than the best single-prompt fit does (pooled_fit_held_out), so this range is a floor. The rejection does not rest on the gain being negligible -- it rests on the largest measured gain still being a fraction of a percent of token-out against a bit-identity obligation on the expert weights."
+}

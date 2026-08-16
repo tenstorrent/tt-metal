@@ -1,0 +1,7 @@
+metric,what,ms,iterations
+ttft,"prefill+lm_head+sample+readback, prompt 128",126.16134498966858,4
+model_trace,"traced decode, batch 1",20.22221899824217,128
+token_out,"traced decode, batch 1",21.460929478053004,128
+token_out_readback,"traced decode, batch 1",22.158651961944997,128
+sampler_split,"eager, same logits",6.154779298231006,1
+sampler_force_argmax,"eager, same logits",0.9013900649733841,1

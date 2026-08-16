@@ -586,6 +586,91 @@ def test_sdpa_rounded_page_count_covers_the_read_window(generator):
         assert generator._sdpa_rounded_page_count(tokens) >= math.ceil(tokens / generator.page_block_size)
 
 
+def test_distributed_argmax_is_exact_at_batch_above_one(batch_generator):
+    """The live-row slice must be right at every batch, not only at batch 1.
+
+    Stage 06 made ``_WatcherCleanSampling1D._sample_argmax`` **batch-dependent**:
+    it slices the 32-slot logit tile down to ``_dist_active_rows`` before the
+    per-die ``ttnn.argmax`` and pads the result back. Every other device-sampling
+    test in this file uses the ``max_batch_size=1`` fixture and the
+    ``max_batch_size=4`` fixture only ever samples on the host, so the branch
+    that the slice introduced was uncovered at batch > 1 -- which is exactly
+    where an off-by-one in the slice or the pad would live.
+
+    This drives the sampler directly with crafted logits, because the property
+    is about the reduction and not about what the model predicts:
+
+    * every **live** row returns the host argmax of the same bf16 logits;
+    * every **padding** row returns token 0, which is the value the shipped
+      32-row reduction produces for a zero-logit row and the value the pad
+      writes back, so the 32-slot buffer is unchanged slot for slot;
+    * the caller's ``tt_out_tok`` object survives -- the traced decode loop
+      feeds that exact tensor back, so a new tensor would break feedback
+      silently.
+
+    The all-negative leg matters on its own: it is the case where "the padding
+    rows are zero" stops being harmless, because a zero padding row would beat
+    every live row if the slice were not there.
+    """
+    gen = batch_generator
+    model = gen.model
+    sampler = model.sampler
+    mesh = gen.mesh_device
+    dies = mesh.get_num_devices()
+    local_vocab = model.vocab_size // dies
+
+    assert sampler._dist_active_rows == model.max_batch_size > 1, (
+        f"this test is only meaningful when the sampler is batched: "
+        f"_dist_active_rows={sampler._dist_active_rows}, max_batch_size={model.max_batch_size}"
+    )
+    sampler.load_device_buffers()
+    assert getattr(sampler, "_dist_die_offset", None) is not None, "the distributed path is not active"
+    assert sampler._dist_local_vocab == local_vocab
+
+    slots = 32
+    active = sampler._dist_active_rows
+    torch.manual_seed(0)
+    legs = {
+        # random logits: the ordinary case, and the winner lands on a different
+        # die for different rows
+        "random": torch.randn(1, 1, slots, model.vocab_size),
+        # every live logit strictly negative: a padding row's exact 0.0 would win
+        # every row if the live-row slice were not doing its job
+        "all_negative": -1.0 - torch.rand(1, 1, slots, model.vocab_size),
+    }
+    for name, logits in legs.items():
+        # bf16 on the way in, so the host reference sees the same values the
+        # device compares -- otherwise near-ties round differently.
+        logits = logits.to(torch.bfloat16).to(torch.float32)
+        expected = logits[0, 0, :active].argmax(dim=-1).tolist()
+
+        device_logits = ttnn.from_torch(
+            logits,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        )
+        out_tok = ttnn.from_torch(
+            torch.full((1, 1, 1, slots), 12345, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        returned, logprobs = sampler._sample_argmax(device_logits, out_tok)
+        assert logprobs is None
+        assert returned is out_tok, f"{name}: the sampler returned a new tensor, breaking token feedback"
+
+        tokens = [int(v) for v in ttnn.to_torch(ttnn.get_device_tensors(returned)[0]).reshape(-1)[:slots].tolist()]
+        assert tokens[:active] == expected, f"{name}: live rows {tokens[:active]} != host argmax {expected}"
+        assert tokens[active:] == [0] * (slots - active), f"{name}: padding rows are {tokens[active:]}, not 0"
+        ttnn.deallocate(device_logits)
+        ttnn.deallocate(out_tok)
+
+
 # --- cache ownership, reset, determinism -------------------------------------
 
 

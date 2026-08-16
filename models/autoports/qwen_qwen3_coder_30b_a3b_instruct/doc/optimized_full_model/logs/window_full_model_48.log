@@ -1,0 +1,76 @@
+  boundary check  device 0  ReduceScatterMinimalAsyncDeviceOperation            96 / 96    ok
+  boundary check  device 0  AllGatherAsyncDeviceOperation                       96 / 96    ok
+  boundary check  device 0  AllBroadcastDeviceOperation                          2 / 2     ok
+  boundary check  device 0  ConcatDeviceOperation                                2 / 2     ok
+  boundary check  device 0  GatherDeviceOperation                                1 / 1     ok
+  boundary check  device 0  SdpaDecodeDeviceOperation                           48 / 48    ok
+  boundary check  device 0  SparseMatmulDeviceOperation                         96 / 96    ok
+  boundary check  device 0  PagedUpdateCacheDeviceOperation                     96 / 96    ok
+  boundary check  device 0  EmbeddingsDeviceOperation                            3 / 3     ok
+  boundary check  device 0  ArgMaxDeviceOperation                                1 / 1     ok
+  boundary check  device 1  ReduceScatterMinimalAsyncDeviceOperation            96 / 96    ok
+  boundary check  device 1  AllGatherAsyncDeviceOperation                       96 / 96    ok
+  boundary check  device 1  AllBroadcastDeviceOperation                          2 / 2     ok
+  boundary check  device 1  ConcatDeviceOperation                                2 / 2     ok
+  boundary check  device 1  GatherDeviceOperation                                1 / 1     ok
+  boundary check  device 1  SdpaDecodeDeviceOperation                           48 / 48    ok
+  boundary check  device 1  SparseMatmulDeviceOperation                         96 / 96    ok
+  boundary check  device 1  PagedUpdateCacheDeviceOperation                     96 / 96    ok
+  boundary check  device 1  EmbeddingsDeviceOperation                            3 / 3     ok
+  boundary check  device 1  ArgMaxDeviceOperation                                1 / 1     ok
+  boundary check  device 2  ReduceScatterMinimalAsyncDeviceOperation            96 / 96    ok
+  boundary check  device 2  AllGatherAsyncDeviceOperation                       96 / 96    ok
+  boundary check  device 2  AllBroadcastDeviceOperation                          2 / 2     ok
+  boundary check  device 2  ConcatDeviceOperation                                2 / 2     ok
+  boundary check  device 2  GatherDeviceOperation                                1 / 1     ok
+  boundary check  device 2  SdpaDecodeDeviceOperation                           48 / 48    ok
+  boundary check  device 2  SparseMatmulDeviceOperation                         96 / 96    ok
+  boundary check  device 2  PagedUpdateCacheDeviceOperation                     96 / 96    ok
+  boundary check  device 2  EmbeddingsDeviceOperation                            3 / 3     ok
+  boundary check  device 2  ArgMaxDeviceOperation                                1 / 1     ok
+  boundary check  device 3  ReduceScatterMinimalAsyncDeviceOperation            96 / 96    ok
+  boundary check  device 3  AllGatherAsyncDeviceOperation                       96 / 96    ok
+  boundary check  device 3  AllBroadcastDeviceOperation                          2 / 2     ok
+  boundary check  device 3  ConcatDeviceOperation                                2 / 2     ok
+  boundary check  device 3  GatherDeviceOperation                                1 / 1     ok
+  boundary check  device 3  SdpaDecodeDeviceOperation                           48 / 48    ok
+  boundary check  device 3  SparseMatmulDeviceOperation                         96 / 96    ok
+  boundary check  device 3  PagedUpdateCacheDeviceOperation                     96 / 96    ok
+  boundary check  device 3  EmbeddingsDeviceOperation                            3 / 3     ok
+  boundary check  device 3  ArgMaxDeviceOperation                                1 / 1     ok
+window: 14076 of 93528 rows, 4 devices, 48 layers
+   1540  ShardedToInterleavedDeviceOperation
+   1356  InterleavedToShardedDeviceOperation
+   1172  BinaryNgDeviceOperation
+   1156  SliceDeviceOperation
+   1152  UnaryDeviceOperation
+    964  MatmulDeviceOperation
+    804  UntilizeWithUnpaddingDeviceOperation
+    772  LayerNormDeviceOperation
+    772  ReshapeViewDeviceOperation
+    396  TypecastDeviceOperation
+    384  RotaryEmbeddingHfDeviceOperation
+    384  PagedUpdateCacheDeviceOperation
+    384  ReduceScatterMinimalAsyncDeviceOperation
+    384  AllGatherAsyncDeviceOperation
+    384  CloneOperation
+    384  SparseMatmulDeviceOperation
+    216  TilizeWithValPaddingDeviceOperation
+    204  FillPadDeviceOperation
+    200  ReduceDeviceOperation
+    192  NLPCreateQKVHeadsDecodeDeviceOperation
+    192  SdpaDecodeDeviceOperation
+    192  NLPConcatHeadsDecodeDeviceOperation
+    192  TopKDeviceOperation
+    192  ScatterDeviceOperation
+     40  PermuteDeviceOperation
+     12  EmbeddingsDeviceOperation
+     12  UntilizeDeviceOperation
+      8  TransposeDeviceOperation
+      8  PlusOneDeviceOperation
+      8  AllBroadcastDeviceOperation
+      8  ConcatDeviceOperation
+      4  ArgMaxDeviceOperation
+      4  GatherDeviceOperation
+      4  CopyDeviceOperation
+wrote /tmp/fm48_decode_window.csv

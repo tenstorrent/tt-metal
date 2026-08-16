@@ -1,0 +1,4 @@
+measured: tt free-running completion [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 107, 'adjacent_duplication': 0.0094, 'trigram_loop_fraction': 0.028}
+measured: hf/tt token agreement (informational) [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/autoregressive_meta.json] {'matching_tokens': 4, 'compared_tokens': 128}
+
+No degenerate output detected.

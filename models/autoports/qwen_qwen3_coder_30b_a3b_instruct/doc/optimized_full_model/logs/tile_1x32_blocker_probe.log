@@ -1,0 +1,18 @@
+=== output_tile = Tile([32, 32]) ===
+  produced Shape([1, 1, 1, 32, 1, 1536]) DataType.BFLOAT16 Layout.TILE
+  ttnn.slice(.., 0, half)            RAISE RuntimeError: TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/slice.cpp:103: input_rank == begins.size()
+  ttnn.reshape -> (B,E,W)            OK    Shape([1, 32, 1536])
+  ttnn.sum(dim=1)                    OK    Shape([1, 1, 32, 1, 1536])
+  ttnn.untilize                      OK    Shape([1, 1, 1, 32, 1, 1536])
+  ttnn.to_layout(ROW_MAJOR)          OK    Shape([1, 1, 1, 32, 1, 1536])
+  ttnn.silu (eltwise)                OK    Shape([1, 1, 1, 32, 1, 1536])
+  value: reference row captured, |mean| 0.00000
+=== output_tile = Tile([1, 32]) ===
+  sparse_matmul itself raised:
+in0 with Tile([1,32]) built: Shape([1, 1, 1, 2048]) Tile with shape: [1, 32]
+RESULT produced Shape([1, 1, 1, 32, 1, 1536])
+RESULT   reshape    RAISE TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/tensor/mesh_tensor_impl.hpp:33: mesh_buffer_->size() >= spec_.compute_pac
+RESULT   sum        RAISE TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/tensor/mesh_tensor_impl.hpp:33: mesh_buffer_->size() >= spec_.compute_pac
+RESULT   untilize   RAISE TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/tensor/mesh_tensor_impl.hpp:33: mesh_buffer_->size() >= spec_.compute_pac
+RESULT   silu       OK Shape([1, 1, 1, 32, 1, 1536])
+RESULT   to_torch   OK torch.Size([4, 1, 1, 32, 1, 1536])

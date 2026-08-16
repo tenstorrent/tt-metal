@@ -714,14 +714,238 @@ class MultichipWeights:
 # would have been allowed to use.
 _SDPA_MAX_CORES_PER_HEAD = 64
 
+# The **paged** path -- the one the full model actually runs -- had no program
+# config at all until stage 06, because the cap above was added to clear a
+# ``TT_FATAL`` the paged path never raised. Running at the op default is not
+# free: with no config the op picks its own ``k_chunk_size`` and core split, and
+# the result is a decode cost that is **linear in ``cur_pos``** rather than
+# flat. Measured at the shipped per-die decode shapes -- 8 Q heads, 1 KV head,
+# head_dim 128, page 32, batch 1, **bfloat16** cache -- with PCC taken against a
+# float32 reference built from the same cache the kernel reads, not against the
+# default leg (``probes/sdpa_sweep_confirm.py``, median of 5 blocks of 50):
+#
+#     cur_pos      default   k256/c16   speedup   default PCC   k256/c16 PCC
+#         127     23.72 us   19.00 us     1.25x      0.999734       0.999707
+#        1023    120.51      22.02        5.47x      0.999714       0.999703
+#        4095    451.85      30.75       14.69x      0.999519       0.999655
+#        8191    893.14      38.15       23.41x      0.999024       0.999590
+#       16383   1777.60      49.83       35.67x      0.993199       0.999577
+#       32767   3545.05      74.13       47.82x      0.989703       0.999692
+#
+# Two things in that table, not one. The speed column is the expected one. The
+# **PCC columns are the surprise**: the default's accuracy *decays with depth* --
+# 0.9932 at 16k and 0.9897 at 32k, through this project's 0.995 layer bar --
+# while the configured path holds 0.9996-0.9997 flat from 127 to 32767. So this
+# is not a speed-for-accuracy trade. At the context this model advertises the
+# config is strictly better on both axes, and the shipped default was the *less*
+# accurate of the two.
+#
+# **The cache dtype is why this took two passes, and it is the lesson.** The
+# stage-06 lever analysis recommended ``k_chunk_size=512`` on the strength of
+# probes that allocated the cache as ``bfloat8_b``; ``create_mesh_kv_cache``
+# allocates ``ttnn.bfloat16`` (see below, ~line 1167). Re-run at the real dtype,
+# 512 loses its edge -- and, far worse, **512 is wrong in-model**:
+# ``test_multichip_decode_batch`` (128-position paged cache, cur_pos 32) returns
+# PCC **-0.04 to -0.17** against HF with it, nondeterministically in 2-3 of its 4
+# batch sizes, across nine runs. Sweeping that real test pins the boundary
+# exactly -- ``k_chunk`` in {32, 64, 128, 256} passes 4/4 at every
+# ``max_cores_per_head_batch`` in {16, 32, 64}; only 512 fails -- so
+# ``max_cores`` is innocent and ``k_chunk`` is the whole effect.
+#
+# No standalone construction reproduces it. ``probes/sdpa_kchunk_rule_probe.py``
+# re-runs the op at bfloat16, at the failing 128-deep cache, with an 8-user paged
+# page table laid out exactly as ``create_mesh_kv_cache`` lays it out, and reads
+# PCC 0.9997 at k512 at every depth from 128 to 4096;
+# ``probes/sdpa_shallow_cache_probe.py`` finds nothing either. The leading
+# explanation is **L1 pressure**: standalone the op owns the whole of L1, while
+# in-model it is co-resident with the layer's sharded activations, expert
+# weights and CCL buffers, and a 512-deep bf16 K chunk is exactly the size that
+# stops fitting. That the boundary is dtype-linked is independently visible --
+# ``k1024/c64`` fails to *build* at bfloat16 (``program.cpp:1722``) and builds
+# fine at bfloat8_b. It is recorded as unexplained-in-detail rather than argued;
+# what is measured is that 512 is unsafe in-model and 256 is not.
+#
+# So: the sweep was redone at bfloat16, 6 x 4 points at five positions
+# (``probes/sdpa_sweep_probe.py``), finalists re-timed over nine positions, and
+# the choice restricted to the in-model-safe ``k_chunk <= 256``. **256/16 is the
+# uniform winner** -- fastest of the safe configs at cur_pos 4095 and above,
+# within 0.6% at 511-2047, and its worst point is +6.4% at cur_pos 127 (19.00 vs
+# 17.86 us for 256/8, i.e. 0.05 ms on a 20 ms iteration). There is no
+# context-dependence worth a runtime switch, so it is **fixed**; a traced decode
+# could not vary it per step anyway. ``q_chunk_size`` stays 32: decode has one
+# query row and 32 is the tile height.
+_SDPA_PAGED_K_CHUNK = 256
+_SDPA_PAGED_MAX_CORES_PER_HEAD = 16
 
-def _sdpa_program_config(device):
-    return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=32,
-        k_chunk_size=32,
-        max_cores_per_head_batch=_SDPA_MAX_CORES_PER_HEAD,
+
+def _paged_cache_depth(kv_cache) -> int:
+    """Positions allocated **per user** in a paged cache.
+
+    ``page_table`` is ``[max_batch, blocks_per_seq]`` and every block holds
+    ``block_size`` positions, so this is the length of the logical sequence the
+    cache can hold for one user -- which is the quantity ``k_chunk_size`` has to
+    respect. See ``_sdpa_k_chunk``.
+    """
+    return int(kv_cache.page_table.shape[-1]) * int(kv_cache.block_size)
+
+
+def _sdpa_k_chunk(kv_cache) -> int:
+    """``_SDPA_PAGED_K_CHUNK``, clamped to what the cache can actually supply.
+
+    **``k_chunk_size`` must not exceed the cache's per-user allocated depth**, and
+    exceeding it does not raise -- it silently returns garbage. This is the whole
+    reason the first adoption of this lever failed its gates, and it is worth
+    stating precisely because nothing in the op signature hints at it.
+
+    How it presents: ``test_multichip_decode_batch`` allocates a **128**-position
+    paged cache. At ``k_chunk_size=256`` it returns PCC **-0.10 to +0.06** against
+    HF -- noise, not a degraded answer -- but *only when another test has run
+    before it in the same process*; run alone it passes. Run the same test after
+    ``test_router_windows_partition_global_routing`` and it fails 4/4, at every
+    ``max_cores_per_head_batch``. Sweeping ``k_chunk`` through that reproducer
+    puts the boundary exactly at the cache depth:
+
+        k_chunk  32   64   128  ->  7 passed, at max_cores in {8, 16, 32, 64}
+        k_chunk 256          ->  4 failed
+
+    That order-dependence is the tell, and it is what makes the bug so easy to
+    miss: the op reads a full ``k_chunk`` past the end of the cache buffer, and
+    whether that hurts depends on what the allocator last left there. On a fresh
+    device it is zeros and the softmax mask hides it; after another test has
+    allocated and freed tensors it is live garbage. **Every standalone probe
+    misses this by construction** -- ``probes/sdpa_shallow_cache_probe.py`` and
+    ``probes/sdpa_kchunk_rule_probe.py`` both reproduce the shapes, the dtype, the
+    128-deep cache and the multi-user page table exactly, and both read PCC 0.9997
+    at k512, because in a probe the cache is the only thing allocated. This is the
+    same shape of miss as the stage-04 ``rotary_embedding_llama`` rejection: a
+    probe that structurally cannot see the state interaction.
+
+    So the clamp is not defensive coding, it is the operating range. At the
+    shipped ``max_context_len`` (4096 and up, contract 262144) it never binds and
+    the config is the tuned 256; at the tests' 128-deep caches it drops to 128,
+    which the sweep prices at +6% on the op at cur_pos 127 and 0% past 511.
+    """
+    depth = _paged_cache_depth(kv_cache)
+    # The ``max(32, ...)`` floor exists because SDPA will not take a chunk below
+    # one tile. It is the one input that could make this function *violate* the
+    # invariant in its own first line, and only when ``block_size < 32``, which
+    # this model never configures (the block size is 32 and the page table is at
+    # least one block per user). Assert it rather than leave a silent hole: a
+    # shallower cache than one tile would return a chunk deeper than the cache.
+    assert depth >= 32, (
+        f"paged cache depth {depth} is below one tile, so the 32-row floor below would return a "
+        "k_chunk_size deeper than the per-user allocated depth -- which SDPA reads past without "
+        "raising. Raise block_size (currently "
+        f"{int(kv_cache.block_size)}) or the page table width ({int(kv_cache.page_table.shape[-1])})."
     )
+    chunk = min(_SDPA_PAGED_K_CHUNK, max(32, depth))
+    # SDPA wants a power-of-two chunk; take the largest one that still fits.
+    return 1 << (chunk.bit_length() - 1)
+
+
+#: Program configs are immutable and there are at most a handful of distinct
+#: ones, but they are built **per layer per call** -- 48 times a token on the
+#: decode path and 48 times a prefill chunk. Each build calls
+#: ``device.compute_with_storage_grid_size()``, which is a device query, not a
+#: Python attribute. On the traced decode path that is capture-only and free; on
+#: the *untraced* paths (``run_teacher_forcing``, ``run_prefill_check``, eager
+#: decode) it is 96 device queries per token of pure host time. Memoised on the
+#: grid size rather than the device handle so the cache survives device reopen.
+_SDPA_CONFIG_CACHE: dict = {}
+
+
+def _cached_sdpa_config(grid, q_chunk, k_chunk, max_cores=None):
+    key = (grid.x, grid.y, q_chunk, k_chunk, max_cores)
+    cfg = _SDPA_CONFIG_CACHE.get(key)
+    if cfg is None:
+        kwargs = {} if max_cores is None else {"max_cores_per_head_batch": max_cores}
+        cfg = _SDPA_CONFIG_CACHE[key] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, **kwargs
+        )
+    return cfg
+
+
+def _sdpa_program_config(device, kv_cache=None):
+    """Program config for SDPA-decode; ``kv_cache`` selects the tuned paged form.
+
+    Both spellings are the same op family and the same maths; they differ only
+    in chunking and core budget. Neither touches dtype, fidelity, the KV cache
+    layout, or any collective -- this is a program config on a call the model
+    already makes.
+    """
+    paged = kv_cache is not None and kv_cache.is_paged
+    return _cached_sdpa_config(
+        device.compute_with_storage_grid_size(),
+        32,
+        _sdpa_k_chunk(kv_cache) if paged else 32,
+        _SDPA_PAGED_MAX_CORES_PER_HEAD if paged else _SDPA_MAX_CORES_PER_HEAD,
+    )
+
+
+# Prefill has the *same* gap and it is larger in absolute terms:
+# ``attention_prefill`` also called SDPA with no program config, and the op
+# default is quadratic-with-a-bad-constant in S. Same shapes, bfloat16
+# (``doc/optimized_full_model/probes/sdpa_prefill_confirm.py``):
+#
+#       S    default   q128/k128   q256/k256
+#     128    23.92 us    25.72 us    32.68 us
+#     512    58.96       54.14       87.18
+#    1024   230.58       88.36      127.54
+#    2048   741.08      216.03      207.28
+#    4096  2850.25      882.61      451.04
+#    8192 10938.43     2907.58     1956.15
+#   16384 44456.67    11364.22     6527.48
+#
+# The winner *is* length-dependent here, unlike decode, and the two legs cross
+# at S ~= 2048. Prefill could pick at call time -- it is eager, not traced, so
+# the branch is a Python ``if`` and there is no captured trace to invalidate.
+#
+# **It is nevertheless NOT adopted.** ``decoder_layer_prefill_multichip`` passes
+# ``sdpa_program_config=None`` and prefill runs at the op default. Two measured
+# reasons, in this order:
+#
+# 1. **It costs accuracy on the one gate that can see it.** With this config
+#    wired, ``run_teacher_forcing`` reads top-1 **0.980** against a baseline of
+#    **0.990** on the same tree (top-5 and top-100 stay 1.000). Bisected: the
+#    *decode* config alone holds 0.990, the *prefill* config alone drops it to
+#    0.980, so the flip is this and not the lever above
+#    (``logs/run_teacher_forcing_leg_prefill.log`` /
+#    ``logs/run_teacher_forcing_leg_decode.log``). One greedy token in a hundred
+#    is small, but the stage bar is "do not spend accuracy for speed", and here
+#    there is no speed to buy it with, which is reason 2.
+# 2. **At the length actually being served it is a loss, not a win.** The
+#    readiness reference prompt is **158 tokens**. The table above says the
+#    config is *behind* the default below S ~= 384, and the measured TTFTs agree:
+#    3448.79 ms baseline against 3445.31 ms with prefill configured -- noise. The
+#    6.8x is real but it lives at S >= 4096, which nothing in the current gate
+#    set exercises.
+#
+# So this is a **verified-fast, accuracy-ungated** lever, left wired and
+# documented rather than taken. What it needs before adoption is a readiness
+# reference with a multi-thousand-token prompt, so the regime where it pays
+# (S >= 4096, 6.3-6.8x on the SDPA op, and 48 of them per prefill) is the same
+# regime the accuracy gate covers. The seam in ``attention_prefill`` exists for
+# exactly that -- same pattern as ``_meta_rope``, which is also built, measured
+# and not adopted.
+#
+# **Arbitrary S keeps working**, so nothing here is blocked on alignment. This
+# was checked and not assumed: S in
+# {1, 3, 31, 33, 100, 129, 255, 257, 1000, 1023, 1025, 2049, 4095, 4097, 5000}
+# all build and run under both chunkings with PCC identical to the default's to
+# five decimals. Prefill is not chunked in this model -- ``prefill_forward``
+# feeds each user's whole logical length in -- so that property is load-bearing
+# for the stage contract, not a nicety.
+#
+# ``q512/k512`` is **rejected** outright: it fails to build at *every* length
+# including 128 (``program.cpp:1722``), so it is a resource limit, not an
+# alignment rule.
+_SDPA_PREFILL_CROSSOVER = 2048
+
+
+def _sdpa_prefill_program_config(device, seq_len: int):
+    """Built and measured; **not wired in**. See the note above before adopting."""
+    q_chunk = 256 if seq_len >= _SDPA_PREFILL_CROSSOVER else 128
+    return _cached_sdpa_config(device.compute_with_storage_grid_size(), q_chunk, q_chunk)
 
 
 # --- decode residual RMSNorm, width-sharded (stage 04) ------------------------
@@ -1384,7 +1608,17 @@ def decoder_layer_prefill_multichip(
 
     normed = ttnn.rms_norm(x, weight=weights.input_layernorm, epsilon=eps)
     attn_partial = attention_prefill(
-        normed, weights.experts.attention, config.local_attention, cos_cache, sin_cache, kv_cache, user_id
+        normed,
+        weights.experts.attention,
+        config.local_attention,
+        cos_cache,
+        sin_cache,
+        kv_cache,
+        user_id,
+        # NOT adopted -- see _sdpa_prefill_program_config. The seam is wired and
+        # the config is built and measured; passing it costs a top-1 point on
+        # run_teacher_forcing, so prefill stays at the op default.
+        sdpa_program_config=None,
     )
     ttnn.deallocate(normed)
     attn_out = all_reduce_prefill(attn_partial, ctx)
@@ -1466,10 +1700,12 @@ def decoder_layer_decode_multichip(
         kv_cache,
         current_pos,
         token_index,
-        # Only the contiguous cache needs the cap; the paged path runs at the op
-        # default, which is the configuration every published decode number here
-        # was measured at. See _sdpa_program_config.
-        sdpa_program_config=None if kv_cache.is_paged else _sdpa_program_config(x.device()),
+        # Both paths are configured now. The contiguous one needs the 64-core cap
+        # to clear a TT_FATAL; the paged one -- what the full model runs -- takes
+        # the swept k256/c16 config (k clamped to the cache depth), which is flat
+        # in cur_pos where the op default is linear in it. See
+        # _sdpa_program_config and _sdpa_k_chunk.
+        sdpa_program_config=_sdpa_program_config(x.device(), kv_cache),
         rope=rope,
     )
     ttnn.deallocate(normed)

@@ -1,0 +1,22 @@
+active-expert recovery: base 29.35 us + 6.85 us/expert
+  per-layer sum over 4 dies == 8 in every layer: True
+attn RS 12.45 us | MoE RS 24.25 us (min 6.25, max 73.38)
+  corr(lag, MoE RS) = 0.988, slope 1.046 us/us
+  corr(lag, attn RS) = 0.063   <- the attention collective does not see the skew
+  most balanced layer 26: work spread 1.33 us, MoE RS [14.43, 12.32, 10.69, 12.11] us -- the collective's floor
+per-die active-expert counts: [(0, 16), (1, 50), (2, 66), (3, 45), (4, 11), (5, 1), (6, 3)]
+  uniform marginal:           [(0, 0.1), (1, 0.267), (2, 0.311), (3, 0.208), (4, 0.087), (5, 0.023), (6, 0.004)]
+  measured mean max_k 3.438 vs uniform 3.538 (perfect balance 2.0)
+  chi2 vs uniform = 4.06, df 5, p = 0.5403 (k >= 5 pooled, not dropped)
+  per-die totals over 48 layers: [81, 111, 102, 90] vs 96 expected
+    chi2 = 5.44, df 3, p = 0.1424
+  neither p-value is evidence FOR uniformity; the sample is 48 layers of ONE token.
+
+idle from skew: measured 9.85 us/layer = 0.473 ms/iteration
+floor under *perfectly uniform* routing: 10.54 us/layer = 0.506 ms/iteration
+  -> measured mean max 3.438 vs uniform expectation 3.538: z = -0.82, p = 0.41 -- indistinguishable.
+  -> a permutation is worth 0 IF routing is exchangeable over experts. Nothing in this
+     one-token sample establishes that; moe_routing_across_tokens_probe.py measures it,
+     and it finds hotness that persists, so the lever is NOT zero. See that probe.
+
+wrote moe_skew_analysis_final.json
