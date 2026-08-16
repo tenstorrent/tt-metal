@@ -26,3 +26,9 @@ metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	production	2
 metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	generated_loadmacro	21508	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 1/3; SFPI-GCC 476abbd2e
 metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	generated_loadmacro	21508	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 2/3; SFPI-GCC 476abbd2e
 metal__ckernel_sfpu_signbit	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	generated_loadmacro	21508	measured	SIGNBIT_LOADMACRO_SILICON_AB.md; sample 3/3; SFPI-GCC 476abbd2e
+metal__ckernel_sfpu_lerp	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	compiler_passes_off	580.984375	measured	LERP_COMPILER_SILICON_AB.md; sample 1/3; SFPI-GCC e17a4f8fd
+metal__ckernel_sfpu_lerp	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	compiler_passes_off	580.984375	measured	LERP_COMPILER_SILICON_AB.md; sample 2/3; SFPI-GCC e17a4f8fd
+metal__ckernel_sfpu_lerp	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	compiler_passes_off	580.984375	measured	LERP_COMPILER_SILICON_AB.md; sample 3/3; SFPI-GCC e17a4f8fd
+metal__ckernel_sfpu_lerp	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	compiler_passes_on	564.984375	measured	LERP_COMPILER_SILICON_AB.md; sample 1/3; SFPI-GCC e17a4f8fd
+metal__ckernel_sfpu_lerp	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	compiler_passes_on	564.984375	measured	LERP_COMPILER_SILICON_AB.md; sample 2/3; SFPI-GCC e17a4f8fd
+metal__ckernel_sfpu_lerp	bh	device_cycles	TILE_LOOP_MATH_ISOLATE	compiler_passes_on	564.984375	measured	LERP_COMPILER_SILICON_AB.md; sample 3/3; SFPI-GCC e17a4f8fd

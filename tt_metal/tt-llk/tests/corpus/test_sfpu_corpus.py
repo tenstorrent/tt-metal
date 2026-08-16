@@ -36,6 +36,7 @@ class CorpusTest(unittest.TestCase):
             "metal__ckernel_sfpu_exp":"loss",
             "metal__ckernel_sfpu_sigmoid_appx":"loss",
             "metal__ckernel_sfpu_recip":"win",
+            "metal__ckernel_sfpu_lerp":"win",
             "legacy__ckernel_sfpu_topk":"blocked",
         }
         for row_id,status in expected.items():
@@ -144,6 +145,15 @@ class CorpusTest(unittest.TestCase):
         self.assertIn("rtol=0.05 atol=0.05",row["correctness_threshold"])
         self.assertEqual(row["silicon_status"],"win")
         self.assertIn("459 cycles vs production 467",row["silicon_result"])
+
+    def test_lerp_mapping_and_compiler_ab_contract_are_explicit(self):
+        row={r["id"]:r for r in M.inventory()}["metal__ckernel_sfpu_lerp"]
+        self.assertEqual(row["mapping_state"],"mapped")
+        self.assertEqual(row["paired_selector_status"],"implemented")
+        self.assertEqual(row["correctness_metric"],"pcc")
+        self.assertIn("rtol=0.05 atol=0.05",row["correctness_threshold"])
+        self.assertEqual(row["silicon_status"],"win")
+        self.assertIn("compiler-pass ON 564.984375 cycles/tile",row["silicon_result"])
 
     def test_v1_is_retained_as_an_immutable_migration_source(self):
         old=P.with_name("sfpu_corpus_v1.tsv")

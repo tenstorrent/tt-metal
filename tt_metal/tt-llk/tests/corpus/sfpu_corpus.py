@@ -59,6 +59,11 @@ AUDITED_SEEDS = {
         paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="pcc",
         correctness_threshold="Float32 rtol=0.05 atol=0.05 plus PCC > 0.99; signed finite domain excludes zero", correctness_source="test_sfpu_unary.py::test_eltwise_unary_sfpu_signbit; helpers/utils.py:548-785; SIGNBIT_LOADMACRO_SILICON_AB.md",
         silicon_status="win", silicon_result="BH TILE_LOOP MATH_ISOLATE: generated typed+SFPLOADMACRO 21508 cycles vs production 23246 (-7.4766%), three identical fresh processes each.", silicon_source="SIGNBIT_LOADMACRO_SILICON_AB.md; sfpu_device_baseline_v1.tsv; audited BH device archive"),
+    "metal__ckernel_sfpu_lerp": dict(
+        semantic_cpp_class="ready", semantic_cpp_blocker="The production Lerp body is already clean typed SFPI C++. The opt-in generic latency, adjacent-Dst fusion, invariant-immediate, and replay-hoist passes fuse two rows per replay without changing the source or numerical expression.",
+        paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="pcc",
+        correctness_threshold="Float16_b rtol=0.05 atol=0.05 plus PCC > 0.99 on the existing seeded ternary domain", correctness_source="test_sfpu_ternary.py::test_sfpu_ternary[formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuLerp]; helpers/utils.py:548-785; LERP_COMPILER_SILICON_AB.md",
+        silicon_status="win", silicon_result="BH TILE_LOOP mean(MATH_ISOLATE): compiler-pass ON 564.984375 cycles/tile vs OFF 580.984375 (-2.7539%), three identical fresh processes each.", silicon_source="LERP_COMPILER_SILICON_AB.md; sfpu_device_baseline_v1.tsv; audited BH device archive"),
     "legacy__ckernel_sfpu_welfords": dict(
         semantic_cpp_class="typed_wrapper_needed", semantic_cpp_blocker="Generated vFloat body exists; raw LREG live-in/live-out ABI remains an explicit typed-boundary requirement.",
         paired_selector_status="implemented", test_status="pass", perf_status="measured", correctness_metric="tolerance",
@@ -141,6 +146,11 @@ AUDITED_MAPPINGS = {
         functional_modules="test_sfpu_unary.py::test_reciprocal_semantic,test_sfpu_unary.py::test_reciprocal_semantic_edges",
         perf_modules="test_sfpu_unary.py::test_reciprocal_device_profile",
         notes="audited test-only production/semantic selector; accurate and approximate BF16/FP32 plus registered-domain edges; scoped accurate-BF16 profiler",
+    ),
+    "metal__ckernel_sfpu_lerp": dict(
+        functional_modules="test_sfpu_ternary.py::test_sfpu_ternary[formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuLerp]",
+        perf_modules="perf_sfpu_ternary.py::test_perf_sfpu_lerp",
+        notes="Audited identical-source compiler-flag A/B on the production typed Lerp body; exact measured lane is Float16_b without destination accumulation.",
     ),
 }
 

@@ -9,7 +9,7 @@ This lane asks whether compiler-visible SFPI C++ can beat an existing hand sched
 | 1 | Binary max/min | Production is a 3-cycle/row SFPLOADMACRO schedule; semantic operation is one `max`/`min` expression | measured below |
 | 2 | Addcmul | Production manually interleaves two independent rows; semantic expression is `(scale * b) * c + a` | measured below |
 | 3 | Addcdiv | Existing correctness and isolated perf; semantic body, but reciprocal expansion adds numerical and scheduling risk | ready after Addcmul |
-| 4 | Lerp | Existing correctness and isolated perf | low upside: production is already simple semantic SFPI C++ |
+| 4 | Lerp | Existing correctness and isolated perf | measured identical-source compiler A/B win; see `LERP_COMPILER_SILICON_AB.md` |
 | 5 | Scalar add/sub/mul/rsub | Existing correctness and isolated perf | low upside: production is already one-row semantic SFPI C++ |
 | 6 | Reduce row max | Existing correctness and isolated perf | needs reduction/addressing audit before a fresh body |
 | 7 | Softmax-K | Correctness harness exists | numerical approximation work; no isolated perf fixture |
@@ -28,6 +28,7 @@ Only correctness-gated, scoped Blackhole device measurements appear here.
 | Reduce-SDPA body | 840 | 834 | -0.714% |
 | Binary broadcast body | 608 | 608 | parity |
 | Reciprocal body, accurate Float16_b | 467 | 459 | **-1.713%** |
+| Lerp isolate, compiler passes off/on | 580.984375 | 564.984375 | **-2.7539%** |
 | Addcmul body with P4 | 292.9296875 | 292.9921875 | parity (+0.02134%) |
 | Exp body, accurate Float16_b | 579.7421875 | 989.75 | +70.72% |
 | TTNN Where body | 159.25 | 312.50 | +96.23% |
