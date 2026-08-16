@@ -31,7 +31,7 @@ from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
-from ...layers.na3d import window_bounds
+from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded, window_bounds
 from ...layers.normalization import RMSNorm
 from ...utils.tensor import local_device_to_torch
 
@@ -518,11 +518,19 @@ class _NeighborhoodAttention3D(Module):
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType,
         ccl_manager=None,
+        na3d_backend: str | None = None,
+        sp_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        # Backend for the NA3D call: "gather"/"op" run the attention replicated (whole volume on
+        # every chip); "op_sp_w_sharded" keeps this chip's W-shard of the sequence through the whole
+        # attention (K/V gathered internally), for full-stage spatial-W SP. Defaults to the env
+        # override so the whole decoder can be flipped to the op backend for the OOM diagnosis.
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        self.sp_axis = sp_axis
         self.scale = config.head_dim**-0.5
 
         linear = {"bias": True, "mesh_device": mesh_device, "dtype": dtype}
@@ -594,13 +602,27 @@ class _NeighborhoodAttention3D(Module):
         return out
 
     def forward(self, y: ttnn.Tensor, grid: Grid, tables: _RopeTables) -> ttnn.Tensor:
-        """``y``: ``(1, batch, sites, dim)``. Returns the same shape."""
+        """``y``: ``(1, batch, sites, dim)``. Returns the same shape.
+
+        ``grid`` is always the FULL ``(T, H, W)``. Under spatial-W SP (``op_sp_w_sharded``) ``y`` is
+        this chip's W-shard, so the local W extent is ``W/sp``; the shapes below use that while the
+        attention is still told the full W (its executor gathers the missing columns). ``tables``
+        must be W-sharded to match ``y`` in that mode (frame piece over this chip's H×(W/sp) rows).
+        """
         cfg = self.config
         assert grid.batch == 1, f"batched stage 5 is not implemented; got batch={grid.batch}"
+        sharded = self.na3d_backend == "op_sp_w_sharded"
+        if sharded:
+            sp = int(list(self.mesh_device.shape)[self.sp_axis])
+            assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
+            w_local = grid.w // sp
+        else:
+            w_local = grid.w
+        sites_local = grid.t * grid.h * w_local
         # Frames are a separate axis rather than folded into the rows, which is what lets the RoPE
         # pieces broadcast: the H/W piece over frames, the T piece over the rows within one.
-        heads_shape = (1, grid.t, grid.h * grid.w * cfg.num_heads, cfg.head_dim)
-        volume_shape = (grid.batch, grid.t, grid.h, grid.w, cfg.num_heads, cfg.head_dim)
+        heads_shape = (1, grid.t, grid.h * w_local * cfg.num_heads, cfg.head_dim)
+        volume_shape = (grid.batch, grid.t, grid.h, w_local, cfg.num_heads, cfg.head_dim)
 
         def to_volume(x: ttnn.Tensor) -> ttnn.Tensor:
             """Untilize into the volume shape NA3D gathers from, consuming ``x``."""
@@ -617,19 +639,31 @@ class _NeighborhoodAttention3D(Module):
         k = to_volume(self._rope(self._normed(self.k_norm, self._projected(self.to_k, y, heads_shape)), tables))
         v = to_volume(self._projected(self.to_v, y, heads_shape))
 
-        out = neighborhood_attention_3d(
-            q,
-            k,
-            v,
-            kernel_size=cfg.kernel_size,
-            scale=1.0,
-            ccl_manager=self.ccl_manager,
-            backend=os.environ.get("DIFFVAE_NA3D_BACKEND", "gather"),
-        )
+        if sharded:
+            out = neighborhood_attention_3d_op_sp_w_sharded(
+                q,
+                k,
+                v,
+                dims=(grid.t, grid.h, grid.w),
+                kernel_size=cfg.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+            )
+        else:
+            out = neighborhood_attention_3d(
+                q,
+                k,
+                v,
+                kernel_size=cfg.kernel_size,
+                scale=1.0,
+                ccl_manager=self.ccl_manager,
+                backend=self.na3d_backend,
+            )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
 
-        flat = _reshape_retiled(out, (1, grid.batch, grid.sites, cfg.dim))
+        flat = _reshape_retiled(out, (1, grid.batch, sites_local, cfg.dim))
         if flat is not out:
             ttnn.deallocate(out)
         projected = self.proj(flat)
@@ -647,9 +681,17 @@ class DiffusionNABlock(Module):
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType,
         ccl_manager=None,
+        na3d_backend: str | None = None,
+        sp_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config
+        self.mesh_device = mesh_device
+        # Resolve the backend once so the block and its attention agree on whether the sequence is
+        # W-sharded: under "op_sp_w_sharded" the per-chip tensor holds only H*(W/sp) rows per frame,
+        # so the block's own frame slicing must use the local rows-per-frame, not the full W.
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        self.sp_axis = sp_axis
         self.context_proj = Linear(config.context_channels, config.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
         self.scale_shift_table = Parameter(
             total_shape=[1, NUM_ADALN_CHUNKS * config.dim], device=mesh_device, dtype=dtype
@@ -662,7 +704,14 @@ class DiffusionNABlock(Module):
             "dtype": dtype,
         }
         self.norm1 = RMSNorm(config.dim, **norm)
-        self.attn = _NeighborhoodAttention3D(config, mesh_device=mesh_device, dtype=dtype, ccl_manager=ccl_manager)
+        self.attn = _NeighborhoodAttention3D(
+            config,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            ccl_manager=ccl_manager,
+            na3d_backend=self.na3d_backend,
+            sp_axis=sp_axis,
+        )
         self.norm2 = RMSNorm(config.dim, **norm)
         # Fused [up | gate] projection: Linear's swiglu path packs the two halves into
         # one GEMM and emits silu(gate) * up.
@@ -717,7 +766,13 @@ class DiffusionNABlock(Module):
         scale_mlp = _slice_last(mod, 3 * dim, 4 * dim)
         shift_mlp = _slice_last(mod, 4 * dim, 5 * dim)
 
-        rows = grid.h * grid.w
+        # Rows per frame on THIS chip. Under spatial-W SP the sequence is W-sharded, so a frame holds
+        # only H*(W/sp) rows here; the frame-granular band slicing below must use that local count.
+        if self.na3d_backend == "op_sp_w_sharded":
+            sp = int(list(self.mesh_device.shape)[self.sp_axis])
+            rows = grid.h * (grid.w // sp)
+        else:
+            rows = grid.h * grid.w
         # A local view of the volume so the caller's list is left alone; entries become None as
         # this loop releases them.
         live: list[ttnn.Tensor | None] = list(x)

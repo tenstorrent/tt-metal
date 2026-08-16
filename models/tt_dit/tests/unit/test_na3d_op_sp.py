@@ -277,3 +277,137 @@ def test_na3d_op_sp_w_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel
     # Reassemble the W-sharded output (dim 3 along sp_axis) into the full volume.
     got = to_torch_replicated(out, mesh_axes=[None, None, None, sp_axis, None])
     assert_quality(expected, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
+def test_diffusion_nablock_op_sp_w_sharded_matches_op(*, mesh_device, sp_axis):
+    """SP-over-W integration for stage 5: a full DiffusionNABlock (context injection + AdaLN attn +
+    AdaLN SwiGLU) run on a W-SHARDED sequence -- x, context and the RoPE frame table split over W --
+    matches the replicated block. Proves the stage's block, RoPE W-sharding and sharded-I/O executor
+    compose, so stage 5 can keep its activation W-sharded (pointwise ops 1/sp, K/V gathered in attn).
+    """
+    from ...models.vae.diffvae_ltx_stage5 import (
+        NUM_ADALN_CHUNKS,
+        DiffusionNABlock,
+        DiffVAEStage5Config,
+        Grid,
+        _bands,
+        _build_rope_tables,
+        _RopeParts,
+        _RopeTables,
+        default_rope_dim_split,
+    )
+
+    dim, head_dim = 128, 64
+    num_heads = dim // head_dim
+    kernel = (3, 3, 3)
+    T, H, W = 4, 4, 32
+    sp = list(mesh_device.shape)[sp_axis]
+    if W % sp != 0 or (W // sp) * T * H % 32 != 0:
+        pytest.skip(f"W={W} not shardable over sp={sp} with tile-aligned origin")
+    wl = W // sp
+    hidden = 4 * dim
+    config = DiffVAEStage5Config(
+        dim=dim, head_dim=head_dim, kernel_size=kernel, context_channels=dim, mlp_hidden=hidden, num_blocks=1
+    )
+    grid = Grid(1, T, H, W)
+    tokens = T * H * W
+
+    torch.manual_seed(0)
+    shapes = {
+        "context_proj.weight": (dim, dim),
+        "context_proj.bias": (dim,),
+        "scale_shift_table": (NUM_ADALN_CHUNKS, dim),
+        "norm1.weight": (dim,),
+        "norm2.weight": (dim,),
+        "attn.qkv.weight": (3 * dim, dim),
+        "attn.qkv.bias": (3 * dim,),
+        "attn.proj.weight": (dim, dim),
+        "attn.proj.bias": (dim,),
+        "attn.q_norm.weight": (head_dim,),
+        "attn.k_norm.weight": (head_dim,),
+        "mlp.w_gate.weight": (hidden, dim),
+        "mlp.w_up.weight": (hidden, dim),
+        "mlp.w_down.weight": (dim, hidden),
+    }
+    # Small weights: the static gates upstream folds into the residual-write projections are absent
+    # here, so unscaled randoms would compound across the residual adds into a meaningless range.
+    state = {name: torch.randn(shape) * 0.1 for name, shape in shapes.items()}
+    hidden_states = torch.randn(1, 1, tokens, dim)
+    context = torch.randn(1, 1, tokens, dim)
+    modulation = torch.randn(1, 1, 1, NUM_ADALN_CHUNKS * dim) * 0.1
+
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    bands = _bands(T, frames=None, kernel=kernel[0])
+    tables = _build_rope_tables(
+        grid,
+        dim_split=default_rope_dim_split(head_dim),
+        base=config.rope_base,
+        num_heads=num_heads,
+        mesh_device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    mod_tt = ttnn.from_torch(modulation, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Replicated reference.
+    block_op = DiffusionNABlock(config, mesh_device=mesh_device, dtype=ttnn.bfloat16, na3d_backend="op")
+    block_op.load_state_dict({k: v.clone() for k, v in state.items()})
+    x_full = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ctx_full = ttnn.from_torch(context, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    band_tables = tuple(tables.frames(b.pad_lo, b.pad_hi) for b in bands)
+    ref = to_torch_replicated(block_op([x_full], ctx_full, mod_tt, grid, bands, band_tables)[0])
+
+    # W-sharded: x, context and the RoPE frame table split over W (the inner axis), so the flat
+    # T-outer rows are reordered to (device, t, h, w_local) contiguous before sharding on the site dim.
+    def shard_rows(flat: torch.Tensor, channels: int) -> ttnn.Tensor:
+        reordered = flat.reshape(T, H, sp, wl, channels).permute(2, 0, 1, 3, 4).reshape(1, 1, sp * T * H * wl, channels)
+        return from_torch(
+            reordered,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_axes=[None, None, sp_axis, None],
+        )
+
+    def shard_frame(part: ttnn.Tensor) -> ttnn.Tensor:
+        host = to_torch_replicated(part).reshape(H, W, num_heads, head_dim)
+        host = (
+            host.reshape(H, sp, wl, num_heads, head_dim)
+            .permute(1, 0, 2, 3, 4)
+            .reshape(1, 1, sp * H * wl * num_heads, head_dim)
+        )
+        return from_torch(
+            host,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_axes=[None, None, sp_axis, None],
+        )
+
+    sharded_tables = _RopeTables(
+        frame=_RopeParts(shard_frame(tables.frame.cos), shard_frame(tables.frame.sin)),
+        time=tables.time,
+        rows_per_frame=H * wl * num_heads,
+    )
+    block_sp = DiffusionNABlock(
+        config,
+        mesh_device=mesh_device,
+        dtype=ttnn.bfloat16,
+        ccl_manager=ccl_manager,
+        na3d_backend="op_sp_w_sharded",
+        sp_axis=sp_axis,
+    )
+    block_sp.load_state_dict({k: v.clone() for k, v in state.items()})
+    x_shard = shard_rows(hidden_states, dim)
+    ctx_shard = shard_rows(context, dim)
+    band_tables_sp = tuple(sharded_tables.frames(b.pad_lo, b.pad_hi) for b in bands)
+    out_shard = block_sp([x_shard], ctx_shard, mod_tt, grid, bands, band_tables_sp)[0]
+
+    # Reassemble over W: gather the site dim, then undo the (device, t, h, w_local) reordering.
+    got = to_torch_replicated(out_shard, mesh_axes=[None, None, sp_axis, None])
+    got = got.reshape(sp, T, H, wl, dim).permute(1, 2, 0, 3, 4).reshape(1, 1, tokens, dim)
+    assert_quality(ref, got, pcc=0.999)
