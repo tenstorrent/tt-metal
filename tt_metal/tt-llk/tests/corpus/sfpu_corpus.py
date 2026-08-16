@@ -17,6 +17,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 LLK = ROOT / "tt_metal/tt-llk"
 MANIFEST = HERE / "sfpu_corpus_v2.tsv"
 DEVICE_BASELINE = HERE / "sfpu_device_baseline_v1.tsv"
+# Scoped silicon baselines are keyed by chip class: absolute cycles re-baseline
+# across device classes, so a measurement may only ever be compared against a
+# baseline taken on the same class.  sfpu_device_baseline_v1.tsv is the
+# immutable p100a-era migration source; p150 rows live in their own file.
+DEVICE_BASELINES = {
+    "p100a": DEVICE_BASELINE,
+    "p150": HERE / "sfpu_device_baseline_p150_v1.tsv",
+}
 PYTEST_PLUGIN = "sfpu_corpus_pytest_plugin"
 EXPECTED = {
     "logical": 164,
@@ -292,6 +300,45 @@ AUDITED_SEEDS = {
         silicon_result="No isolated paired profiler module.",
         silicon_source="f1_candidates.tsv rank 9",
     ),
+    "metal__ckernel_sfpu_addcmul": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Fresh typed ternary addcmul body is complete; the OFF-to-ON delta is carried by the generic dst-autoincr/latency passes (the macro planner refuses: no macro region), landing at exact-class cycle parity with the handwritten kernel.",
+        paired_selector_status="implemented",
+        test_status="pass",
+        perf_status="measured",
+        correctness_metric="pcc",
+        correctness_threshold="Float16_b element tolerance rtol=0.05 atol=0.05 plus PCC > 0.99",
+        correctness_source="test_sfpu_ternary.py::test_fresh_cpp_addcmul",
+        silicon_status="parity",
+        silicon_result="BH p150 TILE_LOOP mean(MATH_ISOLATE)/tile: semantic ON 36.624 vs handwritten 36.615 (+0.02% parity; causal OFF 44.629 -> ON -17.94%), three fresh processes per leg.",
+        silicon_source="sfpu_device_baseline_p150_v1.tsv; sweep-2x2 evidence-20260816 SCOREBOARD.md",
+    ),
+    "metal__ckernel_sfpu_binary_max_min": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Fresh semantic max/min body (fresh_cpp_operations.h) is complete; the planner derives the SFPLOADMACRO emission generically (Min/Max exact calendar deleted at WP7, byte-parity oracles green at the WP8 tip).",
+        paired_selector_status="implemented",
+        test_status="pass",
+        perf_status="not_run",
+        correctness_metric="pcc",
+        correctness_threshold="Float16_b element tolerance rtol=0.05 atol=0.05 plus PCC > 0.99; CRAQ matrix {BH,WH}x{Min,Max}x{OFF,ON} through the generic simulator path",
+        correctness_source="test_sfpu_binary.py::test_fresh_cpp_binary_max_min",
+        silicon_status="not_run",
+        silicon_result="p150 silicon perf pending: the perf kernel failed to compile at 55ce75be (unqualified call_binary_max_min_fresh_cpp) — fixed on this branch; measurement lands in sfpu_device_baseline_p150_v1.tsv.",
+        silicon_source="sweep-2x2 evidence-20260816 SCOREBOARD.md blocked-list item 1",
+    ),
+    "legacy__ckernel_sfpu_typecast_fp16b_uint16": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Fresh semantic UInt16-to-Float16_b body (eltwise_unary_typecast_test.cpp) is complete and the planner fires on the corr shape; WP8 step 4 four-region descriptor sharing targets the remaining gap.",
+        paired_selector_status="implemented",
+        test_status="pass",
+        perf_status="not_run",
+        correctness_metric="exact",
+        correctness_threshold="exact converted payload per the typecast golden",
+        correctness_source="test_eltwise_unary_typecast.py::test_eltwise_unary_typecast",
+        silicon_status="not_run",
+        silicon_result="p150 silicon perf pending: prior p100a record +17.2% macro / +19.6% semantic loss; the impl-parameterized profiler node is test_typecast_device_profile (reconciled: Lane D's absent-node note pointed at perf_eltwise_typecast.py).",
+        silicon_source="TYPECAST_LOADMACRO_SILICON_AB.md; sweep-2x2 evidence-20260816 SCOREBOARD.md blocked-list item 2",
+    ),
     "legacy__ckernel_sfpu_topk_xl": dict(
         semantic_cpp_class="typed_wrapper_needed",
         semantic_cpp_blocker="Requires typed paired value/index state, eight-value transpose, replay-range allocation, alternating-direction legality, and general MOP formation.",
@@ -322,6 +369,21 @@ AUDITED_MAPPINGS = {
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_signbit",
         perf_modules="perf_eltwise_unary_sfpu.py::test_perf_signbit_fresh_cpp",
         notes="Audited production/fresh typed Signbit selector; compiler opt-in forms one dominating descriptor configuration and a delayed macro launch per row.",
+    ),
+    "metal__ckernel_sfpu_addcmul": dict(
+        functional_modules="test_sfpu_ternary.py::test_fresh_cpp_addcmul",
+        perf_modules="perf_sfpu_ternary.py::test_perf_fresh_cpp_addcmul",
+        notes="Audited paired production/fresh typed ternary addcmul selector with functional and isolated profiler fixtures.",
+    ),
+    "metal__ckernel_sfpu_binary_max_min": dict(
+        functional_modules="test_sfpu_binary.py::test_fresh_cpp_binary_max_min",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_fresh_cpp_binary_max_min",
+        notes="Audited paired production/fresh semantic max/min selector; the macro planner derives the SFPLOADMACRO emission generically on the fresh body.",
+    ),
+    "legacy__ckernel_sfpu_typecast_fp16b_uint16": dict(
+        functional_modules="test_eltwise_unary_typecast.py::test_eltwise_unary_typecast",
+        perf_modules="test_eltwise_unary_typecast.py::test_typecast_device_profile",
+        notes="Audited paired handwritten/semantic UInt16->Float16_b selector; the impl-parameterized profiler node lives in the functional module, not perf_eltwise_typecast.py.",
     ),
     "metal__ckernel_sfpu_recip": dict(
         functional_modules="test_sfpu_unary.py::test_reciprocal_semantic,test_sfpu_unary.py::test_reciprocal_semantic_edges",
@@ -954,6 +1016,11 @@ def main():
     ap.add_argument("--run-root", type=pathlib.Path)
     ap.add_argument("--simulator", type=pathlib.Path)
     ap.add_argument("--baseline", type=pathlib.Path)
+    ap.add_argument(
+        "--chip-class",
+        choices=sorted(DEVICE_BASELINES),
+        help="select the checked-in device baseline for this chip class when --baseline is not given explicitly",
+    )
     ap.add_argument("--max-regression-pct", type=float, default=0.0)
     ap.add_argument(
         "--execute",
@@ -1001,6 +1068,8 @@ def main():
     )
     a = ap.parse_args()
     rows = inventory()
+    if a.baseline is None and a.chip_class:
+        a.baseline = DEVICE_BASELINES[a.chip_class]
     compiler_ab = (
         a.compiler_ab_off_options is not None or a.compiler_ab_on_options is not None
     )
