@@ -479,13 +479,65 @@ Two consequences, both cheap and both independent of the filter:
 1. **Replay-record the load/store bodies**, exactly as `ckernel_sfpu_topk_xl.h`
    already does. This recovers most of the gap without changing the algorithm,
    and benefits every existing caller.
-2. **Stop hardcoding `end_phase`.** `topk.cpp:154` pins `end_phase = 5` for every
-   K, while the API it calls documents `i_end_phase` as *"should be set to
-   log(K)-1"* (`compute_kernel_api.h:706`); the multi-core path honors this and
-   the single-core path does not. Measured: end_phase 4 is **47.8** vs
-   end_phase 5's **76.2** -- a 1.6x saving from one constant, more at lower K.
-   Needs correctness validation (the insertion-sort formulation may require the
-   full sort), but it is a one-line experiment.
+2. ~~Stop hardcoding `end_phase`.~~ **TESTED AND INVALID — retracted.** See below.
+
+#### RETRACTED: the `end_phase = log(K)-1` "free win" does not exist
+
+An earlier revision of this document proposed deriving `end_phase` from K in
+`topk.cpp:154`, citing `compute_kernel_api.h:706` ("should be set to log(K)-1").
+**Tested on silicon: it breaks correctness for every K.**
+
+| `end_phase` | configs exact (of 54) |
+| ---: | :--- |
+| 5 (shipping) | **54/54** |
+| 4 | **0/54** — including K=32, the case the formula most directly prescribes |
+| 3 | 0/54 |
+| 2 | 0/54 |
+
+**Why, and it was predicted before testing.** The doc's "K" is the *sorted-subsequence
+length the caller wants out of the 64-datum window*, not the user's top-k. Phase `p`
+leaves sorted runs of length `2^(p+1)`. The **multi-core** path (`topk_local.cpp:124`)
+legitimately stops at length-k runs because it follows up with `topk_merge` and
+`topk_rebuild` — the partial sort is input to a merge stage. The **single-core** path
+contains **no `topk_merge` and no `topk_rebuild` anywhere in the file**;
+`topk_local_sort` is its only sort call, used as a full 64-element merge-sort. Its
+invariant (`topk.cpp:349-351`) is "DST0 = top 32, DST1 = bottom 32", which only a
+complete 64-element sort produces: phases 0-4 sort the accumulator half and the fresh
+half into an opposed bitonic pair, and **phase 5 IS the merge**. Drop it and the halves
+are never compared, so no new element can ever enter the running top-K.
+
+So `end_phase = 5` is correct *and* consistent with the doc: for this caller the
+subsequence length is 64, and `log2(64)-1 = 5`. The failure signature confirms it — the
+match fraction scales as ~1/k and falls to 0.000 as W grows, i.e. only elements that
+happened to land in the first two tiles survive. Total loss of the merge, not a
+boundary artefact.
+
+**The doc line is the real defect** (`compute_kernel_api.h:706`). It should say that K
+is the sorted-subsequence length the caller wants, which equals the user's top-k only
+when the caller follows with `topk_merge`/`topk_rebuild`; a standalone 64-element
+merge-sort must pass 5. Note the stated valid range is 1-5, so `log2(2)-1 = 0` for k=2
+is out of range anyway.
+
+#### The `end_phase` cost curve, and where the real headroom is
+
+Measured, MATH_ISOLATE, controls exact (`CtrlLoad` 1.000, `CtrlSwap` 2.000):
+
+| `end_phase` | cyc / 32-elt vector (desc, unstable) | vs ep5 |
+| ---: | ---: | ---: |
+| 0 | 5.880 | 12.96x |
+| 1 | 12.495 | 6.10x |
+| 2 | 20.620 | 3.70x |
+| 3 | 29.996 | 3.70x |
+| 4 | 47.784 | 1.59x |
+| **5 (shipping)** | **76.195** | 1.00x |
+
+The curve does expose genuine waste, just not the kind a constant can capture. In the
+steady state DST0 **already holds a sorted 32-run from the previous iteration**, yet
+phases 0-4 re-sort it from scratch; only DST1 (the fresh input tile) needs them. Phase 5
+alone costs `76.195 - 47.784 = 28.41` cyc/vector, so phases 0-4 are 47.78 of the 76.20.
+Scoping phases 0-4 to a single DST tile would cost roughly half of that, giving
+**~52.3 vs 76.2 = ~1.46x**. That needs a new LLK entry point (the current API applies
+every phase across all 64 datums), not a kernel constant.
 
 #### MEASURED: packer zero-compression works on Blackhole — filter AND compaction with zero SFPU instructions
 
