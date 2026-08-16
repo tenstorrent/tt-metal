@@ -33,7 +33,9 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded, window_bounds
 from ...layers.normalization import RMSNorm
+from ...utils.tensor import from_torch as sharded_from_torch
 from ...utils.tensor import local_device_to_torch
+from ...utils.tensor import to_torch as gathered_to_torch
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -253,6 +255,7 @@ def _build_rope_tables(
     num_heads: int,
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
+    w_shard: tuple[int, int] | None = None,
 ) -> _RopeTables:
     """Fused (T, H, W) absolute RoPE, factored into one frame and one row per frame.
 
@@ -287,7 +290,14 @@ def _build_rope_tables(
     within = torch.arange(grid.h * grid.w)
     rows_h = torch.div(within, grid.w, rounding_mode="floor").to(torch.float32)
     rows_w = (within % grid.w).to(torch.float32)
-    rows_per_frame = grid.h * grid.w * num_heads
+    # Under spatial-W SP the frame piece is split over W (the H/W lanes it carries), so each chip's
+    # rows-per-frame is only H*(W/sp)*num_heads; the T-lane ``time`` piece is unaffected by a W-shard.
+    if w_shard is not None:
+        sp, _ = w_shard
+        assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
+        rows_per_frame = grid.h * (grid.w // sp) * num_heads
+    else:
+        rows_per_frame = grid.h * grid.w * num_heads
 
     def upload(rows: torch.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -298,7 +308,25 @@ def _build_rope_tables(
         # q and k carry heads inside the row axis and the rotation is per-site, so each site's row
         # repeats once per head.
         rows = (lanes(fn, 1, rows_h) + lanes(fn, 2, rows_w)).reshape(grid.h * grid.w, 1, head_dim)
-        return upload(rows.repeat(1, num_heads, 1), (1, 1, rows_per_frame, head_dim))
+        full = rows.repeat(1, num_heads, 1)  # (H*W, num_heads, head_dim), rows ordered (h, w)
+        if w_shard is None:
+            return upload(full, (1, 1, grid.h * grid.w * num_heads, head_dim))
+        # W-shard: reorder rows to (device, h, w_local, head) so device p gets its W-band, matching the
+        # activation's own W-shard (from_torch shards the site dim across sp_axis in device order).
+        sp, sp_axis = w_shard
+        w_local = grid.w // sp
+        reordered = (
+            full.reshape(grid.h, sp, w_local, num_heads, head_dim)
+            .permute(1, 0, 2, 3, 4)
+            .reshape(1, 1, sp * grid.h * w_local * num_heads, head_dim)
+        )
+        return sharded_from_torch(
+            reordered.contiguous(),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            mesh_axes=[None, None, sp_axis, None],
+        )
 
     def time_piece(fn) -> ttnn.Tensor:
         return upload(lanes(fn, 0, torch.arange(grid.t, dtype=torch.float32)), (1, grid.t, 1, head_dim))
@@ -901,6 +929,8 @@ class DiffVAEStage5(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         modulation_dtype: ttnn.DataType = ttnn.float32,
         ccl_manager=None,
+        na3d_backend: str | None = None,
+        sp_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config or DiffVAEStage5Config()
@@ -909,6 +939,16 @@ class DiffVAEStage5(Module):
         self.ccl_manager = ccl_manager
         self.dtype = dtype
         self.modulation_dtype = modulation_dtype
+        # Spatial-W SP: when the backend is "op_sp_w_sharded" the whole stage keeps its sequence
+        # W-sharded -- context and x_t are uploaded/resharded over W, the blocks run 1/sp, and the
+        # tail output is gathered back over W in forward. Defaults to the env override (so the OOM
+        # diagnostic can flip the whole decoder to the replicated op backend).
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        self.sp_axis = sp_axis
+        self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
+        if self._w_sharded:
+            assert sp_axis is not None, "op_sp_w_sharded needs sp_axis"
+            assert ccl_manager is not None, "op_sp_w_sharded needs a ccl_manager"
         # The tile-aligned width the 48 patch channels are zero-padded to. The pad has to
         # be explicit on conv_in_x_t's K axis: a garbage-filled activation tail would
         # otherwise multiply against whatever the weight's own tile pad happens to hold.
@@ -921,7 +961,14 @@ class DiffVAEStage5(Module):
         self.t_embedder = _TimestepEmbedder(cfg.t_emb_dim, mesh_device=mesh_device, dtype=modulation_dtype)
         self.shared_adaln = _SharedAdaLNZero(cfg, mesh_device=mesh_device, dtype=modulation_dtype, out_dtype=dtype)
         self.diff_blocks = ModuleList(
-            DiffusionNABlock(cfg, mesh_device=mesh_device, dtype=dtype, ccl_manager=ccl_manager)
+            DiffusionNABlock(
+                cfg,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                ccl_manager=ccl_manager,
+                na3d_backend=self.na3d_backend,
+                sp_axis=sp_axis,
+            )
             for _ in range(cfg.num_blocks)
         )
         self.norm_out = RMSNorm(cfg.dim, norm_eps=cfg.norm_eps, bias=False, mesh_device=mesh_device, dtype=dtype)
@@ -949,6 +996,7 @@ class DiffVAEStage5(Module):
     def rope_tables(self, grid: Grid) -> _RopeTables:
         tables = self._rope_cache.get(grid)
         if tables is None:
+            w_shard = (int(list(self.mesh_device.shape)[self.sp_axis]), self.sp_axis) if self._w_sharded else None
             tables = _build_rope_tables(
                 grid,
                 dim_split=self.config.resolved_rope_dim_split,
@@ -956,6 +1004,7 @@ class DiffVAEStage5(Module):
                 num_heads=self.config.num_heads,
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
+                w_shard=w_shard,
             )
             self._rope_cache[grid] = tables
         return tables
@@ -986,15 +1035,34 @@ class DiffVAEStage5(Module):
         cfg = self.config
         patched = patchify(x_t, cfg.patch_size)
         batch = patched.shape[0]
+        sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
         out = []
         for band in bands:
             rows = patched[:, :, band.lo : band.hi]
             t, h, w = rows.shape[2:]
             flat = rows.permute(0, 2, 3, 4, 1).reshape(1, batch, t * h * w, cfg.patch_channels)
             flat = torch.nn.functional.pad(flat, (0, self.padded_patch_channels - cfg.patch_channels))
-            uploaded = ttnn.from_torch(
-                flat.contiguous(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=self.dtype
-            )
+            if self._w_sharded:
+                # Reorder the (t, h, w) rows to (device, t, h, w_local) contiguous so from_torch hands
+                # device p its W-band, then upload sharded on the site dim -- the sequence never lands
+                # whole on any chip.
+                w_local = w // sp
+                reordered = (
+                    flat.reshape(1, batch, t, h, sp, w_local, self.padded_patch_channels)
+                    .permute(0, 1, 4, 2, 3, 5, 6)
+                    .reshape(1, batch, sp * t * h * w_local, self.padded_patch_channels)
+                )
+                uploaded = sharded_from_torch(
+                    reordered.contiguous(),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.dtype,
+                    mesh_axes=[None, None, self.sp_axis, None],
+                )
+            else:
+                uploaded = ttnn.from_torch(
+                    flat.contiguous(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=self.dtype
+                )
             out.append(self.conv_in_x_t(uploaded))
             ttnn.deallocate(uploaded)
         return out
@@ -1038,6 +1106,21 @@ class DiffVAEStage5(Module):
             ttnn.deallocate(part)
         return joined
 
+    def _wshard_context(self, context: ttnn.Tensor, grid: Grid) -> ttnn.Tensor:
+        """Reshard a replicated ``(1, batch, T*H*W, dim)`` context into this chip's W-band.
+
+        The deterministic stages hand context over replicated (T-outer flat), so it is resharded on
+        device: a contiguous W-band is not a contiguous slice of the T-outer sequence, so it is
+        reshaped to a ``(1, T, H, W, dim)`` volume, ``mesh_partition``ed on W, and flattened back to
+        this chip's ``(1, batch, T*H*(W/sp), dim)`` in the same (t, h, w_local) order the blocks use.
+        """
+        dim = int(context.shape[-1])
+        vol = ttnn.reshape(ttnn.to_layout(context, ttnn.ROW_MAJOR_LAYOUT), (1, grid.t, grid.h, grid.w, dim))
+        band = ttnn.mesh_partition(vol, dim=3, cluster_axis=self.sp_axis)  # (1, T, H, W/sp, dim)
+        w_local = grid.w // int(list(self.mesh_device.shape)[self.sp_axis])
+        flat = ttnn.reshape(band, (1, grid.batch, grid.t * grid.h * w_local, dim))
+        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+
     def forward(
         self,
         context: ttnn.Tensor,
@@ -1050,7 +1133,24 @@ class DiffVAEStage5(Module):
         """
         cfg = self.config
         bands = self.bands(grid)
+        if self._w_sharded:
+            context = self._wshard_context(context, grid)
         out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
+
+        if self._w_sharded:
+            # ``out`` is this chip's W-band; gather every band to the host and undo the
+            # (device, t, h, w_local) reordering back to the (t, h, w) volume before unpatchify.
+            sp = int(list(self.mesh_device.shape)[self.sp_axis])
+            w_local = grid.w // sp
+            gathered = gathered_to_torch(out, mesh_axes=[None, None, self.sp_axis, None])[..., : cfg.patch_channels]
+            ttnn.deallocate(out)
+            packed = (
+                gathered.reshape(sp, grid.t, grid.h, w_local, cfg.patch_channels)
+                .permute(1, 2, 0, 3, 4)
+                .reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
+                .permute(0, 4, 1, 2, 3)
+            )
+            return unpatchify(packed, cfg.patch_size)
 
         # This tensor is replicated across the mesh, so a bare ttnn.to_torch sees one buffer per
         # device and fails. Reading a single chip's copy is what that replication means; the

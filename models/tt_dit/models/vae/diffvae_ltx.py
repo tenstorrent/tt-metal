@@ -656,7 +656,16 @@ class DiffVAEDecoder(Module):
     #: The pipeline therefore evicts the DiT before decode even under static loading.
     requires_exclusive_residency = True
 
-    def __init__(self, config: dict, *, mesh_device, dtype: ttnn.DataType = ttnn.bfloat16, ccl_manager=None):
+    def __init__(
+        self,
+        config: dict,
+        *,
+        mesh_device,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        ccl_manager=None,
+        stage5_na3d_backend: str | None = None,
+        stage5_sp_axis: int | None = None,
+    ):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
 
@@ -699,6 +708,8 @@ class DiffVAEDecoder(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             ccl_manager=ccl_manager,
+            na3d_backend=stage5_na3d_backend,
+            sp_axis=stage5_sp_axis,
         )
         self.dtype = dtype
 
