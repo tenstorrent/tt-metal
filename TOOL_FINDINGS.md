@@ -22,8 +22,13 @@ Two experiments against the same hand-built TTNN implementation, on one Blackhol
 | e2e | — | **PCC 0.9999834**, exact audio-code match, **0 code flips** |
 | optimize | ran unattended and worked | 22 attempts, 11 wins, **−15.5%** — see F46 |
 
-**The port is correct.** That result is solid and was measured by running the tests directly, not by
-reading the tool's status files. Bring-up in particular is genuinely impressive: a 4B three-stack
+**The port is correct, and it is 9.6× slower than the hand-built one.** Measured like for like on
+the shipped path: **258.26 ms per audio frame against 26.9** — RTF 3.319 against 0.357, i.e. the
+generated port cannot keep up with real-time speech and the hand-built one does with margin. The gap
+is structural (no KV cache, eager dispatch), not a tuning deficit. See THE COMPARISON below.
+
+Correctness itself is solid and was measured by running the tests directly, not by reading the
+tool's status files. Bring-up in particular is genuinely impressive: a 4B three-stack
 model, no per-model code, entirely on device in one round.
 
 **No performance number in this document describes the delivered model.** That is F46, and it is the
@@ -121,6 +126,86 @@ slower; these were view ops doing no work"*), 2 cores/head on the decode SDPA (`
 **And one thing the tool structurally cannot check:** `[gpt-21]` records SDPA settings that were
 faster but *"NOT SAFE — position sweep"*. The tool gates on PCC at a single length. Nothing in it
 would have caught that.
+
+---
+
+## ★★★★ THE COMPARISON — measured, like for like
+
+The experiment's actual question: how does a tool-generated port compare with a hand-built one?
+Answered here by measuring both the same way — steady state, per audio frame, after warm-up — rather
+than by quoting the tool's own headline, which F43/F44/F45/F46 establish does not describe the
+delivered model.
+
+**Method.** The optimize run was stopped after ~17.5 h and 11 banked commits. Its in-flight
+unbanked work was stashed, so the tree measured is exactly the 11 wins. `run_tts` — the shipped path,
+the one `demo_tts.py` calls — was run at the demo's own settings (real prompt, `--max-frames 24`,
+`early_stop` at its default), once to warm up and once timed. `run_tts` already returns
+`{prefill_s, decode_s, codec_s}`, so no new instrumentation was introduced.
+
+```
+frames generated : 24
+prefill          :   142.2 ms   (once)
+decode           :  6198.2 ms   total   ->  258.26 ms PER FRAME
+codec            :    31.6 ms   (once)
+total utterance  :  6371.9 ms   for 1.92 s of audio
+RTF              :     3.319
+```
+
+### Result
+
+| | tool-generated port | hand-built port (§6.72) |
+|---|---|---|
+| per audio frame | **258.26 ms** | **26.9 ms** |
+| RTF (compute ÷ audio) | **3.319** | **0.357** |
+| against real time (80 ms/frame) | **3.2× slower** | **2.8× faster** |
+| execution mode | eager, full re-prefill per frame | traced (trace+1cq), incremental |
+
+**9.6× slower**, and on the wrong side of real time: the generated port cannot sustain speech, the
+hand-built one does with margin.
+
+### The gap is structural, not tuning
+
+Three separable causes, in the order they were established:
+
+1. **No KV cache in the shipped path (F46).** `run_tts` re-runs all 26 layers over the whole padded
+   224-token sequence every frame and keeps one row. An incremental, cache-resident `decode_step`
+   exists in the same file and is never called from the demo.
+2. **Eager dispatch (F45).** `execute_trace` appears once in the entire pipeline, inside the
+   capture selftest. The delivered generation loop replays no trace, so every op is dispatched from
+   the host, every frame.
+3. **Tuning.** The 11 optimisations are real and correctness-preserving — but they were measured
+   against `decode_step`, which the demo does not call, so none of them are in the 258.26 ms above.
+
+Only the third is the kind of gap more optimisation closes. The first two are structural choices the
+generated port made and its gates never questioned.
+
+### And the proportions confirm F44 with a hard number
+
+The optimizer's objective timed **one prefill against one decode**, weighting prefill at roughly
+half the pair. The real utterance:
+
+```
+decode  6198.2 ms   97.3%
+prefill  142.2 ms    2.2%
+codec     31.6 ms    0.5%
+```
+
+**Decode is 97.3% of the work and entered the objective once.** Prefill is 2.2% and carried
+comparable weight. That is the whole of F44 in three lines: an edit that helped prefill scored, an
+edit that helped decode barely moved the number, and the ranking that followed was not a ranking of
+what this model actually spends its time on.
+
+### What this does NOT say
+
+- **Not that the port is wrong.** It is correct: `e2e PCC 0.9999803900718689`, exact audio-code
+  equality, zero code flips, measured directly on this same tree.
+- **Not that bring-up failed.** Bring-up is the strong half of this tool: a 4B three-stack model,
+  no per-model code, 7/7 components and 114/114 operations on device, in one round, in 42 minutes.
+- **Not that the optimisation work is wasted.** All 11 commits improve `decode_step` — the function
+  that *should* ship. Wire it into `run_tts` and they arrive with it.
+
+The honest summary is narrow and specific: **the tool ports correctly and measures its own
+performance against something the user never runs.**
 
 ---
 
