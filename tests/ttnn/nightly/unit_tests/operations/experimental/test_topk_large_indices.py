@@ -743,10 +743,15 @@ def _run_return_values_case(device, torch_input, k, valid_length=None):
     torch_indices = ttnn.to_torch(indices, dtype=torch.uint32).to(torch.int64)
 
     search = torch_input if valid_length is None else torch_input[:, :valid_length]
-    ref_values, _ = torch.topk(search.float(), k, dim=-1, largest=True, sorted=True)
+    # A prefix shorter than k is legal: only min(k, prefix) lanes are finite,
+    # the rest must be exact -inf (asserted below with the sentinel lanes).
+    n_finite = min(k, search.shape[-1])
+    ref_values, _ = torch.topk(search.float(), n_finite, dim=-1, largest=True, sorted=True)
     # Values: exact, order included — both sides sorted descending, so this
     # holds even under ties (tie index order is unspecified, value order isn't).
-    assert_equal(torch_values.float(), ref_values)
+    assert_equal(torch_values.float()[:, :n_finite], ref_values)
+    if n_finite < k:
+        assert (torch_values.float()[:, n_finite:] == -float("inf")).all()
 
     # Index/value consistency on non-sentinel lanes: input[index] == value.
     sentinel_mask = torch_indices == 0xFFFFFFFF
@@ -802,19 +807,32 @@ def test_topk_large_indices_return_values_neginf_lanes(device, num_rows, n):
     assert_equal(torch_indices[:, :finite_count], expected_prefix)
 
 
-def test_topk_large_indices_return_values_valid_length(device):
-    # Bounded search: values come from the prefix only; lanes past the
-    # prefix's capacity are -inf/sentinel even though the stale tail holds
-    # larger finite values.
-    num_rows, n, k, valid_length = 2, 8192, 512, 300
+@pytest.mark.parametrize("valid_length", [600, 300])
+def test_topk_large_indices_return_values_valid_length(device, valid_length):
+    # Bounded search: all winners must come from the prefix even though the
+    # stale tail holds larger finite decoys. valid_length < k is supported by
+    # design: lanes past the prefix's capacity emit -inf values + sentinel
+    # indices (the docstring's "[k, last dimension]" domain is stale — the
+    # short-prefix sentinel behavior is covered by the indices-only suite too).
+    num_rows, n, k = 2, 8192, 512
     torch_input = torch.zeros(num_rows, n, dtype=torch.bfloat16)
     torch_input[:, :valid_length] = torch.randn(num_rows, valid_length).to(torch.bfloat16)
     torch_input[:, valid_length:] = 100.0  # stale tail decoys, must never appear
 
     torch_values, torch_indices = _run_return_values_case(device, torch_input, k, valid_length=valid_length)
-    assert (torch_values.float() < 100.0).all()
     finite = torch_indices != 0xFFFFFFFF
+    assert (torch_values.float()[finite] < 100.0).all()
     assert torch_indices[finite].max() < valid_length
+
+    n_finite = min(k, valid_length)
+    # Finite lanes must be exactly the prefix's top-n_finite values.
+    ref_values, _ = torch.topk(torch_input[:, :valid_length].float(), n_finite, dim=-1, largest=True, sorted=True)
+    got_finite = torch_values.float()[:, :n_finite]
+    assert_equal(ref_values.sort(dim=-1).values, got_finite.sort(dim=-1).values)
+    # Lanes past the prefix capacity are sentinel index + -inf value.
+    if n_finite < k:
+        assert (torch_indices[:, n_finite:] == 0xFFFFFFFF).all()
+        assert (torch_values.float()[:, n_finite:] == -float("inf")).all()
 
 
 def test_topk_large_indices_default_stays_indices_only(device):
