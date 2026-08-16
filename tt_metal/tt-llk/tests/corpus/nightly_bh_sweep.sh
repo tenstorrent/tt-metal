@@ -32,13 +32,34 @@ echo "== nightly sweep $DATE -> $EV (prev: ${PREV:-none}) =="
 # Corpus inventory must be self-consistent before any measurement.
 python3 "$HERE/sfpu_corpus.py" --validate || { echo "FATAL: corpus validation failed"; exit 2; }
 
-# sweep_2x2.py preflight enforces: compiler sha256 == pin, removed loadmacro
-# flags error on use, OFF/ON flag sets accepted. It classifies BEFORE any
-# device job, refuses byte-identical pairs, gates silicon on paired CRAQ,
-# serializes every device job under both flocks, copies CSVs in-lock, and
-# never parses results while a lock is held. Baselines are read-only here.
+# Gate self-tests FIRST: the class-aware flip detector (win->refusal must be
+# RED — selftest_sweep_2x2_report.py drives the real report()) and the
+# DejaGnu counting gate (clean->GREEN/failing->RED — weekly's suites, but the
+# shared logic is proven nightly too).  A broken gate must never bless a
+# sweep; the outputs are appended to REPORT.md below.
+mkdir -p "$EV"
+GATE_SELFTEST_RC=0
+python3 "$HERE/selftest_sweep_2x2_report.py" > "$EV/selftest-report-gate.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
+bash "$HERE/selftest_dejagnu_gate.sh" > "$EV/selftest-dejagnu-gate.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
+if [ "$GATE_SELFTEST_RC" -ne 0 ]; then
+  echo "FATAL: gate self-tests failed (see $EV/selftest-*.txt) — refusing to sweep"
+  exit 2
+fi
+
+# sweep_2x2.py preflight enforces: cc1plus sha256 == PRIMARY pin (resolved
+# via g++ -print-prog-name=cc1plus; the driver sha is a secondary check —
+# the driver is byte-identical across cc1plus-only changes), removed
+# loadmacro flags error on use, OFF/ON flag sets accepted. It classifies
+# BEFORE any device job, refuses byte-identical pairs, gates silicon on
+# paired CRAQ, serializes every device job under both flocks, copies CSVs
+# in-lock, and never parses results while a lock is held. Resume is
+# hash-matched: cached cells are reused only when their archived .text
+# hashes equal this run's classify build. Baselines are read-only here.
 python3 "$HERE/sweep_2x2.py" \
   --evidence-root "$EV" \
+  --cc1plus-sha "$PINNED_CC1PLUS_SHA256" \
   --compiler-sha "$PINNED_COMPILER_SHA256" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
   --allow-hardware \
@@ -47,6 +68,20 @@ python3 "$HERE/sweep_2x2.py" \
   ${PREV:+--prev-run "$PREV"} \
   "$@"
 RC=$?
+
+# Append the gate self-test evidence to the report so every nightly verdict
+# carries the proof that its flip detector works.
+if [ -f "$EV/REPORT.md" ]; then
+  {
+    echo ""
+    echo "## Gate self-tests (run before the sweep)"
+    echo ""
+    echo '```'
+    tail -n 3 "$EV/selftest-report-gate.txt"
+    tail -n 1 "$EV/selftest-dejagnu-gate.txt"
+    echo '```'
+  } >> "$EV/REPORT.md"
+fi
 
 echo "== nightly sweep $DATE done rc=$RC; report: $EV/REPORT.md =="
 exit $RC

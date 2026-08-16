@@ -16,9 +16,32 @@ Encodes the silicon protocol as executable policy:
      sha256, SHA256SUMS manifest.
 
 Rows/markers/nodes live in sweep_2x2_ops.tsv, never in this file.  Absent
-rows are machine-readable SKIPs.  Metric: post CSV mean(MATH_ISOLATE) at the
+rows are machine-readable SKIPs.  Metric: post CSV mean(<metric>) at the
 row's marker (KERNEL for fire-and-forget replay-launch shapes, TILE_LOOP for
-eltwise suites) divided by tile_cnt = cycles/tile.
+eltwise suites) divided by tile_cnt = cycles/tile (per_tile=0 rows keep the
+absolute scoped reading, e.g. the Reduce-SDPA REDUCE_SDPA_BODY pair).
+
+Post-review hardening (PULL_ANALYSIS-20260817 §4):
+  * the toolchain pin is the CC1PLUS binary (resolved via g++
+    -print-prog-name=cc1plus): the g++ driver is byte-identical across
+    cc1plus-only changes, so the driver sha alone is structurally blind and
+    is kept only as a secondary check (D6);
+  * resume is HASH-MATCHED: a cached device job is reused only when its
+    archived .text hash set equals what THIS run's compiler produces for the
+    same node/flags (stale-compiler cells re-measure); classify/CRAQ verdicts
+    are keyed to the cc1plus (and simulator) sha and re-run on mismatch;
+  * weekly per-knob silicon legs run the identical classify -> paired CRAQ ->
+    correctness-then-perf pipeline as the main legs (D3);
+  * report() is class-aware: baseline rows carry an expected class
+    (win/parity/loss/refusal); a prior win row that becomes a byte-identical
+    refusal is RED, refusal->changed is a flagged notice (D4;
+    selftest_sweep_2x2_report.py proves win->refusal = RED);
+  * rows with issue_slot_lb get the HANDOFF §1 issue-slot sanity check:
+    a BODY-family reading on a macro-launch shape below the payload's
+    issue-slot lower bound is INVALID_MARKER (KERNEL marker required);
+  * kind=pinpair rows (Reduce-SDPA) run a paired gen-vs-hand A/B at the
+    row's pinned flag set (default profitability gate), keeping the checked
+    -in baseline pair and the compiler pin coherent.
 
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
@@ -96,9 +119,38 @@ def load_config(path):
         )
     for row in rows:
         row["nodes"] = {
-            sel: row.get(sel.replace("-", "_"), "").strip() for sel in SELECTORS
+            sel: (row.get(sel.replace("-", "_")) or "").strip() for sel in SELECTORS
         }
+        # Optional columns (sweep-2x2-ops-version 2); absent = v1 defaults.
+        row["metric"] = (row.get("metric") or "").strip() or "MATH_ISOLATE"
+        row["per_tile"] = (row.get("per_tile") or "1").strip() != "0"
+        lb = (row.get("issue_slot_lb") or "").strip()
+        row["issue_slot_lb"] = float(lb) if lb else None
+        row["pin_flags"] = (row.get("pin_flags") or "").strip()
+        env = (row.get("extra_env") or "").strip()
+        row["extra_env"] = dict(kv.split("=", 1) for kv in env.split(";") if kv)
+        if row["kind"] == "pinpair" and not row["pin_flags"]:
+            sys.exit(f"config row {row['op']}: kind=pinpair requires pin_flags")
     return rows
+
+
+def row_scope(row):
+    """Baseline/scoreboard scope string for a config row (or stored result)."""
+    if row["kind"] == "pinpair":
+        return row["marker"]
+    return f"{row['marker']}_{row.get('metric', 'MATH_ISOLATE')}_PER_TILE"
+
+
+# Perf-cell naming per row kind.  pinpair rows keep the checked-in baseline's
+# native selectors (e.g. Reduce-SDPA 'generated'/'handwritten_replay').
+PINPAIR_CELLS = {"sem-perf": "generated", "hand-perf": "handwritten_replay"}
+
+
+def cell_selector(r, cell):
+    """Baseline/scoreboard selector for a result's cell."""
+    if r["kind"] == "pinpair":
+        return cell
+    return f"{r['op']}:{cell}"
 
 
 class Sweep:
@@ -146,13 +198,37 @@ class Sweep:
         }
         if not self.compiler.is_file():
             sys.exit(f"missing compiler {self.compiler}")
+        # SECONDARY pin: the g++ driver.  The driver binary is byte-identical
+        # across cc1plus-only changes (structurally blind, D6) — it can catch
+        # a wrong toolchain layout but never a compiler-proper change.
         info["compiler_sha256"] = sha256(self.compiler)
         if self.a.compiler_sha and not info["compiler_sha256"].startswith(
             self.a.compiler_sha
         ):
             sys.exit(
-                f"COMPILER SHA MISMATCH: pinned {self.a.compiler_sha}, "
+                f"DRIVER SHA MISMATCH: pinned {self.a.compiler_sha}, "
                 f"found {info['compiler_sha256']} — refusing to sweep"
+            )
+        # PRIMARY pin: cc1plus (the compiler proper), resolved through the
+        # driver itself so the pin follows whatever binary actually compiles.
+        cc1 = subprocess.run(
+            [str(self.compiler), "-print-prog-name=cc1plus"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not cc1 or not pathlib.Path(cc1).is_file():
+            sys.exit(f"cannot resolve cc1plus via {self.compiler} (got '{cc1}')")
+        info["cc1plus"] = cc1
+        info["cc1plus_sha256"] = sha256(pathlib.Path(cc1))
+        if self.a.cc1plus_sha and not info["cc1plus_sha256"].startswith(
+            self.a.cc1plus_sha
+        ):
+            sys.exit(
+                "CC1PLUS SHA MISMATCH (primary toolchain pin): pinned "
+                f"{self.a.cc1plus_sha}, found {info['cc1plus_sha256']} at {cc1} "
+                "— refusing to sweep (the g++ driver sha alone cannot detect "
+                "cc1plus-only changes; rebuild/point the pinned toolchain or "
+                "update the pin through review)"
             )
         ver = subprocess.run(
             [str(self.compiler), "--version"], capture_output=True, text=True
@@ -211,8 +287,10 @@ class Sweep:
         (self.ev / "preflight.json").write_text(json.dumps(info, indent=2) + "\n")
         man = [
             f"Lane sweep-2x2 evidence — {self.ev.name}",
-            f"compiler: {self.compiler}",
-            f"compiler sha256: {info['compiler_sha256']}",
+            f"compiler driver: {self.compiler}",
+            f"compiler driver sha256 (secondary pin): {info['compiler_sha256']}",
+            f"cc1plus: {info['cc1plus']}",
+            f"cc1plus sha256 (PRIMARY pin): {info['cc1plus_sha256']}",
             f"compiler version: {info['compiler_version']}",
             f"tt-metal: {info['tt_metal_head']}",
             f"libttsim bh sha256: {info['sim_bh_sha256']}",
@@ -225,7 +303,7 @@ class Sweep:
         self.info = info
 
     # ---------------- process helpers ----------------
-    def _env(self, arch, runner_temp, flags, sim=None):
+    def _env(self, arch, runner_temp, flags, sim=None, extra=None):
         env = os.environ.copy()
         env.update(
             CHIP_ARCH=CHIP[arch],
@@ -235,6 +313,8 @@ class Sweep:
         )
         if sim:
             env["TT_METAL_SIMULATOR"] = str(sim)
+        if extra:
+            env.update(extra)
         return env
 
     def _pytest(self, node, extra, env, log, timeout=1800):
@@ -302,7 +382,12 @@ class Sweep:
         work = self.ev / row["op"] / tag / sel
         verdict_file = work / "verdict.json"
         if verdict_file.is_file() and not self.a.force:
-            return json.loads(verdict_file.read_text())
+            verdict = json.loads(verdict_file.read_text())
+            # Hash-matched resume: a cached classification is only valid for
+            # the compiler that produced it.  Verdicts from another cc1plus
+            # (or from the pre-keying schema) are recompiled.
+            if verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]:
+                return verdict
         work.mkdir(parents=True, exist_ok=True)
         (work / "node.txt").write_text(node + "\n")
         hashes = {}
@@ -314,11 +399,16 @@ class Sweep:
             rc = self._pytest(
                 node,
                 ["--compile-producer"],
-                self._env("bh", rt, flags),
+                self._env("bh", rt, flags, extra=row["extra_env"]),
                 work / f"compile-{leg}.log",
             )
             if rc != 0 or not self._passed(work / f"compile-{leg}.log"):
-                verdict = {"selector": sel, "status": "COMPILE_FAIL", "leg": leg}
+                verdict = {
+                    "selector": sel,
+                    "status": "COMPILE_FAIL",
+                    "leg": leg,
+                    "cc1plus_sha256": self.info["cc1plus_sha256"],
+                }
                 verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
                 self.reds.append(f"{row['op']}/{sel}: compile {leg} failed")
                 return verdict
@@ -326,18 +416,48 @@ class Sweep:
             self._archive_build(rt, work / f"elf-{leg}")
             shutil.rmtree(rt, ignore_errors=True)
         legnames = [leg for leg, _ in legs]
-        a_set = sorted(h[1] for h in hashes[legnames[0]])
-        b_set = sorted(h[1] for h in hashes[legnames[1]])
-        math_a = sorted(h[1] for h in hashes[legnames[0]] if h[0].endswith("math.elf"))
-        math_b = sorted(h[1] for h in hashes[legnames[1]] if h[0].endswith("math.elf"))
-        verdict = {
-            "selector": sel,
-            "status": "OK",
-            "all": "IDENTICAL" if a_set == b_set else "CHANGED",
-            "math": "IDENTICAL" if math_a == math_b else "CHANGED",
-        }
+        if len(legnames) == 1:
+            verdict = {
+                "selector": sel,
+                "status": "OK",
+                "all": "SINGLE_LEG",
+                "math": "SINGLE_LEG",
+            }
+        else:
+            a_set = sorted(h[1] for h in hashes[legnames[0]])
+            b_set = sorted(h[1] for h in hashes[legnames[1]])
+            math_a = sorted(
+                h[1] for h in hashes[legnames[0]] if h[0].endswith("math.elf")
+            )
+            math_b = sorted(
+                h[1] for h in hashes[legnames[1]] if h[0].endswith("math.elf")
+            )
+            verdict = {
+                "selector": sel,
+                "status": "OK",
+                "all": "IDENTICAL" if a_set == b_set else "CHANGED",
+                "math": "IDENTICAL" if math_a == math_b else "CHANGED",
+            }
+        verdict["cc1plus_sha256"] = self.info["cc1plus_sha256"]
         verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
         return verdict
+
+    def _classify_texts(self, row, sel, leg, tag="classify"):
+        """This run's .text hash set for (row, sel, leg) from the classify
+        evidence — the reference a cached device job must hash-match."""
+        path = self.ev / row["op"] / tag / sel / f"hashes-{leg}.txt"
+        if not path.is_file():
+            return None
+        return self._texts_of(path)
+
+    @staticmethod
+    def _texts_of(hash_file):
+        texts = []
+        for line in pathlib.Path(hash_file).read_text().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[1].startswith("text:"):
+                texts.append(parts[1][len("text:") :])
+        return sorted(texts)
 
     # ---------------- phase: craq ----------------
     SOC_DESCRIPTORS = {
@@ -364,13 +484,28 @@ class Sweep:
         shutil.copy2(ROOT / self.SOC_DESCRIPTORS[arch], stage / "soc_descriptor.yaml")
         return stage / "libttsim.so"
 
-    def craq(self, row, sel, arch):
+    def craq(
+        self,
+        row,
+        sel,
+        arch,
+        legs_spec=(("off", OFF_FLAGS), ("on", ON_FLAGS)),
+        tag="craq",
+    ):
         node = row["nodes"][sel]
         sim = self._staged_sim(arch)
-        work = self.ev / row["op"] / "craq" / f"{sel}-{arch}"
+        work = self.ev / row["op"] / tag / f"{sel}-{arch}"
         verdict_file = work / "verdict.json"
+        sim_sha = sha256(sim) if sim and sim.is_file() else ""
         if verdict_file.is_file() and not self.a.force:
-            return json.loads(verdict_file.read_text())
+            verdict = json.loads(verdict_file.read_text())
+            # Hash-matched resume: verdicts are keyed to cc1plus + simulator.
+            if (
+                verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
+                and verdict.get("sim_sha256") == sim_sha
+                and verdict.get("status") != "SKIP_NO_SIMULATOR"
+            ):
+                return verdict
         if not sim or not sim.is_file():
             verdict = {"selector": sel, "arch": arch, "status": "SKIP_NO_SIMULATOR"}
             work.mkdir(parents=True, exist_ok=True)
@@ -379,7 +514,7 @@ class Sweep:
         work.mkdir(parents=True, exist_ok=True)
         (work / "node.txt").write_text(node + "\n")
         legs = {}
-        for leg, flags in (("off", OFF_FLAGS), ("on", ON_FLAGS)):
+        for leg, flags in legs_spec:
             rt = work / f"rt-{leg}"
             shutil.rmtree(rt, ignore_errors=True)
             rt.mkdir(parents=True)
@@ -387,7 +522,7 @@ class Sweep:
             rc = self._pytest(
                 node,
                 ["--run-simulator"],
-                self._env(arch, rt, flags, sim=sim),
+                self._env(arch, rt, flags, sim=sim, extra=row["extra_env"]),
                 log,
                 timeout=2400,
             )
@@ -401,29 +536,53 @@ class Sweep:
             else:
                 legs[leg] = f"FAIL(rc={rc})"
             shutil.rmtree(rt, ignore_errors=True)
-        verdict = {"selector": sel, "arch": arch, "status": "OK", "legs": legs}
+        verdict = {
+            "selector": sel,
+            "arch": arch,
+            "status": "OK",
+            "legs": legs,
+            "cc1plus_sha256": self.info["cc1plus_sha256"],
+            "sim_sha256": sim_sha,
+        }
         verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
         if arch == "bh" and any(v != "PASS" for v in legs.values()):
-            self.reds.append(f"{row['op']}/{sel}: CRAQ {arch} {legs}")
+            self.reds.append(f"{row['op']}/{sel}: CRAQ {arch} ({tag}) {legs}")
         return verdict
 
     # ---------------- phase: silicon ----------------
-    def _device_job(self, row, sel, label, leg, flags, tag="silicon"):
+    def _device_job(
+        self, row, sel, label, leg, flags, tag="silicon", expected_texts=None
+    ):
         """One serialized device job under both flocks; CSVs copied in-lock."""
         node = row["nodes"][sel]
         work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
-        # Resume skips only GREEN jobs: a failed device job (e.g. downstream of
-        # a hung core) is re-run on the next invocation, never cached as done.
+        # Resume skips only GREEN jobs whose archived .text hash set matches
+        # what THIS run's compiler produces for the same node/flags (from the
+        # classify evidence).  A failed job, or a cell measured from a stale
+        # binary (different compiler), is re-run — never cached as done.
         if (work / "rc.txt").is_file() and not self.a.force:
             prior_rc = int((work / "rc.txt").read_text().strip() or 99)
             if prior_rc == 0 and self._passed(work / "log.txt"):
-                return prior_rc
+                if expected_texts is None:
+                    return prior_rc
+                archived = (
+                    self._texts_of(work / "TEXT_HASHES.txt")
+                    if (work / "TEXT_HASHES.txt").is_file()
+                    else None
+                )
+                if archived == expected_texts:
+                    return prior_rc  # hash-matched reuse
+                print(
+                    f"resume: {row['op']}/{sel} {label}-{leg} .text hashes "
+                    "changed — re-measuring"
+                )
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         rt = work / "rt"
         rt.mkdir()
         (work / "node.txt").write_text(node + "\n")
         (work / "flags.txt").write_text(flags + "\n")
+        env_prefix = " ".join(f'{k}="{v}"' for k, v in (row["extra_env"] or {}).items())
         inner = work / "inner.sh"
         # Single-quoted node id survives the sh -c layers because pytest node
         # ids never contain single quotes.
@@ -432,7 +591,7 @@ class Sweep:
             f"""#!/usr/bin/env bash
 rm -rf "{LLK}/perf_data"
 cd "{PYDIR}" || exit 97
-env CHIP_ARCH=blackhole LLK_HOME="{LLK}" RUNNER_TEMP="{rt}" \\
+env {env_prefix} CHIP_ARCH=blackhole LLK_HOME="{LLK}" RUNNER_TEMP="{rt}" \\
 TT_LLK_EXTRA_COMPILER_OPTIONS="{flags}" \\
 timeout 1500 "{self.python}" -m pytest -q -v '{node}' > "{work}/log.txt" 2>&1
 RC=$?
@@ -465,35 +624,145 @@ exit $RC
             self.reds.append(
                 f"{row['op']}/{sel} {label}-{leg}: device job FAIL rc={rc}"
             )
+        elif (
+            expected_texts is not None
+            and self._texts_of(work / "TEXT_HASHES.txt") != expected_texts
+        ):
+            self.reds.append(
+                f"{row['op']}/{sel} {label}-{leg}: device job .text differs "
+                "from this run's classify build (non-deterministic build?)"
+            )
         return rc
 
     def _perf_value(self, row, sel, label, leg, tag="silicon"):
-        """Parse cycles/tile from the copied post CSV (lock long released)."""
+        """Parse the row's scoped metric from the copied post CSV (lock long
+        released).  per_tile rows divide by tile_cnt (cycles/tile); absolute
+        rows (e.g. Reduce-SDPA REDUCE_SDPA_BODY) sum the marker's rows."""
         work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
+        col = f"mean({row['metric']})"
         for post in sorted(work.glob("perf_data/*/*.post.csv")):
+            total, tiles, seen = 0.0, 1.0, False
             with post.open() as f:
                 for rec in csv.DictReader(f):
-                    if rec.get("marker") != row["marker"]:
+                    if rec.get("marker") != row["marker"] or col not in rec:
                         continue
-                    try:
-                        tiles = float(rec.get("tile_cnt", 1) or 1)
-                    except ValueError:
-                        tiles = 1.0
-                    return float(rec["mean(MATH_ISOLATE)"]) / (tiles or 1.0)
+                    total += float(rec[col])
+                    if not seen:
+                        try:
+                            tiles = float(rec.get("tile_cnt", 1) or 1)
+                        except ValueError:
+                            tiles = 1.0
+                    seen = True
+            if seen:
+                return total / (tiles or 1.0) if row["per_tile"] else total
         return None
 
-    def silicon(self, row, classifications):
-        op = row["op"]
-        result = {
-            "op": op,
+    def _result_skeleton(self, row, classifications):
+        return {
+            "op": row["op"],
             "corpus_id": row["corpus_id"],
             "kind": row["kind"],
             "marker": row["marker"],
+            "scope": row_scope(row),
             "classify": classifications,
             "cells": {},
             "runs": {},
             "notes": [],
         }
+
+    def _issue_slot_check(self, row, result):
+        """HANDOFF §1 metric caveat as code: a BODY-family reading on a
+        macro-launch shape must be >= the payload's issue-slot lower bound
+        (issue_slot_lb, cycles/tile), else the marker reading is INVALID and
+        the KERNEL marker is required.  The check result is recorded either
+        way so every measured cell carries its validity evidence."""
+        lb = row["issue_slot_lb"]
+        if lb is None:
+            return
+        cells = result["cells"]
+        checked, invalid = [], []
+        for cell, val in list(cells.items()):
+            if not isinstance(val, (int, float)):
+                continue
+            if val < lb:
+                cells[cell] = "INVALID_MARKER"
+                invalid.append(f"{cell}={val:.2f}")
+                self.reds.append(
+                    f"{row['op']}/{cell}: INVALID_MARKER — {row['marker']} "
+                    f"reading {val:.2f} < issue-slot lower bound {lb:g}; "
+                    "KERNEL marker required"
+                )
+            else:
+                checked.append(f"{cell}={val:.2f}")
+        if invalid:
+            result["notes"].append(
+                f"issue-slot check FAIL ({', '.join(invalid)} < {lb:g}): "
+                f"{row['marker']} is not a valid metric zone for this "
+                "macro-launch shape — re-measure with the KERNEL marker"
+            )
+        elif checked:
+            result["notes"].append(
+                f"issue-slot check PASS: {', '.join(checked)} all >= payload "
+                f"issue-slot lower bound {lb:g} cycles/tile "
+                f"({row['marker']} reading valid for this macro-launch shape)"
+            )
+
+    def silicon_pinpair(self, row, classifications):
+        """kind=pinpair: paired gen-vs-hand A/B at the row's pinned flag set
+        (e.g. Reduce-SDPA at the default profitability gate).  Same pipeline
+        discipline as the 2x2: correctness first, then 3 fresh processes per
+        selector alternating gen/hand, hash-matched resume per job."""
+        result = self._result_skeleton(row, classifications)
+        flags = row["pin_flags"]
+        result["notes"].append(f"pinpair leg flags: {flags}")
+        for sel in ("sem-corr", "hand-corr"):
+            if not row["nodes"][sel]:
+                continue
+            rc = self._device_job(
+                row,
+                sel,
+                "corr",
+                "default",
+                flags,
+                expected_texts=self._classify_texts(row, sel, "default"),
+            )
+            result["runs"][f"{sel}/corr-default"] = (
+                "PASS" if rc == 0 else f"FAIL(rc={rc})"
+            )
+            if rc != 0:
+                result["notes"].append(f"STOP: {sel} correctness failed; perf withheld")
+                return result
+        samples = {sel: [] for sel in ("sem-perf", "hand-perf")}
+        for r in range(1, PERF_RUNS + 1):
+            for sel in ("sem-perf", "hand-perf"):  # alternating gen/hand
+                if not row["nodes"][sel]:
+                    continue
+                self._device_job(
+                    row,
+                    sel,
+                    f"r{r}",
+                    "default",
+                    flags,
+                    expected_texts=self._classify_texts(row, sel, "default"),
+                )
+                val = self._perf_value(row, sel, f"r{r}", "default")
+                if val is not None:
+                    samples[sel].append(val)
+        for sel, cell in PINPAIR_CELLS.items():
+            src = samples[sel]
+            result["runs"][f"{sel}/{cell}_samples"] = src
+            result["cells"][cell] = (sum(src) / len(src)) if src else None
+        self._issue_slot_check(row, result)
+        c = result["cells"]
+        gen, hand = c.get("generated"), c.get("handwritten_replay")
+        if isinstance(gen, (int, float)) and isinstance(hand, (int, float)) and hand:
+            result["vs_hand_pct"] = 100.0 * (gen - hand) / hand
+        return result
+
+    def silicon(self, row, classifications):
+        if row["kind"] == "pinpair":
+            return self.silicon_pinpair(row, classifications)
+        result = self._result_skeleton(row, classifications)
         # correctness first, OFF then ON; byte-identical pair => one run fills both
         for sel in ("sem-corr", "hand-corr"):
             if not row["nodes"][sel]:
@@ -506,7 +775,12 @@ exit $RC
                 )
             for leg in legs:
                 rc = self._device_job(
-                    row, sel, "corr", leg, OFF_FLAGS if leg == "off" else ON_FLAGS
+                    row,
+                    sel,
+                    "corr",
+                    leg,
+                    OFF_FLAGS if leg == "off" else ON_FLAGS,
+                    expected_texts=self._classify_texts(row, sel, leg),
                 )
                 result["runs"][f"{sel}/corr-{leg}"] = (
                     "PASS" if rc == 0 else f"FAIL(rc={rc})"
@@ -546,7 +820,12 @@ exit $RC
             for r in range(1, PERF_RUNS + 1):
                 for leg in legs:  # alternating OFF/ON inside each round
                     self._device_job(
-                        row, sel, f"r{r}", leg, OFF_FLAGS if leg == "off" else ON_FLAGS
+                        row,
+                        sel,
+                        f"r{r}",
+                        leg,
+                        OFF_FLAGS if leg == "off" else ON_FLAGS,
+                        expected_texts=self._classify_texts(row, sel, leg),
                     )
                     val = self._perf_value(row, sel, f"r{r}", leg)
                     if val is not None:
@@ -555,6 +834,8 @@ exit $RC
                 src = samples[leg] if leg in samples else samples["off"]
                 result["runs"][f"{sel}/{cell}_samples"] = src
                 result["cells"][cell] = (sum(src) / len(src)) if src else None
+        # marker validity first: an INVALID_MARKER cell must not feed a ratio
+        self._issue_slot_check(row, result)
         # derived ratios
         c = result["cells"]
         num = lambda x: isinstance(x, (int, float))
@@ -566,6 +847,8 @@ exit $RC
 
     # ---------------- weekly: per-knob attribution ----------------
     def attribute_knobs(self, row, classifications):
+        if row["kind"] == "pinpair":
+            return {"op": row["op"], "status": "SKIP_PINPAIR"}
         sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
         if (
             not row["nodes"][sel]
@@ -595,25 +878,129 @@ exit $RC
         return out
 
     def knob_silicon(self, row, attribution):
-        """Per-knob silicon legs (weekly, headline rows only): OFF vs OFF+knob."""
+        """Per-knob silicon legs (weekly, headline rows only): OFF vs OFF+knob.
+
+        D3 fix (PULL_ANALYSIS-20260817): these legs run the IDENTICAL
+        classify -> paired CRAQ -> correctness-then-perf pipeline as the main
+        legs.  Per firing knob: the perf selector's OFF-vs-knob classification
+        must be CHANGED (byte-identical => recorded refusal, no device run);
+        the correctness selector is classified and paired-CRAQ'd with the same
+        OFF-vs-knob legs and the BH gate must be green; device correctness
+        runs OFF then knob BEFORE any perf leg; only then 3 fresh perf
+        processes per leg, alternating, hash-matched like every device job.
+        Callers must invoke this only for rows whose MAIN BH CRAQ gate is
+        already green (enforced in run())."""
         sel = attribution.get("selector")
         if attribution.get("status") != "OK" or not sel:
             return
+        corr_sel = "sem-corr" if row["nodes"]["sem-corr"] else None
         out = {}
         for knob in attribution.get("firing_knobs", []):
             knob_flags = f"{OFF_FLAGS} {KNOBS[knob]}"
+            legs_spec = (("off", OFF_FLAGS), ("knob", knob_flags))
+            entry = {"selector": sel, "flags": knob_flags}
+            out[knob] = entry
+            # 1. classification (perf selector; already produced by
+            #    attribute_knobs — classify() resumes hash-matched).
+            cls = self.classify(row, sel, legs=legs_spec, tag=f"knobs/{knob}")
+            entry["classify"] = cls
+            if cls.get("status") != "OK":
+                entry["status"] = "CLASSIFY_FAIL"
+                continue
+            if cls.get("all") == "IDENTICAL":
+                entry["status"] = "REFUSAL_BYTE_IDENTICAL"  # no device run
+                continue
+            if not corr_sel:
+                entry["status"] = "WITHHELD_NO_CORR_NODE"
+                self.reds.append(
+                    f"{row['op']}/{knob}: knob silicon withheld — no correctness node"
+                )
+                continue
+            # 2. correctness-selector classification (for its own byte-identity
+            #    handling and the hash-matched device resume below).
+            corr_cls = self.classify(
+                row, corr_sel, legs=legs_spec, tag=f"knobs/{knob}-corr"
+            )
+            entry["classify_corr"] = corr_cls
+            if corr_cls.get("status") != "OK":
+                entry["status"] = "CLASSIFY_FAIL"
+                continue
+            # 3. paired CRAQ on the correctness node, same OFF-vs-knob legs;
+            #    the BH gate must be green (SKIP_NO_SIMULATOR never opens it).
+            bh_verdict = None
+            for arch in row["craq_archs"].split(","):
+                arch = arch.strip()
+                v = self.craq(
+                    row, corr_sel, arch, legs_spec=legs_spec, tag=f"knobs-craq/{knob}"
+                )
+                if arch == "bh":
+                    bh_verdict = v
+            gate = bool(
+                bh_verdict
+                and bh_verdict.get("legs")
+                and all(x == "PASS" for x in bh_verdict["legs"].values())
+            )
+            entry["craq_bh"] = bh_verdict
+            if not gate and not self.a.skip_craq_gate:
+                entry["status"] = "WITHHELD_CRAQ_NOT_GREEN"
+                self.reds.append(
+                    f"{row['op']}/{knob}: knob silicon withheld — paired BH CRAQ not green"
+                )
+                continue
+            # 4. device correctness FIRST (OFF then knob; byte-identical corr
+            #    pair => one run fills both legs, like the main pipeline).
+            tag = f"knobs-silicon/{knob}"
+            corr_legs = (
+                [("off", OFF_FLAGS)]
+                if corr_cls.get("all") == "IDENTICAL"
+                else list(legs_spec)
+            )
+            corr_fail = False
+            for leg, flags in corr_legs:
+                rc = self._device_job(
+                    row,
+                    corr_sel,
+                    "corr",
+                    leg,
+                    flags,
+                    tag=tag,
+                    expected_texts=self._classify_texts(
+                        row, corr_sel, leg, tag=f"knobs/{knob}-corr"
+                    ),
+                )
+                entry[f"corr_{leg}"] = "PASS" if rc == 0 else f"FAIL(rc={rc})"
+                if rc != 0:
+                    corr_fail = True
+                    break
+            if corr_fail:
+                entry["status"] = "STOP_CORRECTNESS_FAILED"
+                self.reds.append(
+                    f"{row['op']}/{knob}: knob correctness failed; perf withheld"
+                )
+                continue
+            # 5. perf: 3 fresh processes per leg, alternating OFF/knob.
             samples = {"off": [], "knob": []}
             for r in range(1, PERF_RUNS + 1):
-                for leg, flags in (("off", OFF_FLAGS), ("knob", knob_flags)):
-                    tag = f"knobs-silicon/{knob}"
-                    self._device_job(row, sel, f"r{r}", leg, flags, tag=tag)
+                for leg, flags in legs_spec:
+                    self._device_job(
+                        row,
+                        sel,
+                        f"r{r}",
+                        leg,
+                        flags,
+                        tag=tag,
+                        expected_texts=self._classify_texts(
+                            row, sel, leg, tag=f"knobs/{knob}"
+                        ),
+                    )
                     val = self._perf_value(row, sel, f"r{r}", leg, tag=tag)
                     if val is not None:
                         samples[leg].append(val)
             cell = {leg: (sum(v) / len(v)) if v else None for leg, v in samples.items()}
             if cell["off"] and cell["knob"]:
                 cell["delta_pct"] = 100.0 * (cell["knob"] - cell["off"]) / cell["off"]
-            out[knob] = cell
+            entry["cells"] = cell
+            entry["status"] = "OK"
         (self.ev / row["op"] / "knob-silicon.json").write_text(
             json.dumps(out, indent=2) + "\n"
         )
@@ -627,10 +1014,18 @@ exit $RC
             "reds": self.reds,
         }
         (self.ev / "scoreboard.json").write_text(json.dumps(payload, indent=2) + "\n")
-        scope = lambda r: f"{r['marker']}_MATH_ISOLATE_PER_TILE"
+        cc1 = self.info["cc1plus_sha256"]
+        sim_sha = self.info.get("sim_bh_sha256", "")
         with (self.ev / "scoreboard.tsv").open("w") as f:
-            f.write("# schema=1; chip-class silicon cells from sweep_2x2.py\n")
-            f.write("id\tarch\tmetric\tscope\tselector\tcycles\tstatus\tprovenance\n")
+            f.write(
+                "# schema=2; chip-class silicon cells from sweep_2x2.py; "
+                "compiler_sha = cc1plus binary sha256 (PRIMARY toolchain pin), "
+                "craq_sim_sha = BH libttsim sha256\n"
+            )
+            f.write(
+                "id\tarch\tmetric\tscope\tselector\tcycles\tstatus\t"
+                "compiler_sha\tcraq_sim_sha\tprovenance\n"
+            )
             for r in results:
                 for cell, val in r.get("cells", {}).items():
                     status = (
@@ -640,14 +1035,16 @@ exit $RC
                     )
                     cyc = f"{val}" if isinstance(val, (int, float)) else ""
                     f.write(
-                        f"{r['corpus_id']}\tbh\tdevice_cycles\t{scope(r)}\t"
-                        f"{r['op']}:{cell}\t{cyc}\t{status}\t{self.ev.name}\n"
+                        f"{r['corpus_id']}\tbh\tdevice_cycles\t{r['scope']}\t"
+                        f"{cell_selector(r, cell)}\t{cyc}\t{status}\t"
+                        f"{cc1}\t{sim_sha}\t{self.ev.name}\n"
                     )
         lines = [
             "# 2x2 sweep scoreboard",
             "",
             f"- evidence: `{self.ev}`",
-            f"- compiler sha256: `{self.info['compiler_sha256']}`",
+            f"- cc1plus sha256 (primary pin): `{self.info['cc1plus_sha256']}`",
+            f"- driver sha256 (secondary): `{self.info['compiler_sha256']}`",
             "",
             "| op | marker | sem OFF | sem ON | causal | hand | vs hand | notes |",
             "|---|---|---:|---:|---:|---:|---:|---|",
@@ -655,14 +1052,22 @@ exit $RC
         fmt = lambda v: f"{v:.3f}" if isinstance(v, (int, float)) else (v or "—")
         for r in results:
             c = r.get("cells", {})
+            if r["kind"] == "pinpair":
+                # gen-vs-hand pair at the row's pinned flag set: the generated
+                # cell rides the "sem ON" column, hand is hand.
+                so, sn = "—", fmt(c.get("generated"))
+                h = fmt(c.get("handwritten_replay"))
+            else:
+                so, sn = fmt(c.get("sem_off")), fmt(c.get("sem_on"))
+                h = fmt(c.get("hand_on", c.get("hand_off")))
             lines.append(
                 "| {op} | {m} | {so} | {sn} | {cz} | {h} | {vh} | {n} |".format(
                     op=r["op"],
                     m=r["marker"],
-                    so=fmt(c.get("sem_off")),
-                    sn=fmt(c.get("sem_on")),
+                    so=so,
+                    sn=sn,
                     cz=f"{r['causal_pct']:+.2f}%" if "causal_pct" in r else "—",
-                    h=fmt(c.get("hand_on", c.get("hand_off"))),
+                    h=h,
                     vh=f"{r['vs_hand_pct']:+.2f}%" if "vs_hand_pct" in r else "—",
                     n="; ".join(r.get("notes", [])),
                 )
@@ -680,20 +1085,61 @@ exit $RC
         out.write_text("\n".join(entries) + "\n")
 
     # ---------------- report ----------------
-    def report(self, results, skips):
-        baseline = {}
-        if self.a.baseline and self.a.baseline.is_file():
-            with self.a.baseline.open() as f:
-                for rec in csv.DictReader(
-                    (x for x in f if not x.startswith("#")), delimiter="\t"
+    @staticmethod
+    def _load_baseline(path):
+        """Baseline TSV -> (cycles map, expected-class map).
+
+        cycles:  (id, scope, selector) -> [floats]  (min = the established
+                 three-process convention when aggregating repeats)
+        classes: (id, scope) -> expected class from the schema-2
+                 expected_class column (win/parity/loss/refusal); rows with
+                 status 'refusal'/'expected_refusal' also declare refusal.
+        Falls back to deriving win/parity/loss from the measured sem cells
+        for schema-1 baselines without the column.
+        """
+        cycles, classes = {}, {}
+        if not (path and path.is_file()):
+            return cycles, classes
+        with path.open() as f:
+            for rec in csv.DictReader(
+                (x for x in f if not x.startswith("#")), delimiter="\t"
+            ):
+                key2 = (rec["id"], rec["scope"])
+                cls = (rec.get("expected_class") or "").strip()
+                if cls:
+                    classes.setdefault(key2, cls)
+                if (rec.get("status") or "").strip() in (
+                    "refusal",
+                    "expected_refusal",
+                    "refusal_byte_identical",
                 ):
-                    try:
-                        cyc = float(rec.get("cycles", ""))
-                    except (TypeError, ValueError):
-                        continue
-                    baseline.setdefault(
-                        (rec["id"], rec["scope"], rec["selector"]), []
-                    ).append(cyc)
+                    classes[key2] = "refusal"
+                try:
+                    cyc = float(rec.get("cycles", ""))
+                except (TypeError, ValueError):
+                    continue
+                cycles.setdefault(
+                    (rec["id"], rec["scope"], rec["selector"]), []
+                ).append(cyc)
+        return cycles, classes
+
+    @staticmethod
+    def _derived_class(baseline, r):
+        """win/parity/loss from the baseline's measured sem cells (schema-1
+        fallback when no expected_class column exists)."""
+        off = baseline.get((r["corpus_id"], r["scope"], cell_selector(r, "sem_off")))
+        on = baseline.get((r["corpus_id"], r["scope"], cell_selector(r, "sem_on")))
+        if not (off and on and min(off)):
+            return None
+        pct = 100.0 * (min(on) - min(off)) / min(off)
+        if pct < -0.5:
+            return "win"
+        if pct <= 0.5:
+            return "parity"
+        return "loss"
+
+    def report(self, results, skips):
+        baseline, base_classes = self._load_baseline(self.a.baseline)
         prev = {}
         if self.a.prev_run and (self.a.prev_run / "scoreboard.json").is_file():
             for r in json.loads((self.a.prev_run / "scoreboard.json").read_text()).get(
@@ -714,23 +1160,82 @@ exit $RC
         for r in results:
             verdicts = []
             c = r.get("cells", {})
-            scope = f"{r['marker']}_MATH_ISOLATE_PER_TILE"
-            num = lambda x: isinstance(x, (int, float))
-            # acceptance 1: refusal rows must stay byte-identical refusals
+            scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
+            r = dict(r, scope=scope)
+            expected = base_classes.get((r["corpus_id"], scope)) or self._derived_class(
+                baseline, r
+            )
+            # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
+            # baseline class is refusal (or the row has no baseline history).
+            # A row whose baseline carries a measured WIN that now collapses
+            # to a byte-identical refusal is a total-refusal regression: RED.
             if c.get("sem_off") == "REFUSAL_BYTE_IDENTICAL":
-                verdicts.append("refusal byte-identical: GREEN")
+                if expected == "win":
+                    verdicts.append(
+                        "WIN→REFUSAL FLIP (baseline class win, now "
+                        "byte-identical refusal — planner stopped firing): RED"
+                    )
+                    rag = "RED"
+                elif expected in ("parity", "loss"):
+                    verdicts.append(
+                        f"{expected.upper()}→REFUSAL: flagged notice "
+                        "(measured baseline row now refuses): YELLOW"
+                    )
+                    if rag == "GREEN":
+                        rag = "YELLOW"
+                elif expected == "refusal":
+                    verdicts.append(
+                        "refusal byte-identical (baseline class refusal): GREEN"
+                    )
+                else:
+                    verdicts.append(
+                        "refusal byte-identical (no baseline history): GREEN"
+                    )
+            elif expected == "refusal" and any(
+                isinstance(v, (int, float)) for v in c.values()
+            ):
+                # refusal -> changed: not a regression by itself, but a class
+                # transition that must be surfaced, never silently blessed.
+                verdicts.append(
+                    "REFUSAL→CHANGED: flagged notice (baseline expects a "
+                    "byte-identical refusal, OFF/ON now differs and was "
+                    "measured): YELLOW"
+                )
+                if rag == "GREEN":
+                    rag = "YELLOW"
+            # acceptance 1b: INVALID_MARKER cells can never gate GREEN.
+            if any(v == "INVALID_MARKER" for v in c.values()):
+                verdicts.append(
+                    "INVALID_MARKER cell(s) — reading below the payload "
+                    "issue-slot lower bound (KERNEL marker required): RED"
+                )
+                rag = "RED"
             # acceptance 2: win-sign preservation vs baseline
             for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
                 if key not in r:
                     continue
                 base_pair = None
-                if name == "causal":
-                    off = baseline.get((r["corpus_id"], scope, f"{r['op']}:sem_off"))
-                    on = baseline.get((r["corpus_id"], scope, f"{r['op']}:sem_on"))
+                if r["kind"] == "pinpair":
+                    if name == "causal":
+                        continue
+                    on = baseline.get((r["corpus_id"], scope, "generated"))
+                    hand = baseline.get((r["corpus_id"], scope, "handwritten_replay"))
+                    base_pair = (min(hand), min(on)) if on and hand else None
+                elif name == "causal":
+                    off = baseline.get(
+                        (r["corpus_id"], scope, cell_selector(r, "sem_off"))
+                    )
+                    on = baseline.get(
+                        (r["corpus_id"], scope, cell_selector(r, "sem_on"))
+                    )
                     base_pair = (min(off), min(on)) if off and on else None
                 else:
-                    on = baseline.get((r["corpus_id"], scope, f"{r['op']}:sem_on"))
-                    hand = baseline.get((r["corpus_id"], scope, f"{r['op']}:hand_on"))
+                    on = baseline.get(
+                        (r["corpus_id"], scope, cell_selector(r, "sem_on"))
+                    )
+                    hand = baseline.get(
+                        (r["corpus_id"], scope, cell_selector(r, "hand_on"))
+                    )
                     base_pair = (min(hand), min(on)) if on and hand else None
                 if not base_pair or not base_pair[0]:
                     verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
@@ -789,24 +1294,30 @@ exit $RC
                     }
                 )
                 continue
+            # pinpair rows classify/CRAQ a single pinned-flag leg per selector.
+            pin_legs = (
+                (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
+            )
             classifications = {}
             if "classify" in phases:
                 for sel in SELECTORS:
                     if row["nodes"][sel]:
-                        classifications[sel] = self.classify(row, sel)
+                        classifications[sel] = (
+                            self.classify(row, sel, legs=pin_legs)
+                            if pin_legs
+                            else self.classify(row, sel)
+                        )
             if "craq" in phases:
                 for arch in row["craq_archs"].split(","):
                     for sel in ("sem-corr", "hand-corr"):
                         if row["nodes"][sel]:
-                            self.craq(row, sel, arch.strip())
+                            if pin_legs:
+                                self.craq(row, sel, arch.strip(), legs_spec=pin_legs)
+                            else:
+                                self.craq(row, sel, arch.strip())
+            attribution = None
             if self.a.knob_attribution and "classify" in phases:
                 attribution = self.attribute_knobs(row, classifications)
-                if (
-                    row["op"] in (self.a.knob_silicon_rows or [])
-                    and "silicon" in phases
-                    and self.a.allow_hardware
-                ):
-                    self.knob_silicon(row, attribution)
             if "silicon" in phases:
                 if not self.a.allow_hardware:
                     skips.append(
@@ -838,31 +1349,25 @@ exit $RC
                     self.reds.append(
                         f"{row['op']}: silicon withheld — paired BH CRAQ not green"
                     )
+                    if attribution and row["op"] in (self.a.knob_silicon_rows or []):
+                        self.reds.append(
+                            f"{row['op']}: knob silicon withheld — main BH CRAQ gate not green"
+                        )
                     results.append(
-                        {
-                            "op": row["op"],
-                            "corpus_id": row["corpus_id"],
-                            "kind": row["kind"],
-                            "marker": row["marker"],
-                            "classify": classifications,
-                            "cells": {},
-                            "notes": ["silicon withheld: BH CRAQ gate not green"],
-                        }
+                        dict(
+                            self._result_skeleton(row, classifications),
+                            notes=["silicon withheld: BH CRAQ gate not green"],
+                        )
                     )
                     continue
                 results.append(self.silicon(row, classifications))
+                # Weekly per-knob silicon legs run BEHIND the main BH CRAQ
+                # gate (D3) and add their own per-knob classify/CRAQ/
+                # correctness pipeline inside knob_silicon().
+                if attribution and row["op"] in (self.a.knob_silicon_rows or []):
+                    self.knob_silicon(row, attribution)
             else:
-                results.append(
-                    {
-                        "op": row["op"],
-                        "corpus_id": row["corpus_id"],
-                        "kind": row["kind"],
-                        "marker": row["marker"],
-                        "classify": classifications,
-                        "cells": {},
-                        "notes": [],
-                    }
-                )
+                results.append(self._result_skeleton(row, classifications))
         self.emit_scoreboard(results, skips)
         rag = "GREEN"
         if "report" in phases:
@@ -902,7 +1407,14 @@ def main():
         help="riscv-tt-elf-g++ (default: tests/sfpi symlink)",
     )
     ap.add_argument(
-        "--compiler-sha", help="required sha256 (prefix ok) of the pinned compiler"
+        "--compiler-sha",
+        help="required sha256 (prefix ok) of the g++ DRIVER — secondary pin "
+        "only (the driver is byte-identical across cc1plus-only changes)",
+    )
+    ap.add_argument(
+        "--cc1plus-sha",
+        help="required sha256 (prefix ok) of cc1plus, resolved via "
+        "g++ -print-prog-name=cc1plus — the PRIMARY toolchain pin",
     )
     ap.add_argument(
         "--baseline",

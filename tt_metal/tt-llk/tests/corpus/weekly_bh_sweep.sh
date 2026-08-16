@@ -28,8 +28,14 @@ echo "== weekly sweep $DATE -> $EV (prev: ${PREV:-none}) =="
 
 python3 "$HERE/sfpu_corpus.py" --validate || { echo "FATAL: corpus validation failed"; exit 2; }
 
+# Gate self-test first: a broken flip detector must never bless a sweep.
+mkdir -p "$EV"
+python3 "$HERE/selftest_sweep_2x2_report.py" > "$EV/selftest-report-gate.txt" 2>&1 \
+  || { echo "FATAL: report-gate self-test failed (see $EV/selftest-report-gate.txt)"; exit 2; }
+
 python3 "$HERE/sweep_2x2.py" \
   --evidence-root "$EV" \
+  --cc1plus-sha "$PINNED_CC1PLUS_SHA256" \
   --compiler-sha "$PINNED_COMPILER_SHA256" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
   --allow-hardware \
