@@ -487,3 +487,210 @@ def test_topk_large_indices_valid_length_out_of_range_raises(device, expect_erro
     torch_input = _make_bf16_exact_input(num_rows=1, n=n)
     with expect_error(RuntimeError, "valid_length"):
         ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+
+# ---------------------------------------------------------------------------
+# Column-parallel (intra-row multi-core) path: single row, many chunks per row.
+# The op splits the row's chunks over a rectangle of local cores and merges the
+# per-slice survivors on one final core. Selected automatically when num_rows
+# is 1 and the row is wide enough that the split beats a single core.
+# ---------------------------------------------------------------------------
+
+
+def _make_distinct_block_input(n: int, k: int, block_start: int, background: float = 0.0) -> torch.Tensor:
+    """One row of `background` with k strictly-increasing bf16-exact values at [block_start, block_start+k)."""
+    values = torch.full((1, n), background, dtype=torch.bfloat16)
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    block = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    values[:, block_start : block_start + k] = block
+    return values
+
+
+@pytest.mark.parametrize(
+    "k,n",
+    [
+        (512, 32768),  # 64 chunks
+        (512, 65536),  # 128 chunks
+        (1024, 32768),  # 32 chunks
+        (1024, 65536),  # 64 chunks
+        (2048, 65536),  # 32 chunks over ~8 slices -> >=4 chained chunk merges per local core
+        (2048, 102400),  # 50 chunks: uneven chunk split across slices
+        (1536, 65536),  # k below the LLK window (2048): output narrower than the merge sequence
+        (2048, 65537),  # 33 chunks with a 1-element tail chunk on the last slice
+    ],
+)
+def test_topk_large_indices_column_parallel_single_row(device, k, n):
+    torch_input = _make_large_index_input(num_rows=1, n=n, k=k)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+def test_topk_large_indices_column_parallel_top_values_straddle_slice_boundary(device):
+    # W=65536 with k=2048 splits into 8 slices of 8192 columns. Center the
+    # winning block on a slice boundary so both neighbors contribute half of
+    # the final top-k and the cross-slice merge ordering is exercised.
+    n, k = 65536, 2048
+    boundary = 4 * 8192
+    torch_input = _make_distinct_block_input(n, k, block_start=boundary - k // 2)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+def test_topk_large_indices_column_parallel_random_ties_return_distinct_indices(device):
+    # Random bf16 over 64K columns is guaranteed to contain duplicate values,
+    # including ties that straddle slice boundaries. Tie order between slices
+    # is unspecified, so check the selected value multiset and index validity
+    # instead of exact index equality.
+    torch.manual_seed(0)
+    n, k = 65536, 2048
+    torch_input = torch.randn(1, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0]
+
+    assert indices.min() >= 0
+    assert indices.max() < n
+    assert indices.unique().numel() == k
+
+    actual_values = torch_input.float()[0][indices]
+    ref_values, _ = torch.topk(torch_input.float()[0], k, largest=True, sorted=True)
+    assert_equal(actual_values.sort().values, ref_values.sort().values)
+
+
+def test_topk_large_indices_column_parallel_all_equal_row(device):
+    # Every element ties. Any k distinct indices are a correct answer; the
+    # merge tree must not lose or duplicate lanes across slices.
+    n, k = 65536, 2048
+    torch_input = torch.ones(1, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0]
+
+    assert indices.min() >= 0
+    assert indices.max() < n
+    assert indices.unique().numel() == k
+
+
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_large_indices_column_parallel_all_neginf_is_sentinel(device, k):
+    # All lanes are -inf in every slice, so every gathered sequence is the
+    # degenerate all--inf run and the final core must emit only sentinels.
+    sentinel = 0xFFFFFFFF
+    n = 32 * k
+    torch_input = torch.full((1, n), -float("inf"), dtype=torch.bfloat16)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_indices(tt_indices, torch.full((1, k), sentinel, dtype=torch.int64), [1, k])
+
+
+@pytest.mark.parametrize(
+    "valid_length,block_start",
+    [
+        (2048, 0),  # only slice 0 active (single chunk); slices 1..P-1 empty -> writer -inf fill
+        (8192, 8192 - 2048),  # slice 0 fully active, the rest empty
+        (20000, 17952),  # partial tail chunk mid-slice; trailing slices empty
+        (65536, 65536 - 2048),  # full width: no empty slices
+    ],
+)
+def test_topk_large_indices_column_parallel_valid_length(device, valid_length, block_start):
+    # The winning block sits inside the valid prefix; the stale tail holds
+    # LARGER finite decoys that must never be selected. Empty slices (fully
+    # beyond valid_length) contribute writer-fabricated -inf sequences.
+    n, k = 65536, 2048
+    torch_input = _make_distinct_block_input(n, k, block_start=block_start)
+    if valid_length < n:
+        torch_input[:, valid_length:] = 100.0
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+    _, ref_indices = torch.topk(torch_input[:, :valid_length].float(), k, dim=-1, largest=True, sorted=True)
+    assert int(ref_indices.max()) < valid_length
+    _assert_indices(tt_indices, ref_indices, [1, k])
+
+
+def test_topk_large_indices_column_parallel_short_valid_length_emits_sentinels(device):
+    # valid_length < k: the real indices come from the short prefix and the
+    # remaining output lanes must be sentinels, with every slice past the
+    # prefix contributing an empty (writer-filled) sequence.
+    n, k = 65536, 2048
+    valid_length = 496
+    torch_input = _make_bf16_exact_input(num_rows=1, n=2048)
+    torch_input = torch.nn.functional.pad(torch_input.float(), (0, n - 2048), value=100.0).to(torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+    _, valid_indices = torch.topk(
+        torch_input[:, :valid_length].float(), valid_length, dim=-1, largest=True, sorted=True
+    )
+    expected = torch.cat(
+        [valid_indices, torch.full((1, k - valid_length), 0xFFFFFFFF, dtype=torch.int64)],
+        dim=-1,
+    )
+    _assert_indices(tt_indices, expected, [1, k])
+
+
+def test_topk_large_indices_column_parallel_valid_length_cache_reuse(device):
+    # The column split is derived from the PHYSICAL width only, so a serving
+    # loop growing valid_length must reuse one cached column-parallel program
+    # (empty slices shrink to active ones purely through runtime args).
+    #
+    # Every 8192-wide region carries its own strictly-increasing distinct
+    # k-block at its start, with each block's values above the previous
+    # block's. There are no ties anywhere (tie order vs torch is unspecified,
+    # so an all-zeros prefix cannot be exact-asserted), and each growth step
+    # has a DIFFERENT exact answer — the newest fully-visible block — so a
+    # stale valid_length-derived runtime arg on a cache hit cannot pass.
+    n, k = 65536, 2048
+    num_blocks = 8
+    region_width = n // num_blocks
+    torch_input = torch.zeros(1, n, dtype=torch.bfloat16)
+    for i in range(num_blocks):
+        hi16 = (0x3F80 + i * k + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+        block = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+        torch_input[:, i * region_width : i * region_width + k] = block
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        entries = []
+        # valid_length -> index of the largest fully-visible block:
+        # 2048 sees only block 0; 20480 reaches block 2 ([16384, 18432));
+        # 40960 reaches block 4 ([32768, 34816)); full width reaches block 7.
+        for valid_length, top_block in ((2048, 0), (20480, 2), (40960, 4), (n, 7)):
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+            entries.append(device.num_program_cache_entries())
+            block_start = top_block * region_width
+            expected = torch.arange(block_start + k - 1, block_start - 1, -1, dtype=torch.int64).unsqueeze(0)
+            _assert_indices(tt_indices, expected, [1, k])
+        assert entries[0] > 0
+        assert max(entries) == min(entries)  # no recompile as valid_length grew
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_topk_large_indices_column_and_row_parallel_programs_coexist_in_cache(device):
+    # A single-row wide input takes the column-parallel factory while a
+    # multi-row input of the same width keeps the row-parallel one; the two
+    # must hash to distinct cache entries and both must stay correct.
+    n, k = 65536, 2048
+    single_row = _make_large_index_input(num_rows=1, n=n, k=k)
+    multi_row = _make_large_index_input(num_rows=2, n=n, k=k)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        tt_single = ttnn.experimental.topk_large_indices(_to_device(single_row, device), k=k)
+        entries_after_single = device.num_program_cache_entries()
+        tt_multi = ttnn.experimental.topk_large_indices(_to_device(multi_row, device), k=k)
+        entries_after_multi = device.num_program_cache_entries()
+
+        assert entries_after_single > 0
+        assert entries_after_multi == entries_after_single + 1
+
+        _assert_topk_matches_torch(single_row, tt_single, k)
+        _assert_topk_matches_torch(multi_row, tt_multi, k)
+    finally:
+        device.disable_and_clear_program_cache()

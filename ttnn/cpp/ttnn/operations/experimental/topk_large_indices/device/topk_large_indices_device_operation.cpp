@@ -87,10 +87,39 @@ void TopkLargeIndicesDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_args(attrs, tensor_args);
 }
 
+namespace {
+
+program::ColumnSplitConfig column_split_config_for(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const auto& shape = input.logical_shape();
+    const uint32_t n = shape[shape.rank() - 1];
+    const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    return program::compute_column_split_config(attrs.k, n, num_rows, grid);
+}
+
+}  // namespace
+
+TopkLargeIndicesDeviceOperation::program_factory_t TopkLargeIndicesDeviceOperation::select_program_factory(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    if (column_split_config_for(attrs, tensor_args).enabled) {
+        return program::TopkLargeIndicesMultiCoreProgramFactory{};
+    }
+    return program::TopkLargeIndicesProgramFactory{};
+}
+
 ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
     const auto grid = input.device()->compute_with_storage_grid_size();
+
+    // Factory selection (and, on the column-parallel path, the program
+    // structure) depends on the derived split config, so its fields must be
+    // hashed. On the row-parallel path the config is all zeros, preserving the
+    // original shape-free hash: row counts and row widths keep patching
+    // through runtime args without recompiles.
+    const auto split_config = column_split_config_for(attrs, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         attrs.k,
@@ -99,7 +128,11 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
         grid.x,
-        grid.y);
+        grid.y,
+        split_config.enabled,
+        split_config.num_slices,
+        split_config.local_grid_x,
+        split_config.local_grid_y);
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

@@ -20,7 +20,11 @@ struct TopkLargeIndicesDeviceOperation {
     using tensor_return_value_t = topk_large_indices::tensor_return_value_t;
     using spec_return_value_t = topk_large_indices::spec_return_value_t;
 
-    using program_factory_t = std::variant<program::TopkLargeIndicesProgramFactory>;
+    using program_factory_t =
+        std::variant<program::TopkLargeIndicesProgramFactory, program::TopkLargeIndicesMultiCoreProgramFactory>;
+
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
