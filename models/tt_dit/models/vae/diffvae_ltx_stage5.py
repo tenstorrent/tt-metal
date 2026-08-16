@@ -1113,10 +1113,17 @@ class DiffVAEStage5(Module):
         device: a contiguous W-band is not a contiguous slice of the T-outer sequence, so it is
         reshaped to a ``(1, T, H, W, dim)`` volume, ``mesh_partition``ed on W, and flattened back to
         this chip's ``(1, batch, T*H*(W/sp), dim)`` in the same (t, h, w_local) order the blocks use.
+
+        **Consumes** ``context``: the full replicated volume is freed here, since holding it through
+        the blocks (9.7 GiB at 6s) is what leaves no room for the per-block K/V gather. This is a
+        replicated -> W-sharded reshard; det-stage SP would remove it by handing context W-sharded.
         """
         dim = int(context.shape[-1])
-        vol = ttnn.reshape(ttnn.to_layout(context, ttnn.ROW_MAJOR_LAYOUT), (1, grid.t, grid.h, grid.w, dim))
+        rm = ttnn.to_layout(context, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(context)
+        vol = ttnn.reshape(rm, (1, grid.t, grid.h, grid.w, dim))
         band = ttnn.mesh_partition(vol, dim=3, cluster_axis=self.sp_axis)  # (1, T, H, W/sp, dim)
+        ttnn.deallocate(rm)
         w_local = grid.w // int(list(self.mesh_device.shape)[self.sp_axis])
         flat = ttnn.reshape(band, (1, grid.batch, grid.t * grid.h * w_local, dim))
         return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)

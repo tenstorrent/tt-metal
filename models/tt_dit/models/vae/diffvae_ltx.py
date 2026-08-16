@@ -459,48 +459,68 @@ class LinearPixelShuffleUpsample(Module):
         index = torch.arange(self.proj_out_channels).reshape(self.out_channels, p1, p2, p3)
         return index.permute(1, 2, 3, 0).reshape(-1)
 
+    def _shuffle(self, projected: ttnn.Tensor, t: int, h: int, w: int, drop_leading_frame: bool) -> ttnn.Tensor:
+        """Pixel-shuffle a ROW_MAJOR ``(t*h*w, proj_out_channels)`` projection into ``(t', h*p2, w*p3,
+        c)`` flattened to ``(t'*..., c)`` in TILE. **Consumes** ``projected``; returns the tile tensor
+        and the output frame count. Each step allocates a second copy of the widened volume, so each
+        is freed the moment it dies.
+        """
+        p1, p2, p3 = self.stride
+        c = self.out_channels
+        # (t, h, w, p1, p2, p3, c) -> (t, p1, h, p2, w, p3, c), channels innermost throughout.
+        projected = _consume(
+            projected, lambda v: ttnn.permute(ttnn.reshape(v, (t, h, w, p1, p2, p3, c)), (0, 3, 1, 4, 2, 5, 6))
+        )
+        out_t = t * p1
+        rows = (h * p2) * (w * p3)
+        if p1 == 2 and drop_leading_frame:
+            # The temporal shuffle emits a duplicate first frame; dropping it preserves the causal
+            # 1:2 (composed 1:8) mapping. Only the slab holding the true t=0 has one.
+            projected = _consume(
+                projected, lambda v: ttnn.slice(ttnn.reshape(v, (out_t, rows, c)), [1, 0, 0], [out_t, rows, c])
+            )
+            out_t -= 1
+        projected = _consume(projected, lambda v: ttnn.to_layout(ttnn.reshape(v, (out_t * rows, c)), ttnn.TILE_LAYOUT))
+        return projected, out_t
+
     def forward(
         self, x: ttnn.Tensor, *, dims: tuple[int, int, int], drop_leading_frame: bool = True
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
-        """``x`` is ``(tokens, in_channels)``; returns ``(tokens', out_channels)`` and new dims."""
+        """``x`` is ``(tokens, in_channels)``; returns ``(tokens', out_channels)`` and new dims.
+
+        The projection widens the channels by the stride span, which at the last 6s 1920x1088
+        upsample is a single 10 GiB buffer (plus the permute's copy) -- past what fits, and what
+        OOMs a 6s decode. Since the shuffle maps each source frame to its own output frames
+        ``[t*p1, (t+1)*p1)`` independently, the volume is processed in source-frame slabs whenever
+        the projection would blow :data:`CHUNK_BYTES`, bounding the widened copy to one slab. Slabbing
+        needs a frame boundary to be tile-aligned (``h*w`` a multiple of TILE); the large upsamples
+        that need it satisfy that, and the small ones run whole.
+        """
         t, h, w = dims
         p1, p2, p3 = self.stride
+        hw = h * w
+        slab = max(1, CHUNK_BYTES // (hw * self.proj_out_channels * 2))
 
-        # Each step below is retiled, permuted or sliced, so it allocates a second copy of the
-        # widened volume rather than aliasing. The projection widens by the stride span, which at
-        # the last 6s 1920x1088 upsample is 10 GiB a copy, so each is freed as soon as it is dead
-        # instead of at the next rebind.
-        projected = _consume(self.proj(x), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+        if slab >= t or hw % TILE != 0:
+            projected = _consume(self.proj(x), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            out, out_t = self._shuffle(projected, t, h, w, drop_leading_frame)
+            return out, (out_t, h * p2, w * p3)
 
-        # (t, h, w, p1, p2, p3, c) -> (t, p1, h, p2, w, p3, c), channels innermost throughout.
-        projected = _consume(
-            projected,
-            lambda volume: ttnn.permute(
-                ttnn.reshape(volume, (t, h, w, p1, p2, p3, self.out_channels)), (0, 3, 1, 4, 2, 5, 6)
-            ),
-        )
-        out_dims = (t * p1, h * p2, w * p3)
-        rows = out_dims[1] * out_dims[2]
-
-        if p1 == 2 and drop_leading_frame:
-            # The temporal shuffle emits a duplicate first frame; dropping it preserves the
-            # causal 1:2 (composed 1:8) mapping. Only the chunk holding the true t=0 has one.
-            projected = _consume(
-                projected,
-                lambda volume: ttnn.slice(
-                    ttnn.reshape(volume, (out_dims[0], rows, self.out_channels)),
-                    [1, 0, 0],
-                    [out_dims[0], rows, self.out_channels],
-                ),
-            )
-            out_dims = (out_dims[0] - 1, out_dims[1], out_dims[2])
-
-        tokens = out_dims[0] * out_dims[1] * out_dims[2]
-        projected = _consume(
-            projected,
-            lambda volume: ttnn.to_layout(ttnn.reshape(volume, (tokens, self.out_channels)), ttnn.TILE_LAYOUT),
-        )
-        return projected, out_dims
+        in_channels = int(x.shape[-1])
+        parts: list[ttnn.Tensor] = []
+        out_t_total = 0
+        for start in range(0, t, slab):
+            st = min(start + slab, t) - start
+            x_slab = ttnn.slice(x, [start * hw, 0], [(start + st) * hw, in_channels])
+            projected = _consume(self.proj(x_slab), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x_slab)
+            part, part_t = self._shuffle(projected, st, h, w, drop_leading_frame and start == 0)
+            parts.append(part)
+            out_t_total += part_t
+        joined = ttnn.concat(parts, dim=-2)
+        for part in parts:
+            ttnn.deallocate(part)
+        return joined, (out_t_total, h * p2, w * p3)
 
 
 class DeterministicStages(Module):
