@@ -13,6 +13,10 @@ said" next to "what it was" is the useful artifact.
 
 ## READ THIS FIRST
 
+*(If the vocabulary here is unfamiliar — stub, graduated, PCC, prefill/decode, KV cache, trace —
+skip to the **PLAIN-LANGUAGE PRIMER** immediately below. It defines every term and tells the
+whole story in ordinary words, in about two pages.)*
+
 Two experiments against the same hand-built TTNN implementation, on one Blackhole p150b:
 
 | | Experiment 1 | Experiment 2 |
@@ -48,6 +52,124 @@ the measurement simply is not of the product. That is F46, and it is the first t
 
 Everything else is indexed in the OWNERSHIP tables below. Entries marked **OURS** (S1–S7) are our
 own setup problems, recorded so they are never mistaken for tool defects.
+
+---
+
+## PLAIN-LANGUAGE PRIMER — read this if the rest looks like jargon
+
+Everything below this section assumes the vocabulary. This section supplies it, and tells the story
+once in ordinary words.
+
+### What the tool is trying to do
+
+Take a model written for CPU/GPU and rewrite it to run on a Tenstorrent chip — automatically,
+without a human writing the port. It runs in three stages:
+
+| stage | what it does |
+|---|---|
+| **bring-up** | chop the model into pieces and rewrite each piece for the chip |
+| **emit-e2e** | wire the rewritten pieces into a working pipeline and check it against the original |
+| **optimize** | make that pipeline faster, without breaking it |
+
+### The words you need
+
+**Stub.** The tool's rewritten version of one piece of the model. `_stubs/attention.py` is its
+Tenstorrent rewrite of attention. Seven pieces here: attention, decoder_layer, m_l_p, r_m_s_norm,
+tts_backbone, flow_matching, codec_decoder.
+
+**Graduated.** A stub that passed its test and is considered finished.
+
+**Gate.** An automatic check that must pass before the tool proceeds. The important ones: *is the
+output still correct*, *did the rewritten pieces actually run*, *can the work be recorded for replay
+on the chip*.
+
+**PCC.** How closely two sets of numbers agree — 1.0 is identical. Used to check the rewritten model
+against the original. The bar here is 0.99. **A PCC can never exceed 1.0**, which is what makes F42
+serious.
+
+**Frame.** This model makes speech in chunks. One frame = 1/12.5 second = **80 ms of audio**, described
+by 37 numbers. A 24-frame run is about 1.9 seconds of speech.
+
+**Prefill and decode.** *Prefill* is reading the prompt — happens once. *Decode* is producing one
+frame — happens once per frame. In a real run: 1 prefill, 24 decodes. Decode is 97% of the work.
+
+**KV cache — "keeping notes".** Each new frame depends on everything said so far. Two ways to handle
+that:
+- *keep notes*: summarise the prompt once, then add one line per frame and glance at the notes. Cost
+  stays flat.
+- *re-read*: keep nothing, and for every frame re-read the whole prompt plus everything generated so
+  far. Cost grows the longer you talk.
+
+The notes are the KV cache. **The original model keeps notes.**
+
+**Trace.** Recording a sequence of chip operations so it can be replayed without the host computer
+driving each step. Much faster. Think of it as a macro.
+
+**Tracy.** The profiler — the tool that measures where time goes, operation by operation.
+
+### What actually happened, in order
+
+**Bring-up worked, and worked well.** A 4-billion-parameter, three-stack model with no
+model-specific code: 7 of 7 pieces rewritten and running on the chip, 114 of 114 operations on the
+chip, in one round, in 42 minutes. This is the strong half of the tool and should not get lost among
+the defects below.
+
+**The pipeline was correct.** Measured by running the tests directly: **PCC 0.9999834**, the emitted
+audio codes exactly equal to the original's, zero differences. It really does turn text into the
+right speech, on the chip.
+
+**Then the optimizer ran for 17 hours** and reported a 17.2% speed-up.
+
+**But it was timing the wrong code.** There are two versions of the decode step in the port:
+
+- one that **keeps notes** — fast, faithful to the original
+- one that **re-reads everything** — slow
+
+The demo, and therefore every user, runs the slow one. The optimizer measured the fast one.
+
+**Why two versions exist.** The rules say the demo must use the graduated stubs. Those stubs ignore
+notes — they accept a notes argument and throw it away. So the demo has no way to keep notes and must
+re-read. Meanwhile the trace gate needs a small fixed-size step, which is only possible *with* notes
+— so a second version was written that bypasses the stubs and keeps them.
+
+**Why the stubs ignore notes.** Not because anything prevents it. The test that decides whether a
+stub is finished builds its inputs from argument *names*, and "cache" is not on its list — so notes
+are never passed to the stub, not once. An implementation that ignores notes scores exactly the same
+as one that uses them. So the simpler one was written, passed, and graduated.
+
+**And the root of that:** when the tool captured a real example to build attention from, that example
+*contained* real notes — 208 entries deep. The tool discarded them while saving it (F27). Everything
+above follows from that one dropped argument.
+
+### So what does the 17.2% mean?
+
+Most of the optimizer's edits landed in **shared code** that both versions use, so the improvements
+did reach the product — just not as much as claimed:
+
+| | |
+|---|---|
+| optimizer reported | **−17.2%** |
+| the product actually got | **−13.2%** (297.69 → 258.26 ms per frame) |
+
+Real work, real gains, measured against the wrong thing.
+
+### How it compares with the hand-written port
+
+| | tool-generated | hand-written |
+|---|---|---|
+| time per frame | **258.26 ms** | **26.9 ms** |
+| vs real time (80 ms/frame) | **3.2× too slow** | **2.8× faster than needed** |
+
+**9.6× apart** — and most of that gap is structural, not tuning: no notes kept, and no trace replay.
+More optimisation would not close it; the two fixes above would.
+
+### The one-paragraph summary
+
+The tool ports a large, unusual model to the chip correctly and quickly, which is genuinely hard and
+it does it well. Its correctness checking is honest and strict. But its *performance* half measures a
+code path the product never runs, and its correctness gate can hand back a number that is not a
+correlation coefficient and call it verified. Neither defect broke this run. Both would, given a
+different roll of the dice.
 
 ---
 
@@ -95,6 +217,9 @@ have stopped on its own. See F6: the agent had no way to report what it had done
 The point of the experiment. Everything below is derived from a tool that never saw the hand-port
 (see the blindness audit). Full detail in the O4* entries; this is the short list.
 
+*(The ranked list immediately below is **Experiment 1** output — Block 1, the 3.4B backbone.
+**Experiment 2's** transferable findings are in their own subsection at the end of this section.)*
+
 ### Take these
 
 | # | change | evidence | risk |
@@ -116,6 +241,34 @@ The point of the experiment. Everything below is derived from a tool that never 
 
 - **`down_proj`/`w2` → bf8_b.** This is §6.16, which you measured and declined. The tool takes it only because a 0.95 gate has no reason not to. Your call stands.
 - **DRAM-sharding the LM head weight.** Real bandwidth insight (interleaved buffers round-robin across all 8 banks; the head ran at 256 GB/s where projections manage 340–360), but it costs a **second 226 MB copy**, and Block 1's LM head isn't on your critical path.
+
+### From Experiment 2 (the full three-block model)
+
+Two results worth a look, both hedged — they come from a different tree and a different block, so
+neither settles anything on its own.
+
+**1. `nlp_create_qkv_heads` won at DECODE shape.** The tool first tried a structural reshape fix for
+the head split and measured it **+17.5 ms worse**, then switched to the shipped ttnn op and banked a
+win (`a7cdd41139`). That is the decode-shaped variant — one token padded to a single 32×32 tile.
+
+This does not contradict the Block-2 A/B in `voxtral-block2-headsplit-ab`; it corroborates the
+distinction that note draws. The note records `nlp_create_qkv_heads` at **90.5 µs** for Block 2's
+non-decode op against a hand-rolled split at 48.6, and that §6.68 wrongly cited **6.2 µs**, which is
+`nlp_create_qkv_heads_DECODE`. Experiment 2 is independent evidence that the decode-shaped variant
+really is the cheap one, in a place where using it is correct. **It says nothing about Block 2.**
+
+**2. Math fidelity can be lowered safely when a hi/lo split carries the precision.** Every
+*weight-dtype* attempt failed hard here — `bfloat8_b` weights collapsed PCC to 0.349, because the FSQ
+quantiser downstream amplifies block-float error into flipped audio codes. But a *math-fidelity*
+reduction (HiFi4 → HiFi2) **passed the exact-code-match gate and won −7.8 ms**, on this reasoning:
+
+> *"MathFidelity is how many passes the FPU makes over the operand mantissa, and the hi/lo split
+> should make two passes sufficient here"*
+
+The bits later FPU passes would gather already live in the `lo` half, so they are not lost. If the
+hand-port carries a hi/lo split anywhere on its critical path, the same argument may apply — and it
+is the sort of change a blanket "no precision changes on a codec model" rule would wrongly exclude.
+**Verify against your own exact-code check before trusting it.**
 
 ### What the experiment confirms about work you already did
 
