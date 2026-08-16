@@ -240,11 +240,26 @@ The final fact-complete consultation after build, full correctness, LOC, and mat
 the required command and timed out after five minutes without a verdict. Silence was not treated as
 approval. The plan-authorized gates independently pass, and no API expansion was made.
 
+### C13 — Tier 2.15 Move overlap control
+
+The architecture consultation used the required Claude command and timed out after five minutes
+without a verdict. No approval was inferred. The implemented API-v11 decomposition keeps the existing
+worker return counter operation-owned and gives each of the two or three disjoint worker rectangles its
+own fixed no-handshake Flag wire. The host always emits three opaque helper blocks; an absent third
+rectangle is an inactive controller singleton. A runtime region selector preserves the shared
+controller/worker binary, and source/destination addresses remain slots 0/1 for cache override. No
+helper API change is proposed.
+
+The final fact-complete review after Release builds, complete correctness, fresh JIT, LOC, source audit,
+helper guards, and matched performance also timed out after five minutes without a verdict. Silence was
+not treated as approval. The mandatory plan gates independently pass in both tiled and row-major paths,
+and no API expansion was made.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 29 migrated, 2 pending, 73 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 31 migrated, 2 pending, 71 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
@@ -256,6 +271,10 @@ approval. The plan-authorized gates independently pass, and no API expansion was
 | Tier 2.12 Interleaved GroupNorm | complete | API v11 at `40e209daad9`; all build, LOC, correctness, helper, source-audit, and matched-performance gates passed |
 | Tier 2.13 SDPA-decode `read_k` star | complete | API v11 at `f760425fe06`; full mapped correctness, fresh-JIT, shared-consumer audit, and q-factor 2/4 matched performance passed |
 | Tier 2.14 Argmax multicore control | complete | API v11 at `5aaaf5b5aa5`; exact two-rectangle, reduce-all, cache, full unit, fresh-JIT, source-audit, and both matched-performance gates passed |
+| Tier 2.15 Move overlap control | complete | API v11 at `a25603ae2c0`; TILE/ROW_MAJOR fresh JIT, complete Move/cache inventory, helper/source guards, and both matched-performance gates passed |
+| Tier 2.16a Routed-expert FFN | in-progress | Auditing the three ordinary multicast channels and exact routed-expert/bias test routes before migration |
+| Tier 2.16b H2D host-I/O service | pending | Independent atomic unit; exact single-device service route and emitter ABI still to audit |
+| Tier 2.16c D2H host-I/O service | pending | Independent atomic unit; exact single-device service route and emitter ABI still to audit |
 
 ## Chronological findings
 
@@ -459,3 +478,20 @@ approval. The plan-authorized gates independently pass, and no API expansion was
     inferred. Source was committed at `5aaaf5b5aa5`, then the kernel and host binding were written back
     at API v11 from the independently satisfied mandatory gates. Rollout state is now 29 migrated,
     2 pending, and 73 deferred kernels. API expansion: NO.
+47. Tier 2.15 decomposes the legacy dual-use control word into the unchanged operation-owned worker
+    return counter and three helper-owned fixed release flags. Two or three disjoint worker rectangles
+    are represented by three opaque no-handshake Flag wires, with an inactive controller singleton for
+    the absent third rectangle. Controller/worker role selection remains runtime under one kernel ABI;
+    src/dst cache slots remain 0/1. Both architecture and final Claude consultations timed out after
+    five minutes without a verdict; no approval was inferred. API expansion: NO.
+48. Release build and production LOC gates passed: tiled kernel 30 additions / 40 deletions, row-major
+    kernel 31/41, factory 46/47. Separate fresh-cache TILE and ROW_MAJOR overlap nodes passed under
+    Watcher with 0/19 hits each. The complete Move inventory passed 136 valid cases with 128 intentional
+    non-L1 skips, including all eight cache cases. Host helpers passed 34/34, device helpers 80/80 under
+    Watcher, and source audit 22/22 before and after ledger promotion.
+49. Matched 800 MHz Tracy used three independent 25-operation sessions per source state and layout,
+    discarding the first five Move samples per session. TILE improved from 4,144.5 ns to 4,125 ns
+    (-0.47%); ROW_MAJOR improved from 6,190 ns to 6,189 ns (-0.02%). Raw production files were restored
+    from the source checkpoint parent, rebuilt, then the migrated files were restored byte-identically
+    and rebuilt. Source was committed at `a25603ae2c0`; the two kernel rows and host binding were then
+    written back at API v11. Rollout state is 31 migrated, 2 pending, and 71 deferred kernels.

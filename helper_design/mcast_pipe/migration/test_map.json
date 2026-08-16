@@ -210,6 +210,15 @@
       "coverage": "complete with fresh-JIT two-rectangle reduce-all, full dtype/shape/dimension unit matrix, cache reuse, and two matched performance cases"
     },
     {
+      "id": "move:overlap-three-rectangle-control",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/move/device/move_overlap_program_factory.cpp",
+      "dispatch": "MULTI_CORE_OVERLAP for TILE and ROW_MAJOR interleaved L1 input",
+      "migration_unit": "move-overlap-control",
+      "inventory": ["MOVE-OVERLAP"],
+      "coverage": "complete with fresh-JIT TILE and ROW_MAJOR routes, full dtype/shape/layout/cache inventory, helper guards, and two matched performance cases"
+    },
+    {
       "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
       "classification": "required",
       "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
@@ -561,6 +570,17 @@
       ],
       "result": "7 long-tensor cases passed; 2 Ht=2 deadlock cases passed"
     },
+    "MOVE-OVERLAP": {
+      "path": "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py",
+      "compile_focused": "shape1 BFLOAT16 L1-to-L1 overlap under --dev from separate empty TT_METAL_CACHE roots for TILE and ROW_MAJOR; each exact kernel must report 0/19 hits",
+      "tests": [
+        "complete file with --run-all for all overlap/non-overlap shape, dtype, layout, and memory-config cases",
+        "test_move_op_with_program_cache for every mapped dtype",
+        "environment-gated 25-operation TILE and ROW_MAJOR matched profiling routes"
+      ],
+      "expected_nonpasses": {"non-L1 input configurations": 128},
+      "result": "136 passed / 128 intentional skips; matched TILE -0.47%, ROW_MAJOR -0.02%"
+    },
     "GROUP-ATTN-MATMUL": {
       "path": "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py",
       "compile_focused": "test_group_attn_matmul_with_program_cache_exhaustive q16 fully-sharded ROW_MAJOR node under --dev from a fresh isolated JIT cache; helper-based rotating reader artifact required",
@@ -602,11 +622,6 @@
       "candidate": "sdpa reader_interleaved.cpp",
       "confidence": "device-verified historical route",
       "route": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_noncausal"
-    },
-    {
-      "candidate": "move_interleaved_with_overlap.cpp and move_stick_layout_interleaved_with_overlap.cpp",
-      "confidence": "discovery-only",
-      "route": "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py; overlap TILE and row-major cases respectively"
     },
     {
       "candidate": "deepseek sampling_kernel.cpp",
@@ -844,6 +859,20 @@
       "inventory": "ARGMAX ROW_MAJOR multicore unit, two-rectangle cache, and reduce-all routes",
       "coverage": "high; fresh-JIT two-rectangle reduce-all, full unit matrix, and two matched performance cases",
       "result": "API v11 at 5aaaf5b5aa5; unit 69/69, nightly 16 passed / 8 skips, [64,128] -0.28%, two-rectangle +0.30%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+      "status": "migrated",
+      "inventory": "MOVE-OVERLAP TILE",
+      "coverage": "high; fresh-JIT 0/19-hit route, complete Move inventory, program cache, and matched performance",
+      "result": "API v11 at a25603ae2c0; full inventory 136 passed / 128 intentional skips; TILE -0.47%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+      "status": "migrated",
+      "inventory": "MOVE-OVERLAP ROW_MAJOR",
+      "coverage": "high; fresh-JIT 0/19-hit route, complete Move inventory, program cache, and matched performance",
+      "result": "API v11 at a25603ae2c0; full inventory 136 passed / 128 intentional skips; ROW_MAJOR -0.02%"
     }
   ],
   "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."

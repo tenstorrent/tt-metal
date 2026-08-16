@@ -435,6 +435,29 @@
       "flags": ["tier:2.14", "fully-end-to-end", "fresh-jit-verified", "two-control-wires"]
     },
     {
+      "id": "move:overlap-three-rectangle-control",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/move/device/move_overlap_program_factory.cpp",
+      "dispatch": "MULTI_CORE_OVERLAP for TILE and ROW_MAJOR interleaved L1 input",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp"
+      ],
+      "migration_unit": "move-overlap-control",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a25603ae2c0",
+      "validation_set": [
+        "build_metal.sh: passed; fresh-JIT TILE and ROW_MAJOR overlap routes passed under Watcher with 0/19 hits each",
+        "complete test_move.py inventory: 136 passed / 128 intentional non-L1 skips, including program cache",
+        "helper guards: McastHostFixture 34 passed; device helper suite 80 passed under Watcher; source audit 22 passed",
+        "production LOC additions/deletions: TILE kernel 30/40, ROW_MAJOR kernel 31/41, factory 46/47",
+        "matched 800 MHz Tracy: TILE -0.47%; ROW_MAJOR -0.02%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.15", "fully-end-to-end", "fresh-jit-verified", "three-control-wires"]
+    },
+    {
       "id": "sort:single-row-multi-core:control",
       "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
       "dispatch": "single-row multicore DRAM factory selected when Wt exceeds the hybrid full-grid capacity",
@@ -1763,39 +1786,47 @@
     {
       "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
       "op_family": "data_movement + reduction",
-      "role": "sender",
+      "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a25603ae2c0",
       "validation_set": [
-        "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-TILE-L1-L1)"
+        "fresh-JIT TILE overlap passed under Watcher with 0/19 hits",
+        "complete Move inventory 136 passed / 128 intentional skips, including cache",
+        "source audit 22 passed; helper host/device guards 34/80 passed",
+        "matched TILE performance -0.47%"
       ],
-      "coverage_confidence": "med",
-      "last_verified": "2026-06-20",
-      "inventory_note": "single-shot go-flag mcast; legacy API | DEFER-DESIGN-GAP: (1) RUNTIME role selection: is_controller=get_arg_val(8) picks sender-vs-receiver per-core under one binary; v7 SenderPipe/ReceiverPipe are distinct compile-time types. (2) MULTI-RECT 2-3 rects with RUNTIME per-rect counts (range_{0,1,2}_size, do_third_multicast all get_arg_val); v7 takes single McastRect + compile-time NUM_ACTIVE_RECEIVER_CORES. (3) dual-use L1 word (control_value RUNTIME): receivers inc as counter, controller waits then broadcasts same cell as go-flag. (4) runtime sem id. Multiple known design gaps. Needs helper change (out of scope).",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED: the operation-owned worker return counter remains separate. Three fixed no-handshake Flag wires release the disjoint worker rectangles; an absent third rectangle uses an inactive controller singleton. Controller and worker roles share one binary through the runtime region selector, while each helper block remains an opaque fixed ABI.",
       "flags": [
-        "design-gap",
-        "tier:3"
+        "tier:2.15",
+        "fully-end-to-end",
+        "three-control-wires"
       ]
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
       "op_family": "data_movement + reduction",
-      "role": "sender",
+      "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "a25603ae2c0",
       "validation_set": [
-        "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-RM-L1-L1)"
+        "fresh-JIT ROW_MAJOR overlap passed under Watcher with 0/19 hits",
+        "complete Move inventory 136 passed / 128 intentional skips, including cache",
+        "source audit 22 passed; helper host/device guards 34/80 passed",
+        "matched ROW_MAJOR performance -0.02%"
       ],
-      "coverage_confidence": "med",
-      "last_verified": "2026-06-20",
-      "inventory_note": "RM twin of above | DEFER-DESIGN-GAP: structurally identical to move_interleaved_with_overlap (RM data path only diff). Same gaps: runtime role selection (is_controller), multi-rect 2-3 rects with runtime per-rect counts, dual-use control_value word, runtime sem id. Needs helper change (out of scope).",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED ROW_MAJOR twin: same three fixed release wires and independent operation return counter as the tiled path; the aligned-page data path remains unchanged.",
       "flags": [
-        "design-gap",
-        "tier:3"
+        "tier:2.15",
+        "fully-end-to-end",
+        "three-control-wires"
       ]
     },
     {
