@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include <utility>
-#include <variant>
-#include <vector>
-
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/base_types.hpp>  // For MathFidelity, UnpackToDestMode
@@ -31,11 +27,20 @@ namespace tt::tt_metal::experimental {
 //
 // The ComputeHardwareConfig configures this pipeline.
 //
-// Different generations of Tenstorrent accelerators have slightly different
-// Tensix compute hardware. The compute configuration is therefore generation-
-// specific (though many fields are common). ComputeHardwareConfig is a variant
-// object that holds one generation's config; you must specify the correct
-// config for the hardware your compute kernel will run on.
+// Different generations of Tenstorrent accelerators have slightly different Tensix compute
+// hardware. Most of the configuration describes the pipeline itself and means the same thing
+// on every generation; those settings are fields of ComputeHardwareConfig directly. The few
+// settings that name hardware only one generation has live in a generation-specific block:
+//
+//     ComputeHardwareConfig{
+//         .fpu_math_fidelity = MathFidelity::HiFi2,   // generation-independent
+//         .enable_32_bit_dest = true,                 // generation-independent
+//         .gen1 = {.unpack_modes = {{"in0", UnpackMode::UnpackToDest}}},  // Gen1 only
+//     }
+//
+// A config may populate both generation blocks; the block matching the target architecture is
+// applied and the other is ignored. Leaving a block default is the common case, and is legal on
+// every generation — a config that sets only the generation-independent fields runs anywhere.
 //
 // NOTE: The Unpack, Math, and Pack stages are hardware pipeline stages internal
 //       to a single kernel thread. Not to be confused with KernelSpec::num_threads!
@@ -44,13 +49,94 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Type used for unpack_modes; see configuration structs below for details
+// Selects, per (consumed-from) DFB, whether the unpacker writes into the SrcA / SrcB register
+// files or straight into the Dest register file.
+//
+//  UnpackToSrc  — Unpack to SrcA/B. Both FPU and SFPU can consume the data (copied to Dest for
+//                 the SFPU), but precision is reduced to 19 bits (precision is lost for FP32;
+//                 32-bit integers are truncated).
+//  UnpackToDest — Unpack to Dest directly, preserving full 32-bit precision. Requires a 32-bit
+//                 Dest register (see enable_32_bit_dest), and the data must be consumed by the
+//                 SFPU rather than the FPU.
+//
+// UnpackToSrc is assumed for any DFB with no entry. Which entries you should write, and which
+// are required, is generation-specific: see ComputeGen1Config / ComputeGen2Config below.
 using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
 
-// Compute configuration for Gen1 architectures:
+// Compute settings specific to Gen1 architectures:
 //  - Wormhole  (TT-1.1.0)
 //  - Blackhole (TT-1.2.0)
+//
+// Ignored when the kernel runs on a Gen2 architecture.
 struct ComputeGen1Config {
+    // Pack stage precision tweak for block-float formats.
+    // Affects how exponents are reconciled when converting Dest contents to BFP in
+    // the Pack stage. Select either precise (slower) or approximate (faster).
+    // NOTE: This setting has no effect on non-BFP formats.
+    Precision bfp_pack_precision_mode = Precision::Approximate;
+
+    // Per-DFB unpack destination; see ComputeUnpackModes above for the mechanism.
+    //
+    // On Wormhole and Blackhole, UnpackToSrc is the fastest option, so UnpackToDest should be
+    // used only if:
+    //  - The data format has 32-bit precision, AND enable_32_bit_dest is set to true
+    //  - You want to preserve the full precision
+    //  - The data will be consumed by the SFPU (not the FPU)
+    //
+    // If enable_32_bit_dest is true and the DFB carries a 32-bit format, you must EXPLICITLY
+    // specify an UnpackMode for that DFB: at that combination the choice is a real precision
+    // and throughput tradeoff, so there is no default to fall back on. (Enforced by validation
+    // checks.)
+    ComputeUnpackModes unpack_modes;
+};
+
+// Compute settings specific to Gen2 architectures:
+//  - Quasar (TT-2.0.0)
+//  - Quasar derivatives (TT-2.0.x)
+//
+// Ignored when the kernel runs on a Gen1 architecture.
+//
+// Note: Gen2 architectures replace BFP data formats with MXFP formats; the Gen1
+//       bfp_pack_precision_mode setting has no Gen2 counterpart.
+struct ComputeGen2Config {
+    // Per-DFB unpack destination; see ComputeUnpackModes above for the mechanism.
+    //
+    // On Gen2 architectures there is NO performance penalty for unpacking directly to Dest, so
+    // UnpackToDest is the preferred mode for any SFPU-consumed data — which is why this table is
+    // generation-specific rather than shared. A table tuned for Gen1 remains legal here, but
+    // leaves precision on the table for SFPU consumers.
+    //
+    // The explicit-entry requirement is the same as on Gen1: if enable_32_bit_dest is true and
+    // the DFB carries a 32-bit format, an entry is required. Porting a Gen1-tuned kernel to
+    // Quasar therefore surfaces this table as something to revisit rather than inherit.
+    ComputeUnpackModes unpack_modes;
+
+    ///////////////////////////////////////////
+    // Temporary configs (these will change!)
+    ///////////////////////////////////////////
+
+    // When true, the unpacker packs two values into each source-register slot instead of one.
+    // The math engine reads twice as many elements per pass, effectively doubling throughput.
+    //
+    // This is currently ONLY supported for Mxfp4 data format. The setting is ignored for all
+    // other formats.
+    //
+    // WARNING: Only the matmul family of instructions work with this format:
+    //  - matmul (MVMUL/MVMULDI)
+    //  - the GAPOOL instruction that column reduce ops are built on
+    //
+    // Invoking other instructions on Mxfp4 data with the setting enabled will produce garbage
+    // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
+    // a matmul or a column reduce.
+    //
+    // This API is not final and subject to change!
+    // It should most likely become a per-DFB setting, similar to unpack_modes.
+    bool enable_2x_src_register = false;
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+};
+
+struct ComputeHardwareConfig {
     ////////////////////////////////////////////////
     // General accuracy / performance tradeoffs
     ////////////////////////////////////////////////
@@ -63,12 +149,6 @@ struct ComputeGen1Config {
     // Accuracy / performance tradeoff for the SFPU transcendentals.
     // Select either fast-and-approximate mode or slow-and-precise mode.
     Precision sfpu_precision_mode = Precision::Precise;
-
-    // Pack stage precision tweak for block-float formats.
-    // Affects how exponents are reconciled when converting Dest contents to BFP in
-    // the Pack stage. Select either precise (slower) or approximate (faster).
-    // NOTE: This setting has no effect on non-BFP formats.
-    Precision bfp_pack_precision_mode = Precision::Approximate;
 
     /////////////////////////////////////
     // Dest register file configuration
@@ -99,162 +179,15 @@ struct ComputeGen1Config {
     // makes it more likely that single-buffering mode will be necessary.
     bool double_buffer_dest = true;
 
-    // Unpack data into the Dest or into the SrcA / SrcB register file.
-    // This choice is specified per (consumed-from) DFB, rather than kernel-wide.
-    // Configuration options:
-    //  UnpackToSrc  — Unpack to SrcA/B
-    //  UnpackToDest — Unpack to Dest directly
-    //
-    // UnpackToSrc is the default.
-    //  - Both FPU and SFPU can consume the data (copied to Dest for the SFPU).
-    //  - Data precision is reduced to 19 bits.
-    //    (Precision is lost for FP32; 32-bit integers are truncated).
-    //  - This is the fastest option on Wormhole and Blackhole.
-    //
-    // UnpackToDest should be used (on Wormhole and Blackhole) only if:
-    //  - The data format has 32-bit precision, AND enable_32_bit_dest is set to true
-    //  - You want to preserve the full precision
-    //  - The data will be consumed by the SFPU (not the FPU)
-    //
-    // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
-    // However, if enable_32_bit_dest is true and the DFB carries a 32-bit format, you must
-    // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
-    //
-    ComputeUnpackModes unpack_modes;
-};
-
-// Compute configuration for Gen2 architectures:
-//  - Quasar (TT-2.0.0)
-//  - Quasar derivatives (TT-2.0.x)
-struct ComputeGen2Config {
-    ////////////////////////////////////////////////
-    // General accuracy / performance tradeoffs
-    ////////////////////////////////////////////////
-
-    // See ComputeGen1Config for details on fpu_math_fidelity
-    MathFidelity fpu_math_fidelity = MathFidelity::HiFi4;
-
-    // See ComputeGen1Config for details on sfpu_precision_mode
-    Precision sfpu_precision_mode = Precision::Precise;
-
-    // Note: Gen2 architectures replace BFP data formats with MXFP formats;
-    //       the bfp_pack_precision_mode setting is not relevant for Gen2.
-
-    /////////////////////////////////////
-    // Dest register file configuration
-    /////////////////////////////////////
-
-    // See ComputeGen1Config for details on enable_32_bit_dest
-    bool enable_32_bit_dest = false;
-
-    // See ComputeGen1Config for details on double_buffer_dest
-    bool double_buffer_dest = true;
-
-    // See ComputeGen1Config for details on unpack_modes
-    //
-    // NOTE: On Gen2 architectures, there is NO performance penalty for unpacking directly to
-    //       Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
-    ComputeUnpackModes unpack_modes;
-
     ///////////////////////////////////////////
-    // Temporary configs (these will change!)
+    // Generation-specific settings
     ///////////////////////////////////////////
 
-    // When true, the unpacker packs two values into each source-register slot instead of one.
-    // The math engine reads twice as many elements per pass, effectively doubling throughput.
-    //
-    // This is currently ONLY supported for Mxfp4 data format. The setting is ignored for all
-    // other formats.
-    //
-    // WARNING: Only the matmul family of instructions work with this format:
-    //  - matmul (MVMUL/MVMULDI)
-    //  - the GAPOOL instruction that column reduce ops are built on
-    //
-    // Invoking other instructions on Mxfp4 data with the setting enabled will produce garbage
-    // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
-    // a matmul or a column reduce.
-    //
-    // This API is not final and subject to change!
-    // It should most likely become a per-DFB setting, similar to unpack_modes.
-    bool enable_2x_src_register = false;
-
-    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // Only the block matching the target architecture is applied; the other is ignored.
+    // Both may be left default — a kernel needing no generation-specific settings runs on
+    // either generation as-is.
+    ComputeGen1Config gen1;
+    ComputeGen2Config gen2;
 };
-
-// A compute kernel's hardware config holds exactly one generation's config.
-using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>;
-
-// ----------------------------------------------------------------------------
-//  Common-field accessors
-// ----------------------------------------------------------------------------
-//
-// Many compute settings are common to Gen1 and Gen2 architectures.
-//
-// Reaching a common field through the variant is syntactically awkward; you should not need
-// to know which alternative is held. For convenience, each common field is given an accessor
-// helper function here. (Generation-specific fields are not given accessors.)
-//
-// Each field has a mutable and a const accessor.
-//
-// The mutable accessor returns a reference, so you can assign through it:
-//
-//     enable_32_bit_dest(compute_hw) = true;
-//
-// or bind it and use it multiple times:
-//
-//     auto& dfb_unpack_modes = unpack_modes(compute_hw);
-//     dfb_unpack_modes.emplace(dfb1, UnpackMode::UnpackToDest);
-//     dfb_unpack_modes.emplace(dfb2, UnpackMode::UnpackToSrc);
-//
-// The const accessor returns the scalar fields by value, and unpack_modes (a container) by
-// const reference.
-//
-// For common fields, prefer this syntax over e.g. std::get<ComputeGen1Config>(config).field,
-// which throws if the wrong architecture is targeted.
-
-inline MathFidelity& fpu_math_fidelity(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> MathFidelity& { return cfg.fpu_math_fidelity; }, config);
-}
-
-inline MathFidelity fpu_math_fidelity(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> MathFidelity { return cfg.fpu_math_fidelity; }, config);
-}
-
-inline Precision& sfpu_precision_mode(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> Precision& { return cfg.sfpu_precision_mode; }, config);
-}
-
-inline Precision sfpu_precision_mode(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> Precision { return cfg.sfpu_precision_mode; }, config);
-}
-
-inline bool& enable_32_bit_dest(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> bool& { return cfg.enable_32_bit_dest; }, config);
-}
-
-inline bool enable_32_bit_dest(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> bool { return cfg.enable_32_bit_dest; }, config);
-}
-
-inline bool& double_buffer_dest(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> bool& { return cfg.double_buffer_dest; }, config);
-}
-
-inline bool double_buffer_dest(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> bool { return cfg.double_buffer_dest; }, config);
-}
-
-inline ComputeUnpackModes& unpack_modes(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> ComputeUnpackModes& { return cfg.unpack_modes; }, config);
-}
-
-inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> const ComputeUnpackModes& { return cfg.unpack_modes; }, config);
-}
-
-// Delete the rvalue overload of unpack_modes to prevent dangling references
-// (The mutable accessors can't bind a temporary, and the const scalars return by value,
-// so only this one needs it.)
-inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig&&) = delete;
 
 }  // namespace tt::tt_metal::experimental

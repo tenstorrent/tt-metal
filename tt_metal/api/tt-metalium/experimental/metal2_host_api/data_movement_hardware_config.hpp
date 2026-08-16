@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include <variant>
-#include <vector>
-
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
@@ -23,20 +20,31 @@ namespace tt::tt_metal::experimental {
 //  - Gen1 architectures (Wormhole, Blackhole) and
 //  - Gen2 architectures (Quasar and derivatives).
 //
-// The DataMovementHardwareConfig is therefore generation-specific.
-// You must provide the variant that matches your kernel's target architecture.
+// The two generations control genuinely different hardware — Gen1 selects a RISC-V core and a
+// NOC, Gen2 has a unified NOC and automated core selection — so, unlike ComputeHardwareConfig,
+// there are no generation-independent DM settings to share. The configuration is entirely
+// contained in the two generation-specific blocks below.
+//
+// A config may populate both blocks; the block matching the target architecture is applied and
+// the other is ignored. Populating both is how one KernelSpec serves both generations:
+//
+//     DataMovementHardwareConfig{
+//         .gen1 = CreateReaderGen1DataMovementConfig(),
+//         .gen2 = {.disable_dfb_implicit_sync_for_all = true},
+//     }
 //
 // ============================================================================
 
-// The Gen1 data movement hardware config specifies which RISC-V core and which
-// NOC a kernel uses. This selection is performance-critical.
+// The Gen1 data movement config specifies which RISC-V core and which NOC a kernel uses.
+// This selection is performance-critical, and it is required when targeting Gen1: the two DM
+// kernels on a node must occupy different RISC-V cores, so there is no default that is right
+// for both. Note that neither field carries a default for that reason.
 //
 // The common case is handled for you by role-specific factory functions:
 //  - For a DM kernel that reads from DRAM: CreateReaderGen1DataMovementConfig()
 //  - For a DM kernel that writes to DRAM:  CreateWriterGen1DataMovementConfig()
 //
-// Power users can override these conventions by constructing a
-// DataMovementGen1Config directly.
+// Power users can override these conventions by populating the struct directly.
 //
 struct DataMovementGen1Config {
     // The RISC-V core that runs this DM kernel (RISCV_0 or RISCV_1)
@@ -54,7 +62,7 @@ struct DataMovementGen1Config {
 };
 
 // Factory helper:
-// Default config for a reader DM kernel (i.e. that reads from DRAM)
+// Default Gen1 placement for a reader DM kernel (i.e. that reads from DRAM)
 inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         // On Wormhole, RISCV_1 runs faster than RISCV_0 due to its dedicated
@@ -84,7 +92,7 @@ inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
 }
 
 // Factory helper:
-// Default config for a writer DM kernel (i.e. that writes to DRAM)
+// Default Gen1 placement for a writer DM kernel (i.e. that writes to DRAM)
 inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         // DM kernels on the same node must be assigned to different RISC-V cores.
@@ -103,7 +111,8 @@ inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
 
 // Gen2 architectures have a unified NOC and fully automated DM kernel core selection.
 // The DataMovementGen2Config controls whether the DFB implicit sync feature for DM
-// kernels is enabled or disabled.
+// kernels is enabled or disabled. Its defaults are the ordinary configuration, so a
+// kernel needing no opt-outs can leave this block alone.
 //
 struct DataMovementGen2Config {
     // Opt-out of DFB implicit sync (on a per-DFB basis)
@@ -118,7 +127,18 @@ struct DataMovementGen2Config {
     bool disable_dfb_implicit_sync_for_all = false;
 };
 
-// A DM kernel's hardware config holds exactly one generation's config.
-using DataMovementHardwareConfig = std::variant<DataMovementGen1Config, DataMovementGen2Config>;
+struct DataMovementHardwareConfig {
+    // There are no generation-independent DM settings; see the note above.
+
+    ///////////////////////////////////////////
+    // Generation-specific settings
+    ///////////////////////////////////////////
+
+    // Only the block matching the target architecture is applied; the other is ignored.
+    // The Gen1 block is required when targeting Gen1 (its processor / noc fields have no
+    // defaults). The Gen2 block may be left default.
+    DataMovementGen1Config gen1;
+    DataMovementGen2Config gen2;
+};
 
 }  // namespace tt::tt_metal::experimental
