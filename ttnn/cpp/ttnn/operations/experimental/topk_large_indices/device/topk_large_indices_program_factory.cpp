@@ -257,6 +257,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     if (return_values) {
         compute_compile_args.push_back(cb_values);
     }
+    // User-requested k (<= llk_k): the data-dependent chunk-skip early-out in
+    // the row-parallel compute kernels thresholds against the running k-th
+    // survivor (not the llk_k-th), which is what makes skipping profitable at
+    // small k. attrs.k is already part of the program hash.
+    compute_compile_args.push_back(k);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         return_values

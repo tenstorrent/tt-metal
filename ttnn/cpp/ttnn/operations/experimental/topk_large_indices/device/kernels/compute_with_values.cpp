@@ -27,6 +27,43 @@
 #include "api/dataflow/circular_buffer.h"
 
 #include "topk_large_indices_compute_common.hpp"
+#include "topk_large_indices_chunk_skip.hpp"
+
+// Data-dependent chunk-skip early-out (row-parallel path only; see
+// topk_large_indices_chunk_skip.hpp for design + soundness proof). One-line
+// A/B toggle; keep in lockstep with compute.cpp's kChunkSkipEnable.
+constexpr bool kChunkSkipEnable = true;
+
+namespace {
+
+// Copy-only half of topk_large_indices::process_chunk (kept local: the shared
+// common header also feeds the column-parallel tree kernels, which must stay
+// untouched by chunk-skip work).
+template <uint32_t K>
+FORCE_INLINE void copy_chunk_only(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements) {
+    constexpr uint32_t tiles = (K + topk_large_indices::elements_per_tile - 1) / topk_large_indices::elements_per_tile;
+    const uint32_t input_cb_id = input_cb.get_cb_id();
+    input_cb.wait_front(tiles);
+    topk_xl_copy_tile_init(input_cb_id);
+    topk_xl_copy_tile<K>(input_cb_id, dst_base, 0, active_elements);
+    input_cb.pop_front(tiles);
+}
+
+// Sort/split half of topk_large_indices::process_chunk.
+template <uint32_t K>
+FORCE_INLINE void finish_chunk_only(uint32_t dst_base, bool ascending) {
+    topk_xl_add_lsb_indices_init();
+    topk_xl_add_lsb_indices<K, 0>(dst_base);
+
+    topk_xl_init<K, true>();
+    topk_xl_local_sort<K>(dst_base, ascending);
+
+    topk_xl_separate_indices_row_major_reinit();
+    topk_xl_separate_indices_row_major<K>(dst_base);
+    topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+}
+
+}  // namespace
 
 void kernel_main() {
     using namespace topk_large_indices;
@@ -39,6 +76,7 @@ void kernel_main() {
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t values_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t USER_K = get_compile_time_arg_val(4);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
@@ -46,7 +84,12 @@ void kernel_main() {
     constexpr uint32_t slot0 = 0;
     constexpr uint32_t slot1 = sequence_tiles;
 
+    namespace skip = topk_large_indices_chunk_skip;
+
     compute_kernel_hw_startup(input_cb, indices_cb);
+    if constexpr (kChunkSkipEnable) {
+        skip::chunk_skip_configure();
+    }
 
     CircularBuffer input_cb_obj(input_cb);
     CircularBuffer indices_cb_obj(indices_cb);
@@ -67,7 +110,16 @@ void kernel_main() {
 
         for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
             const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
-            process_chunk<K>(input_cb_obj, slot1, active_elements, true);
+            copy_chunk_only<K>(input_cb_obj, slot1, active_elements);
+
+            if constexpr (kChunkSkipEnable) {
+                if (chunk >= skip::first_tested_chunk<USER_K>() && skip::chunk_skip_decide<K, USER_K>(slot1)) {
+                    topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+                    continue;
+                }
+            }
+
+            finish_chunk_only<K>(slot1, true);
 
             topk_xl_init<K, false>();
             topk_xl_merge<K, false>(slot0);
