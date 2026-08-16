@@ -531,6 +531,10 @@ def cmd_optimize(args) -> int:
 
     if _os.environ.get("PERF_MCP_SUPERVISED") != "1" and _os.environ.get("PERF_MCP_SUPERVISE", "1") == "1":
         _max = int(_os.environ.get("PERF_MCP_MAX_RESTARTS", "3") or "3")
+        # How often the attempt's tree is re-snapshotted. It is the only record of a grandchild once
+        # the root exits, so it bounds how stale the kill list can be; a /proc scan costs microseconds
+        # against a run measured in hours.
+        _REAP_POLL_S = float(_os.environ.get("PERF_MCP_SUPERVISOR_REAP_POLL_S", "10"))
         # Imported from the ONE definition rather than restated: a second literal here that drifted
         # from run.py's would turn every refusal back into three device resets, silently.
         try:
@@ -538,11 +542,79 @@ def cmd_optimize(args) -> int:
         except Exception:  # noqa: BLE001 -- a supervisor that cannot import must still supervise
             _EXIT_REFUSED = 3
         _ttsmi = _sh.which("tt-smi")
+
+        # THE ATTEMPT IS NOT OVER WHEN MY CHILD EXITS.
+        #
+        # This was `_sp.run(...)`, and its return was taken as the attempt ending. It is not: the run
+        # spawns workers with start_new_session=True (run.py, perf_test_agent.py) so their groups can
+        # be killed independently, and that same flag means they SURVIVE their parent -- reparented
+        # to init, in their own sessions, invisible to a group kill. _reclaim_device does not see
+        # them either; it kills device HOLDERS, and a worker between device operations holds nothing.
+        #
+        # Measured 2026-08-16: attempt 1 gave up on perf-test generation (rc=1), and its orchestrator,
+        # a detached subprocess and a perf-test agent were still running 77, 70 and 37 minutes later.
+        # The supervisor launched attempt 2 into the same board. Two runs driving one board took the
+        # ARC cores down -- `tt-smi -r` then failed with "ARC core (8, 0) failed to start" until the
+        # tree was killed by hand, after which the identical reset succeeded first try.
+        #
+        # So the tree is snapshotted WHILE it lives (once the root exits the PPID links are gone for
+        # good) and reaped before anything else happens. The tool already had three tree-killers --
+        # cli.py:_kill_process_tree, cc_harness.py:_kill_agent_tree, probes.py:_kill_tree -- and this
+        # path used none of them.
+        try:
+            from models.experimental.perf_automation.agent.probes import _descendant_pids as _desc, _kill_tree as _reap
+        except Exception:  # noqa: BLE001 -- supervising without a reaper beats not supervising
+            _desc, _reap = (lambda _p: []), (lambda _p, extra=(): None)
+
+        def _alive(pid):
+            try:
+                _os.kill(int(pid), 0)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+
+        def _run_attempt(_argv, _env):
+            """Run one attempt, tracking its whole tree, and reap whatever outlives it."""
+            _p = _sp.Popen(_argv, env=_env)
+            _tree: set = set()
+            while True:
+                try:
+                    _p.wait(timeout=_REAP_POLL_S)
+                    break
+                except _sp.TimeoutExpired:
+                    _tree.update(_desc(_p.pid))
+            _tree.update(_desc(_p.pid))
+            _left = [q for q in _tree if _alive(q)]
+            if _left:
+                # REPORTED, NOT SILENT. A leaked tree is the difference between "the run crashed" and
+                # "the run is still going and about to be raced", and the operator cannot see it.
+                print(
+                    "  [optimize/supervisor] the attempt left %d process(es) running after exiting "
+                    "(%s) -- killing them before going on" % (len(_left), ", ".join(str(q) for q in sorted(_left)[:8])),
+                    flush=True,
+                )
+                _reap(_p.pid, extra=_left)
+                _t.sleep(2)
+                _still = [q for q in _left if _alive(q)]
+                if _still:
+                    # A process SIGKILL cannot clear is in D-state on the device. Starting another
+                    # attempt now is what broke the board; say so and stop instead.
+                    print(
+                        "  [optimize/supervisor] %d process(es) survived SIGKILL (%s) -- refusing to "
+                        "start another attempt on a board they may still be holding."
+                        % (len(_still), ", ".join(str(q) for q in sorted(_still)[:8])),
+                        flush=True,
+                    )
+                    return _p.returncode, _still
+            return _p.returncode, []
+
         for _n in range(_max + 1):
-            _rc = _sp.run(
+            _rc, _stuck = _run_attempt(
                 [_sys.executable, "-m", "scripts.tt_hw_planner", *_sys.argv[1:]],
-                env={**_os.environ, "PERF_MCP_SUPERVISED": "1"},
-            ).returncode
+                {**_os.environ, "PERF_MCP_SUPERVISED": "1"},
+            )
+            if _stuck:
+                return _rc or 1
             if _rc != 0:
                 _dok, _dlow, _ = _disk_gate()
                 if not _dok:
@@ -566,8 +638,12 @@ def cmd_optimize(args) -> int:
                     print(f"  [optimize/supervisor] child exited rc={_rc}; {_max} restart(s) exhausted.", flush=True)
                 return _rc
             print(
-                f"  [optimize/supervisor] orchestrator exited rc={_rc} (likely native crash / device wedge) "
-                f"-- resetting device + restarting (restart {_n + 1}/{_max}); ladder state is preserved on disk.",
+                # "likely native crash / device wedge" was printed for EVERY non-zero rc, including a
+                # perf-test generation failure that never touched the device. A fixed string is not a
+                # diagnosis, and it sent three separate investigations to the wrong subsystem. State
+                # the code; the reason is in the child's own output above.
+                f"  [optimize/supervisor] orchestrator exited rc={_rc} -- resetting device + restarting "
+                f"(restart {_n + 1}/{_max}); the reason is in the output above. Ladder state is preserved on disk.",
                 flush=True,
             )
             try:

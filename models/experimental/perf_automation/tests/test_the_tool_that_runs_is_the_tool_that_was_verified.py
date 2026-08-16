@@ -177,10 +177,17 @@ def test_r5_a_refusal_exits_with_its_own_code():
 
 
 def test_r5_the_supervisor_does_not_restart_a_refusal():
+    """Anchored on the BRANCH, not on the first mention of the name.
+
+    It used to slice a 2000-character window from `sup.index("_EXIT_REFUSED")` -- which lands on the
+    IMPORT, not on the test. Any code added between the import and the loop pushed the branch out of
+    the window and failed a test whose subject had not changed (the tree-reaping supervisor did
+    exactly that). A window measured in characters is a guess about layout; the branch is the thing.
+    """
     sup = (_PA.parent.parent.parent / "scripts/tt_hw_planner/commands/optimize.py").read_text()
-    i = sup.index("_EXIT_REFUSED")
-    body = sup[i : i + 2000]
-    assert "return _rc" in body
+    i = sup.index("if _rc == _EXIT_REFUSED:")
+    body = sup[i : i + 700]
+    assert "return _rc" in body, "a refusal no longer returns; it would be restarted"
     assert "not a crash" in body.lower() or "Not restarting" in body
 
 

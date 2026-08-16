@@ -606,14 +606,35 @@ def _reap_process_group(pgid) -> list:
     return victims
 
 
-def _kill_tree(root_pid: int) -> None:
+def _kill_tree(root_pid: int, extra=()) -> None:
+    """SIGKILL root_pid, every descendant still traceable from it, and every process group involved.
+
+    `extra` IS THE HALF THE /proc WALK CANNOT DO. _descendant_pids reads PPIDs, so it only sees a
+    tree whose ancestors are still alive: the moment root_pid exits, its children are reparented to
+    init and the link is gone for good. A caller that waits for a process to finish on its OWN --
+    rather than killing it -- therefore has nothing left to walk, and its grandchildren survive.
+    Snapshot them WHILE the root lives and pass them here.
+
+    Observed 2026-08-16: a perf-test agent (`claude -p ...`) and its parent outlived the run that
+    spawned them by 37 and 70 minutes, in their own sessions, holding no device -- invisible to both
+    the process-group kill and the device-holder reclaim. A second optimize attempt then started
+    alongside the first, and two runs driving one board took its ARC cores down.
+    """
     import signal
 
-    pids = _descendant_pids(root_pid) + [root_pid]
+    # NEVER OURSELVES. The walk could only ever reach our descendants, so this was safe by
+    # construction; `extra` is a caller-supplied list and is not. A snapshot pid whose group happens
+    # to be ours would take out the run doing the reaping.
+    _self, _selfpg = os.getpid(), os.getpgid(0)
+    pids = [
+        p for p in (_descendant_pids(root_pid) + [root_pid] + [int(x) for x in (extra or ())]) if p != _self and p > 0
+    ]
     pgids = set()
     for pid in pids:
         try:
-            pgids.add(os.getpgid(pid))
+            _pg = os.getpgid(pid)
+            if _pg != _selfpg:
+                pgids.add(_pg)
         except (ProcessLookupError, PermissionError, OSError):
             pass
     for pid in pids:

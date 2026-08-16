@@ -109,6 +109,11 @@ def _run_and_format(node_abs: str, state: dict | None = None) -> str:
 
 _PERF_TEST_MCP_REL = "models/experimental/perf_automation/cc_optimize/perf_test_mcp.py"
 _PERF_RUN_TOOL = "mcp__perftest-mcp__run_perf_test"
+# How often the agent's descendant tree is re-snapshotted while it runs. The snapshot is the ONLY
+# record of a grandchild once the agent exits -- /proc PPID links die with the parent -- so this is
+# the resolution at which a leaked worker can still be named. A /proc scan is microseconds; the agent
+# runs for minutes.
+_AGENT_REAP_POLL_S = float(os.environ.get("PERF_MCP_AGENT_REAP_POLL_S", "5"))
 
 
 def _repo_root() -> Path:
@@ -138,10 +143,10 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     default model). The one device tool (run_perf_test) is exposed out-of-process via --mcp-config to
     perf_test_mcp.py; success is signalled back through a status file the server updates each run."""
     import json as _json
-    import signal
     import subprocess
     import subprocess as _sp
     import tempfile
+    import time
 
     root = Path(root)
     node_abs = f"{root / out_rel}::test_{task}_perf"
@@ -236,29 +241,62 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     except OSError:
         _lf = subprocess.DEVNULL
     proc = subprocess.Popen(cmd, cwd=str(root), env=env, start_new_session=True, stdout=_lf, stderr=subprocess.STDOUT)
+    # THE TREE OUTLIVES THE AGENT, AND ONLY A LIVE ROOT CAN BE WALKED.
+    #
+    # This waited for the agent and killed its process GROUP on timeout. Both halves leaked. The
+    # claude CLI spawns workers in their own sessions, so the group kill never reached them; and the
+    # kill only ran on TimeoutExpired, so an agent that finished on its own -- exhausted --max-turns,
+    # returned a verdict -- left everything it had spawned running, with nothing to kill it.
+    #
+    # Measured 2026-08-16: the agent and its parent were still alive 37 and 70 minutes after the run
+    # gave up. They sat in their own sessions holding no device, so neither the group kill nor
+    # _reclaim_device's device-holder sweep could see them, and the supervisor -- which treats its
+    # own child exiting as the attempt being over -- started a second optimize run on the same board.
+    # Two runs driving one board took the ARC cores down; `tt-smi -r` then failed with "ARC core
+    # (8, 0) failed to start" until the tree was killed by hand, after which the same reset worked.
+    #
+    # So: snapshot the descendants WHILE the root is alive (once it exits they are reparented to init
+    # and unreachable), and reap on EVERY exit, exactly as _run_device_proc already does for its own
+    # subprocess -- "Reap any lingering group member on EVERY exit".
+    _seen: set = set()
+    _timed_out = False
     try:
-        proc.communicate(timeout=overall_timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:  # noqa: BLE001
-            proc.kill()
-        try:
-            proc.wait(timeout=30)
-        except Exception:  # noqa: BLE001
-            pass
+        from .probes import _descendant_pids as _desc, _kill_tree as _reap
+    except Exception:  # noqa: BLE001 -- reaping is best-effort; never fail the build over it
+        _desc, _reap = (lambda _p: []), (lambda _p, extra=(): None)
+    try:
+        _deadline = time.monotonic() + float(overall_timeout or 0)
+        while True:
+            try:
+                proc.wait(timeout=_AGENT_REAP_POLL_S)
+                break
+            except subprocess.TimeoutExpired:
+                _seen.update(_desc(proc.pid))
+                if overall_timeout and time.monotonic() >= _deadline:
+                    _timed_out = True
+                    break
     except Exception:  # noqa: BLE001
         pass
     finally:
-        if _lf not in (None, subprocess.DEVNULL):
+        _seen.update(_desc(proc.pid))
+        try:
+            _reap(proc.pid, extra=_seen)
+        except Exception:  # noqa: BLE001
+            pass
+        if _timed_out:
             try:
-                _lf.close()
+                proc.wait(timeout=30)
             except Exception:  # noqa: BLE001
                 pass
+    if _lf not in (None, subprocess.DEVNULL):
         try:
-            cfg_path.unlink()
-        except OSError:
+            _lf.close()
+        except Exception:  # noqa: BLE001
             pass
+    try:
+        cfg_path.unlink()
+    except OSError:
+        pass
 
     try:
         passed = bool(_json.loads(Path(status_path).read_text()).get("passed"))
