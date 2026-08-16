@@ -165,11 +165,34 @@ Two final post-validation review attempts used the required Opus command and tim
 earlier explicit API-v11 architecture decision and the completed mandatory build, correctness, fresh-JIT,
 LOC, host/helper, and matched-performance gates; no helper API expansion was made.
 
+### C9 — Tier 2.11 plain sharded LayerNorm
+
+The initial architecture consultation and the focused non-rectangular-grid follow-up both used the
+required Opus command and timed out after 180 seconds without a verdict. Neither silence was treated as
+approval. The plan-prescribed API-v11 composition was implemented experimentally: one handshaked Flag
+pipe carried the readiness phase and one non-handshaked Counter pipe carried repeated final-stat blocks.
+No helper API expansion was made.
+
+The first full-suite attempt exposed a migration bug on the `1_line_plus_1` ragged grid: the helper's
+dense `Mcast2D` default waited for ACKs from bounding-box holes whose `IDLE_CORE` readers return without
+acking. The corrected host composition passes the legacy operation wait count explicitly
+(`grid.num_blocks - 1`) while retaining the dense multicast rectangle. Release build, all 36 host
+multicast tests, the exact formerly hanging `--dev` parametrization, 280 sharded LayerNorm cases, 190
+pre/post-allgather guards, and 80 helper-device cases passed.
+
+The matched-performance gate nevertheless failed for the single-stage case: migrated median 7,904 ns
+versus raw 7,742.5 ns (+2.086%, above the +2.0% ceiling). The two-stage case passed at 44,687.5 ns versus
+44,636.5 ns (+0.114%). The narrow single-stage delta is consistent with the stronger completion required
+by API-v11's monotone Counter (`inc_multicast` plus atomic-ack drain) compared with the legacy value flag.
+A final focused defer-versus-change consultation returned no output. Per the approved plan, the unit was
+deferred and all Tier 2.11 production/test changes were reverted; no gate was waived and no API change
+was attempted.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 21 migrated, 2 pending, 81 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 23 migrated, 2 pending, 79 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
@@ -177,6 +200,7 @@ LOC, host/helper, and matched-performance gates; no helper API expansion was mad
 | Tier 2.8 group-attention Matmul | complete | API v11 at `6e8eb763885`; exact/full correctness, fresh JIT, barrier proof, and both matched performance gates passed |
 | Tier 2.9 Conv3D weight sharing | complete | API v11 at `a290ce20281`; exact/full correctness, fresh JIT, helper guards, and both matched performance gates passed |
 | Tier 2.10 Sharded LayerNorm post-allgather | complete | API v11 at `6cc49825476`; exact/full correctness, ABI guards, fresh JIT, host topology, and both matched performance gates passed |
+| Tier 2.11 Plain sharded LayerNorm | deferred-performance | Correctness passed, but single-stage matched performance regressed +2.086%; experimental changes reverted |
 
 ## Chronological findings
 
@@ -292,3 +316,26 @@ LOC, host/helper, and matched-performance gates; no helper API expansion was mad
     stats must be sharded on one core, but multiple sender lines each require stats, so only the first
     line has valid input. This is recorded as an operation coverage limit, not a helper API gap; the
     outside-sender wire is covered by the host fixture.
+30. Tier 2.11 raw matched-performance baselines at 800 MHz used three independent 25-operation sessions,
+    discarding the first five samples. The single-stage legacy median-of-run-medians is 7,742.5 ns; the
+    two-stage Welford median is 44,636.5 ns.
+31. The experimental plain sharded LayerNorm migration composed two existing API-v11 channels: a
+    handshaked Flag readiness pipe over the existing sender/receiver semaphores and a reset-free,
+    non-handshaked Counter data pipe for each final-stat block. Remote reads and the second-stage
+    semaphore remained operation-owned. The host build passed, and a fresh-cache exact legacy node
+    passed with 0/29 JIT hits.
+32. The first complete sharded-LayerNorm run found a deterministic hang on the ragged
+    `1_line_plus_1` grid. The dense multicast rectangle contains inactive landed cores whose reader
+    kernels use `IDLE_CORE` and do not ACK, whereas the legacy sender waited only `grid.num_blocks - 1`.
+    Passing that existing operation count to `Mcast2D` fixed the mismatch without changing the helper
+    API or multicast footprint. The exact node passed under Watcher after a device reset, all 36
+    multicast host tests passed, and every touched production file satisfied additions < deletions.
+33. Tier 2.11 broad validation passed before the performance decision: 280/280 complete sharded
+    LayerNorm, 190 passed plus 10 documented xfails in the distributed pre/post guard inventory, and
+    80/80 helper-device cases. Three migrated 25-operation Tracy sessions per shape discarded the first
+    five samples. The two-stage median-of-run-medians was 44,687.5 ns versus 44,636.5 ns raw (+0.114%),
+    but single-stage was 7,904 ns versus 7,742.5 ns raw (+2.086%), outside the mandatory +2.0% gate.
+    API-v11's Counter pipe cannot drop its multicast-atomic acknowledgement drain, and repeated Flag
+    signaling would weaken the monotone protocol. A focused Claude consultation returned no verdict;
+    the approved plan independently requires deferral on any failed gate. The entire Tier 2.11 source
+    experiment and temporary profiler shim were reverted, leaving the ledger unchanged at API v11.
