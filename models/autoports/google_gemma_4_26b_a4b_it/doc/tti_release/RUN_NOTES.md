@@ -1,6 +1,6 @@
 # Gemma 4 26B A4B IT — TTI release run notes
 
-Status: **Stage 11 release gate passed**. The definitive no-Docker `ci-nightly` release returned `rc=0`, with acceptance `PASS` and zero blockers.
+Status: **release workflow passed; Stage 11 readiness blocked**. The definitive no-Docker `ci-nightly` release returned `rc=0`, but independent review rejected the two mandatory `NA` accuracy comparisons.
 
 ## Evaluated implementation
 
@@ -31,7 +31,8 @@ Status: **Stage 11 release gate passed**. The definitive no-Docker `ci-nightly` 
 - TTI GPQA timeout repair: `82e52455`
 - TTI conformance repair: `61473555`
 - Definitive TTI measured-timeout repair: `daa1fe6f`
-- Final tt-metal artifact commit: pending
+- tt-metal artifact checkpoint: `a08f7ac8f33`
+- Final tt-metal notes/review commit: pending
 
 ## Commands and key environment
 
@@ -77,16 +78,16 @@ The embedded runtime spec—not command-line overrides alone—sets `docker_serv
 - The lm-eval API backend's implicit 256-token default truncated GPQA reasoning. Gemma GPQA now uses the locally canonical reasoning allowance `max_gen_toks=32768`; context remains 262144.
 - A fixed 1800-second lm-eval client timeout failed valid long requests. The final task-local timeout is 14400 seconds, derived from measured aggregate throughput and leaving the request unchanged.
 - Generic penalty conformance heuristics produced false negatives despite materially changed fixed-seed outputs. The repaired contract fails identical outputs and accepts actual content changes without requiring unrelated length or whitespace statistics.
-- `ci-nightly` evaluates a 5% accuracy subset. A full unrestricted sweep would scale the long reasoning workload materially and is not claimed here.
+- `ci-nightly` evaluates a 5% accuracy subset. From definitive measured task times, a linear full-set projection is IFEval `318 s * 541/28 = 6,144 s` (1.71 h) plus GPQA `12,773 s * 198/10 = 252,905 s` (70.25 h), or about **71.96 hours** serially before server startup, benchmark, conformance, and report overhead. GPQA's concurrent long-tail requests make this only an estimate. No machine-readable reservation deadline was exposed in the container, so a continuous three-day device hold could not be justified or guaranteed; unrestricted readiness is not claimed.
 
 ## Final result
 
-- Release readiness classification: **Stage 11 / nightly-equivalent PASS** (`EXPERIMENTAL` model status); unrestricted full-set readiness is not claimed.
+- Release readiness classification: **BLOCKED** (`release-workflow-pass/readiness-fail`).
 - `meta_ifeval`: score **82.62** (strict instruction-level accuracy **0.8372**; strict prompt-level accuracy **0.7857**), 5% CI-nightly sample.
 - `meta_gpqa_cot`: flexible-extract exact match **0.4000**, 5% CI-nightly sample.
 - Benchmark: **PASS**, 8/8 requests, 0 failures, decode throughput **26.55 tok/s**, mean TTFT **267.45 ms**, target 26 tok/s / 300 ms.
 - API/spec tests: **PASS**, 22/22 parameter cases plus logger-fork-safety; includes non-uniform seeding, penalties, stop, `n`, token limits, and logprobs.
-- Eval reference waiver: both accuracy rows are `NA` only because the custom autoport spec has no published/GPU reference score. The rows are present and nonzero, both mandatory tasks ran, and neither row failed. This Stage 11 handoff accepts the measured scores without inventing a reference baseline.
+- Accuracy blocker: both mandatory rows are present and nonzero, but remain `NA` because no comparable full-set GPU reference or exact-subset `ModeReferenceScore` exists. The official GPQA 82.3% lacks recipe equivalence, no official IFEval value exists, and current TT scores were not self-baselined. A valid unblock requires paired HF/GPU controls on the exact CI documents and harness settings, then a TTI eval/report rerun.
 - Final report: `TTI_RELEASE_REPORT.md`; structured result: `tti_release_report_data.json`; captured spec: `tti_runtime_model_spec.json`.
-- Stage review: pending
+- Stage review: **more-work-needed**; see `stage_review.md`. `$autofix` exhausted local code/spec/waiver mechanisms and found that new external GPU control evidence is required.
 - Cleanup/final hardware health: **PASS**. The TTI runner and autoport vLLM tmux sessions exited, no serving/engine process or container remains, `tt-smi -ls --local` reports all four P300C devices, and a post-run `ttnn.MeshShape(1, 4)` open/close passed. Transient workflow caches and raw sample dumps were removed after compact evidence was copied.
