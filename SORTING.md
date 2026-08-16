@@ -116,6 +116,91 @@ Two fabrication modes are worth naming, because they recur:
 
 ---
 
+## 0a-bis. THE FLOOR WAS NEVER HARDWARE — 4.175 -> 1.257 cyc/vector (3.32x)
+
+The single largest result of this work, and it invalidates the pessimistic half of
+everything above. **`unpack_to_dest` is not slow. The LLK's per-tile handshake is.**
+
+| path | format | cyc/vector | **B/cycle** |
+| :--- | :--- | ---: | ---: |
+| **raw UNPACR -> Dest** | Float32 | **1.004** | **127.5** |
+| raw UNPACR -> SrcA | Float32 | 1.001 | 127.8 |
+| raw UNPACR -> SrcA | Float16_b | 0.503 | 127.2 |
+| raw UNPACR -> SrcA | Bfp8_b | 0.285 | 119.2 |
+| **stock LLK -> Dest** | Float32 | **3.855** | **33.2** |
+
+**The Blackhole unpacker does 128 B/cycle, to Dest as well as SrcA, at every format
+width.** The three raw-SrcA points scale exactly with tile bytes, which independently
+proves the stream is doing real work. The factor of 4 was never in the hardware.
+
+**Where the missing 91 cycles/tile go.** `_llk_unpack_A_<..., unpack_to_dest>` wraps a
+4-`UNPACR` MOP in a full cross-thread lockstep **per tile**:
+- unpack side: blocking `mailbox_read(MathThreadId)` (`cunpack_common.h:1002`), `SEMWAIT`
+  on a **max-1** semaphore (`:974`), `STALLWAIT`, and four `cfg_reg_rmw_tensix`
+- math side: `math_unpack_to_dest_math_ready()` (`cmath_common.h:212-220`) — a
+  `WAIT_SFPU` **drain of every in-flight FPU and SFPU instruction**, then a **RISC-V spin
+  loop** `while (semaphore_read(MATH_DONE) == 0) {}`, then `mailbox_write`, then 4x `ZEROACC`
+
+`123.4 - 32.1 = 91.3 cycles/tile of pure handshake — 74% of the measured "floor".`
+
+### Dest concurrency is a same-region dependency, NOT a structural port limit
+
+This corrects the central claim of the end-to-end section above.
+
+| arm | unpack cyc/vec | math cyc/vec | verdict |
+| :--- | ---: | ---: | :--- |
+| raw Dest (solo) | 1.004 | — | |
+| SFPU only (solo) | — | 1.320 | |
+| **raw + SFPU, DISJOINT Dest tiles** | **1.000** | **1.317** | **`max()` — full concurrency** |
+| raw + SFPU, same Dest tiles | 2.348 | 1.443 | ~ sum — serialised |
+
+**The SFPU and the unpacker overlap perfectly when they touch different Dest rows.** They
+serialise on the same rows, and they serialise on the *stock* path at any rows because
+`math_unpack_to_dest_math_ready()` drains the SFPU before every tile. Supporting evidence:
+`Dst.md` documents no banking, no port count and no unpacker/math conflict model;
+`STALLWAIT`'s 13 condition bits include SrcA/SrcB `AllowedClient` interlocks but **nothing
+for Dst**; and `DstSync::SyncHalf` is not an ISA concept at all — it is a row offset plus
+the `MATH_PACK` semaphore, i.e. address partitioning, exactly the mechanism that works here.
+
+### End to end
+
+| arm | L1_TO_L1 cyc/vector |
+| :--- | ---: |
+| stock LLK unpack + pack | 3.855 (UNPACK_ISOLATE; matches the 4.175 synchronised figure) |
+| raw unpack + pack, **same** Dest region | 2.456 (~ sum) |
+| **raw unpack + pack, SPLIT Dest region** | **1.257** (= `max`) |
+
+**3.32x on the streaming pass.** Re-costing the cascade at N=32768, K=32: streaming drops
+4542 -> **1367 cycles**, total ~6509 -> **~3334 (1.95x end-to-end)**, and the residual
+becomes entirely the non-streaming tail.
+
+**Second-order consequence worth stating plainly: the packer-resident filter's advantage
+collapses from 1.26 cyc/vector to 0.06 once the SFPU can hide under the packer.** It still
+wins, but it is now a 5% edge rather than the whole design. Composed from measured
+isolates, an SFPU filter on 3 disjoint Dest regions is `max(1.004, 1.320, 1.258) = 1.320`.
+
+**Packer L1-to-L1 exists on BH but is a dead end.**
+`THCON_SEC0_REG1_Source_interface_selection` and `_L1_source_addr` are present
+(`blackhole/cfg_defines.h:3174,3210`), packer 0 only. But it is one 128-bit read + one
+128-bit write per cycle = **16 B/cycle** = 8 cyc/vector — 3-6x worse than the measured
+1.257, because it funnels through one packer's single L1 read port instead of the
+unpacker's 128 B/cycle. It also loses format conversion. Analysed, not measured; the gap
+was too large to be worth device time.
+
+**Keeping cascade pass 2 resident in Dest is not worth doing.** The survivors fit, but
+re-streaming them costs 64 of ~3334 cycles (1.9%), and staying in Dest forfeits the
+packer-resident filter whose whole mechanism is compaction on the way out. There is also
+no alternative path back in: `MatrixUnit.md:39-46` shows **Unpacker 0 is the only unit that
+writes Dst from L1**; the Mover is L1-to-L1 only and cannot touch Dst; the NoC has no Dst
+port; ThCon reaches SrcA/SrcB at ~5.3 B/cycle and there is no `STOREIND (Dst)`.
+
+**Two changes get you the floor:** delete the per-tile unpack-to-dest mailbox lockstep in
+favour of a per-block ping-pong, and partition Dest so unpacker, SFPU and packer never
+touch the same rows in the same window. Caveat: the raw arms carry no producer/consumer
+handshake; the stock SrcA-path bracket costs 7.6 cyc/tile, so a per-4-tile-block semaphore
+should land the realistic floor at **~1.26-1.5 cyc/vector**. The 4 `ZEROACC`/tile are still
+needed for correctness and fit in the SFPU budget.
+
 ## 0b. Architectural Discoveries
 
 Everything in this section was established on Blackhole silicon during this work and is
