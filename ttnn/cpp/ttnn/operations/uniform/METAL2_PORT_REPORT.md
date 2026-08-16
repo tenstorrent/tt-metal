@@ -9,6 +9,8 @@ baseline passes **101/101** (see [Verification](#verification)).
 ## Provenance
 
 - **Recipe docs (this port):** `0a67b260fee 2026-08-16 docs(metal_2.0): four small fixes from the cold audit runs`
+  — that commit is on the recipe branch (`akertesz/op-porting-recipe`), not on this one; `git show` it from
+  there. This branch's own recipe docs are two commits older (`086a669ff5e`, the line the audit ran against).
 - **Audit docs (inherited):** `086a669ff5e 2026-08-15 docs(metal_2.0): two porter-facing gaps a blind cold read turned up`
 
 ## TTNN ProgramFactory
@@ -155,6 +157,21 @@ instruction to check this.
   and it is implicit in the two side-by-side signatures rather than called out. One sentence — *"the `Program&`
   parameter goes away; the method describes rather than mutates"* — would land it faster.
 
+- **Nothing tells a porter whether their green test run actually exercised the spec validator.** On stock `main`
+  TTNN's `validate_program_args` knob defaults to *off*, so `MakeProgramFromSpec` / `SetProgramRunArgs` /
+  `UpdateProgramRunArgs` skip validation on the path that builds and patches the Program — a TTNN bug with a fix
+  in flight. A port verified there gets a green that never ran a single legality check, and **nothing in the
+  output distinguishes that from a genuinely-validated green.** This port hit it: two full green runs before
+  landing on a branch carrying `60a2079477d`, which forces the checks on. The re-run was green too, so nothing
+  was hiding — but that was luck, not verification.
+  [Verification](#verification) has the detail. Until the TTNN fix lands, the
+  [Run tests](../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#run-tests)
+  section should tell porters to confirm validation is live before trusting a pass — the section's own
+  custom-hash failure mode is undetectable otherwise, and so is every spec-validator rule the
+  [Construct](../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#construct-paired-spec--run-args)
+  step leans on ("a core or NOC *collision* is a loud `TT_FATAL`, not a silent hang" is only true with the
+  checks on).
+
 - **The repo's pre-commit hooks include three Metal-2.0-aware checks, and no port doc mentions them.**
   `Detect legacy device operation classes in newly added files`, `Detect smuggled buffer-address runtime args in
   descriptor factories`, and `Detect ProgramDescriptor rebuilds inside override_runtime_arguments` all run on
@@ -256,8 +273,26 @@ instruction to check this.
   `ttnn/cpp/ttnn/operations/uniform/CMakeLists.txt`; **no build-file edit was needed**, as the caution predicts.
 - **Tests:** `pytest tests/ttnn/nightly/unit_tests/operations/rand/test_uniform.py -v` (the invoker-confirmed
   no-regression baseline) — **101 passed, 0 failed** (exit 0). Every parametrisation of all four test functions,
-  across both dtypes, both `fp32_dest_acc_en` settings, and the seed/range sweep. Run twice: once before the
-  `clang-format` pre-commit pass and once after, so the numbers above are for the tree as committed.
+  across both dtypes, both `fp32_dest_acc_en` settings, and the seed/range sweep.
+
+  **The result that counts is the one with legality checks forced on.** The port was developed on a branch
+  without `60a2079477d` ("Force Metal 2.0 legality checks on, unhooking the `skip_validation` bypass"), where
+  TTNN's default leaves `SetProgramRunArgs` / `UpdateProgramRunArgs` / `MakeProgramFromSpec` validation inert —
+  a known TTNN bug, fix in flight. So the first two green runs were **weaker than they looked**: neither
+  exercised the spec validator (DFB endpoint invariant, self-loop legality, `unpack_modes` rules) nor the
+  `UpdateProgramRunArgs` `TensorSpec` legality check. Rebuilt and re-run on this branch, with the bypass
+  unhooked: **101 passed, 0 failed** (exit 0), build clean.
+
+  That second check is the one this op most needed. Per
+  [Run tests — custom hash failure mode](../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#run-tests),
+  an `UpdateTensorArgs` `TensorSpec` legality failure on the *second and later* dispatches is the signature of a
+  program hash too loose for the strict `TensorParameter` match — and `uniform`'s backdoor hash deliberately
+  drops `from` / `to` / `seed` (`device/uniform_device_operation.hpp:28-29`). The cache-hit tests dispatch
+  repeatedly against a hot cache with all three varied, and the check did not fire. **So the ops-team verdict
+  the audit carried is corroborated by a run that could actually have contradicted it**, rather than by one
+  where the detector was switched off.
+
+  (Also re-run after the `clang-format` pre-commit pass, so the numbers are for the tree as committed.)
 
   The two that matter most for this concept both pass:
   - `test_uniform_callback` — asserts a changed `seed` does **not** grow the program cache, i.e. the cache-hit
