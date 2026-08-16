@@ -521,7 +521,6 @@ exit $RC
                     if val is not None:
                         samples[leg].append(val)
             for leg, cell in zip(("off", "on"), cells):
-                use = samples.get(leg if leg in samples else "off", [])
                 src = samples[leg] if leg in samples else samples["off"]
                 result["runs"][f"{sel}/{cell}_samples"] = src
                 result["cells"][cell] = (sum(src) / len(src)) if src else None
@@ -706,15 +705,10 @@ exit $RC
                     verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
                     continue
                 base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
-                flip = (
-                    (base_pct < 0 <= r[key])
-                    if name == "causal"
-                    else (base_pct <= 0 < r[key]) or (base_pct > 0 >= r[key] and False)
-                )
                 drift = abs(r[key] - base_pct)
-                if name == "causal" and base_pct < 0 and r[key] >= 0:
+                if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
                     verdicts.append(
-                        f"causal WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
+                        f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
                     )
                     rag = "RED"
                 elif drift > self.a.max_drift_pct:
@@ -803,11 +797,11 @@ exit $RC
                     if (self.ev / row["op"] / "craq").is_dir()
                     else []
                 )
-                gate = (
-                    all(
-                        v == "PASS" for c in bh_craq for v in c.get("legs", {}).values()
-                    )
-                    and bh_craq
+                # Gate requires at least one BH verdict WITH legs, and every
+                # leg PASS; a SKIP_NO_SIMULATOR verdict never opens the gate.
+                gate = bool(bh_craq) and all(
+                    c.get("legs") and all(v == "PASS" for v in c["legs"].values())
+                    for c in bh_craq
                 )
                 if not gate and not self.a.skip_craq_gate:
                     self.reds.append(
