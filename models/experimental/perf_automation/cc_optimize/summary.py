@@ -943,6 +943,28 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         Falls back to the passed-in figure when the facts are too thin to model the extra terms, so a
         model with no layer geometry still gets its weights floor rather than nothing.
         """
+        # DECODE CARRIES KV TOO, AND KV IS PER USER. Decode returned the anchor untouched, so its
+        # ceiling was weights-only: no KV term at all, and therefore nothing for batch to scale. Every
+        # user re-reads their whole history on every token, so an 8-user run at 128 context reads that
+        # history eight times and the ceiling counted none of it.
+        #
+        # Added the same way prefill's extra is: as a DIFFERENCE against the anchor, never as a second
+        # opinion on it. The weights stay exactly the figure perf_target published -- which is the
+        # reason decode was excluded in the first place, two ceilings 2.18x apart with the stop gate
+        # judging one and the reader seeing the other -- and only the per-user terms are added on top.
+        if mf and regime == "decode":
+            try:
+                from agent.perf_target import active_bytes as _ab
+            except Exception:  # noqa: BLE001 -- no byte model, so no extra term; the anchor stands
+                return per_dev_bytes
+            _b = max(1, _prefill_batch())
+            _ctx = int(_prefill_tokens() or 0)
+            if _ctx:
+                _kv = float(_ab(mf, regime="decode", seq_len=_ctx, batch=_b) or 0.0) - float(
+                    _ab(mf, regime="decode", seq_len=0, batch=1) or 0.0
+                )
+                return per_dev_bytes + max(0.0, _kv) / tp
+            return per_dev_bytes
         if not mf or regime != "prefill":
             # DECODE IS THE CEILING'S OWN BYTE COUNT, NOT A SECOND OPINION ON IT. This recomputed the
             # read set from weight_bytes while the headline ceiling came from the params rule, so one
@@ -959,8 +981,10 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             # regimes isolates the KV it writes and the activations it carries, and adds them to the
             # agreed figure -- so the two stages can never disagree about the weights they share,
             # however that figure was established.
-            _extra = float(_ab(mf, regime="prefill", seq_len=int(toks or 0)) or 0.0) - float(
-                _ab(mf, regime="decode", seq_len=0) or 0.0
+            # batch is already folded into `toks` (seq_len x batch) for the terms that are linear in
+            # both, and passed explicitly so the model applies it wherever it is not.
+            _extra = float(_ab(mf, regime="prefill", seq_len=int(toks or 0), batch=1) or 0.0) - float(
+                _ab(mf, regime="decode", seq_len=0, batch=1) or 0.0
             )
             return per_dev_bytes + max(0.0, _extra) / tp
         except Exception:  # noqa: BLE001

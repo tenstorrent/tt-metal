@@ -647,8 +647,26 @@ def test_the_two_stages_never_disagree_about_the_weights_they_share():
         S._prefill_tokens = lambda: 128
         ab = int(11.18e9)
         r = S._stage_roofs(active_bytes=ab, peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
-        assert abs(r["decode"]["bytes"] - ab) < 1.0, "decode invented a second byte count"
+        # THE SHARED WEIGHTS ARE THE ANCHOR, and each stage adds only what IT alone reads on top.
+        # This asserted decode == anchor exactly, which held only because decode had no per-user term
+        # at all: it was priced weights-only, so an 8-user run re-reading eight KV histories counted
+        # none of them and batch had nothing to scale. Decode now adds its KV the same way prefill
+        # adds its KV and activations -- as a difference against the anchor, never as a second opinion
+        # on the weights, which is what this test exists to protect.
+        assert r["decode"]["bytes"] >= ab, "decode dropped below the agreed weights figure"
+        _kv_only = S._stage_roofs(
+            active_bytes=ab, peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None, stage_ms={"decode": 1.0}
+        )
+        assert _kv_only["decode"]["bytes"] >= ab
         assert r["prefill"]["bytes"] > r["decode"]["bytes"], "prefill must add its KV + activations"
+        # and with no context there is nothing extra to add, so it IS the anchor
+        _saved_pt = S._prefill_tokens
+        S._prefill_tokens = lambda: 0
+        try:
+            r0 = S._stage_roofs(active_bytes=ab, peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
+            assert abs(r0["decode"]["bytes"] - ab) < 1.0, "decode invented a second byte count"
+        finally:
+            S._prefill_tokens = _saved_pt
     finally:
         S._model_facts, S._prefill_tokens = _saved_f, _saved_t
 

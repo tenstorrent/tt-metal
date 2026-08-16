@@ -158,3 +158,62 @@ def test_an_unpriced_stage_still_shows_its_measurement():
     out = T._render(stage_ms={"encode": 35.80, "generate": 138.49})
     row = next(l for l in out.splitlines() if "memory" in l and "35.80" in l)
     assert "not modelled" in row, row
+
+
+# ------------------------------------------------------------------ batch moves the THEORETICAL too
+
+
+_MF = {
+    "total_params": 3611483136,
+    "dominant_dtype": "bfloat16",
+    "layers": 30,
+    "kv_heads": 8,
+    "head_dim": 128,
+    "hidden_size": 3072,
+    "intermediate_size": 8192,
+}
+
+
+def _roofs_at_batch(monkeypatch, batch):
+    """Patch the facts and the prompt length directly, as the stress suite does.
+
+    Not via the environment: this file imports the stress module to reach its _render, and executing
+    it leaves module attributes patched, so an env-driven variant passed alone and failed in file
+    order -- the least useful kind of test.
+    """
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_model_facts", lambda: _MF)
+    monkeypatch.setattr(S, "_prefill_tokens", lambda: 128)
+    monkeypatch.setattr(S, "_prefill_batch", lambda: batch)
+    return S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"prefill": 110.1, "decode": 6.11})
+
+
+def test_batch_raises_the_prefill_ceiling(monkeypatch):
+    """Eight users in flight carry eight sets of activations and eight KV writes. Costing that as one
+    user made batch free, so the ceiling came out too high and every at-floor verdict inherited it."""
+    one = _roofs_at_batch(monkeypatch, 1)["prefill"]["bytes"]
+    eight = _roofs_at_batch(monkeypatch, 8)["prefill"]["bytes"]
+    assert eight > one * 1.5, (one, eight)
+
+
+def test_batch_raises_the_decode_ceiling_too(monkeypatch):
+    """Decode used to return the anchor untouched -- weights only, no KV -- so it had no per-user term
+    for batch to scale. Every user re-reads their whole history on every token."""
+    one = _roofs_at_batch(monkeypatch, 1)["decode"]["bytes"]
+    eight = _roofs_at_batch(monkeypatch, 8)["decode"]["bytes"]
+    assert eight > one, (one, eight)
+
+
+def test_decode_still_carries_the_agreed_weights(monkeypatch):
+    """The addition is a DIFFERENCE against the anchor, never a second opinion on the weights -- that
+    is what kept decode excluded in the first place (two ceilings 2.18x apart)."""
+    assert _roofs_at_batch(monkeypatch, 8)["decode"]["bytes"] >= _BYTES
+
+
+def test_the_theoretical_moves_not_just_the_measured(monkeypatch):
+    """A comparison is only correct if BOTH sides describe the same workload."""
+    one = _roofs_at_batch(monkeypatch, 1)
+    eight = _roofs_at_batch(monkeypatch, 8)
+    assert eight["prefill"]["memory_ms"] > one["prefill"]["memory_ms"]
+    assert eight["decode"]["memory_ms"] > one["decode"]["memory_ms"]
