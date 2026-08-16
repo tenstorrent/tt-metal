@@ -326,9 +326,9 @@ AUDITED_SEEDS = {
         silicon_result="p150 silicon perf pending: the perf kernel failed to compile at 55ce75be (unqualified call_binary_max_min_fresh_cpp) — fixed on this branch; measurement lands in sfpu_device_baseline_p150_v1.tsv.",
         silicon_source="sweep-2x2 evidence-20260816 SCOREBOARD.md blocked-list item 1",
     ),
-    "legacy__ckernel_sfpu_typecast_fp16b_uint16": dict(
+    "metal__ckernel_sfpu_typecast": dict(
         semantic_cpp_class="ready",
-        semantic_cpp_blocker="Fresh semantic UInt16-to-Float16_b body (eltwise_unary_typecast_test.cpp) is complete and the planner fires on the corr shape; WP8 step 4 four-region descriptor sharing targets the remaining gap.",
+        semantic_cpp_blocker="Fresh semantic UInt16-to-Float16_b body (eltwise_unary_typecast_test.cpp) is complete and the planner fires on the corr shape (BH Metal typecast surface); WP8 step 4 four-region descriptor sharing targets the remaining gap.",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="not_run",
@@ -380,7 +380,7 @@ AUDITED_MAPPINGS = {
         perf_modules="perf_eltwise_binary_sfpu.py::test_perf_fresh_cpp_binary_max_min",
         notes="Audited paired production/fresh semantic max/min selector; the macro planner derives the SFPLOADMACRO emission generically on the fresh body.",
     ),
-    "legacy__ckernel_sfpu_typecast_fp16b_uint16": dict(
+    "metal__ckernel_sfpu_typecast": dict(
         functional_modules="test_eltwise_unary_typecast.py::test_eltwise_unary_typecast",
         perf_modules="test_eltwise_unary_typecast.py::test_typecast_device_profile",
         notes="Audited paired handwritten/semantic UInt16->Float16_b selector; the impl-parameterized profiler node lives in the functional module, not perf_eltwise_typecast.py.",
