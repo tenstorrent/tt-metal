@@ -598,17 +598,16 @@ void SharedMemoryStatsProvider::release_process_slot(DeviceMemoryRegion::Process
     // then store) would race every concurrent record_allocation: an allocation landing
     // between another writer's sum and its store is silently dropped from the total and
     // stays dropped. Deltas commute, so there is no such window.
-    saturating_sub(region_->total_dram_allocated, slot.dram_allocated.load(std::memory_order_relaxed));
-    saturating_sub(region_->total_l1_allocated, slot.l1_allocated.load(std::memory_order_relaxed));
-    saturating_sub(region_->total_l1_small_allocated, slot.l1_small_allocated.load(std::memory_order_relaxed));
-    saturating_sub(region_->total_trace_allocated, slot.trace_allocated.load(std::memory_order_relaxed));
-    saturating_sub(region_->total_cb_allocated, slot.cb_allocated.load(std::memory_order_relaxed));
+    // Exchange rather than load-then-store: the value taken out of the slot is exactly the
+    // value subtracted from the total. Reading the slot, subtracting, and clearing it as three
+    // steps would leak the delta of any allocation recorded in between -- and this process can
+    // still be allocating on another thread while a device is being closed.
+    saturating_sub(region_->total_dram_allocated, slot.dram_allocated.exchange(0, std::memory_order_relaxed));
+    saturating_sub(region_->total_l1_allocated, slot.l1_allocated.exchange(0, std::memory_order_relaxed));
+    saturating_sub(region_->total_l1_small_allocated, slot.l1_small_allocated.exchange(0, std::memory_order_relaxed));
+    saturating_sub(region_->total_trace_allocated, slot.trace_allocated.exchange(0, std::memory_order_relaxed));
+    saturating_sub(region_->total_cb_allocated, slot.cb_allocated.exchange(0, std::memory_order_relaxed));
 
-    slot.dram_allocated.store(0, std::memory_order_relaxed);
-    slot.l1_allocated.store(0, std::memory_order_relaxed);
-    slot.l1_small_allocated.store(0, std::memory_order_relaxed);
-    slot.trace_allocated.store(0, std::memory_order_relaxed);
-    slot.cb_allocated.store(0, std::memory_order_relaxed);
     slot.last_update_timestamp.store(0, std::memory_order_relaxed);
     std::memset(slot.process_name, 0, sizeof(slot.process_name));
     // Release the slot last: pid == 0 is what makes it claimable, so it must not
