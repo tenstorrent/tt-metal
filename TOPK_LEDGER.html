@@ -74,9 +74,12 @@
       <tr><th></th><th></th><th></th><th class="n ours gl">ours (multi-core tree)</th><th class="n gr">stock (Pavle)</th><th class="n ours gl">ours (routing)</th><th class="n gr">stock</th></tr>
     </thead>
     <tbody>
-      <tr><td>time</td><td class="n flat">1.84 µs</td><td class="n flat">24.5 µs†</td><td class="n ours gl"><strong>41.9 µs</strong></td><td class="n gr">356.6 µs‡</td><td class="n ours gl"><strong>70.8 µs</strong></td><td class="n gr">631,507 µs</td></tr>
-      <tr><td>vs stock ttnn.topk</td><td class="n flat">—</td><td class="n flat">25,782× (fused†)</td><td class="n ours gl"><strong>15,083×</strong></td><td class="n gr">1,771×</td><td class="n ours gl"><strong>8,921×</strong></td><td class="n gr">1×</td></tr>
+<!-- EXEC_NUMBERS -->
+      <tr><td>time</td><td class="n flat">1.8 µs</td><td class="n flat">24.5 µs†</td><td class="n ours gl"><strong>41.9 µs</strong></td><td class="n gr">356.6 µs‡</td><td class="n ours gl"><strong>70.8 µs</strong></td><td class="n gr">631,507.3 µs</td></tr>
+      <tr><td>vs stock ttnn.topk</td><td class="n flat">—</td><td class="n flat">25,818× (fused†)</td><td class="n ours gl"><strong>15,083×</strong></td><td class="n gr">1,771×</td><td class="n ours gl"><strong>8,921×</strong></td><td class="n gr">1×</td></tr>
       <tr><td>cores</td><td class="n flat">128 (assumed)</td><td class="n flat">32</td><td class="n ours gl">26</td><td class="n gr">1/row</td><td class="n ours gl">26</td><td class="n gr">1</td></tr>
+      <tr><td>runtime over supported P</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">183.0→41.9 µs over P=2–32 (3,450×–15,066× vs stock)</td><td class="n gr">—</td><td class="n ours gl">tracks the op + fixed layout envelope</td><td class="n gr">—</td></tr>
+<!-- /EXEC_NUMBERS -->
       <tr><td>callsite</td><td class="n flat">— (model)</td><td class="n flat">— (FusedProgram-internal)</td><td class="n ours gl"><code>topk_large_indices(x, k=…)</code></td><td class="n gr">same call</td><td class="n ours gl"><code>ttnn.topk(x, k, …)</code> — unchanged signature</td><td class="n gr">same call</td></tr>
       <tr><td>returns</td><td class="n flat">—</td><td class="n flat">—</td><td class="n ours gl">indices; <code>return_values=True</code> → (values, indices)</td><td class="n gr">indices only</td><td class="n ours gl">(values, indices), as always</td><td class="n gr">(values, indices)</td></tr>
       <tr><td>attribution</td><td class="n flat">Davor Capalija; proven below the bitonic floor</td><td class="n flat">Nikhil/Radomir/Ligang; fused SDPA+topk, not callable</td><td class="n ours gl"><strong>ours:</strong> multi-core factory + log-tree, values, num_slices (op by Pavle Josipović #46833 on blaze TopK-XL LLK)</td><td class="n gr">Pavle Josipović (PR #46833), row-parallel</td><td class="n ours gl"><strong>ours:</strong> internal routing (BH·bf16·last-dim·64&lt;k≤2048·largest·non-stable); else old path bit-for-bit</td><td class="n gr">—</td></tr>
@@ -98,6 +101,7 @@
   <h2>The competition table — every layer, every cell (measured, deterministic)</h2>
   <p class="sub">One deterministic <code>--competition</code> run, 24/24 rows, zero WRONG/FAILED cells. µs unless marked ms.
   Columns as in the executive summary; stock topk_large_indices is measured via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core time); blaze appears only at its native shape. All speedups are vs stock ttnn.topk.</p>
+<!-- COMPETITION_TABLE -->
   <div class="tablewrap"><table>
     <thead><tr><th class="n">k</th><th class="n">N</th><th class="n">stock ttnn.topk</th><th class="n">stock topk_large_indices</th><th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th><th class="n">cores</th><th class="n">blaze</th><th class="n">roofline</th><th class="n">gap ours/roof</th><th class="n">speedup: routing</th><th class="n">speedup: multi-core op</th></tr></thead>
     <tbody>
@@ -122,11 +126,12 @@
       <tr><td class="n">2,048</td><td class="n">8,192</td><td class="n">70.3 ms</td><td class="n">47.5</td><td class="n win">38.3</td><td class="n win">22.9</td><td class="n">4</td><td class="n flat">—</td><td class="n">1.0</td><td class="n flat">23.6×</td><td class="n win">1,835×</td><td class="n win">3,076×</td></tr>
       <tr><td class="n">2,048</td><td class="n">16,384</td><td class="n">150.8 ms</td><td class="n">91.6</td><td class="n win">46.2</td><td class="n win">26.4</td><td class="n">8</td><td class="n flat">—</td><td class="n">1.2</td><td class="n flat">22.2×</td><td class="n win">3,262×</td><td class="n win">5,717×</td></tr>
       <tr><td class="n">2,048</td><td class="n">32,768</td><td class="n">311.8 ms</td><td class="n">180.0</td><td class="n win">63.8</td><td class="n win">37.8</td><td class="n">13</td><td class="n flat">—</td><td class="n">1.4</td><td class="n flat">26.4×</td><td class="n win">4,888×</td><td class="n win">8,241×</td></tr>
-      <tr><td class="n">2,048</td><td class="n">65,536</td><td class="n">631.5 ms</td><td class="n">356.6</td><td class="n win">70.8</td><td class="n win">41.9</td><td class="n">26</td><td class="n flat">—</td><td class="n">1.8</td><td class="n flat">22.8×</td><td class="n win">8,921×</td><td class="n win">15,083×</td></tr>
+      <tr><td class="n">2,048</td><td class="n">65,536</td><td class="n">631.5 ms</td><td class="n">356.6</td><td class="n win">70.8</td><td class="n win">41.9</td><td class="n">26</td><td class="n">24.5</td><td class="n">1.8</td><td class="n flat">22.8×</td><td class="n win">8,921×</td><td class="n win">15,083×</td></tr>
       <tr><td class="n">2,048</td><td class="n">131,072</td><td class="n">1,273.7 ms</td><td class="n">710.0</td><td class="n win">85.7</td><td class="n win">45.9</td><td class="n">52</td><td class="n flat">—</td><td class="n">2.6</td><td class="n flat">17.9×</td><td class="n win">14,866×</td><td class="n win">27,750×</td></tr>
       <tr><td class="n">2,048</td><td class="n">262,144</td><td class="n">2,557.6 ms</td><td class="n">1,416.6</td><td class="n win">122.3</td><td class="n win">58.6</td><td class="n">52</td><td class="n flat">—</td><td class="n">3.9</td><td class="n flat">15.0×</td><td class="n win">20,920×</td><td class="n win">43,668×</td></tr>
     </tbody>
   </table></div>
+<!-- /COMPETITION_TABLE -->
 
   <details><summary>What shipped — 7 commits, all silicon-gated</summary><div>
   <div class="tablewrap"><table>
@@ -218,16 +223,10 @@
 
 
   <details><summary>Empirical P sweep (num_slices override) — the negative result that scopes the tree merge</summary><div>
-  <div class="tablewrap"><table>
-    <thead><tr><th>anchor</th><th class="n">P=4</th><th class="n">P=8</th><th class="n">P=16</th><th class="n">P=24</th><th class="n">P=32</th><th class="n">P=48</th><th class="n">P=64</th><th class="n">model pick</th></tr></thead>
-    <tbody>
-      <tr><td class="mono">k=2048 W=65536 (32 chunks)</td><td class="n">101.0</td><td class="n win">69.6</td><td class="n">73.6</td><td class="n">73.6</td><td class="n">102.0</td><td class="n flat">—</td><td class="n flat">—</td><td class="n">9 → 69.6 µs</td></tr>
-      <tr><td class="mono">k=512 W=262144 (512 chunks)</td><td class="n flat">—</td><td class="n">148.8</td><td class="n">98.9</td><td class="n flat">—</td><td class="n">67.3</td><td class="n win">64.2</td><td class="n">69.2</td><td class="n">27 → 67.3 µs</td></tr>
-    </tbody>
-  </table></div>
-  <p class="sub">µs, deterministic competition cells (ids suffixed _pN). The √(2·num_chunks) cost model is
-  empirically near-optimal; gains reverse past it because the final stage is a serial P−1 merge chain.
-  Conclusion: core count is not the gap to blaze/roofline — merge topology is.</p>
+<!-- PSWEEP_TABLE -->
+  <div class="tablewrap"><table><thead><tr><th>k=512 N=262,144</th><th class="n">P=2</th><th class="n">P=4</th><th class="n">P=8</th><th class="n">P=16</th><th class="n">P=32</th><th class="n">P=48</th><th class="n">P=64</th><th>speedup range</th></tr></thead><tbody><tr><td>runtime (µs)</td><td class="n">560.2</td><td class="n">283.8</td><td class="n">146.2</td><td class="n">92.6</td><td class="n">52.0</td><td class="n">38.8</td><td class="n win">32.0</td><td class="n">1,157×–20,282× vs stock ttnn.topk</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th>k=2,048 N=65,536</th><th class="n">P=2</th><th class="n">P=4</th><th class="n">P=8</th><th class="n">P=16</th><th class="n">P=24</th><th class="n">P=32</th><th>speedup range</th></tr></thead><tbody><tr><td>runtime (µs)</td><td class="n">183.0</td><td class="n">97.9</td><td class="n">57.3</td><td class="n">49.3</td><td class="n">49.3</td><td class="n win">41.9</td><td class="n">3,450×–15,066× vs stock ttnn.topk</td></tr></tbody></table></div>
+<!-- /PSWEEP_TABLE -->
   </div></details>
 
   <details><summary>Gates, trust-nothing findings, internal alignment, open items</summary><div>
