@@ -226,11 +226,25 @@ A second fact-complete consultation after build, full correctness, LOC, and perf
 the required command and timed out after five minutes without a verdict. Silence was not treated as
 approval. The plan-authorized gates independently pass, and no API expansion was made.
 
+### C12 — Tier 2.14 Argmax multicore control
+
+The architecture consultation used the required Claude command and timed out after five minutes
+without a verdict. No approval was inferred. The plan-authorized API-v11 design composes two fixed
+no-handshake Counter control wires over the two disjoint worker rectangles and adopts the existing
+start semaphore. Rectangle 0 contains and excludes the reducer; rectangle 1 uses it as a separate
+sender. Counter readiness preserves the reset-free `wait_min` behavior required by free-running
+reduce-all, while result unicasts and the operation-owned done counter remain unchanged. No helper API
+change is proposed.
+
+The final fact-complete consultation after build, full correctness, LOC, and matched performance used
+the required command and timed out after five minutes without a verdict. Silence was not treated as
+approval. The plan-authorized gates independently pass, and no API expansion was made.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 28 migrated, 2 pending, 74 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 29 migrated, 2 pending, 73 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
@@ -241,6 +255,7 @@ approval. The plan-authorized gates independently pass, and no API expansion was
 | Tier 2.11 Plain sharded LayerNorm | deferred-performance | Correctness passed, but single-stage matched performance regressed +2.086%; experimental changes reverted |
 | Tier 2.12 Interleaved GroupNorm | complete | API v11 at `40e209daad9`; all build, LOC, correctness, helper, source-audit, and matched-performance gates passed |
 | Tier 2.13 SDPA-decode `read_k` star | complete | API v11 at `f760425fe06`; full mapped correctness, fresh-JIT, shared-consumer audit, and q-factor 2/4 matched performance passed |
+| Tier 2.14 Argmax multicore control | complete | API v11 at `5aaaf5b5aa5`; exact two-rectangle, reduce-all, cache, full unit, fresh-JIT, source-audit, and both matched-performance gates passed |
 
 ## Chronological findings
 
@@ -423,3 +438,24 @@ approval. The plan-authorized gates independently pass, and no API expansion was
     inferred. Source was committed at `f760425fe06`, then the kernel and host binding were written back
     at API v11 from the independently satisfied mandatory gates. Rollout state is now 28 migrated,
     2 pending, and 74 deferred kernels. API expansion: NO.
+43. Tier 2.14 replaces the reducer's two raw start-semaphore multicasts with two fixed no-handshake
+    Counter wires. Both adopt the existing start semaphore; their receiver sets are disjoint, and the
+    reducer is inside rectangle 0 but separate from rectangle 1. Signaling starts at k=1, so helper
+    Counter round 1 exactly replaces legacy value 2 as the first gate. Result unicasts, their barriers,
+    and the independent done counter are unchanged. The architecture Claude consultation timed out
+    after five minutes without a verdict; no approval was inferred. API expansion: NO.
+44. Release build passed after two mechanical host integration corrections. Production LOC passed:
+    factory 49 additions / 61 deletions and kernel 25 additions / 40 deletions. A fresh-cache exact
+    two-rectangle reduce-all route passed under Watcher with 0/19 JIT hits. The explicit two-rectangle
+    last-dimension and reduce-all cache routes passed, the complete unit file passed 69/69, nightly
+    Argmax passed 16 with 8 declared skips, host helpers passed 34/34, device helpers passed 80/80
+    under Watcher, and the expanded source audit passed 21/21.
+45. Matched 800 MHz Tracy used three independent 25-operation sessions per source state and case,
+    discarding the first five operation samples per session. `[64,128]`, dim=-1 improved from 68,504.5
+    ns to 68,310 ns (-0.28%); the multi-round two-rectangle case moved from 693,623 ns to 695,722 ns
+    (+0.30%). Raw production files were restored from the source checkpoint parent, rebuilt, then the
+    migrated files were restored byte-identically and rebuilt.
+46. The final Tier 2.14 Claude review timed out after five minutes without a verdict; no approval was
+    inferred. Source was committed at `5aaaf5b5aa5`, then the kernel and host binding were written back
+    at API v11 from the independently satisfied mandatory gates. Rollout state is now 29 migrated,
+    2 pending, and 73 deferred kernels. API expansion: NO.

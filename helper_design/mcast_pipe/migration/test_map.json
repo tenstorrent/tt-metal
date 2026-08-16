@@ -201,6 +201,15 @@
       "coverage": "complete with fresh-JIT q-factor-4 proof, q-factor-2 guard, every including single-device route, and matched performance"
     },
     {
+      "id": "argmax:multicore-two-rectangle-control",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/argmax/device/argmax_multi_core_program_factory.cpp",
+      "dispatch": "ROW_MAJOR last-dimension or reduce-all multicore Argmax",
+      "migration_unit": "argmax-multicore-control",
+      "inventory": ["ARGMAX-UNIT", "ARGMAX-TWO-RECTANGLE-CACHE", "ARGMAX-NIGHTLY"],
+      "coverage": "complete with fresh-JIT two-rectangle reduce-all, full dtype/shape/dimension unit matrix, cache reuse, and two matched performance cases"
+    },
+    {
       "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
       "classification": "required",
       "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
@@ -595,11 +604,6 @@
       "route": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_noncausal"
     },
     {
-      "candidate": "reader_argmax_interleaved_multicore.cpp",
-      "confidence": "discovery-only",
-      "route": "tests/ttnn/unit_tests/operations/reduction/test_argmax.py; shape [64,128], dim=-1, use_multicore=True"
-    },
-    {
       "candidate": "move_interleaved_with_overlap.cpp and move_stick_layout_interleaved_with_overlap.cpp",
       "confidence": "discovery-only",
       "route": "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py; overlap TILE and row-major cases respectively"
@@ -833,6 +837,13 @@
       "inventory": "SDPA-DECODE single-device unit, nightly, cache, flexible-geometry, MLA, and replicated-Q routes",
       "coverage": "high; fresh-JIT q-factor-4 route, q-factor-2 route, all shared-header consumers, and two matched performance cases",
       "result": "API v11 at f760425fe06; mapped executable inventories passed, source audit 20/20, q-factor 4 -1.20%, q-factor 2 -0.69%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+      "status": "migrated",
+      "inventory": "ARGMAX ROW_MAJOR multicore unit, two-rectangle cache, and reduce-all routes",
+      "coverage": "high; fresh-JIT two-rectangle reduce-all, full unit matrix, and two matched performance cases",
+      "result": "API v11 at 5aaaf5b5aa5; unit 69/69, nightly 16 passed / 8 skips, [64,128] -0.28%, two-rectangle +0.30%"
     }
   ],
   "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."

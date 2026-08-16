@@ -291,12 +291,12 @@ def test_argmax_multicore_two_rectangles_cached(device, dim):
         assert_equal(reference, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
 
 
-@pytest.mark.parametrize("case", ["64x128", "two_rectangles"])
+@pytest.mark.parametrize("case", ["perf_64x128", "perf_two_rectangles"])
 def test_argmax_multicore_mcast_perf(device, case):
     if not os.environ.get("TT_ARGMAX_MCAST_PERF"):
         pytest.skip("matched migration profiling only")
 
-    if case == "64x128":
+    if case == "perf_64x128":
         shape = (64, 128)
         sub_core_grids = None
     else:

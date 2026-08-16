@@ -413,6 +413,28 @@
       "flags": ["tier:2.13", "fully-end-to-end", "fresh-jit-verified", "fixed-column-star"]
     },
     {
+      "id": "argmax:multicore-two-rectangle-control",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/argmax/device/argmax_multi_core_program_factory.cpp",
+      "dispatch": "ROW_MAJOR last-dimension and reduce-all multicore Argmax, including two sub-core rectangles",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp"
+      ],
+      "migration_unit": "argmax-multicore-control",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "5aaaf5b5aa5",
+      "validation_set": [
+        "build_metal.sh: passed; fresh-JIT two-rectangle reduce-all passed under Watcher with 0/19 hits",
+        "unit Argmax 69 passed; explicit two-rectangle last-dim and reduce-all cache routes passed",
+        "nightly Argmax 16 passed / 8 declared skips; source audit 21 passed",
+        "production LOC: factory 49/61 and kernel 25/40 additions/deletions",
+        "matched 800 MHz Tracy: [64,128] -0.28%; multi-round two-rectangle +0.30%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.14", "fully-end-to-end", "fresh-jit-verified", "two-control-wires"]
+    },
+    {
       "id": "sort:single-row-multi-core:control",
       "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
       "dispatch": "single-row multicore DRAM factory selected when Wt exceeds the hybrid full-grid capacity",
@@ -1647,19 +1669,23 @@
       "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
       "op_family": "data_movement + reduction",
       "role": "hybrid",
-      "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "5aaaf5b5aa5",
       "validation_set": [
-        "tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax (shape [64,128] use_multicore=True)"
+        "fresh-JIT two-rectangle reduce-all passed under Watcher with 0/19 hits",
+        "unit Argmax 69 passed; explicit two-rectangle last-dim and reduce-all cache routes passed",
+        "nightly Argmax 16 passed / 8 declared skips; source audit 21 passed",
+        "matched [64,128] and multi-round two-rectangle performance: -0.28% and +0.30%"
       ],
-      "coverage_confidence": "med",
-      "last_verified": "2026-06-20",
-      "inventory_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED: two fixed no-handshake Counter control wires adopt the existing start semaphore and preserve monotone reduce-all readiness. Rectangle 0 contains and excludes the reducer; rectangle 1 uses the reducer as a separate sender. The disjoint wires share no receiver cells. Result unicasts and the operation-owned worker-arrival counter remain independent.",
       "flags": [
-        "tier:2b",
-        "design-gap"
+        "tier:2.14",
+        "fully-end-to-end",
+        "two-control-wires"
       ]
     },
     {
