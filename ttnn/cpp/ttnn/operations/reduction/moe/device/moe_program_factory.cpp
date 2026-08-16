@@ -214,8 +214,6 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .data_format_metadata = input_dfb_data_format,
     });
 
-    const tt::ARCH arch = input_tensor.device().arch();
-
     KernelSpec reader{
         .unique_id = MOE_READER,
         .source = "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp",
@@ -249,7 +247,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
                 TensorBinding{.tensor_parameter_name = MOE_TENSOR_EXPERT_MASK, .accessor_name = "expert_mask"},
             },
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"K", k}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -275,7 +273,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
                 TensorBinding{.tensor_parameter_name = MOE_TENSOR_OUTPUT, .accessor_name = "output"},
             },
         .compile_time_args = {{"Ht", Ht}, {"K", k}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<DFBBinding> compute_dfb_bindings{
@@ -350,7 +348,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
                 {"logWt", static_cast<uint32_t>(std::log2(Wt))},
                 {"tile_width", tile_width},
             },
-        .hw_config = ComputeGen1Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     ProgramSpec spec{

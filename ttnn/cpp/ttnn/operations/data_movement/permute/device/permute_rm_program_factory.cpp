@@ -93,7 +93,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = {{"N", N}, {"page_size", input_rm_page_size}, {"num_rows", num_rows}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_row", "end_row"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -107,7 +107,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
         .compile_time_args = {{"N", N}, {"page_size", output_rm_page_size}, {"num_rows", num_rows}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_row", "end_row"}},
         // rank-length shape/perm/stride arrays (count = N, a CTA) → runtime varargs.
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
@@ -267,7 +267,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
              {"w_block_size", w_block_size},
              {"element_size", input_tensor.element_size()}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * N},
     };
 
@@ -296,7 +296,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
              {"w_block_size", w_block_size},
              {"W", W}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
@@ -305,13 +305,13 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
                             cb_data_format_output == tt::DataFormat::UInt32;
     // Style B compute config: build ComputeGen1Config directly, matching the legacy
     // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
     // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
     // (via tilize) and TILIZE_CB (self-loop). Legacy default (Default) → UnpackToSrc.
     // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
     if (cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToSrc}, {TILIZE_CB, UnpackMode::UnpackToSrc}};
+        compute_cfg.gen1.unpack_modes = {{SRC_CB, UnpackMode::UnpackToSrc}, {TILIZE_CB, UnpackMode::UnpackToSrc}};
     }
 
     KernelSpec compute{

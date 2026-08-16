@@ -139,7 +139,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCFactory::c
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_tiles", "num_output_tiles", "start_id", "dim", "reduce_tile_size", "inner_tile_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -152,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCFactory::c
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -166,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCFactory::c
     // No unpack_modes entry: legacy left unpack_to_dest_mode all-Default, which is exactly an empty
     // table. With the dead Float32-capable intermediate gone, every DFB this kernel consumes carries
     // the output data format, so Metal 2.0's explicit-entry requirement does not fire either.
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         return KernelSpec{

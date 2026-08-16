@@ -62,19 +62,15 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
     tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
 
 // Maps the four hardware knobs (math_fidelity, math_approx_mode, fp32_dest_acc_en,
-// dst_full_sync_en) of a ComputeKernelConfig to a Metal 2.0 ComputeHardwareConfig. The knobs are
-// common to both generations; `arch` selects the matching alternative (ComputeGen2Config on Quasar,
-// else ComputeGen1Config) — the config's generation must match the target platform.
+// dst_full_sync_en) of a ComputeKernelConfig to a Metal 2.0 ComputeHardwareConfig. All four are
+// generation-independent, so the result runs on either generation and no `arch` is needed.
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
 //
-// The result's per-DFB unpack_modes table is left default for the program factory to set.
-// bfp_pack_precision_mode is likewise left default (rarely set non-default).
-//
-// The following Gen2-only TEMPORARY field is also not set here; a use site that needs
-// it should set it on the returned config instead:
-//   enable_2x_src_register
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
-    tt::ARCH arch, const ComputeKernelConfig& config);
+// The generation-specific blocks of the result are left default for the program factory to fill in:
+//   .gen1.unpack_modes / .gen2.unpack_modes  — per-DFB, and set on the generation being targeted
+//   .gen1.bfp_pack_precision_mode            — rarely set non-default
+//   .gen2.enable_2x_src_register             — TEMPORARY
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,

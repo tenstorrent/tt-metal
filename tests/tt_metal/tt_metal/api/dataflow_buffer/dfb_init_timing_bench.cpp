@@ -73,11 +73,7 @@ DfbInitTimingBenchContext create_dfb_init_timing_bench_context() {
 
     const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
     auto id_to_device = distributed::MeshDevice::create_unit_meshes(
-        ids,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        dispatch_core_config);
+        ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
     DfbInitTimingBenchContext ctx;
     ctx.mesh_device = id_to_device.begin()->second;
@@ -146,7 +142,7 @@ uint16_t DfbInitTimingUsedSlotsMask(Program& program, const CoreCoord& core) {
         }
         for (uint8_t neo = 0; neo < 4; ++neo) {
             if (combined & (1u << (::dfb::TENSIX_RISC_OFFSET + neo))) {
-                mask |= static_cast<uint16_t>(1u << (8u + neo * 2u));      // unpack
+                mask |= static_cast<uint16_t>(1u << (8u + neo * 2u));       // unpack
                 mask |= static_cast<uint16_t>(1u << (8u + neo * 2u + 1u));  // pack
             }
         }
@@ -157,10 +153,7 @@ uint16_t DfbInitTimingUsedSlotsMask(Program& program, const CoreCoord& core) {
 void LogDfbInitTimingFromL1(
     IDevice* device, const CoreCoord& core, const char* benchmark_name, uint16_t used_slots_mask) {
     if (!MetalContext::instance().rtoptions().get_measure_dfb_init_time_enabled()) {
-        log_info(
-            tt::LogTest,
-            "DFB init timing [{}]: disabled (set TT_METAL_MEASURE_DFB_INIT_TIME=1)",
-            benchmark_name);
+        log_info(tt::LogTest, "DFB init timing [{}]: disabled (set TT_METAL_MEASURE_DFB_INIT_TIME=1)", benchmark_name);
         return;
     }
 
@@ -266,8 +259,7 @@ void LogDfbInitTimingFromL1(
     }
 }
 
-void LaunchAndLogDfbInitTiming(
-    IDevice* device, Program& program, const CoreCoord& core, const char* benchmark_name) {
+void LaunchAndLogDfbInitTiming(IDevice* device, Program& program, const CoreCoord& core, const char* benchmark_name) {
     ClearDfbInitTimingL1(device, core);
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
     LogDfbInitTimingFromL1(device, core, benchmark_name, DfbInitTimingUsedSlotsMask(program, core));
@@ -300,7 +292,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName CONSUMER{"consumer"};
     const experimental::TensorParamName IN_TENSOR{"in_tensor"};
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{};
 
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
@@ -331,7 +323,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {experimental::StridedConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES_PER_CONSUMER}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -354,8 +346,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     experimental::ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
     producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-        experimental::NodeCoord{0, 0},
-        {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
+        experimental::NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
     experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
@@ -369,19 +360,19 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t ENTRY_SIZE = 1024;
     constexpr uint32_t NUM_ENTRIES = 16;
-    constexpr uint8_t  NUM_IN_THREADS = 4;
-    constexpr uint8_t  NUM_OUT_THREADS = 2;
+    constexpr uint8_t NUM_IN_THREADS = 4;
+    constexpr uint8_t NUM_OUT_THREADS = 2;
 
-    const experimental::DFBSpecName DFB_SS{"dfb_ss"};   // 4Sx4S DM→Tensix
-    const experimental::DFBSpecName DFB_SA{"dfb_sa"};   // 4Sx4A DM→Tensix
-    const experimental::DFBSpecName DFB_T6{"dfb_t6"};   // 4Sx4S Tensix→DM
+    const experimental::DFBSpecName DFB_SS{"dfb_ss"};  // 4Sx4S DM→Tensix
+    const experimental::DFBSpecName DFB_SA{"dfb_sa"};  // 4Sx4A DM→Tensix
+    const experimental::DFBSpecName DFB_T6{"dfb_t6"};  // 4Sx4S Tensix→DM
     const experimental::KernelSpecName READER{"reader_dm"};
     const experimental::KernelSpecName COMPUTE{"compute"};
     const experimental::KernelSpecName WRITER{"writer_dm"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     experimental::DataflowBufferSpec dfb_ss_spec = MakeBenchDfbSpec(DFB_SS, ENTRY_SIZE, NUM_ENTRIES);
     experimental::DataflowBufferSpec dfb_sa_spec = MakeBenchDfbSpec(DFB_SA, ENTRY_SIZE, NUM_ENTRIES);
@@ -390,13 +381,13 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
     // Reader DM: producer on DFB_SS (STRIDED) and DFB_SA (STRIDED)
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp",
         .num_threads = NUM_IN_THREADS,
-        .dfb_bindings = {
-            experimental::ProducerOf(DFB_SS, "ss_out"),
-            experimental::ProducerOf(DFB_SA, "sa_out"),
-        },
+        .dfb_bindings =
+            {
+                experimental::ProducerOf(DFB_SS, "ss_out"),
+                experimental::ProducerOf(DFB_SA, "sa_out"),
+            },
         .hw_config = gen2_dm_hw,
     };
 
@@ -405,12 +396,13 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp",
         .num_threads = NUM_IN_THREADS,
-        .dfb_bindings = {
-            experimental::StridedConsumerOf(DFB_SS, "ss_in"),
-            experimental::AllConsumerOf(DFB_SA, "sa_in"),
-            experimental::ProducerOf(DFB_T6, "t6_out"),
-        },
-        .hw_config = experimental::ComputeGen2Config{},
+        .dfb_bindings =
+            {
+                experimental::StridedConsumerOf(DFB_SS, "ss_in"),
+                experimental::AllConsumerOf(DFB_SA, "sa_in"),
+                experimental::ProducerOf(DFB_T6, "t6_out"),
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     // Writer DM: STRIDED consumer on DFB_T6
@@ -471,10 +463,10 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE    = 1024;
-    constexpr uint32_t NUM_ENTRIES   = 16;
-    constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
-    constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix ALL consumers per DFB
+    constexpr uint32_t ENTRY_SIZE = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+    constexpr uint8_t NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
+    constexpr uint8_t NUM_CONSUMERS = 4;  // Tensix ALL consumers per DFB
 
     const experimental::DFBSpecName DFB0{"dfb0"};
     const experimental::DFBSpecName DFB1{"dfb1"};
@@ -482,18 +474,19 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName READER{"reader_dm"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     // Reader DM: 4 STRIDED producers on all three DFBs
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp",
         .num_threads = NUM_PRODUCERS,
-        .dfb_bindings = {
-            experimental::ProducerOf(DFB0, "out0"),
-            experimental::ProducerOf(DFB1, "out1"),
-            experimental::ProducerOf(DFB2, "out2"),
-        },
+        .dfb_bindings =
+            {
+                experimental::ProducerOf(DFB0, "out0"),
+                experimental::ProducerOf(DFB1, "out1"),
+                experimental::ProducerOf(DFB2, "out2"),
+            },
         .hw_config = gen2_dm_hw,
     };
 
@@ -502,12 +495,13 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {
-            experimental::AllConsumerOf(DFB0, "in0"),
-            experimental::AllConsumerOf(DFB1, "in1"),
-            experimental::AllConsumerOf(DFB2, "in2"),
-        },
-        .hw_config = experimental::ComputeGen2Config{},
+        .dfb_bindings =
+            {
+                experimental::AllConsumerOf(DFB0, "in0"),
+                experimental::AllConsumerOf(DFB1, "in1"),
+                experimental::AllConsumerOf(DFB2, "in2"),
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -519,11 +513,12 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
     experimental::ProgramSpec spec{
         .name = "bench_worst",
         .kernels = {reader_spec, compute_spec},
-        .dataflow_buffers = {
-            MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
-        },
+        .dataflow_buffers =
+            {
+                MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+            },
         .work_units = {wu},
     };
 
@@ -558,10 +553,10 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE    = 1024;
-    constexpr uint32_t NUM_ENTRIES   = 16;
-    constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
-    constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix STRIDED consumers per DFB
+    constexpr uint32_t ENTRY_SIZE = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+    constexpr uint8_t NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
+    constexpr uint8_t NUM_CONSUMERS = 4;  // Tensix STRIDED consumers per DFB
 
     const experimental::DFBSpecName DFB0{"avg2_dfb0"};
     const experimental::DFBSpecName DFB1{"avg2_dfb1"};
@@ -569,18 +564,19 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName READER{"reader_dm"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     // Reader DM: 4 STRIDED producers on all three DFBs.
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg2_reader_dm.cpp",
         .num_threads = NUM_PRODUCERS,
-        .dfb_bindings = {
-            experimental::ProducerOf(DFB0, "out0"),
-            experimental::ProducerOf(DFB1, "out1"),
-            experimental::ProducerOf(DFB2, "out2"),
-        },
+        .dfb_bindings =
+            {
+                experimental::ProducerOf(DFB0, "out0"),
+                experimental::ProducerOf(DFB1, "out1"),
+                experimental::ProducerOf(DFB2, "out2"),
+            },
         .hw_config = gen2_dm_hw,
     };
 
@@ -589,12 +585,13 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg2_compute.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {
-            experimental::StridedConsumerOf(DFB0, "in0"),
-            experimental::StridedConsumerOf(DFB1, "in1"),
-            experimental::StridedConsumerOf(DFB2, "in2"),
-        },
-        .hw_config = experimental::ComputeGen2Config{},
+        .dfb_bindings =
+            {
+                experimental::StridedConsumerOf(DFB0, "in0"),
+                experimental::StridedConsumerOf(DFB1, "in1"),
+                experimental::StridedConsumerOf(DFB2, "in2"),
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -606,11 +603,12 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
     experimental::ProgramSpec spec{
         .name = "bench_avg2",
         .kernels = {reader_spec, compute_spec},
-        .dataflow_buffers = {
-            MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
-        },
+        .dataflow_buffers =
+            {
+                MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+            },
         .work_units = {wu},
     };
 
@@ -657,20 +655,18 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t ENTRY_SIZE = 1024;
     constexpr uint32_t NUM_ENTRIES = 16;
 
     auto dfb_id = [](char group, int i) -> experimental::DFBSpecName {
         return experimental::DFBSpecName{std::string("dfb_") + group + std::to_string(i)};
     };
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     // Each reader: single DM, 1Sx4A, 16 reads per DFB (full ring).
-    const char* READER_SRC =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst2_reader_dm.cpp";
-    const char* COMPUTE_SRC =
-        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst2_compute.cpp";
+    const char* READER_SRC = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst2_reader_dm.cpp";
+    const char* COMPUTE_SRC = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst2_compute.cpp";
 
     // Each reader: 1 DM thread, STRIDED producer on 3 DFBs.
     auto make_reader_bindings = [&](char group) -> std::vector<experimental::DFBBinding> {
@@ -688,8 +684,7 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         int in_idx = 0;
         for (char g : {'a', 'b', 'c', 'd'}) {
             for (int i = 0; i < 3; i++) {
-                compute_bindings.push_back(
-                    experimental::AllConsumerOf(dfb_id(g, i), "in" + std::to_string(in_idx++)));
+                compute_bindings.push_back(experimental::AllConsumerOf(dfb_id(g, i), "in" + std::to_string(in_idx++)));
             }
         }
     }
@@ -709,7 +704,7 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         .source = COMPUTE_SRC,
         .num_threads = 4,
         .dfb_bindings = compute_bindings,
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     });
 
     // 12 DFB specs: 3 per group × 4 groups.
@@ -789,7 +784,7 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE  = 2048;
+    constexpr uint32_t ENTRY_SIZE = 2048;
     // num_entries=1 is intentional: compute_optimal_txn_id_count iterates n=2..4
     // looking for num_entries % (n * num_producers * num_tcs_per_risc) == 0.
     // With num_entries=1 no n≥2 divides 1, so the function returns 1 txn ID per DFB.
@@ -800,10 +795,10 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     // risc_mask bit positions
     // DM k  → bit k        (bits 0–7)
     // Neo k → bit (8 + k)  (bits 8–11)
-    constexpr uint16_t DM2  = (1u << 2);
-    constexpr uint16_t DM3  = (1u << 3);
-    constexpr uint16_t DM4  = (1u << 4);
-    constexpr uint16_t DM5  = (1u << 5);
+    constexpr uint16_t DM2 = (1u << 2);
+    constexpr uint16_t DM3 = (1u << 3);
+    constexpr uint16_t DM4 = (1u << 4);
+    constexpr uint16_t DM5 = (1u << 5);
     constexpr uint16_t NEO0 = (1u << 8);
     constexpr uint16_t NEO1 = (1u << 9);
     constexpr uint16_t NEO2 = (1u << 10);
@@ -889,8 +884,7 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     // Kernels: created with the low-level experimental Quasar API.
     // DFB risc masks are already set above; no BindDataflowBufferToProducerConsumerKernels call needed.
     // -----------------------------------------------------------------------
-    constexpr const char* DM_KERNEL_SRC =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst3_dm.cpp";
+    constexpr const char* DM_KERNEL_SRC = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst3_dm.cpp";
     constexpr const char* COMPUTE_KERNEL_SRC =
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst3_compute.cpp";
 
@@ -953,16 +947,16 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE  = 2048;
+    constexpr uint32_t ENTRY_SIZE = 2048;
     // num_entries=1: each DFB consumes exactly 1 TxnId (24 DFBs × 1 = the 24-ID pool)
     // while keeping implicit sync enabled to exercise ISR setup.
     constexpr uint32_t NUM_ENTRIES = 1;
 
     // risc_mask bit positions: DM k → bit k (bits 0–7), Neo k → bit (8+k) (bits 8–11)
-    constexpr uint16_t DM2  = (1u << 2);
-    constexpr uint16_t DM3  = (1u << 3);
-    constexpr uint16_t DM4  = (1u << 4);
-    constexpr uint16_t DM5  = (1u << 5);
+    constexpr uint16_t DM2 = (1u << 2);
+    constexpr uint16_t DM3 = (1u << 3);
+    constexpr uint16_t DM4 = (1u << 4);
+    constexpr uint16_t DM5 = (1u << 5);
     constexpr uint16_t NEO0 = (1u << 8);
     constexpr uint16_t NEO1 = (1u << 9);
     constexpr uint16_t NEO2 = (1u << 10);
@@ -977,17 +971,17 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     // -----------------------------------------------------------------------
     auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos) {
         return experimental::dfb::DataflowBufferConfig{
-            .entry_size          = ENTRY_SIZE,
-            .num_entries         = NUM_ENTRIES,
-            .producer_risc_mask  = producer_dm,
-            .num_producers       = 1,
-            .pap                 = dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask  = consumer_neos,
-            .num_consumers       = 2,
-            .cap                 = dfb::AccessPattern::ALL,
+            .entry_size = ENTRY_SIZE,
+            .num_entries = NUM_ENTRIES,
+            .producer_risc_mask = producer_dm,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = consumer_neos,
+            .num_consumers = 2,
+            .cap = dfb::AccessPattern::ALL,
             .enable_producer_implicit_sync = true,
             .enable_consumer_implicit_sync = true,
-            .data_format         = kDfbBenchDataFormat,
+            .data_format = kDfbBenchDataFormat,
         };
     };
 
@@ -1015,17 +1009,17 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     // -----------------------------------------------------------------------
     auto make_1sx1a = [&](uint16_t producer_dm, uint16_t consumer_neo) {
         return experimental::dfb::DataflowBufferConfig{
-            .entry_size          = ENTRY_SIZE,
-            .num_entries         = NUM_ENTRIES,
-            .producer_risc_mask  = producer_dm,
-            .num_producers       = 1,
-            .pap                 = dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask  = consumer_neo,
-            .num_consumers       = 1,
-            .cap                 = dfb::AccessPattern::ALL,
+            .entry_size = ENTRY_SIZE,
+            .num_entries = NUM_ENTRIES,
+            .producer_risc_mask = producer_dm,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = consumer_neo,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::ALL,
             .enable_producer_implicit_sync = true,
             .enable_consumer_implicit_sync = true,
-            .data_format         = kDfbBenchDataFormat,
+            .data_format = kDfbBenchDataFormat,
         };
     };
 
@@ -1050,8 +1044,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     // Kernels: 6-thread DM kernel (DM0–DM5 launched; DM0/DM1 coordinators only;
     // producers DM2–DM5) and 4-thread compute kernel (Neo0–Neo3).
     // -----------------------------------------------------------------------
-    constexpr const char* DM_KERNEL_SRC =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst4_dm.cpp";
+    constexpr const char* DM_KERNEL_SRC = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst4_dm.cpp";
     constexpr const char* COMPUTE_KERNEL_SRC =
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst4_compute.cpp";
 
@@ -1083,13 +1076,12 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
         TT_FATAL(dfb->config.entry_size == ENTRY_SIZE, "DFB {} entry_size mismatch", dfb->id);
     }
     std::vector<uint8_t> cfg_buf(256 * 1024, 0);
-    const size_t cfg_bytes =
-        experimental::dfb::detail::serialize_dfb_config_for_core(bench_core, dfbs, cfg_buf);
+    const size_t cfg_bytes = experimental::dfb::detail::serialize_dfb_config_for_core(bench_core, dfbs, cfg_buf);
     TT_FATAL(cfg_bytes > 0u, "serialize_dfb_config_for_core returned 0 bytes");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(cfg_buf.data());
     constexpr uint8_t kNeo0Hart = ::dfb::TENSIX_RISC_OFFSET;  // Neo0 unpack hart
-    const auto* neo0_e0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
+    const auto* neo0_e0 =
+        reinterpret_cast<const dfb_hart_init_entry_t*>(cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
     const auto* neo0_tc0 = reinterpret_cast<const dfb_blob_tc_pair_t*>(
         cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart] + sizeof(dfb_hart_init_entry_t));
     log_info(
@@ -1117,10 +1109,10 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE  = 2048;
+    constexpr uint32_t ENTRY_SIZE = 2048;
     constexpr uint32_t NUM_ENTRIES = 1;
 
-    constexpr uint16_t DM4  = (1u << 4);
+    constexpr uint16_t DM4 = (1u << 4);
     constexpr uint16_t NEO0 = (1u << 8);
 
     Program program = CreateProgram();
@@ -1129,21 +1121,20 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
         program,
         core_range_set,
         experimental::dfb::DataflowBufferConfig{
-            .entry_size          = ENTRY_SIZE,
-            .num_entries         = NUM_ENTRIES,
-            .producer_risc_mask  = DM4,
-            .num_producers       = 1,
-            .pap                 = dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask  = NEO0,
-            .num_consumers       = 1,
-            .cap                 = dfb::AccessPattern::ALL,
+            .entry_size = ENTRY_SIZE,
+            .num_entries = NUM_ENTRIES,
+            .producer_risc_mask = DM4,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = NEO0,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::ALL,
             .enable_producer_implicit_sync = false,
             .enable_consumer_implicit_sync = false,
-            .data_format         = kDfbBenchDataFormat,
+            .data_format = kDfbBenchDataFormat,
         });
 
-    constexpr const char* DM_KERNEL_SRC =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_case6_debug_dm.cpp";
+    constexpr const char* DM_KERNEL_SRC = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_case6_debug_dm.cpp";
     constexpr const char* COMPUTE_KERNEL_SRC =
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_case6_debug_compute.cpp";
 
@@ -1177,13 +1168,12 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(dfbs[0]->config.entry_size == ENTRY_SIZE, "DFB entry_size mismatch");
 
     std::vector<uint8_t> cfg_buf(256 * 1024, 0);
-    const size_t cfg_bytes =
-        experimental::dfb::detail::serialize_dfb_config_for_core(bench_core, dfbs, cfg_buf);
+    const size_t cfg_bytes = experimental::dfb::detail::serialize_dfb_config_for_core(bench_core, dfbs, cfg_buf);
     TT_FATAL(cfg_bytes > 0u, "serialize_dfb_config_for_core returned 0 bytes");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(cfg_buf.data());
     constexpr uint8_t kNeo0Hart = ::dfb::TENSIX_RISC_OFFSET;
-    const auto* neo0_e0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
+    const auto* neo0_e0 =
+        reinterpret_cast<const dfb_hart_init_entry_t*>(cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
     const auto* neo0_tc0 = reinterpret_cast<const dfb_blob_tc_pair_t*>(
         cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart] + sizeof(dfb_hart_init_entry_t));
     log_info(
@@ -1210,10 +1200,10 @@ void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) 
     IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    constexpr uint32_t ENTRY_SIZE  = 2048;
+    constexpr uint32_t ENTRY_SIZE = 2048;
     constexpr uint32_t NUM_ENTRIES = 1;
 
-    constexpr uint16_t DM4  = (1u << 4);
+    constexpr uint16_t DM4 = (1u << 4);
     constexpr uint16_t NEO0 = (1u << 8);
 
     Program program = CreateProgram();
@@ -1222,17 +1212,17 @@ void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) 
         program,
         core_range_set,
         experimental::dfb::DataflowBufferConfig{
-            .entry_size          = ENTRY_SIZE,
-            .num_entries         = NUM_ENTRIES,
-            .producer_risc_mask  = DM4,
-            .num_producers       = 1,
-            .pap                 = dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask  = NEO0,
-            .num_consumers       = 1,
-            .cap                 = dfb::AccessPattern::ALL,
+            .entry_size = ENTRY_SIZE,
+            .num_entries = NUM_ENTRIES,
+            .producer_risc_mask = DM4,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = NEO0,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::ALL,
             .enable_producer_implicit_sync = true,
             .enable_consumer_implicit_sync = true,
-            .data_format         = kDfbBenchDataFormat,
+            .data_format = kDfbBenchDataFormat,
         });
 
     constexpr const char* DM_KERNEL_SRC =
@@ -1280,7 +1270,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
     const experimental::KernelSpecName CONSUMER{"consumer"};
     const experimental::TensorParamName IN_TENSOR{"in_tensor"};
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{};
 
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
@@ -1311,7 +1301,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {experimental::AllConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -1334,8 +1324,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
     experimental::ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
     producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-        experimental::NodeCoord{0, 0},
-        {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
+        experimental::NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
     experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
@@ -1351,11 +1340,10 @@ struct DfbInitTimingBenchCase {
 };
 
 void print_usage(const char* argv0) {
-    std::cerr
-        << "Usage: " << argv0 << " [--case NAME]\n"
-        << "  NAME: base, two, three, four, five, six, seven,\n"
-        << "        six-debug, six-debug-implicit-sync, six-debug-implicit-sync-program-spec, all\n"
-        << "\nRequires TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_MEASURE_DFB_INIT_TIME=1 on Quasar.\n";
+    std::cerr << "Usage: " << argv0 << " [--case NAME]\n"
+              << "  NAME: base, two, three, four, five, six, seven,\n"
+              << "        six-debug, six-debug-implicit-sync, six-debug-implicit-sync-program-spec, all\n"
+              << "\nRequires TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_MEASURE_DFB_INIT_TIME=1 on Quasar.\n";
 }
 
 }  // namespace tt::tt_metal

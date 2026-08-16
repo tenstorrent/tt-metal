@@ -136,7 +136,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"higher_dim_start", "higher_dim_end", "lower_dim_start", "lower_dim_end", "repetitions", "nop"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

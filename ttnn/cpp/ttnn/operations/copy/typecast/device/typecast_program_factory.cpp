@@ -67,14 +67,18 @@ ComputeUnpackModes make_unpack_modes(
 //   bfp8_pack_precise -> bfp_pack_precision_mode; math_approx_mode=false -> sfpu_precision_mode.
 // dst_full_sync_en was left at its legacy default (false), which is double_buffer_dest = true (the
 // Metal 2.0 default), so it needs no explicit setting.
-ComputeGen1Config make_compute_config(const TypecastParams& args, ComputeUnpackModes unpack_modes) {
-    return ComputeGen1Config{
+ComputeHardwareConfig make_compute_config(const TypecastParams& args, ComputeUnpackModes unpack_modes) {
+    return ComputeHardwareConfig{
         .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-        .bfp_pack_precision_mode =
-            args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
+        .sfpu_precision_mode = tt::tt_metal::Precision::Precise,
         .enable_32_bit_dest = args.fp32_dest_acc_en,
-        .unpack_modes = std::move(unpack_modes),
+        .gen1 =
+            {
+                // legacy math_approx_mode = false
+                .bfp_pack_precision_mode =
+                    args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
+                .unpack_modes = std::move(unpack_modes),
+            },
     };
 }
 
@@ -146,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     const KernelSpec writer{
@@ -156,7 +160,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     const auto typecast_defines = make_typecast_defines(input_dtype, output_dtype);
@@ -173,8 +177,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
                 {{"per_core_block_cnt", per_core_block_cnt},
                  // per_core_block_dim is always 1 (works for both tiled and row-major)
                  {"per_core_block_dim", 1u}},
-            .hw_config =
-                ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format_input))},
+            .hw_config = make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format_input)),
         };
     };
 
@@ -254,8 +257,6 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
-    const auto* device = input.device();
-
     uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
     uint32_t ncores = sub_core_grids->num_cores();
 
@@ -310,7 +311,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     const KernelSpec writer{
@@ -320,7 +321,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     uint32_t ntiles_per_core = ntiles / ncores;
@@ -333,7 +334,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)}, {"per_core_block_dim", 1u}},
-        .hw_config = ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format))},
+        .hw_config = make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format)),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

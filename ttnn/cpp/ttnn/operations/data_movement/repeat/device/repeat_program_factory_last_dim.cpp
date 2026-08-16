@@ -53,11 +53,12 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
     // Per-core page count so read/write start on page boundaries.
     const uint32_t number_of_pages = input_log_shape[-2];
     const uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
-    const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + ((source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
-                                   : (source_page_size_bytes & 0x7) == 0                       ? source_page_size_bytes * 2
-                                   : (source_page_size_bytes & 0x3) == 0                       ? source_page_size_bytes * 4
-                                   : (source_page_size_bytes & 0x1) == 0                       ? source_page_size_bytes * 8
-                                                                           : source_page_size_bytes * 16);
+    const uint32_t cb_size_bytes =
+        (READ_ALIGNMENT * 2) + ((source_page_size_bytes & 0xF) == 0   ? source_page_size_bytes
+                                : (source_page_size_bytes & 0x7) == 0 ? source_page_size_bytes * 2
+                                : (source_page_size_bytes & 0x3) == 0 ? source_page_size_bytes * 4
+                                : (source_page_size_bytes & 0x1) == 0 ? source_page_size_bytes * 8
+                                                                      : source_page_size_bytes * 16);
 
     // RM sharded -> rm_sharded; RM interleaved -> rm_interleaved (TILE uses higher-dim factory).
     const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
@@ -119,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = {{"original_page_size_bytes", source_page_size_bytes}, {"num_repeats", num_repeats}},
         .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "nop"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

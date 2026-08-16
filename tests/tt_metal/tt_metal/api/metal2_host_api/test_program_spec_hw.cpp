@@ -592,7 +592,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "signal"}},
-        .hw_config = CreateWriterGen1DataMovementConfig(),
+        .hw_config = DataMovementHardwareConfig{.gen1 = CreateWriterGen1DataMovementConfig()},
     };
     KernelSpec consumer{
         .unique_id = KernelSpecName{"consumer"},
@@ -601,7 +601,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "waiter"}},
-        .hw_config = CreateReaderGen1DataMovementConfig(),
+        .hw_config = DataMovementHardwareConfig{.gen1 = CreateReaderGen1DataMovementConfig()},
     };
 
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
@@ -911,7 +911,14 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
             {
                 .runtime_arg_names = {"report_addr"},
             },
-        .hw_config = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1 =
+                    {
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::NOC_0,
+                    },
+            },
     };
     dm_kernel.scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});

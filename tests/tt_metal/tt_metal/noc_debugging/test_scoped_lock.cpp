@@ -710,10 +710,20 @@ void run_dfb_scoped_lock_test(
 
     // The two DM kernels claim different NOCs, so the consumer takes whichever one the producer did not.
     const NOC consumer_noc = (producer_noc == NOC::NOC_0) ? NOC::NOC_1 : NOC::NOC_0;
-    const experimental::DataMovementHardwareConfig dm_producer_cfg =
-        experimental::DataMovementGen1Config{.processor = producer_processor, .noc = producer_noc};
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg =
-        experimental::DataMovementGen1Config{.processor = consumer_processor, .noc = consumer_noc};
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = producer_processor,
+                .noc = producer_noc,
+            },
+    };
+    const experimental::DataMovementHardwareConfig dm_consumer_cfg = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = consumer_processor,
+                .noc = consumer_noc,
+            },
+    };
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -865,7 +875,13 @@ void run_dfb_region_cleared_between_launches_test(
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_buffer_addr", "write_size", "self_noc_x", "self_noc_y", "target_addr"}},
-        .hw_config = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1 =
+                    {
+                        .processor = DataMovementProcessor::RISCV_0,
+                    },
+            },
     };
     experimental::WorkUnitSpec writer_wu{.name = "main", .kernels = {WRITER}, .target_nodes = core};
     experimental::ProgramSpec writer_program_spec{
@@ -938,10 +954,19 @@ void run_dfb_scoped_lock_xcore_test(
     experimental::SemaphoreSpec sem_written{
         .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
 
-    const experimental::DataMovementHardwareConfig dm_rv0 =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-    const experimental::DataMovementHardwareConfig dm_rv1 =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    const experimental::DataMovementHardwareConfig dm_rv0 = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = DataMovementProcessor::RISCV_0,
+            },
+    };
+    const experimental::DataMovementHardwareConfig dm_rv1 = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::NOC_1,
+            },
+    };
 
     experimental::KernelSpec locker_spec{
         .unique_id = LOCKER,
@@ -1079,10 +1104,19 @@ void run_dfb_mcast_loopback_unlocked_test(
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = DataMovementProcessor::RISCV_0,
+            },
+    };
+    const experimental::DataMovementHardwareConfig dm_consumer_cfg = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::NOC_1,
+            },
+    };
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -1213,10 +1247,19 @@ void run_dfb_mcast_xcore_locked_test(
     experimental::SemaphoreSpec sem_written{
         .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
 
-    const experimental::DataMovementHardwareConfig dm_rv0 =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-    const experimental::DataMovementHardwareConfig dm_rv1 =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    const experimental::DataMovementHardwareConfig dm_rv0 = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = DataMovementProcessor::RISCV_0,
+            },
+    };
+    const experimental::DataMovementHardwareConfig dm_rv1 = experimental::DataMovementHardwareConfig{
+        .gen1 =
+            {
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::NOC_1,
+            },
+    };
 
     experimental::KernelSpec locker_spec{
         .unique_id = LOCKER,

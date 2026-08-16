@@ -95,9 +95,15 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
     m2::DataMovementHardwareConfig reader_hw;
     if (input.device()->arch() == tt::ARCH::QUASAR) {
-        reader_hw = m2::DataMovementGen2Config{};
+        reader_hw = m2::DataMovementHardwareConfig{};
     } else {
-        reader_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        reader_hw = m2::DataMovementHardwareConfig{
+            .gen1 =
+                {
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
+                },
+        };
     }
     m2::KernelSpec reader{
         .unique_id = READER,

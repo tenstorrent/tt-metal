@@ -80,7 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                 {
                     .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
 
@@ -135,11 +135,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     // Reference global addresses: DM 2-4 share one binary, DM 5-6 share another, DM 7 alone.
     auto slot_global_addr = [&dram_data](uint32_t dm) {
         const uint32_t offset = dm * TLS_CHECK_RESULT_SLOT_WORDS;
-        return (uint64_t)dram_data[offset + TLS_CHECK_GLOBAL_ADDR_LO] | ((uint64_t)dram_data[offset + TLS_CHECK_GLOBAL_ADDR_HI] << 32);
+        return (uint64_t)dram_data[offset + TLS_CHECK_GLOBAL_ADDR_LO] |
+               ((uint64_t)dram_data[offset + TLS_CHECK_GLOBAL_ADDR_HI] << 32);
     };
     auto slot_thread_local_addr = [&dram_data](uint32_t dm) {
         const uint32_t offset = dm * TLS_CHECK_RESULT_SLOT_WORDS;
-        return (uint64_t)dram_data[offset + TLS_CHECK_THREAD_LOCAL_ADDR_LO] | ((uint64_t)dram_data[offset + TLS_CHECK_THREAD_LOCAL_ADDR_HI] << 32);
+        return (uint64_t)dram_data[offset + TLS_CHECK_THREAD_LOCAL_ADDR_LO] |
+               ((uint64_t)dram_data[offset + TLS_CHECK_THREAD_LOCAL_ADDR_HI] << 32);
     };
     const uint64_t ref_addr_2_4 = slot_global_addr(2);
     const uint64_t ref_addr_5_6 = slot_global_addr(5);
@@ -323,7 +325,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
             {
                 .runtime_arg_names = {"signal_address", "l1_result_addr"},
             },
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{

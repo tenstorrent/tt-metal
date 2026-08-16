@@ -206,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
             .accessor_name = "input",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -222,15 +222,15 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
             .accessor_name = "output",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    const ComputeGen1Config compute_config{
+    const ComputeHardwareConfig compute_config{
         .fpu_math_fidelity = default_math_fidelity,
         .sfpu_precision_mode = Precision::Precise,
         .enable_32_bit_dest = true,
         .double_buffer_dest = true,
-        .unpack_modes = unpack_modes,
+        .gen1 = {.unpack_modes = unpack_modes},
     };
 
     const KernelSpec::CompilerOptions::Defines compute_defines(defines_kernel_args);

@@ -246,7 +246,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PREWF_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -263,7 +263,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PREWF_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Welford uses fp32 accumulation; preserve fp32_dest_acc_en from the compute config.
@@ -290,7 +290,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
              {"blk", block_size},
              {"welford_unpack_fp32_active", welford_unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
     // The reciprocal table has no FIFO traffic at all: the kernel reads it by base pointer. It is
     // that kernel's only endpoint, so it takes both roles.
@@ -303,7 +303,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         bind_self_loop(compute, PREWF_M2_SPILL, "m2_spill");
     }
 
-    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    auto& compute_hw = std::get<m2::ComputeHardwareConfig>(compute.hw_config);
+    auto& compute_gen1 = compute_hw.gen1;
     // When welford_unpack_fp32_active:
     //   !fuse_pre_add -> UnpackToDest on the input only (read by transpose_tile in the Welford loop).
     //   fuse_pre_add  -> UnpackToDest on the input, residual and fused buffers (copy_tile pre-add

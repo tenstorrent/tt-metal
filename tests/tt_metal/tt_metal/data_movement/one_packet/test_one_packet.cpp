@@ -81,11 +81,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 
     DataMovementHardwareConfig kspec_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        kspec_hw_config = DataMovementGen2Config{};
+        kspec_hw_config = DataMovementHardwareConfig{};
     } else {
-        kspec_hw_config = DataMovementGen1Config{
-            .processor = proc,
-            .noc = noc,
+        kspec_hw_config = DataMovementHardwareConfig{
+            .gen1 =
+                {
+                    .processor = proc,
+                    .noc = noc,
+                },
         };
     }
     KernelSpec kspec{

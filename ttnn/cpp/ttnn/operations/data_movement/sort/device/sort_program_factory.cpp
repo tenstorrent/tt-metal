@@ -559,7 +559,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
                 {"W_index_bytes", W_index_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -583,10 +583,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
                 {"W_value_bytes", W_value_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     // UINT16 keys also route through the fp32 sort path (sort_value_cb_data_format
     // is Float32 for UINT16 — the reader's software conversion writes Float32 into
     // INPUT_TENSOR), so treat UINT16 the same as Float32 here: the value buffers
@@ -596,15 +596,15 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     // losing bits > 255 and defeating the software conversion.  Index buffers
     // stay on the default path.
     if (input_tensor_cb_data_format == tt::DataFormat::Float32 || is_uint16_input) {
-        compute_hw_config.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
-        compute_hw_config.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
+        compute_hw_config.gen1.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
+        compute_hw_config.gen1.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
         if (is_row_major) {
             // rm_input carries Float32 for both native Float32 RM inputs and
             // UINT16 RM inputs (after reader software conversion), so
             // tilize_block must load the full 32-bit mantissa here.
-            compute_hw_config.unpack_modes.insert({RM_INPUT, UnpackMode::UnpackToDest});
+            compute_hw_config.gen1.unpack_modes.insert({RM_INPUT, UnpackMode::UnpackToDest});
         } else {
-            compute_hw_config.unpack_modes.insert({VALUE_TENSOR, UnpackMode::UnpackToDest});
+            compute_hw_config.gen1.unpack_modes.insert({VALUE_TENSOR, UnpackMode::UnpackToDest});
         }
     }
 
@@ -1290,7 +1290,6 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     // -----------------------------------------------------------------------
     // Kernels
     // -----------------------------------------------------------------------
-    auto* const device = tensor_args.input_tensor.device();
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
@@ -1325,7 +1324,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"input_tensor_tile_size_bytes", input_tensor_tile_size},
                 {"index_tensor_tile_size_bytes", index_tensor_tile_size},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -1349,22 +1348,22 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"is_32_bit_data", static_cast<uint32_t>(is_32_bit_data)},
                 {"W_value_slice_bytes", W_value_slice_bytes},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
         // Only buffers this configuration actually binds may appear here, and an absent entry
         // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
         // precision; the index buffers stay on the default path.
-        compute_hw_config.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
-        compute_hw_config.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
-        compute_hw_config.unpack_modes.insert({VALUE_INTERMEDIATE, UnpackMode::UnpackToDest});
-        compute_hw_config.unpack_modes.insert({VALUE_PEER, UnpackMode::UnpackToDest});
+        compute_hw_config.gen1.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
+        compute_hw_config.gen1.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
+        compute_hw_config.gen1.unpack_modes.insert({VALUE_INTERMEDIATE, UnpackMode::UnpackToDest});
+        compute_hw_config.gen1.unpack_modes.insert({VALUE_PEER, UnpackMode::UnpackToDest});
         if (is_row_major) {
-            compute_hw_config.unpack_modes.insert({RM_INPUT, UnpackMode::UnpackToDest});
+            compute_hw_config.gen1.unpack_modes.insert({RM_INPUT, UnpackMode::UnpackToDest});
         } else {
-            compute_hw_config.unpack_modes.insert({VALUE_TENSOR, UnpackMode::UnpackToDest});
+            compute_hw_config.gen1.unpack_modes.insert({VALUE_TENSOR, UnpackMode::UnpackToDest});
         }
     }
 

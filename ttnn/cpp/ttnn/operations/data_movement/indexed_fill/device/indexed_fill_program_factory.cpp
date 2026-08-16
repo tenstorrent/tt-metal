@@ -234,16 +234,17 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     // input_a / input_b / output share the page (last) dim on this path, so a single aligned size
     // applies; std::max keeps it correct even if alignments ever differ.
     const uint32_t generic_aligned_page_size = is_tile ? rounded_page_size
-                                                        : static_cast<uint32_t>(std::max({input_a_buffer->aligned_page_size(),
-                                                                                          input_b_buffer->aligned_page_size(),
-                                                                                          output_buffer->aligned_page_size()}));
+                                                       : static_cast<uint32_t>(std::max(
+                                                             {input_a_buffer->aligned_page_size(),
+                                                              input_b_buffer->aligned_page_size(),
+                                                              output_buffer->aligned_page_size()}));
 
     // Use shard geometry for the shard_local path, full aligned pages for the generic path.
     const uint32_t kernel_page_size =
         is_shard_local ? shard_page_size : (is_native ? page_size : generic_aligned_page_size);
     const uint32_t kernel_rounded_page_size = is_shard_local ? round_up_to_mul32(shard_page_size)
-                                              : is_native     ? rounded_page_size
-                                                              : generic_aligned_page_size;
+                                              : is_native    ? rounded_page_size
+                                                             : generic_aligned_page_size;
     const uint32_t batch_size_in_pages = is_shard_local ? shard_ppb : inner_count;
     const uint32_t total_pages_in_shard = total_batches_per_core * shard_ppb;
     const uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
@@ -299,8 +300,6 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
         .data_format_metadata = dfb_data_format,
     });
 
-    const auto arch = input_a.device()->arch();
-
     // ---- Reader: single unified kernel; path selected via the `mode` compile-time arg.
     // The one source serves all four modes through `if constexpr (mode)`. Because the named
     // `args::` tokens are emitted per-kernel from the schema, and name lookup still runs on the
@@ -348,13 +347,13 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
                   "full_tile_w",
                   "col_page_offset",
                   "col_byte_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer: path-dependent source and bindings.
     KernelSpec writer{
         .unique_id = IF_WRITER,
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (is_native || is_shard_local) {
         // Data DFB is borrowed onto the output buffer: the writer just synchronises on the DFB.

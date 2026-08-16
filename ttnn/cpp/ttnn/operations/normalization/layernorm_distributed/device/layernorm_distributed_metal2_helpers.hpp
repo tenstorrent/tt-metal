@@ -64,18 +64,4 @@ inline void unpack_via_dest(m2::ComputeGen1Config& compute_config, const m2::DFB
     compute_config.unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToDest);
 }
 
-// Resolve the Gen1 alternative of a compute hardware config so per-DFB fields can be set on it.
-//
-// A compute hardware config holds one generation's settings, and this op only ever builds the Gen1
-// (Wormhole / Blackhole) alternative: `to_compute_hardware_config` returns the Gen2 alternative on
-// Quasar, and nothing here populates the Gen2-only fields or makes the Quasar-specific choices those
-// need. Say so plainly rather than letting the std::get raise std::bad_variant_access.
-inline m2::ComputeGen1Config& gen1_compute_config(m2::ComputeHardwareConfig& config) {
-    TT_FATAL(
-        std::holds_alternative<m2::ComputeGen1Config>(config),
-        "layernorm_distributed builds Gen1 (Wormhole / Blackhole) compute configs only; this device "
-        "reports a different generation, which this op does not support yet.");
-    return std::get<m2::ComputeGen1Config>(config);
-}
-
 }  // namespace ttnn::prim::layernorm_distributed_metal2

@@ -18,7 +18,6 @@
 // Wormhole (Gen1):
 //   8. Gen1 specific tests
 // Device-free:
-//   9. ComputeHardwareConfig common-field accessors
 //
 //---------------------------------------------------------------------------------
 // These unit tests use shortcut functions to create minimal valid ProgramSpec
@@ -45,7 +44,7 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <tt-metalium/tt_metal.hpp>                      // for CompileProgram (JIT trigger)
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -184,7 +183,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateKernelNameFails) {
 
     // Add a kernel with duplicate name
     auto duplicate_kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    duplicate_kernel.hw_config = DataMovementGen2Config{};
+    duplicate_kernel.hw_config = DataMovementHardwareConfig{};
     spec.kernels.push_back(duplicate_kernel);
 
     EXPECT_THAT(
@@ -872,8 +871,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
 
         auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
         auto compute_kernel = MakeMinimalGen2ComputeKernel("compute_kernel");
-        auto& dm_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(dm_kernel.hw_config));
+        auto& dm_hw_config = std::get<DataMovementHardwareConfig>(dm_kernel.hw_config).gen2;
         dm_hw_config.disable_dfb_implicit_sync_for_all = disable_all;
 
         auto dfb = MakeMinimalDFB("dfb_0");
@@ -915,8 +913,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisagreementAcrossProduce
 
     // producer1 hammers implicit sync off; producer2 leaves it on. Both bind the same DFB on
     // the producer side, so the per-side opt-out disagrees and validation must reject.
-    DataMovementGen2Config& producer1_hw_config =
-        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config));
+    DataMovementGen2Config& producer1_hw_config = std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2;
     producer1_hw_config.disable_dfb_implicit_sync_for_all = true;
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -951,10 +948,8 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
 
     // producer1 opts out via the per-kernel hammer; producer2 opts the same DFB out by name.
     // Both express the same per-side decision (disable), so they agree and the side lowers off.
-    DataMovementGen2Config& producer1_hw_config =
-        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config));
-    DataMovementGen2Config& producer2_hw_config =
-        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer2.hw_config));
+    DataMovementGen2Config& producer1_hw_config = std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2;
+    DataMovementGen2Config& producer2_hw_config = std::get<DataMovementHardwareConfig>(producer2.hw_config).gen2;
     producer1_hw_config.disable_dfb_implicit_sync_for_all = true;
     producer2_hw_config.disable_dfb_implicit_sync_for.push_back(DFBSpecName{"dfb"});
 
@@ -1041,30 +1036,23 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
             "KernelSpec 'kernel' has too many threads. The architecture supports up to 4 for compute kernels")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithGen1ConfigFails) {
-    // The config's generation must match the target platform: on Gen2 (Quasar) a DM kernel must
-    // carry a DataMovementGen2Config. Supplying an explicit Gen1 config is a hard error — it is not
-    // silently substituted with a default Gen2 config.
+TEST_F(ProgramSpecTestQuasar, DMKernelCarryingBothGenerationBlocksSucceeds) {
+    // A hardware config carries a settings block per generation and only the block matching the
+    // target platform is applied. A spec that populates both is therefore legal on Gen2: the Gen1
+    // placement is inert here, not a mismatch. This is what lets one KernelSpec serve both
+    // generations rather than forcing the factory to branch on architecture.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
     auto kernel = MakeMinimalGen2DMKernel("kernel");
-    // Replace the default Gen2 config with an explicit Gen1 config (wrong generation for Quasar).
-    auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-    dm_config = DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default,
-        .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
-    };
+    std::get<DataMovementHardwareConfig>(kernel.hw_config).gen1 = CreateReaderGen1DataMovementConfig();
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("holds a DataMovementGen1Config")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
@@ -1084,10 +1072,10 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, RoleBasedGen1ConfigOnGen2Fails) {
-    // MakeMinimalReaderDMKernel builds a Gen1 placement (DataMovementGen1Config), which
-    // is the wrong generation for Gen2 (Quasar): the platform requires a DataMovementGen2Config, so the
-    // mismatch is a hard error rather than a silently-ignored role hint.
+TEST_F(ProgramSpecTestQuasar, RoleBasedGen1PlacementIsInertOnGen2) {
+    // MakeMinimalReaderDMKernel fills the Gen1 placement block. Gen2 has a unified NOC and
+    // automated core selection, so that block has nothing to say here: it is ignored rather than
+    // rejected, and the kernel runs on the default Gen2 settings.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1098,9 +1086,7 @@ TEST_F(ProgramSpecTestQuasar, RoleBasedGen1ConfigOnGen2Fails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("holds a DataMovementGen1Config")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // Cross-node DFBs are part of the API surface but not yet supported by the runtime.
@@ -1736,7 +1722,8 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
 
     // Set an unpack_modes entry referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
-    auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
+    auto& compute_config_parent = std::get<ComputeHardwareConfig>(consumer.hw_config);
+    auto& compute_config = compute_config_parent.gen2;
     compute_config.unpack_modes = {{DFBSpecName{"nonexistent_dfb"}, UnpackMode::UnpackToDest}};
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1767,7 +1754,8 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config_parent = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = config_parent.gen2;
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
@@ -1782,8 +1770,9 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.enable_32_bit_dest = true;
+            auto& config_parent = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = config_parent.gen2;
+            config_parent.enable_32_bit_dest = true;
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
@@ -1800,7 +1789,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             config.enable_32_bit_dest = true;
         }
     }
@@ -1835,7 +1824,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     spec.name = "test_program";
 
     auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
-    auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
+    auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
     producer_config.enable_32_bit_dest = true;
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
@@ -1863,8 +1852,9 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
     spec.name = "test_program";
 
     auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
-    auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.enable_32_bit_dest = true;
+    auto& producer_config_parent = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
+    auto& producer_config = producer_config_parent.gen2;
+    producer_config_parent.enable_32_bit_dest = true;
     producer_config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
@@ -1894,7 +1884,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config_parent = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = config_parent.gen2;
             // enable_32_bit_dest stays at its default (false).
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
@@ -1912,7 +1903,8 @@ TEST_F(ProgramSpecTestQuasar, ConsumerUnpackToDestBelow32BitWithoutEnableSucceed
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b, consumed by compute_kernel
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config_parent = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = config_parent.gen2;
             // enable_32_bit_dest stays at its default (false).
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
@@ -1930,8 +1922,9 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.enable_32_bit_dest = true;
+            auto& config_parent = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = config_parent.gen2;
+            config_parent.enable_32_bit_dest = true;
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
@@ -2440,7 +2433,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     // Find the compute kernel and set math fidelity options
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             config.fpu_math_fidelity = MathFidelity::LoFi;
             config.enable_32_bit_dest = true;
             config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;
@@ -2462,8 +2455,9 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.enable_32_bit_dest = true;
+            auto& config_parent = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = config_parent.gen2;
+            config_parent.enable_32_bit_dest = true;
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
@@ -2496,8 +2490,9 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in0"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
-    auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
-    compute_config.enable_32_bit_dest = true;
+    auto& compute_config_parent = std::get<ComputeHardwareConfig>(consumer.hw_config);
+    auto& compute_config = compute_config_parent.gen2;
+    compute_config_parent.enable_32_bit_dest = true;
     compute_config.unpack_modes = {{DFBSpecName{"dfb_1"}, UnpackMode::UnpackToDest}};
 
     spec.kernels = {producer, consumer};
@@ -2537,7 +2532,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 // layer and is out of scope for a Metal unit test.)
 
 TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigDefaultsMapToInternalDefaults) {
-    // A default ComputeGen2Config{} must yield the historical internal QuasarComputeConfig defaults.
+    // A default ComputeHardwareConfig{} must yield the historical internal QuasarComputeConfig defaults.
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // compute_kernel carries a default ComputeGen2Config
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
@@ -2557,7 +2552,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             config.double_buffer_dest = false;                                  // -> internal dst_full_sync_en == true
             config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;  // -> internal math_approx_mode == true
         }
@@ -2875,7 +2870,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .unique_id = KernelSpecName{"my_dm_kernel"},
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 2,
-        .hw_config = DataMovementGen2Config{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
     EXPECT_EQ(dm_kernel.unique_id.get(), "my_dm_kernel");
@@ -2893,7 +2888,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
             },
         .hw_config =
             ComputeHardwareConfig{
-                ComputeGen2Config{
+                ComputeHardwareConfig{
                     .fpu_math_fidelity = MathFidelity::LoFi,
                     .enable_32_bit_dest = true,
                 },
@@ -2983,7 +2978,7 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
             KernelSpec::RuntimeArgSchema{
                 .runtime_arg_names = {"input_ptr"},
             },
-        .hw_config = DataMovementGen2Config{},
+        .hw_config = DataMovementHardwareConfig{},
     };
     EXPECT_EQ(k.runtime_arg_schema.runtime_arg_names.size(), 1u);
 }
@@ -3018,7 +3013,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
-                    .hw_config = DataMovementGen2Config{},
+                    .hw_config = DataMovementHardwareConfig{},
                 },
                 KernelSpec{
                     .unique_id = KernelSpecName{"consumer"},
@@ -3129,7 +3124,7 @@ protected:
 };
 
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
-// Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig
+// Quasar suite): a default ComputeHardwareConfig{} must yield the historical internal ComputeConfig
 // defaults. Guards the perf/precision knobs that don't move a functional pass/fail result.
 TEST_F(ProgramSpecTestGen1, ComputeGen1ConfigDefaultsMapToInternalDefaults) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // compute_kernel carries a default ComputeGen1Config
@@ -3222,7 +3217,7 @@ TEST_F(ProgramSpecTestGen1, ConsumerUnpackToDestBelow32BitWithoutEnableFailsForP
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // dfb_0 is Float16_b, consumed by compute_kernel
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config).gen1;
             // enable_32_bit_dest stays at its default (false).
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
@@ -3473,23 +3468,22 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support multi-threaded kernels")));
 }
 
-TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
-    // The config's generation must match the target platform: on Gen1 (WH/BH) a DM kernel carrying a
-    // Gen2 config is a hard error — it has no way to resolve its processor/NOC placement.
+TEST_F(ProgramSpecTestGen1, Gen2OnlySettingsAreInertOnGen1) {
+    // The mirror of the Gen2 case: a spec whose Gen2 block carries implicit-sync settings and whose
+    // Gen1 block is left default is legal on Gen1. The Gen2 block is inert, and the Gen1 placement
+    // falls back on its defaults (RISCV_0 / NOC_0) — legal for a single DM kernel on a node, with
+    // the processor-distinctness check the thing that catches a real placement mistake.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // MakeMinimalGen2DMKernel produces a gen2 (Quasar) DM config (no Gen1Config).
     auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("holds a DataMovementGen2Config")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
@@ -3523,8 +3517,8 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsSameNocDedicatedFails) {
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
     // Force both onto NOC_0 (the helper would otherwise assign complementary NOCs). noc_mode
     // defaults to DM_DEDICATED_NOC.
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k0.hw_config)).noc = NOC::NOC_0;
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k1.hw_config)).noc = NOC::NOC_0;
+    std::get<DataMovementHardwareConfig>(k0.hw_config).gen1.noc = NOC::NOC_0;
+    std::get<DataMovementHardwareConfig>(k1.hw_config).gen1.noc = NOC::NOC_0;
 
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
@@ -3543,8 +3537,8 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsDistinctNocDedicatedSucceeds) {
 
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k0.hw_config)).noc = NOC::NOC_0;
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k1.hw_config)).noc = NOC::NOC_1;
+    std::get<DataMovementHardwareConfig>(k0.hw_config).gen1.noc = NOC::NOC_0;
+    std::get<DataMovementHardwareConfig>(k1.hw_config).gen1.noc = NOC::NOC_1;
 
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
@@ -3563,10 +3557,10 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsSameNocDynamicSucceeds) {
 
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
-    auto& cfg0 = std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k0.hw_config));
+    auto& cfg0 = std::get<DataMovementHardwareConfig>(k0.hw_config).gen1;
     cfg0.noc = NOC::NOC_0;
     cfg0.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
-    auto& cfg1 = std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k1.hw_config));
+    auto& cfg1 = std::get<DataMovementHardwareConfig>(k1.hw_config).gen1;
     cfg1.noc = NOC::NOC_0;
     cfg1.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
 
@@ -3585,8 +3579,7 @@ TEST_F(ProgramSpecTestGen1, DMProcessorBeyondRiscv1Fails) {
     spec.name = "test_program";
 
     auto kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(kernel.hw_config)).processor =
-        DataMovementProcessor::RISCV_2;
+    std::get<DataMovementHardwareConfig>(kernel.hw_config).gen1.processor = DataMovementProcessor::RISCV_2;
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
@@ -3608,10 +3601,8 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsMixedNocModeFails) {
     // neither the processor nor the NOC-distinctness check fires — only the mode disagreement trips.
     auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k0.hw_config)).noc_mode =
-        NOC_MODE::DM_DEDICATED_NOC;
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k1.hw_config)).noc_mode =
-        NOC_MODE::DM_DYNAMIC_NOC;
+    std::get<DataMovementHardwareConfig>(k0.hw_config).gen1.noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+    std::get<DataMovementHardwareConfig>(k1.hw_config).gen1.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
 
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
@@ -3656,10 +3647,8 @@ TEST_F(ProgramSpecTestGen1, DMKernelsDifferentNocModesOnDistinctNodesSucceeds) {
 
     auto k_a = MakeMinimalGen1DMKernel("k_a", DataMovementProcessor::RISCV_0);
     auto k_b = MakeMinimalGen1DMKernel("k_b", DataMovementProcessor::RISCV_0);
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k_a.hw_config)).noc_mode =
-        NOC_MODE::DM_DEDICATED_NOC;
-    std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(k_b.hw_config)).noc_mode =
-        NOC_MODE::DM_DEDICATED_NOC;
+    std::get<DataMovementHardwareConfig>(k_a.hw_config).gen1.noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+    std::get<DataMovementHardwareConfig>(k_b.hw_config).gen1.noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 
     spec.kernels = {k_a, k_b};
     spec.work_units = std::vector<WorkUnitSpec>{
@@ -4782,9 +4771,7 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
 // bound to the same producer/consumer kernels in a single WorkUnit on a single node.
 namespace {
 ProgramSpec MakeAliasProgramSpec(
-    const NodeCoord& node,
-    const DataflowBufferSpec& dfb_a,
-    const DataflowBufferSpec& dfb_b) {
+    const NodeCoord& node, const DataflowBufferSpec& dfb_a, const DataflowBufferSpec& dfb_b) {
     ProgramSpec spec;
 
     KernelSpec producer = MakeMinimalGen2DMKernel("producer_kernel");
@@ -4815,8 +4802,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("different total sizes")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
 TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnAsymmetricDeclaration) {
@@ -4864,8 +4850,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
     ProgramSpec spec;
     spec.kernels = {producer, consumer, other};
     spec.dataflow_buffers = {dfb_a, dfb_b};
-    spec.work_units = {
-        MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -4937,181 +4922,5 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
 }
 
-//---------------------------------------------------------------------------------
-// 9. ComputeHardwareConfig common-field accessors
-//
-// Device-free; no fixture needed.
-//
-// ComputeHardwareConfig is a std::variant<ComputeGen1Config, ComputeGen2Config>, and the accessors
-// exist to hide that variant for the fields both alternatives share. The failure they can plausibly
-// hide is a copy-paste one: an accessor wired to the wrong member, or one that happens to work for
-// the alternative someone tested and not the other.
-//
-// Two things below are load-bearing against exactly that:
-//   - Every check runs against BOTH alternatives, via helpers templated on the alternative type, so
-//     neither generation can be covered by accident alone.
-//   - The two bool fields are checked at values OPPOSITE each other (and opposite their defaults),
-//     so an accessor pointing at the wrong bool cannot pass. Their differing defaults
-//     (enable_32_bit_dest = false, double_buffer_dest = true) make even the untouched-config read
-//     discriminating.
-//
-// The static_asserts pin the return types, which are a deliberate design decision rather than an
-// accident: the mutable accessors return references so callers can assign through them, the const
-// accessors return the small scalars by value (no reference into a temporary variant, no pointless
-// indirection) and unpack_modes by const reference (it is a container; copying it on every read
-// would be wasteful, and callers expect a view).
-//---------------------------------------------------------------------------------
-
-// Non-default values for every common field. Each differs from the field's default, so an accessor
-// that read a hardcoded default, or that never wrote, fails. The bools are opposite each other.
-constexpr MathFidelity kAccessorFidelity = MathFidelity::LoFi;    // default HiFi4
-constexpr Precision kAccessorPrecision = Precision::Approximate;  // default Precise
-constexpr bool kAccessor32BitDest = true;                         // default false
-constexpr bool kAccessorDoubleBuffer = false;                     // default true
-
-const DFBSpecName kAccessorDfbA{"accessor_dfb_a"};
-const DFBSpecName kAccessorDfbB{"accessor_dfb_b"};
-
-using MutableComputeConfig = ComputeHardwareConfig&;
-using ConstComputeConfig = const ComputeHardwareConfig&;
-
-static_assert(std::is_same_v<decltype(fpu_math_fidelity(std::declval<MutableComputeConfig>())), MathFidelity&>);
-static_assert(std::is_same_v<decltype(fpu_math_fidelity(std::declval<ConstComputeConfig>())), MathFidelity>);
-static_assert(std::is_same_v<decltype(sfpu_precision_mode(std::declval<MutableComputeConfig>())), Precision&>);
-static_assert(std::is_same_v<decltype(sfpu_precision_mode(std::declval<ConstComputeConfig>())), Precision>);
-static_assert(std::is_same_v<decltype(enable_32_bit_dest(std::declval<MutableComputeConfig>())), bool&>);
-static_assert(std::is_same_v<decltype(enable_32_bit_dest(std::declval<ConstComputeConfig>())), bool>);
-static_assert(std::is_same_v<decltype(double_buffer_dest(std::declval<MutableComputeConfig>())), bool&>);
-static_assert(std::is_same_v<decltype(double_buffer_dest(std::declval<ConstComputeConfig>())), bool>);
-static_assert(std::is_same_v<decltype(unpack_modes(std::declval<MutableComputeConfig>())), ComputeUnpackModes&>);
-static_assert(std::is_same_v<decltype(unpack_modes(std::declval<ConstComputeConfig>())), const ComputeUnpackModes&>);
-
-// unpack_modes is the one accessor returning a reference from a const config, so it carries a
-// deleted rvalue overload to stop a caller binding that reference into a temporary. Assert the
-// deletion bites — and assert the lvalue forms still compile, because without those positive
-// controls a mere typo here would satisfy the negative assertion vacuously.
-template <typename Config>
-concept UnpackModesAcceptsLvalue = requires(Config& config) { unpack_modes(config); };
-template <typename Config>
-concept UnpackModesAcceptsRvalue = requires(Config config) { unpack_modes(std::move(config)); };
-
-static_assert(UnpackModesAcceptsLvalue<ComputeHardwareConfig>);
-static_assert(UnpackModesAcceptsLvalue<const ComputeHardwareConfig>);
-static_assert(!UnpackModesAcceptsRvalue<ComputeHardwareConfig>);
-static_assert(!UnpackModesAcceptsRvalue<const ComputeHardwareConfig>);
-
-// Reading an untouched config through the accessors must yield the alternative's own defaults.
-template <typename GenConfig>
-void CheckAccessorDefaultsReadThrough() {
-    const ComputeHardwareConfig config{GenConfig{}};
-    const GenConfig defaults{};
-
-    EXPECT_EQ(fpu_math_fidelity(config), defaults.fpu_math_fidelity);
-    EXPECT_EQ(sfpu_precision_mode(config), defaults.sfpu_precision_mode);
-    EXPECT_EQ(enable_32_bit_dest(config), defaults.enable_32_bit_dest);
-    EXPECT_EQ(double_buffer_dest(config), defaults.double_buffer_dest);
-    EXPECT_TRUE(unpack_modes(config).empty());
-}
-
-// Writing through the mutable accessors must land on the held alternative's actual members, and the
-// const accessors must read back what was written.
-template <typename GenConfig>
-void CheckAccessorWritesLandOnHeldAlternative() {
-    ComputeHardwareConfig config{GenConfig{}};
-
-    fpu_math_fidelity(config) = kAccessorFidelity;
-    sfpu_precision_mode(config) = kAccessorPrecision;
-    enable_32_bit_dest(config) = kAccessor32BitDest;
-    double_buffer_dest(config) = kAccessorDoubleBuffer;
-
-    // Bind the returned reference and use it repeatedly — the usage the header documents.
-    auto& dfb_unpack_modes = unpack_modes(config);
-    dfb_unpack_modes.emplace(kAccessorDfbA, UnpackMode::UnpackToDest);
-    dfb_unpack_modes.emplace(kAccessorDfbB, UnpackMode::UnpackToSrc);
-
-    // Reach past the accessors: the writes must be visible on the held alternative itself. This is
-    // what catches an accessor that targets the wrong member.
-    const GenConfig& held = std::get<GenConfig>(config);
-    EXPECT_EQ(held.fpu_math_fidelity, kAccessorFidelity);
-    EXPECT_EQ(held.sfpu_precision_mode, kAccessorPrecision);
-    EXPECT_EQ(held.enable_32_bit_dest, kAccessor32BitDest);
-    EXPECT_EQ(held.double_buffer_dest, kAccessorDoubleBuffer);
-
-    const ComputeUnpackModes expected_modes{
-        {kAccessorDfbA, UnpackMode::UnpackToDest},
-        {kAccessorDfbB, UnpackMode::UnpackToSrc},
-    };
-    EXPECT_EQ(held.unpack_modes, expected_modes)
-        << "unpack_modes() handed back a copy rather than a view onto the held alternative";
-
-    // And the const accessors report the same values.
-    const ComputeHardwareConfig& const_config = config;
-    EXPECT_EQ(fpu_math_fidelity(const_config), kAccessorFidelity);
-    EXPECT_EQ(sfpu_precision_mode(const_config), kAccessorPrecision);
-    EXPECT_EQ(enable_32_bit_dest(const_config), kAccessor32BitDest);
-    EXPECT_EQ(double_buffer_dest(const_config), kAccessorDoubleBuffer);
-    EXPECT_EQ(unpack_modes(const_config), expected_modes);
-}
-
-// An accessor must never reach into the alternative that is NOT held. Assigning a fresh alternative
-// over the variant has to be reflected immediately. This is the retargeting case that makes
-// std::get<ComputeGen1Config> throw, and the reason these accessors exist.
-template <typename FromConfig, typename ToConfig>
-void CheckAccessorsFollowTheHeldAlternative() {
-    ComputeHardwareConfig config{FromConfig{}};
-    fpu_math_fidelity(config) = kAccessorFidelity;
-    enable_32_bit_dest(config) = kAccessor32BitDest;
-
-    config = ToConfig{};  // switch alternatives; the accessors must now see ToConfig's defaults
-
-    const ToConfig defaults{};
-    EXPECT_EQ(fpu_math_fidelity(config), defaults.fpu_math_fidelity);
-    EXPECT_EQ(enable_32_bit_dest(config), defaults.enable_32_bit_dest);
-
-    // ...and writing still works after the switch.
-    fpu_math_fidelity(config) = kAccessorFidelity;
-    EXPECT_EQ(std::get<ToConfig>(config).fpu_math_fidelity, kAccessorFidelity);
-}
-
-TEST(ComputeHardwareConfigAccessors, Gen1DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen1Config>(); }
-
-TEST(ComputeHardwareConfigAccessors, Gen2DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen2Config>(); }
-
-TEST(ComputeHardwareConfigAccessors, Gen1WritesLandOnHeldAlternative) {
-    CheckAccessorWritesLandOnHeldAlternative<ComputeGen1Config>();
-}
-
-TEST(ComputeHardwareConfigAccessors, Gen2WritesLandOnHeldAlternative) {
-    CheckAccessorWritesLandOnHeldAlternative<ComputeGen2Config>();
-}
-
-TEST(ComputeHardwareConfigAccessors, FollowsSwitchFromGen1ToGen2) {
-    CheckAccessorsFollowTheHeldAlternative<ComputeGen1Config, ComputeGen2Config>();
-}
-
-TEST(ComputeHardwareConfigAccessors, FollowsSwitchFromGen2ToGen1) {
-    CheckAccessorsFollowTheHeldAlternative<ComputeGen2Config, ComputeGen1Config>();
-}
-
 }  // namespace
 }  // namespace tt::tt_metal::experimental
-
-namespace {
-
-// Op code calls these accessors unqualified from its own namespace, which only works if they are
-// found by ADL on ComputeHardwareConfig. The checks above cannot show that: they live inside
-// tt::tt_metal::experimental, where ordinary lookup finds the accessors regardless. This probe sits
-// outside that namespace, so ADL is the only thing that can resolve the names.
-template <typename Config>
-concept ComputeAccessorsFoundByAdl = requires(Config& config) {
-    fpu_math_fidelity(config);
-    sfpu_precision_mode(config);
-    enable_32_bit_dest(config);
-    double_buffer_dest(config);
-    unpack_modes(config);
-};
-
-static_assert(ComputeAccessorsFoundByAdl<tt::tt_metal::experimental::ComputeHardwareConfig>);
-static_assert(ComputeAccessorsFoundByAdl<const tt::tt_metal::experimental::ComputeHardwareConfig>);
-
-}  // namespace

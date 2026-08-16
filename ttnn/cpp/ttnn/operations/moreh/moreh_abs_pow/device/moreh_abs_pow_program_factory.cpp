@@ -151,7 +151,7 @@ ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgra
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"input_is_dram", "decimal", "num_rows_per_core", "Wt", "tile_offset", "origin_w"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -161,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgra
             .dfb_spec_name = OUTPUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"output_is_dram", "num_rows_per_core", "Wt", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -172,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgra
     // (false). double_buffer_dest defaults to true (== !dst_full_sync_en), matching legacy. The TTNN
     // to_compute_hardware_config helper is deliberately NOT used: it would forward the resolved
     // dst_full_sync_en, which the legacy op never applied.
-    m2::ComputeGen1Config compute_gen1{
+    m2::ComputeHardwareConfig compute_gen1{
         .fpu_math_fidelity = math_fidelity,
         .sfpu_precision_mode =
             math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
@@ -182,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgra
     // kernel (self-loop), so the Metal 2.0 validator requires an explicit unpack_modes entry. Legacy
     // unpack_to_dest_mode was empty (all Default) → UnpackMode::UnpackToSrc.
     if (fp32_dest_acc_en) {
-        compute_gen1.unpack_modes = {
+        compute_gen1.gen1.unpack_modes = {
             {XABS_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
             {XPOW_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
             {LOGX_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
