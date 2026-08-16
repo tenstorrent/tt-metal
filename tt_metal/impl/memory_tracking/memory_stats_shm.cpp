@@ -30,6 +30,25 @@ namespace tt::tt_metal {
 class Device;
 class Allocator;
 
+// Subtract without wrapping. The counters are unsigned and shared across processes, so a
+// subtraction that would go negative -- possible if a process is killed between recording an
+// allocation and updating its own slot -- must clamp rather than wrap to ~1.8e19.
+void SharedMemoryStatsProvider::saturating_sub(std::atomic<uint64_t>& counter, uint64_t amount) {
+    uint64_t current = counter.load(std::memory_order_relaxed);
+    uint64_t updated = 0;
+    do {
+        updated = (current < amount) ? 0 : current - amount;
+    } while (!counter.compare_exchange_weak(current, updated, std::memory_order_relaxed, std::memory_order_relaxed));
+}
+
+void SharedMemoryStatsProvider::saturating_sub(std::atomic<uint32_t>& counter, uint32_t amount) {
+    uint32_t current = counter.load(std::memory_order_relaxed);
+    uint32_t updated = 0;
+    do {
+        updated = (current < amount) ? 0 : current - amount;
+    } while (!counter.compare_exchange_weak(current, updated, std::memory_order_relaxed, std::memory_order_relaxed));
+}
+
 // Implementation of SharedMemoryStatsProvider
 
 SharedMemoryStatsProvider::SharedMemoryStatsProvider(
@@ -175,7 +194,6 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     if (per_pid_tracking_enabled_) {
         reap_dead_processes();
         claim_own_pid_entry(getpid());
-        recompute_aggregates();
     }
 
     // ALWAYS update identifiers, even when reattaching to existing SHM
@@ -202,15 +220,13 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
     if (region_ != nullptr && region_ != MAP_FAILED) {
         const pid_t my_pid = getpid();
 
-        // Release our slot. There is no separate "subtract my totals from the
-        // aggregate" step any more: the aggregates are derived from the live slots,
-        // so dropping the slot is what removes our contribution. That is also why a
-        // SIGKILLed process can be cleaned up by somebody else later -- the old code
-        // could only do this subtraction from its own destructor, so a killed process
-        // left its allocations in the totals permanently.
+        // Release our slot, which subtracts our bytes from the device-wide totals. The
+        // same subtraction is what reap_dead_processes() applies on behalf of a process
+        // that never got here, so a SIGKILLed run can be cleaned up by whoever attaches
+        // next instead of leaving its allocations in the totals permanently.
         for (auto& slot : region_->processes) {
             if (slot.pid.load(std::memory_order_relaxed) == my_pid) {
-                clear_process_slot(slot);
+                release_process_slot(slot);
                 break;
             }
         }
@@ -218,7 +234,6 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
         // Also drop slots of any process that died in the meantime, so the "no live
         // processes" state below is reached even if a peer was killed.
         reap_dead_processes();
-        recompute_aggregates();
 
         const uint32_t attached = region_->reference_count.load(std::memory_order_relaxed);
         if (attached == 0) {
@@ -258,9 +273,9 @@ void SharedMemoryStatsProvider::initialize_region() {
     // publishes SHM_INIT_READY afterwards. We must not touch it here, or another process
     // could observe READY while these stores are still in flight.
     //
-    // reference_count and num_active_processes are derived from the live process slots
-    // (see recompute_aggregates), so zeroing them here is just establishing the
-    // "no slots claimed yet" baseline that the loop at the end of this function creates.
+    // reference_count and num_active_processes are maintained by delta as processes claim
+    // and release slots, so zeroing them here just establishes the "no slots claimed yet"
+    // baseline that the loop at the end of this function creates.
     region_->version.store(DEVICE_MEMORY_REGION_VERSION, std::memory_order_relaxed);
     region_->num_active_processes.store(0, std::memory_order_relaxed);
     region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
@@ -416,28 +431,13 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
             asic_id_);
     }
 
-    // Update aggregated counters with underflow protection
-    // Note: We use compare-and-swap loop to prevent underflow
-    auto safe_sub = [](std::atomic<uint64_t>& counter, uint64_t size) {
-        uint64_t current = counter.load(std::memory_order_relaxed);
-        uint64_t new_val;
-        do {
-            if (current < size) {
-                // Underflow would occur - clamp to 0
-                new_val = 0;
-            } else {
-                new_val = current - size;
-            }
-        } while (
-            !counter.compare_exchange_weak(current, new_val, std::memory_order_relaxed, std::memory_order_relaxed));
-    };
-
+    // Aggregated counters, clamped so a stale or duplicated free cannot wrap them.
     switch (type) {
-        case ShmBufferType::DRAM: safe_sub(region_->total_dram_allocated, size); break;
-        case ShmBufferType::L1: safe_sub(region_->total_l1_allocated, size); break;
-        case ShmBufferType::L1_SMALL: safe_sub(region_->total_l1_small_allocated, size); break;
-        case ShmBufferType::TRACE: safe_sub(region_->total_trace_allocated, size); break;
-        case ShmBufferType::CB: safe_sub(region_->total_cb_allocated, size); break;
+        case ShmBufferType::DRAM: saturating_sub(region_->total_dram_allocated, size); break;
+        case ShmBufferType::L1: saturating_sub(region_->total_l1_allocated, size); break;
+        case ShmBufferType::L1_SMALL: saturating_sub(region_->total_l1_small_allocated, size); break;
+        case ShmBufferType::TRACE: saturating_sub(region_->total_trace_allocated, size); break;
+        case ShmBufferType::CB: saturating_sub(region_->total_cb_allocated, size); break;
         default: break;
     }
 
@@ -445,11 +445,11 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
     auto* chip_entry = find_or_create_chip_entry(chip_id);
     if (chip_entry) {
         switch (type) {
-            case ShmBufferType::DRAM: safe_sub(chip_entry->dram_allocated, size); break;
-            case ShmBufferType::L1: safe_sub(chip_entry->l1_allocated, size); break;
-            case ShmBufferType::L1_SMALL: safe_sub(chip_entry->l1_small_allocated, size); break;
-            case ShmBufferType::TRACE: safe_sub(chip_entry->trace_allocated, size); break;
-            case ShmBufferType::CB: safe_sub(chip_entry->cb_allocated, size); break;
+            case ShmBufferType::DRAM: saturating_sub(chip_entry->dram_allocated, size); break;
+            case ShmBufferType::L1: saturating_sub(chip_entry->l1_allocated, size); break;
+            case ShmBufferType::L1_SMALL: saturating_sub(chip_entry->l1_small_allocated, size); break;
+            case ShmBufferType::TRACE: saturating_sub(chip_entry->trace_allocated, size); break;
+            case ShmBufferType::CB: saturating_sub(chip_entry->cb_allocated, size); break;
             default: break;
         }
     }
@@ -566,6 +566,11 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::claim_own_pid_entry
             const std::string proc_name = get_process_name(pid);
             strncpy(slot.process_name, proc_name.c_str(), 63);
             slot.process_name[63] = '\0';
+
+            // One more process attached. Only on a fresh claim: re-attaching a slot this
+            // process already owns must not double-count it.
+            region_->reference_count.fetch_add(1, std::memory_order_release);
+            region_->num_active_processes.fetch_add(1, std::memory_order_relaxed);
             return &slot;
         }
     }
@@ -581,7 +586,24 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::claim_own_pid_entry
     return nullptr;
 }
 
-void SharedMemoryStatsProvider::clear_process_slot(DeviceMemoryRegion::ProcessStats& slot) {
+void SharedMemoryStatsProvider::release_process_slot(DeviceMemoryRegion::ProcessStats& slot) {
+    if (!region_) {
+        return;
+    }
+
+    // Subtract this slot's contribution from the device-wide totals before dropping it.
+    //
+    // Every mutation of an aggregate is a delta -- fetch_add on allocation, saturating
+    // subtract on deallocation and here. Deriving the totals instead (sum the live slots,
+    // then store) would race every concurrent record_allocation: an allocation landing
+    // between another writer's sum and its store is silently dropped from the total and
+    // stays dropped. Deltas commute, so there is no such window.
+    saturating_sub(region_->total_dram_allocated, slot.dram_allocated.load(std::memory_order_relaxed));
+    saturating_sub(region_->total_l1_allocated, slot.l1_allocated.load(std::memory_order_relaxed));
+    saturating_sub(region_->total_l1_small_allocated, slot.l1_small_allocated.load(std::memory_order_relaxed));
+    saturating_sub(region_->total_trace_allocated, slot.trace_allocated.load(std::memory_order_relaxed));
+    saturating_sub(region_->total_cb_allocated, slot.cb_allocated.load(std::memory_order_relaxed));
+
     slot.dram_allocated.store(0, std::memory_order_relaxed);
     slot.l1_allocated.store(0, std::memory_order_relaxed);
     slot.l1_small_allocated.store(0, std::memory_order_relaxed);
@@ -592,6 +614,11 @@ void SharedMemoryStatsProvider::clear_process_slot(DeviceMemoryRegion::ProcessSt
     // Release the slot last: pid == 0 is what makes it claimable, so it must not
     // become visible before the fields above have been cleared.
     slot.pid.store(0, std::memory_order_release);
+
+    // One fewer process attached. Counted by delta for the same reason as the byte totals.
+    saturating_sub(region_->reference_count, 1);
+    saturating_sub(region_->num_active_processes, 1);
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 }
 
 bool SharedMemoryStatsProvider::process_table_layout_is_known(uint32_t version) {
@@ -639,47 +666,10 @@ size_t SharedMemoryStatsProvider::reap_dead_processes() {
             "Reclaiming SHM slot of dead pid {} for asic_id=0x{:x} (process exited without cleanup)",
             pid,
             asic_id_);
-        clear_process_slot(slot);
+        release_process_slot(slot);
         reaped++;
     }
     return reaped;
-}
-
-void SharedMemoryStatsProvider::recompute_aggregates() {
-    // Deriving the totals requires the per-process slots to be the source of truth.
-    // With per-PID tracking off nothing populates them, so recomputing would zero
-    // out figures that record_allocation() is maintaining incrementally instead.
-    if (!region_ || !per_pid_tracking_enabled_) {
-        return;
-    }
-
-    uint64_t dram = 0;
-    uint64_t l1 = 0;
-    uint64_t l1_small = 0;
-    uint64_t trace = 0;
-    uint64_t cb = 0;
-    uint32_t live = 0;
-
-    for (const auto& slot : region_->processes) {
-        if (slot.pid.load(std::memory_order_acquire) == 0) {
-            continue;
-        }
-        live++;
-        dram += slot.dram_allocated.load(std::memory_order_relaxed);
-        l1 += slot.l1_allocated.load(std::memory_order_relaxed);
-        l1_small += slot.l1_small_allocated.load(std::memory_order_relaxed);
-        trace += slot.trace_allocated.load(std::memory_order_relaxed);
-        cb += slot.cb_allocated.load(std::memory_order_relaxed);
-    }
-
-    region_->total_dram_allocated.store(dram, std::memory_order_relaxed);
-    region_->total_l1_allocated.store(l1, std::memory_order_relaxed);
-    region_->total_l1_small_allocated.store(l1_small, std::memory_order_relaxed);
-    region_->total_trace_allocated.store(trace, std::memory_order_relaxed);
-    region_->total_cb_allocated.store(cb, std::memory_order_relaxed);
-    region_->num_active_processes.store(live, std::memory_order_relaxed);
-    region_->reference_count.store(live, std::memory_order_release);
-    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 }
 
 bool SharedMemoryStatsProvider::wait_for_region_ready() {

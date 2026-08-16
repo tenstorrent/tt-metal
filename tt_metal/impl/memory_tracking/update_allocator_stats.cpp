@@ -26,24 +26,31 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         // Query actual LOCALLY-allocated CB usage (globally-allocated CBs are in L1 already)
         uint64_t cb_allocated = device->get_total_cb_allocated();
 
-        // Record OUR contribution in our own process slot first. This value is
-        // per-process by construction: get_total_cb_allocated() only sees the programs
-        // registered by this process.
+        // Publish our own figure, and move the device-wide total by the same difference.
+        //
+        // This value is per-process by construction: get_total_cb_allocated() only sees the
+        // programs this process dispatched. It is an absolute figure rather than a delta, so
+        // the slot is exchanged and the *difference* applied to the device-wide total. That
+        // keeps every aggregate mutation a delta, which is what lets concurrent writers
+        // coexist: summing the slots and storing the result would drop any allocation another
+        // process recorded between the sum and the store.
+        //
+        // It also fixes the original bug here, which store()d our own value straight into
+        // total_cb_allocated -- making the device-wide figure last-writer-wins rather than a
+        // total across processes.
         for (auto& slot : region_->processes) {
             if (slot.pid.load(std::memory_order_relaxed) == pid) {
-                slot.cb_allocated.store(cb_allocated, std::memory_order_relaxed);
+                const uint64_t previous = slot.cb_allocated.exchange(cb_allocated, std::memory_order_relaxed);
+                if (cb_allocated >= previous) {
+                    region_->total_cb_allocated.fetch_add(cb_allocated - previous, std::memory_order_relaxed);
+                } else {
+                    saturating_sub(region_->total_cb_allocated, previous - cb_allocated);
+                }
                 slot.last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
                 break;
             }
         }
-
-        // Then republish the device-wide totals as the SUM over live process slots.
-        // This previously store()d our own value straight into total_cb_allocated, which
-        // made the device-wide figure last-writer-wins instead of a sum: with two
-        // processes on one device it reported one process's CB usage, not the total.
-        // recompute_aggregates() also re-derives reference_count, so every publish doubles as
-        // a self-correction of the derived fields.
-        recompute_aggregates();
+        region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
         // Per-chip CB stats for this device. Use the CAS-based claim helper rather than
         // grabbing the first matching-or-unused slot with a plain store, which raced

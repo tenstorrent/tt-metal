@@ -33,9 +33,12 @@ constexpr uint32_t CHIP_STATS_UNUSED = UINT32_MAX;
 // v4: init_state publishes readiness so attaching processes cannot observe a
 //     half-initialized (zero-filled) region; num_active_processes is atomic;
 //     a process claims its ProcessStats slot at attach time rather than on its
-//     first allocation; aggregated totals and reference_count are DERIVED from
-//     live slots rather than independently accumulated, so a process that dies
-//     without running its destructor cannot leave ghost allocations behind.
+//     first allocation; every aggregated total and reference_count is moved by
+//     DELTA (add on allocate, saturating subtract on free and on slot release),
+//     so a process that dies without running its destructor has its bytes
+//     subtracted by whoever reaps its slot instead of leaving ghost allocations.
+//     Deltas rather than a recomputed sum-then-store: the latter drops any
+//     allocation another writer records between the sum and the store.
 //     Field offsets 0..(processes end) are unchanged from v3 so that a reader
 //     which only understands v3 still parses the fields it knows.
 constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 4;
@@ -261,21 +264,20 @@ private:
     // processes and reclaimable if we die.
     DeviceMemoryRegion::ProcessStats* claim_own_pid_entry(pid_t pid);
 
-    // Helper: zero a ProcessStats slot, marking it free.
-    static void clear_process_slot(DeviceMemoryRegion::ProcessStats& slot);
+    // Helper: subtract a slot's bytes from the device-wide totals, then zero the slot and
+    // drop the attached count. Every aggregate mutation in this class is a delta like this
+    // one; see saturating_sub.
+    void release_process_slot(DeviceMemoryRegion::ProcessStats& slot);
+
+    // Helper: subtract without wrapping, for the unsigned shared counters.
+    static void saturating_sub(std::atomic<uint64_t>& counter, uint64_t amount);
+    static void saturating_sub(std::atomic<uint32_t>& counter, uint32_t amount);
 
     // Helper: reclaim slots whose owning process no longer exists. Their memory was
     // never released, so this is what stops a SIGKILLed run from leaving permanently
     // inflated totals behind (tt-mgmt's `smi cleanup` does not fix that case).
     // Returns the number of slots reclaimed.
     size_t reap_dead_processes();
-
-    // Helper: recompute aggregated totals, reference_count and num_active_processes
-    // from the live per-process slots. Making these derived rather than
-    // independently accumulated is what makes ghost allocations impossible and
-    // fixes device-wide totals under multiple processes (previously the CB total
-    // was a store() of one process's value, so it was last-writer-wins, not a sum).
-    void recompute_aggregates();
 };
 
 }  // namespace tt::tt_metal

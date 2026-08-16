@@ -13,6 +13,7 @@
 // tests attach to a synthetic region of their own (keyed by the test process's pid, so
 // concurrent CI jobs cannot collide) and never touch a real chip's region.
 
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -21,6 +22,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
@@ -224,6 +226,113 @@ TEST_F(ShmMemoryTrackingMultiProcess, RepeatedAttachDetachLeavesNoResidue) {
     EXPECT_EQ(slots.size(), 1u) << "a fresh attach should own exactly one slot (its own); got " << slots.size();
     EXPECT_EQ(fresh->get_device_stats().dram_allocated, 0u) << "attach/detach cycles drifted the device-wide total";
     EXPECT_TRUE(has_slot_for_pid(*fresh, getpid()));
+}
+
+// A process attaching to the region must not disturb anybody else's accounting.
+//
+// The device-wide totals used to be re-derived on attach -- sum the live slots, then store
+// the result -- while allocations were applied to the same words with fetch_add. The two
+// protocols do not compose: an allocation recorded between another process's sum and its
+// store is silently dropped from the total and stays dropped, leaving the device total
+// short while the owning process's own slot still reads correctly. Every aggregate
+// mutation is now a delta, which commutes with concurrent writers.
+//
+// This exercises the race rather than proving its absence, so it runs several rounds and
+// keeps the child attaching for the whole of the parent's allocation loop. Against the
+// derive-and-store version it failed ~75% of the time per round even with only partial
+// overlap; three fully-overlapped rounds make a surviving regression very unlikely to pass.
+TEST_F(ShmMemoryTrackingMultiProcess, ConcurrentAttachDoesNotLoseAllocations) {
+    constexpr uint64_t kChunk = 4096;
+    constexpr int kChurnChildren = 3;
+    constexpr int kAllocsPerRound = 40000;
+    constexpr int kRounds = 3;
+    constexpr long kMaxChildIterations = 5'000'000;  // safety valve if the parent dies
+
+    for (int round = 0; round < kRounds; round++) {
+        auto owner = attach(asic_id_);
+        ASSERT_TRUE(owner->is_initialized());
+        const uint64_t before = owner->get_device_stats().dram_allocated;
+
+        int stop[2];
+        int warm[2];
+        ASSERT_EQ(pipe(stop), 0);
+        ASSERT_EQ(pipe(warm), 0);
+
+        std::vector<pid_t> children;
+        for (int c = 0; c < kChurnChildren; c++) {
+            const pid_t child = fork();
+            ASSERT_NE(child, -1);
+            if (child == 0) {
+                // Attach and detach continuously until told to stop. Each attach and each
+                // detach writes the aggregates; those writes must not disturb the parent.
+                close(stop[1]);
+                close(warm[0]);
+                const int flags = fcntl(stop[0], F_GETFL, 0);
+                fcntl(stop[0], F_SETFL, flags | O_NONBLOCK);
+                {
+                    SharedMemoryStatsProvider warmup(asic_id_, 0, false, false);
+                }
+                const char ready = 'r';
+                ssize_t ignored = write(warm[1], &ready, 1);
+                (void)ignored;
+                char token = 0;
+                for (long i = 0; i < kMaxChildIterations; i++) {
+                    // Poll rarely: a read() per cycle throttles the churn by an order of
+                    // magnitude, and the churn rate is what makes the window observable.
+                    if ((i % 64) == 0 && read(stop[0], &token, 1) == 1) {
+                        break;
+                    }
+                    SharedMemoryStatsProvider visitor(asic_id_, 0, false, false);
+                }
+                _exit(0);
+            }
+            children.push_back(child);
+        }
+        close(stop[0]);
+        close(warm[1]);
+        for (int c = 0; c < kChurnChildren; c++) {
+            char ready = 0;
+            ASSERT_EQ(read(warm[0], &ready, 1), 1) << "a churn child never finished its first attach";
+        }
+        close(warm[0]);
+
+        uint64_t recorded = 0;
+        for (int i = 0; i < kAllocsPerRound; i++) {
+            owner->record_allocation(getpid(), kChunk, ShmBufferType::DRAM, /*chip_id=*/0);
+            recorded += kChunk;
+        }
+
+        // Read the total while the churn is still running. Measuring after the children have
+        // exited would hide the bug: the last detach recomputes the aggregates from the slots
+        // and heals the lost update just before the assertion looks at it.
+        const uint64_t expected = before + recorded;
+        const uint64_t total = owner->get_device_stats().dram_allocated;
+        const uint64_t own_slot = dram_for_pid(*owner, getpid());
+
+        const char go = 'x';
+        for (int c = 0; c < kChurnChildren; c++) {
+            EXPECT_EQ(write(stop[1], &go, 1), 1);
+        }
+        close(stop[1]);
+        for (const pid_t child : children) {
+            int status = 0;
+            ASSERT_EQ(waitpid(child, &status, 0), child);
+            EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "churn child did not exit cleanly";
+        }
+        EXPECT_EQ(total, expected) << "round " << round << ": device total lost "
+                                   << (static_cast<long long>(expected) - static_cast<long long>(total)) << " of "
+                                   << recorded
+                                   << " bytes while other processes were attaching; "
+                                      "an aggregate write clobbered a concurrent allocation";
+        EXPECT_EQ(own_slot, recorded) << "round " << round << ": own slot is wrong";
+
+        // Leaving scope releases our slot, which must subtract exactly what we added.
+        owner.reset();
+        auto after = attach(asic_id_);
+        ASSERT_TRUE(after->is_initialized());
+        EXPECT_EQ(after->get_device_stats().dram_allocated, 0u)
+            << "round " << round << ": releasing the slot did not subtract its bytes";
+    }
 }
 
 }  // namespace
