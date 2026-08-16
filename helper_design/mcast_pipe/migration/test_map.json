@@ -276,6 +276,15 @@
       "migration_unit": "matmul-in0-mcast-block-sharded",
       "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
       "coverage": "complete; exact 0/24-hit JIT proof, mapped correctness, and inherited matched performance passed 2026-08-16"
+    },
+    {
+      "id": "group-attn-matmul:rotating-reader",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_program_factory.cpp",
+      "dispatch": "all group-attention Matmul paths with rotating sender identity",
+      "migration_unit": "group-attn-matmul-rotating-mcast",
+      "inventory": ["GROUP-ATTN-MATMUL"],
+      "coverage": "complete; exact fresh-cache helper JIT proof, 322 passed / 132 expected skips, and matched q16/q48 performance gates passed 2026-08-16"
     }
   ],
   "inventory_definitions": {
@@ -464,6 +473,18 @@
         "test_sort_multi_row_multi_core_no_deadlock: descending False and True"
       ],
       "result": "7 long-tensor cases passed; 2 Ht=2 deadlock cases passed"
+    },
+    "GROUP-ATTN-MATMUL": {
+      "path": "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py",
+      "compile_focused": "test_group_attn_matmul_with_program_cache_exhaustive q16 fully-sharded ROW_MAJOR node under --dev from a fresh isolated JIT cache; helper-based rotating reader artifact required",
+      "tests": [
+        "every collected test whose node contains group_attn_matmul, including exhaustive, sharded, dtype, and program-cache routes"
+      ],
+      "expected_skips": {
+        "optional-preallocated output with sharded output": 96,
+        "remaining duplicate COL_MAJOR cases with both inputs interleaved": 36
+      },
+      "result": "322 passed, 132 expected skips, 299 deselected; warm JIT 351/351"
     }
   },
   "additional_candidate_routes": [
@@ -471,11 +492,6 @@
       "candidate": "reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
       "confidence": "discovery-only",
       "route": "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py; confirm the exact JIT path"
-    },
-    {
-      "candidate": "reader_mcast_transformer_group_attn_matmul.cpp",
-      "confidence": "discovery-only",
-      "route": "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul"
     },
     {
       "candidate": "experimental/conv3d writer.cpp",
@@ -683,6 +699,13 @@
       "inventory": "TOPK-MULTICORE",
       "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventory",
       "result": "v10 migrated; exact node passed and TOPK-MULTICORE passed 14 with 12 expected BFLOAT8_B pad xfails"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
+      "status": "migrated",
+      "inventory": "GROUP-ATTN-MATMUL",
+      "coverage": "high; exact fresh-cache helper JIT proof, complete group-attention inventory, and two matched performance routes",
+      "result": "API v11 migrated; exact --dev passed, complete inventory 322 passed / 132 expected skips, q16 -32.20%, q48 -27.31%"
     }
   ],
   "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."

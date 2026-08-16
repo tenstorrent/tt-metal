@@ -17,9 +17,9 @@ its plan-mandated historical matched performance baseline requires a separately 
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v11 | 19 | 19 |
+| migrated at ledger API v11 | 20 | 20 |
 | pending | 2 | 5 |
-| deferred | 83 | 0 |
+| deferred | 82 | 0 |
 | quarantined | 0 | 0 |
 
 All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
@@ -53,6 +53,12 @@ its pre-existing selection mismatch; when temporarily unskipped, its 100-iterati
 and reproduced the raw implementation's exact `p_scores` failure signature. Matched device-kernel
 durations were +0.25% for argmax and -0.05% for top-k.
 
+Tier 2.7 DRAM-sharded Matmul remains deferred because API v11 cannot preserve both its forced
+sender-only EXCLUDE-source data path and its type-2 signal-only INCLUDE-source path; API expansion was
+not authorized. Tier 2.8 `group-attn-matmul-rotating-mcast` is migrated at v11 in `6e8eb763885`.
+Fresh-JIT and complete correctness passed (322 passed / 132 categorized expected skips), as did the
+helper/source/host guards. Matched 800 MHz q16 and q48 device-kernel medians improved 32.20% and 27.31%.
+
 ## Closed `needs_recheck`
 
 | Unit | Kernels | Reason |
@@ -80,7 +86,7 @@ design gap and continues to use the established raw primitive path.
 
 ## Deferred backlog
 
-Eighty-four entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+Eighty-two entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
 The major classes are:
 
 - genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;
@@ -94,5 +100,5 @@ factory, ABI, channel split, or data flow.
 
 ## Next action
 
-Proceed with approved Tier 1 unit 6. Keep the two interleaved Matmul kernels and five bindings pending
-until a future instruction separately authorizes the historical performance checkout.
+Proceed with approved Tier 2.9 Conv3D weight sharing. Keep the two interleaved Matmul kernels and five
+bindings pending until a future instruction separately authorizes the historical performance checkout.

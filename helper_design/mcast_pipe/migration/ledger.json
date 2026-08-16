@@ -626,6 +626,27 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
       "flags": ["tier:1", "fully-end-to-end", "known-blackhole-selection-mismatch"]
+    },
+    {
+      "id": "group-attn-matmul:rotating-reader",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_program_factory.cpp",
+      "dispatch": "all group-attention Matmul paths; rotating first-32 logical sender cores with per-core ACK counts",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp"
+      ],
+      "migration_unit": "group-attn-matmul-rotating-mcast",
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "6e8eb7638855ffc03948b34236b9219102215b49",
+      "validation_set": [
+        "exact q16 fully-sharded ROW_MAJOR --dev node passed with fresh helper JIT artifacts",
+        "complete group_attn_matmul inventory: 322 passed / 132 expected skips (96 optional-preallocated sharded-output exclusions; 36 remaining duplicate COL_MAJOR interleaved-input cases); 351/351 warm JIT hits",
+        "post-restore exact normal q16 node passed; helper/device suite 80/80, source audit 17/17, McastHostFixture 32/32",
+        "matched 800 MHz q16 and q48 Tracy gates improved -32.20% and -27.31% respectively"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified"]
     }
   ],
   "entries": [
@@ -773,18 +794,24 @@
       "op_family": "matmul",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "deferred",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 11,
+      "commit": "6e8eb7638855ffc03948b34236b9219102215b49",
       "validation_set": [
-        "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul"
+        "./build_metal.sh: passed after host/factory migration and again after raw-baseline restoration",
+        "exact q16 fully-sharded ROW_MAJOR --dev node passed with fresh helper JIT artifacts",
+        "complete group_attn_matmul inventory: 322 passed / 132 expected skips (96 optional-preallocated sharded-output exclusions; 36 remaining duplicate COL_MAJOR interleaved-input cases); 351/351 warm JIT hits",
+        "post-restore exact normal q16 node passed; helper/device suite 80/80, source audit 17/17, McastHostFixture 32/32",
+        "800 MHz matched Tracy q16 median of three run medians: raw 57846.5 ns vs migrated 39219.5 ns (-32.20%)",
+        "800 MHz matched Tracy q48 median of three run medians: raw 405652 ns vs migrated 294888 ns (-27.31%)"
       ],
-      "coverage_confidence": "med",
-      "last_verified": "2026-06-20",
-      "inventory_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids | DEFER-DESIGN-GAP: sem ids are RUNTIME args (Semaphore<>(get_arg_val(i++)) at lines 54-55), but v7 SenderPipe/ReceiverPipe take DATA_READY_SEM_ID/CONSUMER_READY_SEM_ID as compile-time template params. Runtime sem id inexpressible. Needs helper change (out of scope).",
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Migrated at API v11 as an independent rotating Mcast2D over the fixed dense receiver rectangle. The host now supplies helper compile-time semaphore IDs and runtime sender coordinates; only the per-core divergent ACK count remains operation-owned. The historical per-round post-flag barrier was redundant because the helper flushes the remote flag before reset and barriers local loopback writes; one final write barrier preserves last-send completion.",
       "flags": [
-        "tier:2b",
-        "design-gap"
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified"
       ]
     },
     {

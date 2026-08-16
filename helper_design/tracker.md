@@ -111,16 +111,43 @@ retry returned DEFER for API v11 as-is:
 
 No production source was edited and no correctness/performance tests were credited for this blocked unit.
 
+### C6 — Tier 2.8 group-attention Matmul
+
+Three Claude consultations were attempted with the required Opus command: a broad architectural review,
+a compact decision request, and a post-diff/evidence review. They timed out after 180, 120, and 180
+seconds respectively without producing a verdict. A fourth final review returned REVISE for evidence
+completeness only: cite per-round coordinate indexing and cross-round ordering, attribute the large
+speedup, and classify the expected skips. The migration log now resolves all four items from source and
+profile evidence; no code or API change was requested. No approval was inferred from earlier silence,
+and no API expansion was made. A bounded re-review returned PASS for ledger write-back after the
+evidence revisions; it requested that the cross-round proof also live in the kernel annotation and the
+skip categories in `test_map.json`, which are now recorded.
+
+The independently verified API-v11 decision was KEEP:
+
+- model the fixed dense receiver rectangle as one `Mcast2D`, with the first 32 logical cores rotating
+  through the sender role;
+- move the helper semaphore IDs into compile-time arguments, retain only the per-core divergent ACK
+  count as operation-owned runtime state, and append `McastArgs` without disturbing existing ABI slots;
+- use direct sender construction for the rotating face and `McastArgs::receiver()` for the receiving
+  face; helper loopback inference exactly covers the `CB2 -> CB1`, `CB1 -> CB1`, inside, and outside
+  cases;
+- remove the historical per-round post-flag barrier. API v11 flushes the remote Flag before state reset
+  and barriers local loopback; one final write barrier preserves last-send completion at kernel exit.
+
+Correctness, fresh-JIT, LOC, build, and two matched 800 MHz performance gates all passed. API expansion:
+NO.
+
 ## Progress
 
 | Unit | State | Current finding / next gate |
 |---|---|---|
-| Reconciliation | complete | 104 unique entries preserved; current rollout state is 19 migrated, 2 pending, 83 deferred |
+| Reconciliation | complete | 104 unique entries preserved; current rollout state is 20 migrated, 2 pending, 82 deferred |
 | Tier 0.1 Matmul in0 interleaved | blocked-writeback | Correctness/JIT verification passed; historical matched performance checkout is not authorized |
 | Tier 0.2 Matmul in0 block-sharded | complete | Migrated API v11 after correctness, fresh-JIT, inherited performance, and Claude gates passed |
 | Tier 1.6 DeepSeek sampling | complete | API v11 at `2840fc28361`; 101-core correctness/cache, raw-signature top-k barrier proof, and matched performance passed |
 | Tier 2.7 DRAM-sharded Matmul | deferred-design-gap | API v11 cannot preserve sender-only EXCLUDE plus type-2 signal-only INCLUDE behavior; API expansion is not authorized |
-| Tier 2.8 group-attention Matmul | pending | Required behavior and post-flag-barrier proof not started |
+| Tier 2.8 group-attention Matmul | complete | API v11 at `6e8eb763885`; exact/full correctness, fresh JIT, barrier proof, and both matched performance gates passed |
 | Tier 2.9 Conv3D weight sharing | pending | Required behavior and test collection not started |
 
 ## Chronological findings
@@ -172,3 +199,29 @@ No production source was edited and no correctness/performance tests were credit
     non-aliasing in-rectangle source, while sender+compute `SKIP_MCAST` requires an INCLUDE-source
     readiness signal without data. The public helper exposes neither operation. Claude returned DEFER;
     the API-extension gate remains closed, so the kernel/factory were left untouched.
+15. Migrated Tier 2.8 in `6e8eb763885`: replaced the raw rotating multicast and manual physical
+    coordinates with independent `Mcast2D` sender/receiver faces over the fixed dense rectangle. Helper
+    compile-time and runtime arguments were appended after the existing TensorAccessor and operation
+    ABI. The host retains only runtime slot 20 for each core's divergent ACK count. Production files
+    shrank independently (factory 55 deletions / 20 additions; kernel 132 deletions / 24 additions).
+16. Proved the raw per-round post-flag full barrier redundant: helper `send()` flushes the remote Flag
+    before state reset and completes local loopback writes; a single final write barrier preserves the
+    last remote send at kernel exit. Release build passed, the exact q16 fully-sharded ROW_MAJOR `--dev`
+    probe passed with fresh artifacts, and the complete `group_attn_matmul` inventory reported 322 passed,
+    132 expected skips, 299 deselected, with 351/351 warm JIT hits.
+17. Tier 2.8 matched 800 MHz Tracy used three independent 25-iteration sessions per source state and
+    shape, discarding the first five operation samples in every session. Median-of-run-medians improved
+    from 57,846.5 ns to 39,219.5 ns (-32.20%) for q16 and from 405,652 ns to 294,888 ns (-27.31%) for
+    q48. Raw source was restored reversibly from the parent commit, verified byte-identical, then the
+    migrated commit was restored exactly and rebuilt. Empty profiler attempts that selected zero tests
+    were not credited.
+18. Final Tier 2.8 guards passed on the restored committed source: exact normal q16 passed,
+    `test_mcast_pipe.py` passed 80/80, the source audit passed 17/17, and `McastHostFixture.*` passed
+    32/32.
+19. Claude's final Tier 2.8 review requested documentation-only revisions. Source citations now show
+    that sender selection and receiver ACK targets index `tile_row_id` every round, and that every
+    next-round ACK occurs only after the prior Flag was observed/cleared while the sender fence flushes
+    the linked data+Flag chain before local reset. The 32-round removal of the raw intermediate flush
+    plus post-Flag full barrier explains the measured speedup; both profiles retained 25 operation rows
+    and 110 cores. The 132 skips are 96 optional-preallocated sharded-output exclusions plus 36 remaining
+    duplicate COL_MAJOR interleaved-input cases.
