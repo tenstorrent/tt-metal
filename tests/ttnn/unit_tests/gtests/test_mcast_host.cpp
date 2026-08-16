@@ -877,43 +877,40 @@ TEST_F(McastHostFixture, Mcast2DNumActiveTooLargeFatal) {
 TEST_F(McastHostFixture, LayerNormPreAllGatherWholeGridOffset) {
     auto* dev = device_;
     const auto grid = make_grid(CoreCoord(1, 1), /*gc=*/4, /*gr=*/2);
-    ttnn::prim::sharded_layernorm_helpers::PreAllGatherMcast mc(
+    ttnn::prim::sharded_layernorm_helpers::DistributedLayerNormMcast mc(
         dev,
         grid,
         /*global_sender=*/CoreCoord(1, 1),
+        /*is_post_allgather=*/false,
+        /*mcast_1d=*/true,
         /*row_wise=*/true,
         /*use_two_stage_reduce=*/false,
         NOC::NOC_0,
         /*data_ready_sem_id=*/7,
         /*consumer_ready_sem_id=*/8);
 
-    EXPECT_FALSE(mc.uses_two_stage_reduce());
     EXPECT_EQ(mc.num_active(), 7u);
     EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 7, 8, 7, 1, 0}));
-    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 1)));
-    EXPECT_FALSE(mc.is_sender(CoreCoord(4, 2)));
     EXPECT_EQ(mc.runtime_args(CoreCoord(1, 1)), expected_rect2d(dev, 1, 1, 4, 2, /*noc1=*/false));
 }
 
 TEST_F(McastHostFixture, LayerNormPreAllGatherTwoStageRowsOffset) {
     auto* dev = device_;
     const auto grid = make_grid(CoreCoord(1, 1), /*gc=*/4, /*gr=*/3);
-    ttnn::prim::sharded_layernorm_helpers::PreAllGatherMcast mc(
+    ttnn::prim::sharded_layernorm_helpers::DistributedLayerNormMcast mc(
         dev,
         grid,
         /*global_sender=*/CoreCoord(1, 1),
+        /*is_post_allgather=*/false,
+        /*mcast_1d=*/true,
         /*row_wise=*/true,
         /*use_two_stage_reduce=*/true,
         NOC::NOC_0,
         /*data_ready_sem_id=*/7,
         /*consumer_ready_sem_id=*/8);
 
-    EXPECT_TRUE(mc.uses_two_stage_reduce());
     EXPECT_EQ(mc.num_active(), 3u);
     EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 7, 8, 3, 1, 0}));
-    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 1)));
-    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 2)));
-    EXPECT_FALSE(mc.is_sender(CoreCoord(3, 2)));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(1, 2)),
         expected_bbox(dev, {CoreCoord(2, 2), CoreCoord(3, 2), CoreCoord(4, 2)}, NOC::NOC_0));
@@ -926,10 +923,12 @@ TEST_F(McastHostFixture, LayerNormPreAllGatherTwoStageRowsOffset) {
 TEST_F(McastHostFixture, LayerNormPreAllGatherTwoStageColumnsOffset) {
     auto* dev = device_;
     const auto grid = make_grid(CoreCoord(2, 1), /*gc=*/3, /*gr=*/4);
-    ttnn::prim::sharded_layernorm_helpers::PreAllGatherMcast mc(
+    ttnn::prim::sharded_layernorm_helpers::DistributedLayerNormMcast mc(
         dev,
         grid,
         /*global_sender=*/CoreCoord(2, 1),
+        /*is_post_allgather=*/false,
+        /*mcast_1d=*/true,
         /*row_wise=*/false,
         /*use_two_stage_reduce=*/true,
         NOC::NOC_0,
@@ -937,15 +936,56 @@ TEST_F(McastHostFixture, LayerNormPreAllGatherTwoStageColumnsOffset) {
         /*consumer_ready_sem_id=*/8);
 
     EXPECT_EQ(mc.num_active(), 3u);
-    EXPECT_TRUE(mc.is_sender(CoreCoord(2, 1)));
-    EXPECT_TRUE(mc.is_sender(CoreCoord(3, 1)));
-    EXPECT_FALSE(mc.is_sender(CoreCoord(3, 3)));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(3, 1)),
         expected_bbox(dev, {CoreCoord(3, 2), CoreCoord(3, 3), CoreCoord(3, 4)}, NOC::NOC_0));
     const auto sender = dev->worker_core_from_logical_core(CoreCoord(3, 1));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(3, 3)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
+}
+
+TEST_F(McastHostFixture, LayerNormPostAllGatherWholeGridOffset) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(1, 1), /*gc=*/4, /*gr=*/2);
+    ttnn::prim::sharded_layernorm_helpers::DistributedLayerNormMcast mc(
+        dev,
+        grid,
+        /*global_sender=*/CoreCoord(1, 1),
+        /*is_post_allgather=*/true,
+        /*mcast_1d=*/true,
+        /*row_wise=*/true,
+        /*use_two_stage_reduce=*/false,
+        NOC::NOC_0,
+        /*data_ready_sem_id=*/7,
+        /*consumer_ready_sem_id=*/8);
+
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 7, 0xFFFFFFFFu, 7, 0, 0}));
+    EXPECT_EQ(mc.runtime_args(CoreCoord(1, 1)), expected_rect2d(dev, 1, 1, 4, 2, /*noc1=*/false));
+}
+
+TEST_F(McastHostFixture, LayerNormPostAllGatherRowsUseOutsideSenders) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(1, 1), /*gc=*/4, /*gr=*/3);
+    ttnn::prim::sharded_layernorm_helpers::DistributedLayerNormMcast mc(
+        dev,
+        grid,
+        /*global_sender=*/CoreCoord(1, 1),
+        /*is_post_allgather=*/true,
+        /*mcast_1d=*/false,
+        /*row_wise=*/true,
+        /*use_two_stage_reduce=*/false,
+        NOC::NOC_0,
+        /*data_ready_sem_id=*/7,
+        /*consumer_ready_sem_id=*/8);
+
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 7, 0xFFFFFFFFu, 3, 0, 0}));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(1, 2)),
+        expected_bbox(dev, {CoreCoord(2, 2), CoreCoord(3, 2), CoreCoord(4, 2)}, NOC::NOC_0));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(1, 2));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(3, 2)),
         (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
 }
 

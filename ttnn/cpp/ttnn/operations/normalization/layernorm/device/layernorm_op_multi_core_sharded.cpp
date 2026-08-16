@@ -269,24 +269,19 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         writer_noc = NOC::NOC_1;
     }
 
-    std::optional<PreAllGatherMcast> pre_allgather_mcast;
-    if (is_pre_all_gather) {
-        pre_allgather_mcast.emplace(
+    std::optional<DistributedLayerNormMcast> distributed_mcast;
+    if (is_pre_all_gather || is_post_all_gather) {
+        distributed_mcast.emplace(
             device,
-            grid.shard_spec.grid,
+            is_post_all_gather ? core_ranges.mcast_dest_cores : grid.shard_spec.grid,
             core_ranges.start_core,
+            is_post_all_gather,
+            grid.mcast_1d,
             grid.row_wise,
             grid.use_two_stage_reduce,
             reader_noc,
             reduce_sender_semaphore_id,
             reduce_receiver_semaphore_id);
-        const uint32_t expected_active =
-            (grid.use_two_stage_reduce ? workers.num_blocks_first_stage : grid.num_blocks) - 1;
-        TT_FATAL(
-            pre_allgather_mcast->num_active() == expected_active,
-            "Pre-allgather LayerNorm multicast fan-out mismatch: helper={}, expected={}",
-            pre_allgather_mcast->num_active(),
-            expected_active);
     }
 
     // Build compile-time args using helper
@@ -297,7 +292,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = &grid,
         .workers = &workers,
         .core_ranges = &core_ranges,
-        .pre_allgather_mcast = pre_allgather_mcast ? &*pre_allgather_mcast : nullptr,
+        .distributed_mcast = distributed_mcast ? &*distributed_mcast : nullptr,
         .block_ht = block_ht,
         .block_wt = block_wt,
         .subblock_wt = subblock_wt,
@@ -401,7 +396,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = grid,
         .workers = workers,
         .core_ranges = core_ranges,
-        .pre_allgather_mcast = pre_allgather_mcast ? &*pre_allgather_mcast : nullptr,
+        .distributed_mcast = distributed_mcast ? &*distributed_mcast : nullptr,
         .mcast_noc_x = std::move(mcast_noc_x),
         .mcast_noc_y = std::move(mcast_noc_y),
         .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),
