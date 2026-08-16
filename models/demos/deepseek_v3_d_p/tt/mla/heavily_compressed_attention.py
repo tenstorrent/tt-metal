@@ -580,7 +580,7 @@ class TtHCA(_TtHCABase):
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
         # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
-        compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype")
+        compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype", "memory_config")
         compressor = TtHCACompressor.from_reference(
             device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
         )
