@@ -160,7 +160,7 @@ void kernel_main() {
 #endif
 
     // compute_kernel_hw_startup must be the first compute API call. The bias broadcast-add is
-    // initialized by add_bcast_rows_init_short right before it in the loop, so the full init_bcast
+    // initialized by add_bcast_rows_init right before it in the loop, so the full init_bcast
     // here is redundant and was removed.
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
@@ -230,7 +230,7 @@ void kernel_main() {
                             // bcast add data from bias_cb_id
                             cb_wait_front(bias_cb_id, bias_ntiles_w);
                             cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
-                            add_bcast_rows_init_short(out_for_bias_cb_id, bias_cb_id);
+                            add_bcast_rows_init(out_for_bias_cb_id, bias_cb_id);
                             // reconfig packer df for out
                             // pack_reconfig_data_format(out_cb_id);
                             tile_regs_acquire();

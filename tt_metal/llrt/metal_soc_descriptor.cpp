@@ -60,15 +60,46 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
     const auto& umd_dram_cores = get_cores(tt::CoreType::DRAM, coord_system);
     dram_cores.reserve(umd_dram_cores.size());
     for (const tt::umd::CoreCoord& core : umd_dram_cores) {
-        if (exclude_noc0_endpoints) {
-            const tt::umd::CoreCoord translated = translate_coord_to(core, tt::CoordSystem::TRANSLATED);
-            if (is_noc0_dram_endpoint({translated.x, translated.y})) {
-                continue;
-            }
+        const tt::umd::CoreCoord translated = translate_coord_to(core, tt::CoordSystem::TRANSLATED);
+        if (exclude_noc0_endpoints && is_noc0_dram_endpoint({translated.x, translated.y})) {
+            continue;
         }
-        dram_cores.push_back({core.x, core.y});
+        // UMD's LOGICAL DRAM coord is {channel, raw subchannel}, but Metal's logical DRAM space is
+        // {dram_view, index into dram_bank_endpoint_coords}, which orders the NOC0 worker endpoint
+        // first rather than by subchannel id. Handing back the UMD coord would make a caller that
+        // resolves it through get_physical_dram_core_from_logical land on a different core -- and for
+        // any view whose worker_endpoint[0] is not subchannel 0, that core is the syseng-owned NOC0
+        // endpoint this loop just excluded, whose mailbox is never initialized.
+        if (coord_system == tt::CoordSystem::LOGICAL) {
+            dram_cores.push_back(get_logical_dram_core_from_translated({translated.x, translated.y}));
+        } else {
+            dram_cores.push_back({core.x, core.y});
+        }
     }
     return dram_cores;
+}
+
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_from_translated(
+    const tt::tt_metal::CoreCoord& translated_coord) const {
+    // A view can share its NOC endpoints with the other views carved out of the same channel, so this
+    // returns the lowest view index that reaches translated_coord. Every such coord resolves back to
+    // translated_coord through get_physical_dram_core_from_logical, which is what callers rely on; use
+    // get_logical_dram_core_for_subchannel instead when a specific view is wanted.
+    for (size_t dram_view = 0; dram_view < this->dram_bank_endpoint_coords.size(); ++dram_view) {
+        const auto& endpoints = this->dram_bank_endpoint_coords[dram_view];
+        for (size_t idx = 0; idx < endpoints.size(); ++idx) {
+            if (endpoints[idx] == translated_coord) {
+                return tt::tt_metal::CoreCoord{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
+            }
+        }
+    }
+    TT_THROW(
+        "Translated DRAM core ({}, {}) is not a NOC endpoint of any of the {} DRAM views, so it has no logical "
+        "DRAM coordinate. Every DRAM core Metal can address is reachable through some view, so this coord is "
+        "either not a DRAM core or belongs to a harvested channel",
+        translated_coord.x,
+        translated_coord.y,
+        this->dram_bank_endpoint_coords.size());
 }
 
 tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {

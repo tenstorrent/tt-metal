@@ -3,6 +3,7 @@
 
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <array>
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -25,6 +27,40 @@ namespace ttnn::graph::arguments::test {
 namespace {
 
 using TestGraphCaptureArgumentsTranspose = TTNNFixtureWithDevice;
+
+TensorSpec make_nd_sharded_tensor_spec(const ttnn::Shape& shape, const ttnn::Shape& shard_shape) {
+    const auto cores = tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}));
+    const auto memory_config = tt::tt_metal::MemoryConfig(
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::NdShardSpec{shard_shape, cores, tt::tt_metal::ShardOrientation::ROW_MAJOR});
+    return TensorSpec(
+        shape, TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), memory_config));
+}
+
+TensorSpec make_legacy_height_sharded_tensor_spec(const ttnn::Shape& shape) {
+    const auto cores = tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}));
+    const auto memory_config = tt::tt_metal::MemoryConfig(
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec(cores, std::array<uint32_t, 2>{32, 64}, tt::tt_metal::ShardOrientation::ROW_MAJOR));
+    return TensorSpec(
+        shape, TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), memory_config));
+}
+
+const auto has_nd_provenance = [](const std::string& args) {
+    // MemoryConfig reflection prints an empty nd_shard_spec as std::nullopt and a
+    // populated one as a JSON object, so a populated spec is any non-nullopt value.
+    return args.find("created_with_nd_shard_spec=1") != std::string::npos &&
+           args.find("nd_shard_spec=std::nullopt") == std::string::npos;
+};
+
+const auto find_create_device_tensor = [](const auto& operations) {
+    return std::find_if(operations.begin(), operations.end(), [](const auto& op) {
+        return op.operation_name == "tt::tt_metal::create_device_tensor";
+    });
+};
 
 TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     tt::tt_metal::TensorSpec tensor_spec(
@@ -65,6 +101,69 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(create_tensor_op.arguments[0], "Shape([1, 2048, 1, 512])");
     EXPECT_EQ(create_tensor_op.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(create_tensor_op.arguments[2], "Layout::ROW_MAJOR");
+}
+
+TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesNdProvenanceFor4DShardedFallback) {
+    auto tt_input = create_device_tensor(
+        make_nd_sharded_tensor_spec(ttnn::Shape({1, 1, 64, 64}), ttnn::Shape({1, 1, 32, 32})), device_);
+
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({1, 0, 3, 2}));
+    auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
+    auto operations = ttnn::graph::extract_arguments(trace);
+
+    auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
+        return op.operation_name == "PermuteDeviceOperation";
+    });
+    ASSERT_NE(it, operations.end()) << "PermuteDeviceOperation not found";
+    EXPECT_TRUE(has_nd_provenance(it->arguments[0])) << it->arguments[0];
+
+    auto create_tensor_it = find_create_device_tensor(operations);
+    ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 1, 64, 64])");
+    EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
+    ASSERT_EQ(create_tensor_it->arguments.size(), 5);
+    EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
+}
+
+TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigRecomputesLegacyShardSpecForShardedFallback) {
+    auto tt_input = create_device_tensor(make_legacy_height_sharded_tensor_spec(ttnn::Shape({1, 1, 32, 64})), device_);
+
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({3, 2, 1, 0}));
+    auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
+    auto operations = ttnn::graph::extract_arguments(trace);
+
+    auto create_tensor_it = find_create_device_tensor(operations);
+    ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([64, 32, 1, 1])");
+    EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
+    ASSERT_EQ(create_tensor_it->arguments.size(), 5);
+    EXPECT_TRUE(create_tensor_it->arguments[4].find("TensorMemoryLayout::HEIGHT_SHARDED") != std::string::npos)
+        << create_tensor_it->arguments[4];
+}
+
+TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesNdProvenanceForRank5ShardedFallback) {
+    auto tt_input = create_device_tensor(
+        make_nd_sharded_tensor_spec(ttnn::Shape({1, 2, 2, 32, 64}), ttnn::Shape({1, 1, 2, 32, 64})), device_);
+
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({0, 2, 1, 4, 3}));
+    auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
+    auto operations = ttnn::graph::extract_arguments(trace);
+
+    auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
+        return op.operation_name == "PermuteDeviceOperation";
+    });
+    ASSERT_NE(it, operations.end()) << "PermuteDeviceOperation not found";
+    EXPECT_TRUE(has_nd_provenance(it->arguments[0])) << it->arguments[0];
+
+    auto create_tensor_it = find_create_device_tensor(operations);
+    ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 2, 2, 64, 32])");
+    EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
+    ASSERT_EQ(create_tensor_it->arguments.size(), 5);
+    EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
 }
 
 }  // namespace

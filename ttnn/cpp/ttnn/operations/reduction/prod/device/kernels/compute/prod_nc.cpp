@@ -21,7 +21,7 @@ void kernel_main() {
     DataflowBuffer dfb_in0_obj(dfb_in0);
     DataflowBuffer dfb_out0_obj(dfb_out0);
 
-    binary_op_init_common(dfb_in0, dfb_in0, dfb_out0);
+    compute_kernel_hw_startup(dfb_in0, dfb_in0, dfb_out0);
     pack_reconfig_data_format(dfb_out0);
 
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
@@ -35,10 +35,10 @@ void kernel_main() {
         copy_tile(dfb_in0, 0, dst0);
         dfb_in0_obj.pop_front(onetile);
 
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0);
         for (uint32_t j = 1; j < num_input_tiles; ++j) {
             dfb_in0_obj.wait_front(onetile);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                 dfb_in0, 0, dst0);
             dfb_in0_obj.pop_front(onetile);
         }

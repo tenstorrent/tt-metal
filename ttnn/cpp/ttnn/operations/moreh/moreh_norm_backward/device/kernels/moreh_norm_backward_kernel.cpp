@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(dfb::x, dfb::x, dfb::dx);
+    compute_kernel_hw_startup(dfb::x, dfb::x, dfb::dx);
     dfb_decimal_obj.wait_front(onetile);  // comes from the reader
 
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {
@@ -66,13 +66,13 @@ void kernel_main() {
 
         tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
-            mul_tiles_bcast_scalar_init_short_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
+            mul_bcast_scalar_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
             mul_tiles_bcast_scalar(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            mul_bcast_rows_init_short_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
+            mul_bcast_rows_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
             mul_tiles_bcast_rows(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            mul_bcast_cols_init_short_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
+            mul_bcast_cols_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
             mul_tiles_bcast_cols(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         } else {
             mul_tiles_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
@@ -93,13 +93,13 @@ void kernel_main() {
 
         tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
-            mul_tiles_bcast_scalar_init_short_with_dt(dfb_tmp4_obj, dfb_dy_obj);
+            mul_bcast_scalar_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
             mul_tiles_bcast_scalar(dfb::tmp4, dfb::dy, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            mul_bcast_rows_init_short_with_dt(dfb_tmp4_obj, dfb_dy_obj);
+            mul_bcast_rows_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
             mul_tiles_bcast_rows(dfb::tmp4, dfb::dy, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            mul_bcast_cols_init_short_with_dt(dfb_tmp4_obj, dfb_dy_obj);
+            mul_bcast_cols_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
             mul_tiles_bcast_cols(dfb::tmp4, dfb::dy, 0, 0, dst0);
         } else {
             mul_tiles_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
@@ -132,13 +132,13 @@ void kernel_main() {
 
         tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
-            mul_tiles_bcast_scalar_init_short_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
+            mul_bcast_scalar_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
             mul_tiles_bcast_scalar(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            mul_bcast_rows_init_short_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
+            mul_bcast_rows_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
             mul_tiles_bcast_rows(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            mul_bcast_cols_init_short_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
+            mul_bcast_cols_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
             mul_tiles_bcast_cols(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         } else {
             mul_tiles_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
