@@ -169,13 +169,21 @@ def render_model_scenarios(rows):
         today_label = {"stocknow": "ttnn.topk", "routed": "ttnn.topk", "op": "topk_large_indices"}.get(today_e, today_e)
         today = fnum(r.get("today_us"))
         ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
+        # The first numeric column is BEFORE: the pinned pre-campaign cost when
+        # the spec carries one (rows whose today-engine already is ours), else
+        # the today-engine measurement (for stock rows those coincide). Never
+        # print best-ours twice.
+        pre_v = fnum(r.get("pre_branch_us"))
+        before = pre_v if pre_v is not None else today
         today_cores = r.get(f"{today_e}_cores", "")
         if today_e == "op" and today_cores:
             today_cores = op_active_cores(nrows, today_cores)
-        if today is not None and today_cores:
-            today_td = f'<td class="n">{today:,.1f} <span class="flat">@{today_cores}c</span></td>'
+        if before is not None and pre_v is None and today_cores:
+            today_td = f'<td class="n">{before:,.1f} <span class="flat">@{today_cores}c</span></td>'
+        elif before is not None and pre_v is not None:
+            today_td = f'<td class="n">{before:,.1f} <span class="flat">pre</span></td>'
         else:
-            today_td = us_fmt(today)
+            today_td = us_fmt(before)
 
         # best ours: the cheaper measured variant, with its core count
         cands = [(v, n, key) for v, n, key in ((ro, "routed", "routed"), (op, "direct", "op")) if v is not None]
@@ -191,10 +199,8 @@ def render_model_scenarios(rows):
         else:
             best, best_name, best_td = None, None, '<td class="n flat">not run</td>'
 
-        pre = fnum(r.get("pre_branch_us"))
-        base = pre if pre is not None else today
-        if base is not None and best is not None:
-            ratio = base / best
+        if before is not None and best is not None:
+            ratio = before / best
             rs = f"{ratio:,.0f}\u00d7" if ratio >= 100 else f"{ratio:,.1f}\u00d7"
             sp = f'<td class="n win">{rs}</td>' if ratio >= 1.05 else f'<td class="n flat">{rs}</td>'
         else:
@@ -204,14 +210,21 @@ def render_model_scenarios(rows):
         if best is None:
             capture = "\u2014"
         elif today_e == best_key:
-            # today already IS the best engine. For routed rows that is the
-            # plain ttnn.topk call: the MoE-gate carve-out (fdb81ed027e)
-            # routes these shapes automatically -- nothing to change.
-            capture = (
-                "nothing \u2014 already on the best engine"
-                if today_e == "op"
-                else "nothing \u2014 the plain ttnn.topk call already routes here (MoE-gate carve-out, fdb81ed027e)"
-            )
+            # today already IS the best engine. With a pinned pre-campaign
+            # cost the win is landed, not absent -- say so; without one the
+            # shape genuinely was optimal all along.
+            if pre_v is not None and best is not None and pre_v > best * 1.05:
+                capture = (
+                    "nothing \u2014 the win is landed inside the op (hybrid row split, 26abf46feee); it ships with the branch"
+                    if today_e == "op"
+                    else "nothing \u2014 landed in the ttnn.topk route (MoE-gate carve-out, fdb81ed027e); ships with the branch"
+                )
+            else:
+                capture = (
+                    "nothing \u2014 already optimal pre-campaign"
+                    if today_e == "op"
+                    else "nothing \u2014 the plain ttnn.topk call already routes here"
+                )
         elif best_name == "routed":
             capture = "same API; drop indices_tensor/sub_core_grids/stable from the call"
         elif today_label == "ttnn.topk" and best_name == "direct":
@@ -251,7 +264,7 @@ def render_model_scenarios(rows):
     head = (
         '  <div class="tablewrap"><table style="min-width: 1700px">\n'
         '    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows\u00d7N, k)</th>'
-        '<th>calls today</th><th class="n">today \u00b5s</th>'
+        '<th>calls today</th><th class="n">before \u00b5s</th>'
         '<th class="n ours">best ours \u00b5s</th>'
         '<th class="n">speedup (before \u00f7 best ours)</th>'
         "<th>to capture it</th><th>note</th></tr></thead>"
