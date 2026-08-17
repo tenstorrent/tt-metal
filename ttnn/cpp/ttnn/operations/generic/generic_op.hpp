@@ -13,6 +13,7 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/distributed/types.hpp"
+#include <tt-metalium/workload/utils/table.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -30,6 +31,17 @@ Tensor generic_op(
 
 // Convenience entry point for single ProgramDescriptor (SPMD mode)
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+// Metal 2.0 entry point: a ProgramSpec + ProgramRunArgs instead of a ProgramDescriptor.
+//
+// tensor_args maps each TensorParameter name to an index into io_tensors. The op builds the real
+// TensorArgument table from it, so the pointer-identity requirement on TensorArguments is
+// satisfied by construction.
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>& tensor_args);
 
 namespace experimental {
 
