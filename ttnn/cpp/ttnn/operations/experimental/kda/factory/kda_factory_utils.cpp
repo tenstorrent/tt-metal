@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <set>
 
+#include <tt_stl/assert.hpp>
+
 namespace ttnn::experimental::prim::kda_factory_detail {
 
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap) {
