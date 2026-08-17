@@ -369,18 +369,18 @@ def test_bundle_registers_the_autoport_with_unpatched_vllm():
     # architecture and requires a matching registration, so the bundle declares
     # the bare HF arch and the plugin derives TTGemma4ForConditionalGeneration.
     assert metadata["arch"] == "Gemma4ForConditionalGeneration"
-    assert metadata["main_class"] == (
-        "models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM"
-    )
+    assert metadata["main_class"] == ("models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM")
 
 
 @pytest.mark.xfail(
     strict=False,
     reason=(
         "Stage 10's plugin-side async-decode work was never pushed and is absent "
-        "from tenstorrent/vllm dev: model_runner.py has no greedy_only sampling "
-        "policy and async_decode.py has no reuse_device_decode_inputs, "
-        "page_tables_changed or scheduler_updates_page_tables handling. Not a "
+        "from both tenstorrent/vllm dev and tenstorrent/vllm-tt-plugin main (the "
+        "repo tt-shield migrated to, re-checked 2026-08-17): model_runner.py has "
+        "no greedy_only sampling policy and async_decode.py has no "
+        "reuse_device_decode_inputs, page_tables_changed or "
+        "scheduler_updates_page_tables handling. Not a "
         "correctness risk on greedy traffic, because the adapter's decode_forward "
         "declares reuse_device_decode_inputs=False and so takes the conservative "
         "path when the plugin never passes it; it costs the steady async fast "
