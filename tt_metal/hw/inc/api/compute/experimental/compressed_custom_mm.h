@@ -35,7 +35,7 @@ namespace ckernel {
  * | Argument       | Description                                                                            | Type     | Valid Range                           | Required              |
  * |----------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
  * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
- * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
+ * | split_acc      | Whether to accumulate partials within a single tile in different dest locations. NOT FORWARDED on this family: accepted for call-site compatibility, but the LLK is always instantiated with split_acc=false (see the NOTE in the body). Sibling custom_mm.h does forward it. | bool     | true/false                            | False (default false) |
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
@@ -90,7 +90,7 @@ ALWI void compressed_custom_mm_block_init(
  * | Argument       | Description                                                                            | Type     | Valid Range                           | Required              |
  * |----------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
  * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
- * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
+ * | split_acc      | Whether to accumulate partials within a single tile in different dest locations. NOT FORWARDED on this family: accepted for call-site compatibility, but the LLK is always instantiated with split_acc=false (see the NOTE in the body). Sibling custom_mm.h does forward it. | bool     | true/false                            | False (default false) |
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
@@ -133,7 +133,7 @@ ALWI void compressed_custom_mm_block_init_short(
  *
  * | Argument        | Description                                                                                                     | Type     | Valid Range                                      | Required              |
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
- * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                               | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | finalize        | Whether to perform the finalization step which merges split_accumulation partials. NOT FORWARDED on this family: accepted for call-site compatibility, but the LLK is always instantiated with finalize=false (see the NOTE in the body). Sibling custom_mm.h does forward it. | bool     | true/false (must be false if split_acc is false) | False (default true)  |
  * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool     | true/false                                       | False (default false) |
  * | clear_src       | Whether to clear SrcB before unpacking (saves power as only 1/8 FPU rows are used)                              | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t | 0 to 31                                          | True                  |
@@ -221,7 +221,7 @@ ALWI void compressed_custom_mm_block_unpack(
  *
  * | Argument        | Description                                                                                                    | Type     | Valid Range                                      | Required              |
  * |-----------------|----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
- * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                              | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | finalize        | Whether to perform the finalization step which merges split_accumulation partials. NOT FORWARDED on this family: accepted for call-site compatibility, but the LLK is always instantiated with finalize=false (see the NOTE in the body). Sibling custom_mm.h does forward it. | bool     | true/false (must be false if split_acc is false) | False (default true)  |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
