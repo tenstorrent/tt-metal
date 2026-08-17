@@ -106,9 +106,12 @@ treat these as **tool-drift tells** and act on them:
 - an `UNRESOLVED` bucket rising sharply in the checks that HAVE one — cfg-word
   (`UNRESOLVED`) and mailbox (`UNRESOLVED_ENDPOINT`) surface inputs they couldn't
   key; a jump means a new write/endpoint shape the registry doesn't classify;
-- the kernel-tier **coverage ledger** showing TUs it could not translate/parse
-  (`EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*`) — a *capture* hole (the checkers never
-  saw those kernels), distinct from a classification gap but equally a silent miss;
+- the kernel-tier **coverage ledger** showing TUs it could not translate/parse — any
+  row whose status LEADS with a hole marker (`PARSE-FAIL`, `PARSE-HOLE`, `EMPTY-OUT`,
+  `EXEC-FAIL`, `SKIP-*`, `HOST-LEAK`, `NON-KERNEL-CMD`); these are also counted into
+  the audit JSON's `degraded`, and are excluded from its `ok/N parsed` headline. A
+  *capture* hole (the checkers never saw those kernels), distinct from a classification
+  gap but equally a silent miss;
 - **the LLM tier finding a real sync site the deterministic worklist omitted** —
   the cleanest tell, and the ONLY one for **cb-sync / noc-sync**, which have no
   `UNRESOLVED` bucket (a CB/NoC object has many non-flow-control methods, so an
@@ -203,9 +206,12 @@ must never read as "all kernels covered").
    (log path), or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' <same run.sh> --full-jit`
    (run-a-workload path). bootstrap → `capture.py` (scrape → GCC→clang translate →
    `llk_extract` per kernel → merged fact base) → cb/noc/read/atomic/l1/mailbox over it.
-3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every
-   TU as parsed / `EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*` (no silent caps); an empty
-   fact base makes bootstrap exit non-zero rather than emit a false all-clear.
+3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every TU
+   as parsed or with a leading hole marker (`PARSE-FAIL`, `PARSE-HOLE`, `EMPTY-OUT`,
+   `EXEC-FAIL`, `SKIP-*`, `HOST-LEAK`, `NON-KERNEL-CMD`) — no silent caps. Holes reach
+   the audit JSON's `degraded`, so *some* kernels failing can't be hidden by others
+   succeeding; an empty fact base makes bootstrap exit non-zero outright rather than
+   emit a false all-clear. **Read `degraded` before treating 0 findings as clean.**
 4. **Merge:** merge/dedup the kernel-tier candidates with the in-tree findings.
 
 Everything lives **inside tt-llk** (`.claude/tools/llk-audit/`), so there is zero
