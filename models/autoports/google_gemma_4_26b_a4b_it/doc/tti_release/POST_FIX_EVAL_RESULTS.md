@@ -218,7 +218,44 @@ python -m vllm.entrypoints.openai.api_server \
 
 The autoport comes up healthy on this configuration (`/health` 200, arch resolves to
 `models.autoports.google_gemma_4_26b_a4b_it.tt.generator_vllm:Gemma4ForCausalLM`) and
-generates in thinking mode at ~25 tok/s single-user. `r1_gpqa_diamond` results are
-appended below when the run completes; note the r1 task supplies its own
-`until: ['<|end_of_text|>','<|endoftext|>','<|im_end|>']`, which the release spec
-overrides to `[]` — those stop strings are other models' markers and are inert here.
+generates in thinking mode at ~25–30 tok/s single-user.
+
+### Driving it through the TTI harness rather than by hand
+
+Driving `lm_eval` directly is not the same test: the harness builds the command,
+applies `limit_samples_map`, scores the declared `result_keys`, and emits the
+verdict. Run locally against the already-serving autoport with:
+
+```bash
+cd tt-inference-server   # c8509ac2 + the 4 committed patches + cherry-pick 60f80c4b
+MODEL_SPECS_ENV=dev ONLY_BENCHMARK_TARGETS=1 CACHE_ROOT=<cache> python run.py \
+  --workflow evals \
+  --runtime-model-spec-json <this dir>/autoport_releaseflow_spec.json \
+  --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth \
+  --skip-system-sw-validation --disable-trace-capture \
+  --limit-samples-mode smoke-test
+```
+
+Three integration gaps had to be closed to get that far, none of them documented
+on either branch:
+
+1. **`MODEL_SPECS_ENV=dev` is mandatory.** `60f80c4b` registers these eight models
+   in `workflows/model_specs/dev/llm.yaml`, and `EVAL_CONFIGS` is built only from
+   the catalog that is actually loaded (`model_spec.py:1206`, default `prod`).
+   Without it: `AssertionError: Model:=… not found in EVAL_CONFIGS`.
+2. **The autoport spec's `model_name` must match the catalog key exactly.** The
+   committed `autoport_release_spec.json` says `Gemma-4-26B-A4B-it`; the release-flow
+   catalog key is `gemma-4-26B-A4B-it` (lower-case `g`). `EVAL_CONFIGS` is keyed by
+   `model_spec.model_name` for specs present in `MODEL_SPECS`
+   (`eval_config.py:5638`), so a runtime autoport spec is unreachable until the two
+   agree. `autoport_releaseflow_spec.json` uses the catalog spelling.
+3. **`--limit-samples-mode smoke` is invalid**; the enum accepts `smoke-test`
+   (`workflow_types.py:354`, `SMOKE_TEST/CI_COMMIT/CI_NIGHTLY/CI_LONG`).
+
+Running it this way also revealed a difference from the hand-rolled command: TTI
+passes the spec's `until: []`, whereas a manual invocation inherits the r1 task's
+`until: ['<|end_of_text|>','<|endoftext|>','<|im_end|>']`. Those markers belong to
+other model families and are inert for Gemma, but it is the kind of divergence that
+makes the harness run the authoritative one.
+
+`r1_gpqa_diamond` scores are appended below as runs complete.

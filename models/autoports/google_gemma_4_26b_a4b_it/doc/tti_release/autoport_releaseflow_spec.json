@@ -1,0 +1,141 @@
+{
+  "model_id": "id_autoport-Gemma-4-26B-A4B-it_p300x2_releaseflow",
+  "impl": {
+    "impl_id": "autoport_gemma4_26b_a4b_it",
+    "impl_name": "autoport-gemma4-26b-a4b-it",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/google_gemma_4_26b_a4b_it"
+  },
+  "hf_model_repo": "google/gemma-4-26B-A4B-it",
+  "model_name": "gemma-4-26B-A4B-it",
+  "inference_engine": "vLLM",
+  "device_type": "P300X2",
+  "device_model_spec": {
+    "device": "P300X2",
+    "max_concurrency": 1,
+    "max_context": 49152,
+    "max_tokens_all_users_override": 49152,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 128,
+        "osl": 128,
+        "max_concurrency": 1,
+        "num_prompts": 8,
+        "images_per_prompt": 0,
+        "task_type": "text",
+        "targets": {
+          "functional": {
+            "ttft_ms": 1000.0,
+            "tput_user": 10.0,
+            "tput": 10.0,
+            "tolerance": 0.0
+          },
+          "complete": {
+            "ttft_ms": 500.0,
+            "tput_user": 20.0,
+            "tput": 20.0,
+            "tolerance": 0.0
+          },
+          "target": {
+            "ttft_ms": 300.0,
+            "tput_user": 26.0,
+            "tput": 26.0,
+            "tolerance": 0.0
+          }
+        },
+        "target_peak_perf": {
+          "customer_functional": 0.1,
+          "customer_complete": 0.5,
+          "customer_sellable": 0.8
+        }
+      }
+    ],
+    "vllm_args": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "block_size": "64",
+      "max_model_len": 49152,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 49152,
+      "max-log-len": "32",
+      "seed": "9472",
+      "additional_config": "{\"tt\": {\"trace_region_size\": 200000000, \"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"decode_only\"}}",
+      "enable-auto-tool-choice": true,
+      "tool-call-parser": "gemma4",
+      "default-chat-template-kwargs": "{\"enable_thinking\": true}",
+      "reasoning-parser": "gemma4"
+    },
+    "override_tt_config": {
+      "trace_region_size": 200000000,
+      "fabric_config": "FABRIC_1D",
+      "sample_on_device_mode": "decode_only"
+    },
+    "env_vars": {
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "GEMMA4_PAGE_BLOCK_SIZE": "64",
+      "GEMMA4_MAX_TOKENS_ALL_USERS": "49152"
+    },
+    "tensor_cache_timeout": 3600.0,
+    "known_issues": [],
+    "eval_max_retries": 1,
+    "image_benchmark_num_batches": 3
+  },
+  "env_vars": {
+    "VLLM_CONFIGURE_LOGGING": "1",
+    "VLLM_RPC_TIMEOUT": "900000",
+    "VLLM_TARGET_DEVICE": "tt",
+    "TORCHDYNAMO_DISABLE": "1",
+    "MESH_DEVICE": "P300x2",
+    "ARCH_NAME": "blackhole"
+  },
+  "tt_metal_commit": "4b17e185dea9e70db276bcd5b0ed47c5786738b0",
+  "vllm_commit": "938c45ed71f3f669ffd38e4c9a033c3391cec961",
+  "hf_weights_repo": "google/gemma-4-26B-A4B-it",
+  "param_count": 26,
+  "min_disk_gb": 60,
+  "min_ram_gb": 32,
+  "model_type": "LLM",
+  "repacked": 0,
+  "version": "0.19.0",
+  "docker_image": null,
+  "status": "EXPERIMENTAL",
+  "code_link": "models/autoports/google_gemma_4_26b_a4b_it",
+  "override_tt_config": {
+    "trace_region_size": 220000000,
+    "fabric_config": "FABRIC_1D_RING"
+  },
+  "supported_modalities": [
+    "text"
+  ],
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {
+    "prompt_mode": "chat",
+    "tokenizer_class": "GemmaTokenizer",
+    "tokenizer_chat_template_present": true,
+    "autoport_generator": "models/autoports/google_gemma_4_26b_a4b_it/tt/generator_vllm.py",
+    "context_contract": "models/autoports/google_gemma_4_26b_a4b_it/doc/context_contract.json"
+  },
+  "cli_args": {
+    "model": "Gemma-4-26B-A4B-it",
+    "workflow": "release",
+    "device": "p300x2",
+    "tt_device": "p300x2",
+    "impl": "autoport-gemma4-26b-a4b-it",
+    "engine": "vLLM",
+    "docker_server": false,
+    "local_server": false,
+    "interactive": false,
+    "service_port": "8000",
+    "bind_host": "0.0.0.0",
+    "server_url": "http://127.0.0.1",
+    "runtime_model_spec_json": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/tti_release/autoport_release_spec.json",
+    "no_auth": true,
+    "tools": "vllm",
+    "disable_trace_capture": true,
+    "skip_system_sw_validation": true,
+    "limit_samples_mode": "ci-nightly"
+  }
+}
