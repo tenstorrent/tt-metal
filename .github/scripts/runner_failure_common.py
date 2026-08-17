@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v5"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-17-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -38,6 +38,15 @@ FABRIC_LINK_MISMATCH_RE = re.compile(
 OUT_OF_DISK_HARD_RE = re.compile(r"(no\s+space\s+left\s+on\s+device|enospc)", re.IGNORECASE)
 DISK_USAGE_RE = re.compile(r"disk\s+usage\s+is\s+(?P<percent>\d{1,3})\s*%", re.IGNORECASE)
 DISK_USAGE_HIGH_RE = re.compile(r"disk\s+usage\s+is\s+high", re.IGNORECASE)
+SETUP_RUNNER_START_RE = re.compile(
+    r"A\s+job\s+started\s+hook\s+has\s+been\s+configured\s+by\s+the\s+self-hosted\s+runner\s+administrator",
+    re.IGNORECASE,
+)
+SETUP_RUNNER_END_RE = re.compile(
+    r"A\s+job\s+completed\s+hook\s+has\s+been\s+configured\s+by\s+the\s+self-hosted\s+runner\s+administrator",
+    re.IGNORECASE,
+)
+PROCESS_EXIT_ERROR_RE = re.compile(r"##\[error\]Process\s+completed\s+with\s+exit\s+code\s+[1-9]\d*\.?", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,10 @@ ERROR_SIGNATURES = (
         label="Physical chip not found",
         pattern=r"Physical\s+chip\s+id\s+\d+\s+(?:is\s+)?not\s+found\s+in\s+(?:the\s+)?control\s+plane\s+chip\s+mapping",
         case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="SETUP_RUNNER_FAILURE_FOUND",
+        label="Set up runner failure",
     ),
 )
 
@@ -471,6 +484,9 @@ def signature_found(log_text: str, signature: ErrorSignature) -> bool:
     if signature.key == "OUT_OF_DISK_FOUND":
         return out_of_disk_signature_found(log_text)
 
+    if signature.key == "SETUP_RUNNER_FAILURE_FOUND":
+        return setup_runner_failure_found(log_text)
+
     if signature.pattern:
         flags = 0 if signature.case_sensitive else re.IGNORECASE
         return re.search(signature.pattern, log_text, flags=flags) is not None
@@ -498,6 +514,18 @@ def out_of_disk_signature_found(log_text: str) -> bool:
         return False
 
     return max(disk_pressure_signals, key=lambda signal: signal[0])[1]
+
+
+def setup_runner_failure_found(log_text: str) -> bool:
+    plain_log_text = strip_terminal_sequences(log_text)
+    start_match = SETUP_RUNNER_START_RE.search(plain_log_text)
+    if start_match is None:
+        return False
+
+    end_match = SETUP_RUNNER_END_RE.search(plain_log_text, start_match.end())
+    end_index = end_match.start() if end_match is not None else len(plain_log_text)
+    setup_runner_text = plain_log_text[start_match.start() : end_index]
+    return PROCESS_EXIT_ERROR_RE.search(setup_runner_text) is not None
 
 
 def format_fabric_node(mesh: str, device: str) -> str:
