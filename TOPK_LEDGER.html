@@ -64,7 +64,7 @@
           color: var(--muted); font-size: .84rem; max-width: 70ch; }
 </style>
 <main>
-  <div class="eyebrow">nkapre/sorting · single Blackhole · 2026-08-16 · every number measured on silicon unless marked</div>
+  <div class="eyebrow">nkapre/sorting · single Blackhole · 2026-08-17 · every number measured on silicon unless marked</div>
   <h1>Blackhole Top-K Ledger</h1>
   <p class="sub">One anchor shape, four layers of the stack, before → after. Details are collapsed below.</p>
 
@@ -316,6 +316,11 @@
     Method: Tracy device-kernel duration at op level; MATH_ISOLATE two-point slope with the 2.00×
     control tripwire at LLK level; one device process at a time; per-cell subprocess isolation;
     correctness exact/bit-exact vs torch goldens, never PCC. Branch <code>nkapre/sorting</code>,
-    commits d64993c…da8a0b7, nothing pushed. Roofline: tenstorrent/llm_perf main (PR 671 + 676 + 825).
+    commits d64993c…575ff18, nothing pushed. Roofline: tenstorrent/llm_perf main (PR 671 + 676 + 825).
+    Full local top-k CI battery (<code>ci.sh</code>, tiers 1–3) re-run 2026-08-17 with the sampling
+    relaxation in: contract 62/62 + FULL 72/72, reduce/topk 220, op nightly 154, sampling 26, moe 2,
+    sort 128, reduce dir 2,814, nightly reduction 3,978 — all green; the one nightly_experimental error
+    (minimal_matmul perf under Tracy, no topk involvement) is the known in-suite-only transient and
+    passes solo. Manifest: <code>generated/ci_local/i5_relaxation_full/RESULTS.txt</code>.
   </div>
 </main>
