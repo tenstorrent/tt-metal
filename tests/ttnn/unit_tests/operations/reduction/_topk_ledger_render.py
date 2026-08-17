@@ -153,8 +153,10 @@ def render_model_scenarios(rows):
                  ((ro, "routed ttnn.topk", "routed"), (op, "direct op", "op")) if v is not None]
         if cands:
             best, best_name, best_cores = min(cands)
+            # which variant won is carried by the 'to capture it' column;
+            # repeating it in every cell is noise
             bc = f" @{best_cores}c" if best_cores else ""
-            best_td = f'<td class="n ours">{best:,.1f}{bc} <span class="flat">({best_name})</span></td>'
+            best_td = f'<td class="n ours">{best:,.1f}{bc}</td>'
         else:
             best, best_name, best_td = None, None, '<td class="n flat">not run</td>'
 
@@ -201,7 +203,7 @@ def render_model_scenarios(rows):
         '  <div class="tablewrap"><table style="min-width: 1700px">\n'
         '    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows\u00d7N, k)</th>'
         '<th>calls today</th><th class="n">today \u00b5s</th>'
-        '<th class="n ours">best ours \u00b5s (variant)</th>'
+        '<th class="n ours">best ours \u00b5s</th>'
         '<th class="n">speedup (today \u00f7 best ours)</th>'
         '<th>to capture it</th><th>note</th></tr></thead>'
     )
