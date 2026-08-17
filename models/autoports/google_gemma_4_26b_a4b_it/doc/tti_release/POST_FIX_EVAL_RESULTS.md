@@ -294,3 +294,40 @@ Not reproducible here, and not claimed:
 
 `--workflow release` additionally requires `HF_TOKEN` in the environment
 (`run.py:841`), which `--workflow evals` does not.
+
+### The local release verdict
+
+`--workflow release --limit-samples-mode smoke-test` ran to a verdict against the
+external autoport server. Full report copied to
+`experiments/post_fix_evals/local_release_report.md`:
+
+| section | result |
+|---|---|
+| **Acceptance** | ❌ FAIL, 2 blockers |
+| Benchmarks | ✅ PASS 1/1 |
+| Evals | ❌ FAIL — 0/3 passed, 2 failed, **1 NA** |
+| Spec tests | 🟨 NA (no blocks — no spec-test mapping for this model) |
+
+Both blockers are the Docker-dependent agentic rows, `terminal_bench_2` and
+`swe_bench_verified`. Neither can run in this container, so this FAIL is an
+environment limit, not a model result.
+
+Benchmarks pass at the **strictest tier** on the release recipe — ISL 128 / OSL 128
+at concurrency 1: TTFT 261.2 ms against a 300 ms target (ratio 0.87), 26.7 decode
+TPS against 26 (1.03), throughput/user ratio 1.08. Functional and complete tiers
+pass with margin.
+
+The important finding is the eval row. `r1_gpqa_diamond` **scored 100 and is still
+graded `NA`**, because the release-flow config carries no reference to compare
+against: `published_score=None` and `gpu_reference_score_ref="TBD"`
+(`eval_config.py`, this model's `EvalTaskScore`). So the accuracy gate cannot be
+passed by any score at all in its current form — which is the same class of blocker
+`ACCURACY_BLOCKER.md` recorded for the old recipe, now reappearing on the new one.
+Somebody has to supply a published or GPU reference for `r1_gpqa_diamond` before
+this row can grade, and that is a release-config task rather than a model task.
+
+One provenance defect worth fixing in the spec: the report's metadata prints
+`tt_metal_commit 4b17e185dea9` and `vllm_commit 938c45ed`, which are copied
+verbatim from the spec JSON and describe the *old* Stage 11 run — not the code that
+actually produced this report. A runtime spec that hard-codes commit fields will
+mislabel every future run.

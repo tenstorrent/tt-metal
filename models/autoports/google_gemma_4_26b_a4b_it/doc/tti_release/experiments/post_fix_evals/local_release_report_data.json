@@ -1,0 +1,201 @@
+{
+    "metadata": {
+        "model_name": "google/gemma-4-26B-A4B-it",
+        "device": "P300X2",
+        "generated_at": "2026-08-17T14:25:03+00:00",
+        "report_id": "id_autoport-Gemma-4-26B-A4B-it_p300x2_releaseflow_2026-08-17_14-27-02",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "python run.py --workflow release --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/tti_release/autoport_releaseflow_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --limit-samples-mode smoke-test",
+        "runtime_model_spec_json": "/tmp/claude-2896121/-home-mvasiljevic-tt-metal/8648d126-70e2-4f72-8074-38818c035e90/scratchpad/tti_cache/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-17_14-08-34_id_autoport-Gemma-4-26B-A4B-it_p300x2_releaseflow_dVN1oxoU.json",
+        "model_id": "id_autoport-Gemma-4-26B-A4B-it_p300x2_releaseflow",
+        "model_repo": "google/gemma-4-26B-A4B-it",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "4b17e185dea9e70db276bcd5b0ed47c5786738b0",
+        "vllm_commit": "938c45ed71f3f669ffd38e4c9a033c3391cec961",
+        "model_impl": "autoport-gemma4-26b-a4b-it"
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "r1_gpqa_diamond",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/Qwen/Qwen3.6-27B",
+                "gpu_reference_score": null,
+                "gpu_reference_score_ref": "TBD",
+                "score": 100.0,
+                "ratio_to_published": "N/A",
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 1
+            },
+            "title": "LLM Eval \u2014 r1_gpqa_diamond",
+            "task_type": "llm",
+            "id": "gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "task_name": "r1_gpqa_diamond",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/Qwen/Qwen3.6-27B"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 261.1783,
+                "p50_ttft": 261.4612,
+                "p99_ttft": 265.0363,
+                "mean_tpot_ms": 35.64,
+                "mean_e2el_ms": 4787.4538,
+                "tps_decode_throughput": 26.7351,
+                "request_throughput": 0.2089,
+                "error_request_count": null,
+                "target_check": 2,
+                "target_checks": {
+                    "functional": {
+                        "ttft": 1000.0,
+                        "ttft_ratio": 0.2611783,
+                        "ttft_check": 2,
+                        "tput_user": 10.0,
+                        "tput_user_ratio": 2.8058361391694726,
+                        "tput_user_check": 2,
+                        "tput": 10.0,
+                        "tput_ratio": 2.67351,
+                        "tput_check": 2
+                    },
+                    "complete": {
+                        "ttft": 500.0,
+                        "ttft_ratio": 0.5223566,
+                        "ttft_check": 2,
+                        "tput_user": 20.0,
+                        "tput_user_ratio": 1.4029180695847363,
+                        "tput_user_check": 2,
+                        "tput": 20.0,
+                        "tput_ratio": 1.336755,
+                        "tput_check": 2
+                    },
+                    "target": {
+                        "ttft": 300.0,
+                        "ttft_ratio": 0.8705943333333332,
+                        "ttft_check": 2,
+                        "tput_user": 26.0,
+                        "tput_user_ratio": 1.0791677458344124,
+                        "tput_user_check": 2,
+                        "tput": 26.0,
+                        "tput_ratio": 1.0282730769230768,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-08-17 14:25:54"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "terminal_bench_2",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/Qwen/Qwen3.6-27B",
+                "gpu_reference_score": null,
+                "score": null,
+                "ratio_to_published": "N/A",
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 3,
+                "mean_seconds_per_task": null,
+                "success": false,
+                "subprocess_rc": 1
+            },
+            "title": "LLM Eval \u2014 terminal_bench_2",
+            "task_type": "llm",
+            "id": "terminal_bench_2_P300X2",
+            "targets": {
+                "task_name": "terminal_bench_2",
+                "device": "P300X2"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "swe_bench_verified",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/Qwen/Qwen3.6-27B",
+                "gpu_reference_score": null,
+                "score": null,
+                "ratio_to_published": "N/A",
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 3,
+                "mean_seconds_per_task": null,
+                "success": false,
+                "subprocess_rc": 1
+            },
+            "title": "LLM Eval \u2014 swe_bench_verified",
+            "task_type": "llm",
+            "id": "swe_bench_verified_P300X2",
+            "targets": {
+                "task_name": "swe_bench_verified",
+                "device": "P300X2"
+            }
+        }
+    ],
+    "acceptance_criteria": false,
+    "acceptance_blockers": {
+        "evals:LLM Eval \u2014 terminal_bench_2": "LLM Eval \u2014 terminal_bench_2 reported success=False (attempts=?)",
+        "evals:LLM Eval \u2014 swe_bench_verified": "LLM Eval \u2014 swe_bench_verified reported success=False (attempts=?)"
+    },
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "FAIL",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "FAIL",
+                "total": 3,
+                "passed": 0,
+                "failed": 2,
+                "na": 1,
+                "skipped": 0,
+                "blockers": {
+                    "evals:LLM Eval \u2014 terminal_bench_2": "LLM Eval \u2014 terminal_bench_2 reported success=False (attempts=?)",
+                    "evals:LLM Eval \u2014 swe_bench_verified": "LLM Eval \u2014 swe_bench_verified reported success=False (attempts=?)"
+                },
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u274c `FAIL`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \u2705 `PASS` (1/1 passed)\n- Evals: \u274c `FAIL` (0/3 passed, 2 failed, 1 NA)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n\n#### Blockers\n\n- `evals:LLM Eval \u2014 terminal_bench_2`: LLM Eval \u2014 terminal_bench_2 reported success=False (attempts=?)\n- `evals:LLM Eval \u2014 swe_bench_verified`: LLM Eval \u2014 swe_bench_verified reported success=False (attempts=?)"
+}
