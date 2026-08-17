@@ -260,7 +260,11 @@ class NeighborhoodAttention(Module):
         # nlp_create_qkv_heads, partitioning the heads over tp_axis FIRST. The head split otherwise
         # happens inside the attention, so q/k norm, the scale and both RoPEs run on all the heads
         # and three quarters of that is then discarded; partitioning up front makes them 1/tp.
-        self.fused_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
+        # DIFFVAE_DET_COLPAR_QKV=1 goes further: shard the fused weight on its output axis so each
+        # chip's matmul only ever computes its own heads. The partition then has nothing to do --
+        # the output is born 3*dim/tp wide -- and nlp_create_qkv_heads splits it locally.
+        self.colpar_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_COLPAR_QKV") == "1"
+        self.fused_qkv = self.colpar_qkv or (tp_axis is not None and os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1")
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
@@ -272,7 +276,13 @@ class NeighborhoodAttention(Module):
         # Under fused_qkv the partition lands immediately after the matmul, so what is held is
         # (rows, 3*dim) plus (rows, 3*dim/tp), not six full-width activations.
         if self.fused_qkv:
-            self.qkv = Linear(dim, 3 * dim, bias=True, mesh_device=mesh_device)
+            qkv_linear = {"bias": True, "mesh_device": mesh_device}
+            if self.colpar_qkv:
+                # device_major already orders the weight [dev][q|k|v][heads/tp], which is exactly
+                # what a contiguous column shard needs.
+                qkv_linear["weight_mesh_axes"] = [None, tp_axis]
+                qkv_linear["bias_mesh_axes"] = [None, tp_axis]
+            self.qkv = Linear(dim, 3 * dim, **qkv_linear)
         else:
             self.to_q = Linear(dim, dim, bias=True, mesh_device=mesh_device)
             self.to_k = Linear(dim, dim, bias=True, mesh_device=mesh_device)
@@ -331,17 +341,21 @@ class NeighborhoodAttention(Module):
         tokens = t * h * w
         heads = self.heads_local
         if self.fused_qkv:
-            qkv = ttnn.reshape(self.qkv(x), (1, 1, tokens, 3 * self.dim))
+            flat = self.qkv(x)
             ttnn.deallocate(x)
-            # The head partition lands here rather than inside the attention, so the norms, the
-            # scale and both RoPEs below see heads/tp instead of computing every head and letting
-            # the attention discard all but this chip's.
-            partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
-            ttnn.deallocate(qkv)
+            qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
+            if not self.colpar_qkv:
+                # The head partition lands here rather than inside the attention, so the norms, the
+                # scale and both RoPEs below see heads/tp instead of computing every head and
+                # letting the attention discard all but this chip's. Under colpar_qkv the matmul
+                # already emitted only this chip's heads, so there is nothing to slice.
+                partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
+                ttnn.deallocate(qkv)
+                qkv = partitioned
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                partitioned, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
+                qkv, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
             )
-            ttnn.deallocate(partitioned)
+            ttnn.deallocate(qkv)
         else:
             heads_shape = (tokens * self.num_heads, self.head_dim)
             q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
