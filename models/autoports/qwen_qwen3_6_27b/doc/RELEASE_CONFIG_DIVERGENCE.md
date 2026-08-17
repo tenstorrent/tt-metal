@@ -131,3 +131,233 @@ This is the single most important caveat on everything else in this directory.
 3. **`max_num_seqs 32`.** Confirms the batch-32 latency penalty in the release
    configuration and, incidentally, makes long reasoning evals faster in wall clock by
    overlapping documents.
+
+---
+
+## Code-verified prediction: the release configuration scores 0.00 on GPQA
+
+Established 2026-08-17 from source and measurement, before running the release
+configuration. Six links, each checked:
+
+1. **Thinking is ON in the release.** The chat template's default branch emits an open
+   `<think>` (see `doc/tti_release/NON_TERMINATION.md`), and the Qwen3.6-27B release
+   entry sets **no** `default-chat-template-kwargs`. The sibling gemma-4 entry in the
+   same file *does* (`'{"enable_thinking": true}'`), so the knob exists and was simply
+   not set here.
+
+2. **The release enables the reasoning parser.** `vllm_args: reasoning_parser: qwen3`,
+   and `workflows/model_spec.py:429` merges `vllm_args` straight onto the server
+   command line.
+
+3. **The release grants no generation budget.** `EvalTask.gen_kwargs` defaults to
+   `{"stream": "False"}` (`reference_config/evals/eval_config.py:209`) and the
+   Qwen3.6-27B tasks do not override it. `gpqa_diamond_cot_zeroshot`'s own YAML sets no
+   `max_gen_toks` either, so lm-eval falls back to its API default of **256**. This is
+   exactly what stage 11 recorded: `gen_kwargs = {'stream': False, 'seed': 42}`.
+
+4. **256 tokens cannot reach `</think>` on a real Diamond item.** Measured: the same
+   Diamond row 0 consumed the entire 32,768-token budget in thinking mode without
+   closing.
+
+5. **The parser then returns no content.** `vllm/reasoning/qwen3_reasoning_parser.py`,
+   `extract_reasoning`:
+
+   ```python
+   # Thinking enabled but no </think>: output was truncated.
+   # Everything generated so far is reasoning.
+   return model_output, None
+   ```
+
+   Its docstring states the same: "Otherwise (thinking enabled, default), a missing
+   `</think>` means the output was truncated and everything is reasoning: returns
+   `(model_output, None)`."
+
+6. **lm-eval grades `content`.** Empty content yields `[invalid]` from the
+   `boxed_choice` filter, so `exact_match,flexible-extract` — the single key the GPQA
+   score function reads — is **0.00**.
+
+So the release configuration is predicted to score **0.00**, *below* the 0.30 the
+autoport recorded without a parser, and for a purely configurational reason. Nothing
+about the port changes between those two numbers.
+
+### The same file already contains the fix pattern
+
+Other reasoning models get an explicit budget for the very same task:
+
+| model | task | `max_gen_toks` |
+|---|---|---:|
+| `zai-org/GLM-5.2` | **`gpqa_diamond_cot_zeroshot`** | **200 x 1024** |
+| `moonshotai/Kimi-K2.6` | `r1_gpqa_diamond` | 256 x 1024 |
+| `moonshotai/Kimi-K2.7-Code` | `r1_gpqa_diamond` | 256 x 1024 |
+| **`Qwen/Qwen3.6-27B`** | **`gpqa_diamond_cot_zeroshot`** | **none** |
+
+### But the budget fix alone is impractical on this hardware
+
+At the measured 56 ms/token, a 200 x 1024 = 204,800-token budget is up to **3.2 h per
+document** and about **32 h for the ten-document CI subset**. GLM-5.2 presumably runs
+on hardware where that is affordable. Here it is not.
+
+### What the measurements say the fix should be
+
+Thinking OFF answers the hard item correctly and cheaply. Measured on this port,
+`chat_template_kwargs: {"enable_thinking": false}`:
+
+| item | tokens | finish_reason | answer |
+|---|---:|---|---|
+| "What is 2 + 2?" | **2** | stop | correct |
+| easy physics MCQ | 472 | stop | `\boxed{A}` correct |
+| **real Diamond row 0** | **1,849** | **stop** | **`\boxed{A}` correct** |
+
+The same Diamond row 0 that does not converge in 32,768 tokens with thinking ON is
+answered **correctly in 1,849 tokens** with thinking OFF.
+
+So the recommended release configuration for this model, in order of preference:
+
+1. **Set `default-chat-template-kwargs: '{"enable_thinking": false}'`** plus a modest
+   `gen_kwargs.max_gen_toks` (4096 is ample given the 1,849-token measurement). Cheap,
+   terminating, and it grades the model's actual answer. It must be labelled as a
+   non-thinking condition, because it is not comparable to a published thinking-mode
+   score.
+2. **Or keep thinking ON and set a real budget**, accepting the wall-clock cost and
+   the risk that some items still will not converge. On this hardware that is a
+   multi-day CI job, so it belongs on a published-number run rather than in nightly CI.
+
+Doing neither leaves the release reporting 0.00 for a model that answers the same
+questions correctly.
+
+### One subtlety still to verify by running
+
+`Qwen3ReasoningParser.__init__` reads the flag once, at construction:
+
+```python
+chat_kwargs = kwargs.get("chat_template_kwargs", {}) or {}
+self.thinking_enabled = chat_kwargs.get("enable_thinking", True)
+```
+
+That is *constructor* state, not per-request state. A request that passes
+`chat_template_kwargs={"enable_thinking": false}` may therefore still be parsed with
+`thinking_enabled=True`, in which case output containing no `</think>` — which is what
+the thinking-off template produces — would be classified entirely as reasoning and
+**content would be empty even in the thinking-off arm**. The docstring says the serving
+layer handles this via `prompt_is_reasoning_end`, but explicitly in the *streaming*
+path.
+
+The queued release probe tests exactly this: it runs with `--reasoning_parser qwen3`
+active and includes a `thinking_enabled=false` case, reporting `content` and
+`reasoning_content` lengths separately. If the thinking-off arm also returns empty
+content in non-streaming mode, then recommendation 1 above needs
+`default-chat-template-kwargs` at *server* level rather than per-request
+`chat_template_kwargs` — which is precisely how the gemma-4 entry sets it.
+
+---
+
+## Which GPQA task: `r1_gpqa_diamond`, not `gpqa_diamond_cot_zeroshot`
+
+Answered from the branch itself. **All four models the branch adds use
+`task_name="r1_gpqa_diamond"`**, each with an explicit budget:
+
+| model | task | `max_gen_toks` |
+|---|---|---:|
+| `Qwen/Qwen3.8-27B` | `r1_gpqa_diamond` | 80 x 1024 = 81,920 |
+| `Qwen/Qwen3.6-35B-A3B` | `r1_gpqa_diamond` | 80 x 1024 = 81,920 |
+| `meta-models/Muse-Glimmer-30B` | `r1_gpqa_diamond` | 24 x 1024 = 24,576 |
+| `google/diffusiongemma-26B-A4B-it` | `r1_gpqa_diamond` | 32 x 1024 = 32,768 |
+| **`Qwen/Qwen3.6-27B`** (already in main) | **`meta_gpqa_cot` -> `gpqa_diamond_cot_zeroshot`** | **none** |
+
+So this model is still on the older pattern while its closest sibling,
+`Qwen/Qwen3.8-27B`, is onboarded the new way.
+
+### Why the task choice is decisive, not cosmetic
+
+`lm_eval/tasks/r1_evals/gpqa_reasoning_diamond.yaml` against
+`lm_eval/tasks/gpqa/cot_zeroshot/_gpqa_cot_zeroshot_yaml`:
+
+| | `gpqa_diamond_cot_zeroshot` (what ran) | `r1_gpqa_diamond` (release) |
+|---|---|---|
+| `max_gen_toks` | **absent -> lm-eval API default 256** | **32768, in the YAML** |
+| `until` | `["</s>"]` — **not a Qwen stop token** | `<\|im_end\|>`, `<\|endoftext\|>`, `<\|end_of_text\|>` |
+| sampling | `do_sample: false`, `temperature: 0.0` | `temperature: 0.6, top_k: 40, top_p: 0.95` |
+| extraction | `strict-match` (regex "The answer is", structurally unmatchable) + `flexible-extract` | own `process_results_gpqa` |
+| graded key | `exact_match,flexible-extract` | `exact_match,none` |
+
+Every one of those four differences hurts a thinking model, and together they account
+for what I measured: a 256-token cap that cannot escape the `<think>` block, greedy
+decoding on a model whose card specifies otherwise, and a stop list that does not
+contain the token this model actually emits.
+
+### The sibling entry's own notes are worth quoting
+
+```
+# R1-style zero-shot reasoning GPQA Diamond: the model emits reasoning then a
+# final answer, and the task's own extractor scores exact_match,none. Do NOT
+# switch to gpqa_diamond_generative_n_shot -- its 5-shot examples demonstrate
+# bare "(C)" answers and suppress reasoning (that cost gemma-4 ~30 points).
+```
+
+and on the endpoint:
+
+```
+# Use the chat endpoint so the server applies the chat template (which is what
+# carries thinking mode); client-side apply_chat_template on /v1/completions
+# would bypass it.
+```
+
+That second note independently confirms the mechanism documented in
+`NON_TERMINATION.md`: the chat template is what carries thinking mode.
+
+### The sampling divergence I had not tested
+
+The sibling's `gen_kwargs`:
+
+```python
+"stream": "false",          # REQUIRED: lm-eval's streaming parser raises KeyError 'message'
+"max_gen_toks": 80 * 1024,
+"until": [],
+"do_sample": "true",
+"temperature": 1.0,         # Qwen card, thinking mode
+"top_k": 20,
+"top_p": 0.95,
+```
+
+`temperature 1.0 / top_k 20 / top_p 0.95` is exactly this model's own
+`generation_config.json`. **Every graded run on this branch, and every probe I ran
+until now, used greedy `temperature 0.0`** — which is neither the task YAML's value
+(0.6) nor the release's (1.0), and greedy decoding is a known non-convergence mode for
+reasoning models.
+
+That is a live candidate explanation for the 32,768-token runaway, and it had not been
+tested. The updated release probe now includes both non-greedy profiles on Diamond
+row 0 so the comparison is direct:
+
+| arm | sampling | budget |
+|---|---|---:|
+| `greedy_diamond0_256` | greedy t=0 | 256 |
+| `r1sampling_diamond0_32768` | t=0.6, top_k=40, top_p=0.95 | 32768 |
+| `release_sampling_diamond0_32768` | t=1.0, top_k=20, top_p=0.95 | 32768 |
+| `thinkoff_diamond0_4096` | greedy t=0, thinking OFF | 4096 |
+
+If a non-greedy arm converges where greedy did not, the runaway was a
+sampling-configuration artifact that the release `gen_kwargs` already avoids — and the
+correct conclusion is that the port was fine and the *old* task entry was the defect.
+
+### Local test now mirrors the release
+
+`/tmp/run_r1_gpqa.sh` runs `--tasks r1_gpqa_diamond` with the release's own gen_kwargs
+(`stream=false, do_sample=true, temperature=1.0, top_k=20, top_p=0.95`), `--seed 9472`,
+`--block_size 64`, `--reasoning_parser qwen3`, and `apply_chat_template` (the EvalTask
+default is `True`, so the release passes it too). Verified that `r1_gpqa_diamond`
+resolves in this venv without `--include_path` — it is in the task index and loads its
+198 documents.
+
+Two device settings are deliberately left at the autoport's validated values —
+`FABRIC_1D_RING` rather than the spec's `FABRIC_1D`, and a 200 MB rather than 1 GB
+trace region — so that this run isolates the *task and grading* change. The device
+settings get their own run.
+
+### Recommendation for the release config
+
+Onboard `Qwen/Qwen3.6-27B` the same way its sibling `Qwen/Qwen3.8-27B` is onboarded:
+`r1_gpqa_diamond`, explicit `max_gen_toks`, model-card sampling, chat endpoint. Note
+the wall-clock consequence on this hardware: at the measured 56 ms/token an 80 x 1024
+budget is up to ~76 min per document, so the YAML's own 32,768 is the affordable
+starting point for CI and the larger budget belongs to a published-number run.
