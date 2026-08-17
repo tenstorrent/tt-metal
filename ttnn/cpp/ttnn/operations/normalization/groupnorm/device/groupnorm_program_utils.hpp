@@ -19,10 +19,12 @@ namespace ttnn::prim {
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
 // Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
-// and the padding rows must be excluded from both accumulation passes -- the kernels do that by
-// switching to a row-masked set of input-mask tiles on each batch's final row-tile, of which
-// `rows_in_last_tile` are real. Shared by all three two-pass factories. Kernels re-derive `active`
-// from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw when off.
+// and the padding rows must be excluded from both accumulation passes. The interleaved kernels do
+// that by switching to a row-masked set of input-mask tiles on each batch's final row-tile, of
+// which `rows_in_last_tile` are real; the sharded kernels compose that row mask on device from a
+// rowvalid tile (c_18) and the column selector. Shared by all three two-pass factories. Kernels
+// re-derive `active` from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw
+// when off.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;
@@ -134,8 +136,10 @@ struct GroupNormShardedStaticCbSizes {
     uint32_t ex_partial_CB_size = 0;        // c_8  ex_partial
     uint32_t ex_global_CB_size = 0;         // c_9/c_15 ex_global
     uint32_t ex2pe_CB_size = 0;             // c_17 ex2pe
-    uint32_t single_tile_size = 0;          // c_10 ex_external, c_18..c_20 pad correction
+    uint32_t single_tile_size = 0;          // c_10 ex_external
     uint32_t scalar_tile_size = 0;          // c_26 ones -- bf16 even on the legacy fp32 path
+    uint32_t rowvalid_CB_size = 0;          // c_18, bf16, 1 tile, pad correction only
+    uint32_t composed_mask_CB_size = 0;     // c_19, bf16, block_wt tiles, pad correction only
 
     // Total per-core L1 occupied by the static CB region.
     uint32_t total(const GroupNormShardedCbFlags& flags) const;
@@ -149,9 +153,6 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
     std::optional<tt::tt_metal::DataType> input_mask_dtype,
     std::optional<tt::tt_metal::DataType> negative_mask_dtype,
     bool use_welford,
-    uint32_t num_groups,
-    // 2 when a row-masked second mask set is streamed for non-tile-aligned H*W (#52685), which
-    // doubles c_7. Must match the factory's `mask_sets`, or this estimate under-counts L1.
-    uint32_t mask_sets = 1);
+    uint32_t num_groups);
 
 }  // namespace ttnn::prim

@@ -474,8 +474,6 @@ void kernel_main() {
                         // // b. (x - u) * 1/[sqrt(Var + eps)]
                         dfb_xmm.wait_front(1);
                         mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
-                        // fp32: step a left SrcA on dfb_in0; move it to dfb_xmm. Both are bf16 on the
-                        // default path, so this compiles out.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                         }

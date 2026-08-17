@@ -276,7 +276,9 @@ uint32_t GroupNormShardedStaticCbSizes::total(const GroupNormShardedCbFlags& fla
     t += ex2pe_CB_size;      // c_17
     t += scalar_tile_size;   // c_26 ones
     if (flags.pad_correction_active) {
-        t += 3 * single_tile_size;  // c_18/c_19/c_20, see append_group_norm_pad_correction_cbs
+        // c_18 rowvalid + c_19 composed mask, created inline by the sharded factory (the
+        // append_group_norm_pad_correction_cbs helper this once referred to no longer exists).
+        t += rowvalid_CB_size + composed_mask_CB_size;
     }
     return t;
 }
@@ -289,8 +291,7 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
     std::optional<tt::tt_metal::DataType> input_mask_dtype,
     std::optional<tt::tt_metal::DataType> negative_mask_dtype,
     bool use_welford,
-    uint32_t num_groups,
-    uint32_t mask_sets) {
+    uint32_t num_groups) {
     using tt::tt_metal::datatype_to_dataformat_converter;
 
     // Data formats, mirroring groupnorm_sharded_program_factory.cpp. Note beta overrides gamma
@@ -357,9 +358,9 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
     sizes.in3_CB_size = scalar_tile_size;
     sizes.in5_CB_size = per_core_Nt * gamma_beta_single_tile_size;
     sizes.in6_CB_size = per_core_Nt * gamma_beta_single_tile_size;
-    // Non-Welford: double-buffered, doubled again for the row-masked set when present.
-    sizes.in_mask_CB_size =
-        block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2 * mask_sets);
+    // Non-Welford: double-buffered single set. Caller masks may carry a row-masked second set
+    // under the pad correction, but the sharded writer never streams it into c_7.
+    sizes.in_mask_CB_size = block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2);
     sizes.in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;
     sizes.repack_CB_size = per_core_Nt * in_single_tile_size * 2;
     sizes.x_CB_size = single_tile_size * (use_welford ? 1 : interm_block_tiles);
@@ -369,6 +370,10 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
     sizes.ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : sizes.ex_partial_CB_size;
     sizes.single_tile_size = single_tile_size;
     sizes.scalar_tile_size = scalar_tile_size;
+    // Pad-correction CBs (c_18 rowvalid, c_19 composed mask), both bf16. Computed
+    // unconditionally; total() only counts them when the correction is active.
+    sizes.rowvalid_CB_size = scalar_tile_size;
+    sizes.composed_mask_CB_size = block_wt * scalar_tile_size;
     return sizes;
 }
 

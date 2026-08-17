@@ -307,16 +307,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             block_wt * tile_width);
     }
 
-    // Non-tile-aligned H*W: corrected reduce scaler + the row-masked mask set. See
-    // compute/groupnorm.cpp and GroupNormPadCorrection. Unlike the interleaved paths the scaler and the
-    // row-masked set's start id ship as RUNTIME args (8, 9).
+    // Non-tile-aligned H*W: corrected reduce scaler + on-device row-mask composition (c_18/c_19).
+    // See compute/groupnorm.cpp and GroupNormPadCorrection. Unlike the interleaved paths the scaler
+    // and the core's valid-row count ship as RUNTIME args (8, 9).
     const auto pad = make_group_norm_pad_correction(
         static_cast<uint32_t>(a.logical_shape()[2]),
         static_cast<uint32_t>(a.padded_shape()[2]),
         use_welford,
         tile_height);
-    // The mask carries two sets when the correction is active; cores stride through the first, and
-    // the row-masked one sits mask_set_tiles beyond it.
+    // Caller-supplied masks still carry a row-masked second set when the correction is active
+    // (validation requires it), but the sharded writer never reads it -- the row mask is composed
+    // on device instead. mask_sets only scopes the per-core start-id wrap to the first set.
     const uint32_t mask_sets = pad.active ? 2 : 1;
     const uint32_t mask_set_tiles =
         input_mask.has_value() ? (input_mask.value().physical_volume() / tile_hw) / mask_sets : 0;
@@ -349,8 +350,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         input_mask.has_value() ? std::make_optional(input_mask.value().dtype()) : std::nullopt,
         negative_mask.has_value() ? std::make_optional(negative_mask.value().dtype()) : std::nullopt,
         use_welford,
-        num_groups,
-        mask_sets);
+        num_groups);
 
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
@@ -584,8 +584,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     std::map<std::string, std::string> writer_defines;
     writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
     // FUSE_NEGATIVE_MASK enables the compute-side second multiply against a
-    // negative mask. Fires whenever the caller either passed a negative_mask
-    // OR opted into synthesizing one via synthesize_negative_mask=True.
+    // negative mask: either the caller passed one, or the op decided to
+    // synthesize one (the L1-fit heuristic in needs_negative_mask_overlap).
     const bool synth_neg_mask = operation_attributes.synthesize_negative_mask && !negative_mask.has_value();
     if (negative_mask.has_value() || synth_neg_mask) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
@@ -593,19 +593,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (pad.active) {
         writer_defines["PAD_CORRECTION"] = "1";
     }
-    // Mask data path selection. Two paths:
-    //   1. MASK_SYNTHESIZE: writer kernel writes row 0 of face 0 + face 1
-    //      directly into L1 from `num_cols_per_group` and the per-group
-    //      start_stride recurrence — no DRAM mask read at all. Fires only
-    //      when the caller did NOT pass an input_mask (the auto-built format
-    //      is always bf16 and always synth-safe).
-    //   2. fallthrough: writer NOC-reads the entire mask tile from DRAM.
-    // A user-supplied mask is always used (bytes NOC-read, not synthesized) —
-    // synthesis only substitutes for the DRAM-mask allocation the host used
-    // to build. The negative-mask synthesis path fires when the caller opts
-    // in via synthesize_negative_mask=True (and did not pass a tensor); the
-    // interleaved factories don't support negative masks so this gate is
-    // sharded-only.
+    // MASK_SYNTHESIZE: no caller mask, so the writer builds the selector directly in L1
+    // (always bf16) instead of NOC-reading a tensor. A caller-supplied mask is always
+    // NOC-read.
     const bool synth_mask = !input_mask.has_value();
     if (synth_mask) {
         writer_defines["MASK_SYNTHESIZE"] = "1";
@@ -715,7 +705,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         num_groups_per_reset,
         single_tile_size,
         per_core_Mt * per_core_Nt / num_batches_per_core,
-        num_groups_per_core * block_wt * mask_sets,
+        num_groups_per_core * block_wt,
         block_wt_last,
         static_cast<uint32_t>((num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
         static_cast<uint32_t>(num_datum_row_per_group < tile_width),
@@ -754,7 +744,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         num_groups_per_reset,
         single_tile_size,
         per_core_Mt * per_core_Nt / num_batches_per_core,
-        num_groups_per_core * block_wt * mask_sets,
+        num_groups_per_core * block_wt,
         block_wt_last,
         static_cast<uint32_t>((num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0),
         static_cast<uint32_t>(num_datum_row_per_group < tile_width),
@@ -1176,6 +1166,32 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
+    // Pad correction: c_18 rowvalid (written once per core by the writer, never popped) and
+    // c_19 the composed per-(batch,group) mask -- rowvalid x column selector, produced and
+    // consumed by compute.
+    if (pad.active) {
+        constexpr uint32_t cb_rowvalid_index = tt::CBIndex::c_18;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = scalar_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_rowvalid_index),
+                .data_format = eps_cb_data_format,
+                .page_size = scalar_single_tile_size,
+            }}},
+        });
+        constexpr uint32_t cb_composed_mask_index = tt::CBIndex::c_19;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = block_wt * scalar_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_composed_mask_index),
+                .data_format = eps_cb_data_format,
+                .page_size = scalar_single_tile_size,
+            }}},
+        });
+    }
+
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
@@ -1337,12 +1353,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         // args 8, 9: only read when PAD_CORRECTION.
         writer_mcast_sender_args.push_back(pad_scaler_bits);
-        // Where this core reads the row-masked set from. Only the core holding a batch's final
-        // row-tile needs it; the rest get the normal set again, making compute's switch a no-op
-        // there. Deciding it here keeps the compute kernel compile-time-only.
-        writer_mcast_sender_args.push_back(
-            input_mask_tile_start_id +
-            (pad.active && group_norm_core_owns_pad_tile(m_index, num_cores_per_batch) ? mask_set_tiles : 0));
+        // Arg 9: the core's valid-row count for the c_18 rowvalid tile. Only the core holding
+        // a batch's final row-tile gets a partial count; the rest get tile_height, making their
+        // rowvalid tile all-ones.
+        const bool owns_pad_tile = pad.active && group_norm_core_owns_pad_tile(m_index, num_cores_per_batch);
+        writer_mcast_sender_args.push_back(owns_pad_tile ? pad.rows_in_last_tile : tile_height);
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {
@@ -1355,7 +1370,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }
         if (input_mask.has_value()) {
             // Tile id for negative mask is same as input mask. Wrap on the set size, not the whole
-            // tensor: the row-masked set is an offset off this.
+            // tensor: under the pad correction the caller's mask carries a second (row-masked) set
+            // beyond the first that the sharded writer never reads.
             input_mask_tile_start_id =
                 (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
         }

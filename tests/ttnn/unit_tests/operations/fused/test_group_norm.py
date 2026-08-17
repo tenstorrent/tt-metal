@@ -1399,9 +1399,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, s
     """
     Test that a group norm without an input mask produces the same result as torch.
 
-    Exercises the writer-kernel mask-synthesis path on the sharded factory. Parametrized
-    over use_welford so we cover the Welford + sharded + synthesis combination, which
-    depends on the mask-multiply reorder in welford_groupnorm_sharded_v2.cpp.
+    Exercises the writer-kernel mask-synthesis path on the sharded factory.
     """
     torch.manual_seed(0)
     input_shape = (N, C, H, W)
@@ -2235,12 +2233,16 @@ def test_group_norm_sharded_all_config(
     [(2, 1), (2, 2), (2, 4), (4, 2)],
 )
 @pytest.mark.parametrize(
-    # prebuilt_mask=True is what real code should do (free); False makes group_norm derive the
-    # second set per call (~4x slower), covered so the fallback cannot rot.
-    "prebuilt_mask",
-    [True, False],
+    # How the {0,1} column selector reaches the kernel, for each way group_norm accepts it:
+    #   "doubled"     -- caller ships both mask sets (create_group_norm_input_mask with
+    #                    rows_in_last_tile).
+    #   "single_set"  -- caller ships the column selector only.
+    #   "synthesized" -- no mask at all; the writer builds one row-0-only selector set directly
+    #                    in L1, and compute composes the row-masked final row-tile on device.
+    "mask_mode",
+    ["doubled", "single_set", "synthesized"],
 )
-def test_group_norm_sharded_dirty_padding(device, grid_y, grid_x, padding_value, prebuilt_mask):
+def test_group_norm_sharded_dirty_padding(device, grid_y, grid_x, padding_value, mask_mode):
     # Mirror of test_group_norm_non_tile_aligned_garbage_padding_DRAM for the BLOCK-SHARDED path:
     # supply non-zero tile padding and require the result to be independent of it.
     #
@@ -2275,16 +2277,19 @@ def test_group_norm_sharded_dirty_padding(device, grid_y, grid_x, padding_value,
     )
     tt = ttnn.to_memory_config(tt, sharded_mem_config)
 
-    mask = ttnn.to_device(
-        ttnn.create_group_norm_input_mask(
-            C,
-            G,
-            grid_size.y,
-            ttnn.DataType.BFLOAT8_B,
-            rows_in_last_tile=(HW % 32) if prebuilt_mask else 0,
-        ),
-        device,
-    )
+    if mask_mode == "synthesized":
+        mask = None
+    else:
+        mask = ttnn.to_device(
+            ttnn.create_group_norm_input_mask(
+                C,
+                G,
+                grid_size.y,
+                ttnn.DataType.BFLOAT8_B,
+                rows_in_last_tile=(HW % 32) if mask_mode == "doubled" else 0,
+            ),
+            device,
+        )
     out = ttnn.group_norm(
         tt,
         num_groups=G,
@@ -2299,10 +2304,96 @@ def test_group_norm_sharded_dirty_padding(device, grid_y, grid_x, padding_value,
     pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
     logger.info(
         f"block-sharded dirty padding grid={grid_x}x{grid_y} padding={padding_value} "
-        f"prebuilt_mask={prebuilt_mask}: max_abs_err={max_abs_err} pcc={pcc}"
+        f"mask_mode={mask_mode}: max_abs_err={max_abs_err} pcc={pcc}"
     )
     assert max_abs_err < 0.08, (
         f"max abs error {max_abs_err} with tile padding = {padding_value} on a {grid_x}x{grid_y} "
         f"block-sharded grid; group_norm must be independent of its padding (see #52685)"
     )
     assert pcc > 0.999, f"pcc {pcc} with tile padding = {padding_value} (see #52685)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("padding_value", [7.0, -3.5])
+@pytest.mark.parametrize("grid_x", [1, 2, 4])
+@pytest.mark.parametrize(
+    # Group sizes that are a WHOLE number of tiles. On grid_y=8, C=1024 gives 128 channels
+    # (4 tiles) per core:
+    #   G=32 -> group 32 ch = 1 tile   (block_wt == 1)
+    #   G=16 -> group 64 ch = 2 tiles  (block_wt == 2)
+    #   G=64 -> group 16 ch, sub-tile  (control, matches the regime already covered)
+    "C, G, whole_tile_groups",
+    [(1024, 32, True), (1024, 16, True), (1024, 64, False)],
+    ids=["blockwt1", "blockwt2", "subtile_control"],
+)
+@pytest.mark.parametrize("mask_mode", ["doubled", "single_set", "synthesized"])
+def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
+    device, grid_x, C, G, whole_tile_groups, padding_value, mask_mode
+):
+    # Same contract as test_group_norm_sharded_dirty_padding -- the result must not depend on what
+    # sits in the tile padding -- but at group sizes that are a whole number of tiles, where the
+    # per-group column selector is all-ones and only the composed row exclusion does any work.
+    grid_y = 8
+    if device.core_grid.x < grid_x or device.core_grid.y < grid_y:
+        pytest.skip(f"device grid too small for {grid_x}x{grid_y}")
+
+    torch.manual_seed(0)
+    N, HW, padded = 1, 100, 128
+    assert (padded // 32) % grid_x == 0, "padded H*W tiles must split evenly across the M cores"
+    grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
+
+    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
+    ref = ref.permute(0, 2, 3, 1).reshape(N, 1, HW, C)
+
+    buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
+    buf[:, :, :HW, :] = real
+    buf[:, :, HW:, :] = padding_value
+
+    tt = ttnn.from_torch(
+        buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded // grid_size.x, C // grid_size.y), ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt = ttnn.to_memory_config(tt, sharded_mem_config)
+
+    if mask_mode == "synthesized":
+        mask = None
+    else:
+        mask = ttnn.to_device(
+            ttnn.create_group_norm_input_mask(
+                C,
+                G,
+                grid_size.y,
+                ttnn.DataType.BFLOAT8_B,
+                rows_in_last_tile=(HW % 32) if mask_mode == "doubled" else 0,
+            ),
+            device,
+        )
+    out = ttnn.group_norm(
+        tt,
+        num_groups=G,
+        input_mask=mask,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        inplace=False,
+    )
+    out = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float()[:, :, :HW, :]
+
+    max_abs_err = (out - ref).abs().max().item()
+    pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
+    logger.info(
+        f"whole-tile groups={whole_tile_groups} C={C} G={G} grid={grid_x}x{grid_y} "
+        f"padding={padding_value} mask_mode={mask_mode}: max_abs_err={max_abs_err} pcc={pcc}"
+    )
+    assert max_abs_err < 0.08, (
+        f"max abs error {max_abs_err} with tile padding = {padding_value} at C={C} G={G} "
+        f"(whole-tile groups={whole_tile_groups}); the composed row mask must still apply"
+    )
+    assert pcc > 0.999, f"pcc {pcc} at C={C} G={G} with tile padding = {padding_value}"

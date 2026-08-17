@@ -21,11 +21,6 @@ from ttnn._ttnn.operations.normalization import (
 )
 
 
-# ===========================================================================
-#  Pure CPU-only tests (no device fixture required)
-# ===========================================================================
-
-
 # ---------------------------------------------------------------------------
 # groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
 #   TT_FATAL — num_cores_across_channel must be > 0
@@ -73,14 +68,9 @@ def test_find_expected_dram_grid_no_valid_grid(expect_error):
 # normalization.py  dram_group_norm_virtual_columns():
 #   AssertionError — no valid num_virtual_cols (wraps compute_num_virtual_cols)
 #
-# This covers the num_virtual_cols == 0 scenario that used to be asserted via
-# groupnorm.cpp get_mask_tensor() (removed along with the host-side mask build).
-# The surviving C++ guard in groupnorm_device_operation.cpp select_program_factory()
-# is unreachable from ttnn.group_norm: it sits behind the non-sharded branch, and
-# every non-sharded input is forced to TILE layout, so padded W is always tile
-# aligned and num_virtual_cols is always >= 1.  dram_group_norm_virtual_columns()
-# is the guard DRAM group-norm callers actually hit, and it is exercised here with
-# the same (grid_x=1, num_channels=48, num_groups=16) configuration.
+# No num_virtual_cols can satisfy (num_channels / nvc) % 32 == 0 and
+# num_groups % nvc == 0 for grid_x=1, num_channels=48, num_groups=16, so the
+# helper must raise instead of returning 0.
 # ---------------------------------------------------------------------------
 def test_dram_group_norm_virtual_columns_none_valid(expect_error):
     with expect_error(AssertionError, "could not find a valid num_virtual_cols for"):
@@ -89,11 +79,6 @@ def test_dram_group_norm_virtual_columns_none_valid(expect_error):
             num_channels=48,
             num_groups=16,
         )
-
-
-# ===========================================================================
-#  Device-dependent tests (use TT-Sim simulated device)
-# ===========================================================================
 
 
 # ---------------------------------------------------------------------------

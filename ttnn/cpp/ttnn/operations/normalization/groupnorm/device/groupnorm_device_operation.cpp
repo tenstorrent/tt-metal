@@ -250,9 +250,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             negative_mask.value().padded_shape()[3],
             tile_width);
         TT_FATAL(a.is_sharded(), "Negative mask support is only available for sharded input tensors.");
-        // The Welford compute kernels have no negative-mask path, and the sharded factory skips the
-        // untilize-output CB (c_30) whenever a negative mask is in play while the Welford kernel
-        // still reads it under UNTILIZE_OUT, so the combination hangs instead of being ignored.
+        // The Welford compute kernels have no negative-mask path.
         TT_FATAL(!args.use_welford, "Negative mask is not supported with use_welford=True.");
         TT_FATAL(
             a.layout() == Layout::ROW_MAJOR,

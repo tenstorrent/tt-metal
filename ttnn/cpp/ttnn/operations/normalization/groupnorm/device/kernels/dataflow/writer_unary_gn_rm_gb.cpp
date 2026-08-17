@@ -80,12 +80,6 @@ void kernel_main() {
     constexpr bool has_row_mask = get_named_compile_time_arg_val("has_row_mask") == 1;
     constexpr uint32_t mask_tiles_per_group = has_row_mask ? 2 * block_w : block_w;
 
-#if defined(MASK_SYNTHESIZE)
-    // The synthesized mask is row-invariant (row 0 only, consumed by mul_tiles_bcast_rows), so it
-    // cannot express the row-masked second set. The op must not enable both.
-    static_assert(!has_row_mask, "MASK_SYNTHESIZE is incompatible with a row mask (non-tile-aligned H*W)");
-#endif
-
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -108,9 +102,14 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(9);
-    // Only read when has_row_mask; equals input_mask_tile_start_id on cores that do not hold a
-    // batch's final row-tile.
+    // Only read when has_row_mask. Under synthesis it is the per-core valid-row count; on the
+    // DRAM-read path it is where to read the row-masked set from. Both encode "does this core hold
+    // a batch's final row-tile" -- cores that do not get data making compute's switch a no-op.
+#if defined(MASK_SYNTHESIZE)
+    const uint32_t mask_rows_valid = get_arg_val<uint32_t>(10);
+#else
     const uint32_t input_mask_row_tile_start_id = get_arg_val<uint32_t>(10);
+#endif
 
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
@@ -170,7 +169,9 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#if !defined(MASK_SYNTHESIZE)
         uint32_t input_mask_row_tile_id = input_mask_row_tile_start_id;
+#endif
         index_g_offset = 0;
         row_offset = num_cols_per_group;
 #if defined(MASK_SYNTHESIZE)
@@ -181,15 +182,42 @@ void kernel_main() {
             dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
 #if defined(MASK_SYNTHESIZE)
-            tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
-                l1_write_addr_input_mask,
-                mask_row_offset,
-                num_channels_per_group,
-                block_w,
-                input_mask_single_tile_size_bytes,
-                tile_width,
-                tt::tt_metal::groupnorm::BF16_ONE,
-                tt::tt_metal::groupnorm::BF16_ZERO);
+            if constexpr (has_row_mask) {
+                // Compute consumes the mask with a full-tile mul_tiles here and selects a second,
+                // row-masked set on each batch's final row-tile, so both sets need all 32 rows.
+                // Set 1 zeroes rows >= mask_rows_valid, which is tile_width on cores that do not
+                // hold that row-tile -- making their second set identical to the first.
+                tt::tt_metal::groupnorm::synthesize_group_mask_tiles_full_bf16(
+                    l1_write_addr_input_mask,
+                    mask_row_offset,
+                    num_channels_per_group,
+                    block_w,
+                    input_mask_single_tile_size_bytes,
+                    tile_width,
+                    tile_width,  // set 0: every row valid
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+                tt::tt_metal::groupnorm::synthesize_group_mask_tiles_full_bf16(
+                    l1_write_addr_input_mask + block_w * input_mask_single_tile_size_bytes,
+                    mask_row_offset,
+                    num_channels_per_group,
+                    block_w,
+                    input_mask_single_tile_size_bytes,
+                    tile_width,
+                    mask_rows_valid,  // set 1: the row-masked set
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+            } else {
+                tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                    l1_write_addr_input_mask,
+                    mask_row_offset,
+                    num_channels_per_group,
+                    block_w,
+                    input_mask_single_tile_size_bytes,
+                    tile_width,
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+            }
             mask_row_offset =
                 tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, tile_width);
 #else
@@ -218,9 +246,6 @@ void kernel_main() {
             }
             noc.async_read_barrier();
 #endif  // MASK_SYNTHESIZE
-            // Must match reserve_back(mask_tiles_per_group) above, or the compute kernel's
-            // wait_front(mask_tiles_per_group) starves. Equals block_w under MASK_SYNTHESIZE,
-            // which is mutually exclusive with the row mask (see static_assert above).
             dfb_input_mask.push_back(mask_tiles_per_group);
 
             if (i == 0 and b == 0) {

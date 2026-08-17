@@ -156,4 +156,102 @@ inline void synthesize_group_mask_tiles_bf16(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Full-tile variants, for non-tile-aligned H*W.
+//
+// When the tile-padding rows must be excluded from the reductions, the mask
+// becomes row-VARIANT on the batch's final row-tile, so compute consumes it
+// with a full-tile mul_tiles rather than mul_tiles_bcast_rows. A row-0-only
+// tile is then not enough: all 32 rows must be written.
+//
+// Layout: 4 faces of 16x16, face stride 512 B. Faces 0/1 carry rows 0-15 and
+// faces 2/3 rows 16-31, so the face-pair index selects the row base; faces 1/3
+// carry columns 16-31. Within a face, row r is 8 uint32 at offset r*8.
+// ---------------------------------------------------------------------------
+
+// Write one full 32x32 bf16 mask tile. Columns in [start_col_in_tile, end_col_in_tile)
+// get `value_inside`, the rest `value_outside`; rows >= rows_valid are forced to 0.0
+// regardless of column.
+//
+// Note the asymmetry: invalid rows are 0.0, NOT `value_outside`. For a negative mask
+// `value_outside` is 1.0, and a row-masked set must still be zero in the padding rows.
+//
+// 512 uint32 stores, in address order. The per-column classifier runs 8 times per face
+// rather than once per row, since the column pattern is identical down the tile.
+inline void synthesize_mask_tile_full_bf16(
+    uint32_t l1_tile_base,
+    uint32_t start_col_in_tile,
+    uint32_t end_col_in_tile,
+    uint32_t rows_valid,
+    uint16_t value_inside,
+    uint16_t value_outside) {
+    constexpr uint32_t FACE_W = 16;                 // bf16 columns per face
+    constexpr uint32_t FACE_R = 16;                 // rows per face
+    constexpr uint32_t PAIRS_PER_ROW = FACE_W / 2;  // 8 uint32 per face row
+    constexpr uint32_t U32_PER_FACE = 128;          // 512 B / 4
+
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_tile_base);
+    for (uint32_t f = 0; f < 4U; ++f) {
+        const uint32_t row_base = (f >> 1) * FACE_R;  // faces 0,1 -> rows 0-15; faces 2,3 -> rows 16-31
+        const uint32_t col_base = (f & 1U) * FACE_W;  // faces 0,2 -> cols 0-15; faces 1,3 -> cols 16-31
+
+        uint32_t packed[PAIRS_PER_ROW];
+        for (uint32_t i = 0; i < PAIRS_PER_ROW; ++i) {
+            const uint32_t c_even = col_base + 2 * i;
+            const uint32_t c_odd = c_even + 1;
+            const uint16_t v_even =
+                (c_even >= start_col_in_tile && c_even < end_col_in_tile) ? value_inside : value_outside;
+            const uint16_t v_odd =
+                (c_odd >= start_col_in_tile && c_odd < end_col_in_tile) ? value_inside : value_outside;
+            packed[i] = pack_bf16_pair(v_even, v_odd);
+        }
+
+        uint32_t idx = f * U32_PER_FACE;
+        for (uint32_t r = 0; r < FACE_R; ++r) {
+            const bool row_valid = (row_base + r) < rows_valid;
+            for (uint32_t i = 0; i < PAIRS_PER_ROW; ++i) {
+                ptr[idx + i] = row_valid ? packed[i] : 0U;  // a bf16 0.0 pair is 0x00000000
+            }
+            idx += PAIRS_PER_ROW;
+        }
+    }
+}
+
+// Full-tile counterpart of synthesize_group_mask_tiles_bf16. `rows_valid` is the number
+// of leading rows carrying real data: tile_w for the normal set, and (logical_hw % 32)
+// for the row-masked set on the core that owns a batch's final row-tile. Cores that do
+// not own it pass tile_w, which makes their row-masked set identical to the normal one
+// and the compute-side switch a no-op there.
+inline void synthesize_group_mask_tiles_full_bf16(
+    uint32_t l1_mask_base,
+    uint32_t start_stride,
+    uint32_t group_size,
+    uint32_t block_w,
+    uint32_t tile_size_bytes,
+    uint32_t tile_w,
+    uint32_t rows_valid,
+    uint16_t value_inside,
+    uint16_t value_outside) {
+    const uint32_t end_stride = start_stride + group_size;
+    uint32_t l1_addr = l1_mask_base;
+    for (uint32_t t = 0; t < block_w; ++t) {
+        const uint32_t tile_lo = t * tile_w;
+        const uint32_t tile_hi = tile_lo + tile_w;
+        uint32_t s;
+        uint32_t e;
+        if (start_stride >= tile_hi || end_stride <= tile_lo) {
+            s = 0;  // whole tile outside the group's span
+            e = 0;
+        } else if (start_stride <= tile_lo && tile_hi <= end_stride) {
+            s = 0;  // whole tile inside
+            e = tile_w;
+        } else {
+            s = (start_stride > tile_lo) ? (start_stride - tile_lo) : 0;
+            e = (end_stride < tile_hi) ? (end_stride - tile_lo) : tile_w;
+        }
+        synthesize_mask_tile_full_bf16(l1_addr, s, e, rows_valid, value_inside, value_outside);
+        l1_addr += tile_size_bytes;
+    }
+}
+
 }  // namespace tt::tt_metal::groupnorm

@@ -322,12 +322,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    // Welford writer reserves block_w * num_groups_per_core tiles up-front and the compute kernel
-    // waits on all of them; non-Welford double-buffers block_wt tiles. Sized from block_wt rather
-    // than from the caller's tensor because a synthesized mask has no tensor to size against.
-    // mask_sets == 2 when the row-masked set is present -- it shares the CB with the normal set on
-    // top of the double-buffering. pad.active is false whenever use_welford, so mask_sets is always
-    // 1 on the Welford arm and is not needed there.
+    // Sized from block_wt (a synthesized mask has no tensor to size against). Welford holds all
+    // groups' tiles at once; non-Welford double-buffers block_wt tiles per set (mask_sets == 2
+    // when the row-masked set is present).
     uint32_t in_mask_CB_size = use_welford ? input_mask_num_tiles_per_core * in_mask_single_tile_size
                                            : block_wt * in_mask_single_tile_size * 2 * mask_sets;
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;
@@ -1309,12 +1306,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
-        // Where this core reads the row-masked set from. Only the core holding a batch's final
-        // row-tile needs it; the rest get the normal set again, making compute's switch a no-op
-        // there. Deciding it here keeps the compute kernel compile-time-only.
+        // Per-core: under synthesis the valid-row count, on the DRAM path where to read the
+        // row-masked set from. Cores that do not hold a batch's final row-tile get values that
+        // make the second set identical to the first.
+        const bool owns_pad_tile = pad.active && group_norm_core_owns_pad_tile(virtual_core.y, num_cores_per_batch);
         writer_mcast_sender_args.push_back(
-            input_mask_tile_start_id +
-            (pad.active && group_norm_core_owns_pad_tile(virtual_core.y, num_cores_per_batch) ? mask_set_tiles : 0));
+            synth_mask ? (owns_pad_tile ? pad.rows_in_last_tile : tile_height)
+                       : (input_mask_tile_start_id + (owns_pad_tile ? mask_set_tiles : 0)));
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
     }
 
