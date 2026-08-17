@@ -38,6 +38,11 @@
  * its logical marker kind to these codes explicitly (see ppfmt in kernel_profiler.hpp). */
 #define PP_ZONE_START 0u
 #define PP_ZONE_END 1u
+/* 3-word COMPLETE zone: w0 = type|hash16, w1 = END timer_low, w2 = duration in cycles. Anchored on the
+ * END because records leave the producer in completion order -- ends are monotonic per lane (so the
+ * STICKY_TIMER contract holds unchanged), starts are not. Host recovers start = full_end - duration.
+ * A zone whose duration overflows 32 bits is emitted as a legacy START/END pair instead. */
+#define PP_ZONE_ATOMIC 2u
 /* STICKY_META (LEGACY / synthetic bench path only): combined sticky carrying BOTH timer_hi(low27) and
  * prog_id(payload32) in one packet. Emitted by the throwaway producer_common.h stand-in. The REAL
  * kernel_profiler path does NOT use this -- it splits identity into three separate stickies below
@@ -116,7 +121,6 @@
  * plain-C header cannot include; spsc_marker_decode.hpp static_asserts that the codes agree. */
 #define PP_BULK_SPAN 13u
 
-
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
@@ -166,6 +170,7 @@ static inline int pp_is_sticky(uint32_t w0) { return pp_type(w0) == PP_STICKY_ME
 static inline int pp_is_src(uint32_t w0) { return pp_type(w0) == PP_STICKY_SRC; }
 static inline int pp_is_prog(uint32_t w0) { return pp_type(w0) == PP_STICKY_PROG; }
 static inline int pp_is_timer(uint32_t w0) { return pp_type(w0) == PP_STICKY_TIMER; }
+static inline int pp_is_zone_atomic(uint32_t w0) { return pp_type(w0) == PP_ZONE_ATOMIC; }
 static inline uint32_t pp_prog_id(uint32_t w1) { return w1; }
 static inline uint32_t pp_timer_hi(uint32_t w0) { return pp_low27(w0); }
 static inline int pp_is_data(uint32_t w0) { return pp_type(w0) == PP_DATA; }
@@ -190,7 +195,6 @@ static inline uint32_t pp_packet_words(uint32_t w0) {
     }
     return 2u;
 }
-
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */
 static inline uint32_t pp_src_w0(uint32_t lane_id) { return pp_word0(PP_STICKY_SRC, lane_id); }

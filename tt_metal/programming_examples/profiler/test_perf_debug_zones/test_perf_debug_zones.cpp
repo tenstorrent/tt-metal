@@ -34,7 +34,8 @@ int main(int argc, char** argv) {
     // the knob a live-GUI session needs (time to connect) that a knee sweep must never have.
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
     uint32_t zone_scale = 1;
-    bool knee_mode = false;  // set by --delay, including --delay 0
+    bool knee_mode = false;     // set by --delay, including --delay 0
+    bool atomic_zones = false;  // --atomic 1: kernels emit 3-word complete-zone records (FW wrappers stay split)
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -49,6 +50,8 @@ int main(int argc, char** argv) {
             knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
         } else if (a == "--scale") {
             zone_scale = v == 0 ? 1u : v;
+        } else if (a == "--atomic") {
+            atomic_zones = v != 0;
         }
     }
 
@@ -85,6 +88,9 @@ int main(int argc, char** argv) {
         {"ZONE_MODE", knee_mode ? "1" : "0"},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
         {"ZONE_SCALE", std::to_string(zone_scale) + "u"}};
+    if (atomic_zones) {
+        defs["PROFILER_ATOMIC_ZONES"] = "1";
+    }
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
     // BRISC (RISCV_0) + NCRISC (RISCV_1): the data-movement zone kernel (tags BR_/NC_).

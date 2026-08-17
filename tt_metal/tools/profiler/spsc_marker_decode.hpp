@@ -107,7 +107,9 @@ struct SpscDecodeState {
 // Decode `in[0..in_n)` (a fresh read), prepending any carried residual. For each MARKER packet, calls
 //   emit(uint32_t lane, uint32_t type, uint32_t zone_hash, uint64_t full_ts, uint32_t prog)
 // where type is PP_ZONE_START/END/TOTAL, zone_hash is the low-16 srcloc hash, and full_ts is the 59-bit
-// device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
+// device timestamp (timer_hi<<32 | timer_low). For a PP_ZONE_ATOMIC record, full_ts is the zone's END
+// and the 5th arg carries the DURATION instead of prog (per-record prog was dropped from this stream).
+// Sticky packets update `st` and are not emitted. A trailing
 // partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
 // No-op default for the optional drainer hart-zone sink (see the PP_drainer_ZONE branch below).
 struct ProfzoneIgnoredrainer {
@@ -184,7 +186,9 @@ inline uint32_t spsc_walk_run(
     uint32_t i = 0;
     while (i + 1 < n) {
 #if defined(__x86_64__)
-        if (spsc_have_avx2()) {
+        // The screen only ever matches 2-word markers, so don't pay its failed-scan cost on other
+        // types -- an all-atomic stream would otherwise eat two AVX loads + movemasks per record.
+        if ((lin[i] >> 27) <= PP_ZONE_END && spsc_have_avx2()) {
             const uint32_t blk = spsc_screen_zone_block(lin + i, n - i);
             if (blk != 0) {
                 emit_block(lin + i, blk, lane, hi, prog);
@@ -201,6 +205,21 @@ inline uint32_t spsc_walk_run(
         if (t <= PP_ZONE_END) [[likely]] {
             emit(lane, t, rw0 & 0xFFFFu, pp_full_ts(hi, rw1), prog);
             i += 2;
+            continue;
+        }
+        if (t == PP_ZONE_ATOMIC) {
+            if (i + 3 > n) {
+                break;  // partial record -> carry
+            }
+            // 3-word complete zones dominate an atomic stream: hand the whole run to the block sink in
+            // one call (it distinguishes the kind by p[0]'s type), mirroring the screened-marker path's
+            // amortization. Sinks receive DURATION where markers carry prog.
+            uint32_t j = i + 3;
+            while (j + 3 <= n && pp_type(lin[j]) == PP_ZONE_ATOMIC) {
+                j += 3;
+            }
+            emit_block(lin + i, j - i, lane, hi, prog);
+            i = j;
             continue;
         }
         if (t == PP_STICKY_TIMER) {
@@ -231,7 +250,22 @@ inline uint32_t spsc_walk_run(
     return i;
 }
 
-// Scalar-sink overload: adapts screened blocks back to per-marker emit.
+// Adapts a block (screened 2-word markers, or a 3-word atomic-zone run -- kind told by p[0]'s type)
+// back to per-record emit, for sinks that don't provide their own block path.
+template <typename Emit>
+inline void spsc_block_to_emit(Emit&& emit, const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi, uint32_t bprog) {
+    if ((p[0] >> 27) == PP_ZONE_ATOMIC) {
+        for (uint32_t j = 0; j + 2 < nw; j += 3) {
+            emit(bl, PP_ZONE_ATOMIC, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), p[j + 2]);
+        }
+        return;
+    }
+    for (uint32_t j = 0; j < nw; j += 2) {
+        emit(bl, p[j] >> 27, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), bprog);
+    }
+}
+
+// Scalar-sink overload: adapts blocks back to per-marker emit.
 template <typename Emit, typename EmitData>
 inline uint32_t spsc_walk_run(
     const uint32_t* lin, uint32_t n, uint32_t lane, uint32_t& hi, uint32_t& prog, Emit&& emit, EmitData&& emit_data) {
@@ -244,9 +278,7 @@ inline uint32_t spsc_walk_run(
         emit,
         emit_data,
         [&emit](const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi, uint32_t bprog) {
-            for (uint32_t j = 0; j < nw; j += 2) {
-                emit(bl, p[j] >> 27, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), bprog);
-            }
+            spsc_block_to_emit(emit, p, nw, bl, bhi, bprog);
         });
 }
 
@@ -315,6 +347,9 @@ inline size_t spsc_top_packet_words(uint32_t w0, uint32_t w1) {
     }
     if (pp_is_point(w0)) {
         return 2u + pp_data_size(w0);
+    }
+    if (pp_is_zone_atomic(w0)) {
+        return 3;
     }
     return 2;
 }
@@ -424,6 +459,15 @@ inline void spsc_decode(
                     st.cur_hi[st.cur_lane] = pp_timer_hi(w0);
                 }
                 p += 1;
+            } else if (pp_is_zone_atomic(w0)) {
+                if (p + 3 > sz) {
+                    break;  // partial record -> carry
+                }
+                if (st.cur_lane < nl) {
+                    const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w[p + 1]);
+                    emit(st.cur_lane, PP_ZONE_ATOMIC, pp_low27(w0) & 0xFFFFu, ts, w[p + 2]);
+                }
+                p += 3;
             } else if (pp_is_point(w0)) {
                 // 2 + size words: the unified EVENT/DATA packet (size 0 == a bare event). Self-describing
                 // length, so an unknown payload shape can never desynchronize the walk.
@@ -497,7 +541,7 @@ inline void spsc_decode(
     }
 }
 
-// Scalar-sink overload: screened marker blocks fall back to per-marker emit.
+// Scalar-sink overload: blocks fall back to per-marker emit.
 template <typename Emit, typename EmitData = SpscIgnoreData>
 inline void spsc_decode(
     SpscDecodeState& st,
@@ -514,9 +558,7 @@ inline void spsc_decode(
         emit,
         emit_data,
         [&emit](const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi, uint32_t bprog) {
-            for (uint32_t j = 0; j < nw; j += 2) {
-                emit(bl, p[j] >> 27, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), bprog);
-            }
+            spsc_block_to_emit(emit, p, nw, bl, bhi, bprog);
         });
 }
 

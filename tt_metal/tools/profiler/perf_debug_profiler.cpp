@@ -2299,7 +2299,16 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
                 r.first,
                 r.second,
                 ctx.nl,
-                [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t /*prog*/) {
+                [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t dur) {
+                    if (type == PP_ZONE_ATOMIC) {
+                        // Device-paired zone: ts is the END, dur rides the prog slot. Counted as the
+                        // wire-equivalent START+END pair so zones/Mzones stay comparable across modes
+                        // (the actual wire is 12 B vs the split pair's 16).
+                        markers += 2;
+                        out[k++] = PerfDebugRec{
+                            ts - dur, dur, (kRecZone << kRecTypeShift) | dev_bits | (lane << kRecLaneShift) | hash};
+                        return;
+                    }
                     if (type > PP_ZONE_END) {
                         return;
                     }
@@ -2325,6 +2334,21 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
                     }
                 },
                 [&](const uint32_t* p, uint32_t nw, uint32_t lane, uint32_t bhi, uint32_t /*bprog*/) {
+                    if ((p[0] >> 27) == PP_ZONE_ATOMIC) {
+                        // Device-paired 3-word records: {hash, end_lo, dur}. Counted as wire-equivalent
+                        // START+END pairs so zones/Mzones stay comparable across modes (the actual wire
+                        // is 12 B per zone vs the split pair's 16).
+                        markers += 2ull * (nw / 3);
+                        const uint32_t ml = (kRecZone << kRecTypeShift) | dev_bits | (lane << kRecLaneShift);
+                        for (uint32_t j = 0; j + 2 < nw; j += 3) {
+#if defined(__x86_64__)
+                            _mm_prefetch(reinterpret_cast<const char*>(p + j + 24), _MM_HINT_T0);
+#endif
+                            const uint64_t end = pp_full_ts(bhi, p[j + 1]);
+                            out[k++] = PerfDebugRec{end - p[j + 2], p[j + 2], ml | (p[j] & 0xFFFFu)};
+                        }
+                        return;
+                    }
                     markers += nw / 2;
 #if defined(__x86_64__)
                     k += emit_zone_block_avx2(

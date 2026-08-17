@@ -141,7 +141,7 @@ volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
 constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 
 // SPSC ring geometry for this RISC.
-constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;                // words (= data[] length)
+constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;  // words (= data[] length)
 // SPSC layout, NOT the DRAM profiler's HOST_/DEVICE_BUFFER_END_INDEX_* slots -- see SpscControlBuffer.
 constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;  // producer (this RISC)
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;  // consumer (drainer)
@@ -203,6 +203,7 @@ struct ppfmt {
     // made ZONE_TOTAL alias PP_drainer_ZONE and TS_DATA_16B alias PP_BULK_CORE.
     static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START
     static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END
+    static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: hash, end_low, duration)
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
     static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
     static constexpr uint32_t T_DATA = 10u;             // PP_DATA (compile-time tag, 2 + size words)
@@ -346,7 +347,44 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
         g_prev_timer_hi = hi;
     }
     ring_write_word(ppfmt::zone_w0(timer_id, kind));  // word0: zone type | zone srcloc (16-bit hash)
-    ring_write_word(lo);                        // word1: timer_low
+    ring_write_word(lo);                              // word1: timer_low
+    publish_tail();
+}
+
+// Emit one COMPLETE zone: {type|hash, end_low, duration} -- 3 words instead of the split pair's 4,
+// ONE ring transaction per zone instead of two, and the whole emit runs AFTER the end timestamp is
+// read, so none of it lands inside the measured window. Anchored on the END because records leave in
+// completion order: ends are monotonic per lane (the STICKY_TIMER contract holds unchanged), starts
+// are not -- the host recovers start = full_end - duration. A duration that overflows 32 bits falls
+// back to the legacy split pair with explicit stickies for BOTH halves (the start's epoch is long
+// gone from g_prev_timer_hi); the host's pairing path still handles those.
+inline __attribute__((always_inline)) void mark_zone_atomic(uint32_t timer_id, uint64_t start) {
+    ring_ensure_room(4);  // worst case: 1-word TIMER sticky + 3-word record
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    const uint64_t d = ((static_cast<uint64_t>(hi) << 32) | lo) - start;
+    if (d >> 32) {
+        ring_ensure_room(6);
+        const uint32_t start_hi = static_cast<uint32_t>(start >> 32);
+        if (start_hi != g_prev_timer_hi) {
+            ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, start_hi));
+        }
+        ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::Start));
+        ring_write_word(static_cast<uint32_t>(start));
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+        g_prev_timer_hi = hi;
+        ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::End));
+        ring_write_word(lo);
+        publish_tail();
+        return;
+    }
+    if (hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+        g_prev_timer_hi = hi;
+    }
+    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::HASH16_MASK));
+    ring_write_word(lo);
+    ring_write_word(static_cast<uint32_t>(d));
     publish_tail();
 }
 
@@ -481,8 +519,21 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
 
 template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 struct profileScope {
+#if defined(PROFILER_ATOMIC_ZONES)
+    // Complete-zone emission: opening a zone is a bare clock read; the start rides this scope object,
+    // so storage scales with live NESTING depth only (sequential zones reuse the same stack slot) and
+    // the single 3-word record goes out at close. See mark_zone_atomic for the wire contract.
+    uint64_t start;
+    inline __attribute__((always_inline)) profileScope() {
+        uint32_t hi, lo;
+        read_wall_clock(hi, lo);
+        start = (static_cast<uint64_t>(hi) << 32) | lo;
+    }
+    inline __attribute__((always_inline)) ~profileScope() { mark_zone_atomic(timer_id, start); }
+#else
     inline __attribute__((always_inline)) profileScope() { mark_time(timer_id); }
     inline __attribute__((always_inline)) ~profileScope() { mark_time(timer_id, ZoneKind::End); }
+#endif
 };
 
 // FW-wrapper scope (what DeviceZoneScopedMainN used to be, via profileScopeGuaranteed<hash,0>).
