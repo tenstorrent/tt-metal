@@ -865,6 +865,26 @@ inline void fabric_dbg_set_sender_gate(
 #endif
 }
 
+// [CONN-LIFECYCLE PROBE #45872] Repurpose word[17] (SENDER_GATE_CH1, always 0 in single-link runs and
+// ERISC0-owned) to pack channel-0 (stream 22) connect/disconnect edge counts: high 16 = connects, low 16 =
+// disconnects. Stamped from check_worker_connections on the connect/teardown edges. Verifies clean
+// disconnect-before-reconnect: connects - disconnects should be 0 (idle) or 1 (a worker currently
+// connected). If it ever exceeds 1, a fresh connect happened without the prior worker's teardown = dirty
+// handoff. If at the barrier hang connects == disconnects (delta 0), the sync's connect never registered.
+constexpr uint32_t MEM_AERISC_CH0_CONNLIFE_ADDR = MEM_AERISC_SENDER_GATE_CH1_ADDR;  // word[17], repurposed
+inline void fabric_dbg_ch0_conn_event([[maybe_unused]] bool is_connect) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CH0_CONNLIFE_ADDR);
+    uint32_t v = *p;
+    if (is_connect) {
+        v = ((((v >> 16) + 1u) & 0xFFFFu) << 16) | (v & 0xFFFFu);
+    } else {
+        v = (v & 0xFFFF0000u) | (((v & 0xFFFFu) + 1u) & 0xFFFFu);
+    }
+    *p = v;
+#endif
+}
+
 // Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
 // dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status

@@ -2030,6 +2030,15 @@ struct SenderKernelConfig {
 
     void open_connections() {
         connections.open_all();
+        // [SENDER-DESTCORE PROBE #45872] Emit each sender fabric connection's target eth core (tag 0xD1,
+        // packed (x<<8)|y, same encoding as the sync DESTCORE 0xC8) so the two sets can be compared to
+        // confirm whether senders (payload) and the barrier sync share the same eth cores / stream-22.
+        for (uint8_t _i = 0; _i < connections.num_connections; _i++) {
+            if (!connections.is_mux[_i]) {
+                auto& _c = connections.get_fabric_connection(_i);
+                WATCHER_RING_BUFFER_PUSH((0xD1u << 24) | (((uint32_t)_c.edm_noc_x << 8) | (uint32_t)_c.edm_noc_y));
+            }
+        }
         // Initialize credit management for all traffic configs
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_config_ptrs[i]->credit_manager_.initialize();
