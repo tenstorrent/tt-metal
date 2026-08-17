@@ -52,9 +52,6 @@ void MLAQKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
         q_pre.device() == kv_up.device() && kv_up.device() == k_pe.device(),
         "MLAQKVAssembleFw: q_pre, kv_up, and k_pe must be on the same device.");
 
-    // compute_output_specs derives each output layout from one input; the outputs are only
-    // interchangeable if every input shares the same placement.
-
     const auto q_pre_shape = q_pre.padded_shape();
     const auto kv_up_shape = kv_up.padded_shape();
     const auto k_pe_shape = k_pe.padded_shape();
@@ -138,8 +135,9 @@ MLAQKVAssembleFwDeviceOperation::spec_return_value_t MLAQKVAssembleFwDeviceOpera
     const ttnn::Shape k_shape({B, args.n_heads, S, qk_head});
     const ttnn::Shape v_shape({B, args.n_heads, S, args.v_dim});
 
-    // Each output inherits from its primary input source. Validation requires all three
-    // inputs share dtype + memory_config, so these layouts are equal in practice.
+    // q inherits q_pre's placement; k and v inherit kv_up's. Inputs may sit in
+    // different memory configs (only interleaved is required); the program hash
+    // keys each input's memory config independently.
     auto q_layout = tt::tt_metal::TensorLayout(q_pre.dtype(), tt::tt_metal::Layout::TILE, q_pre.memory_config());
     auto kv_layout = tt::tt_metal::TensorLayout(kv_up.dtype(), tt::tt_metal::Layout::TILE, kv_up.memory_config());
     output_specs.emplace_back(q_shape, q_layout);

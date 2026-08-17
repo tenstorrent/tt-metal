@@ -53,6 +53,15 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
 
+        // Logical shapes must match for element-for-element correspondence with the parameter;
+        // padding alone cannot tell apart tensors that round up to the same tile extent.
+        TT_FATAL(
+            tensor.logical_shape() == param.logical_shape(),
+            "Tensor '{}' must match the parameter's logical shape. Expected {}, got {}",
+            name,
+            param.logical_shape(),
+            tensor.logical_shape());
+
         // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
         // smaller companion tensor would be read or written past its allocation.
         TT_FATAL(

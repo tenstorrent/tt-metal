@@ -193,6 +193,9 @@ const std::vector<AssembleShape>& shapes() {
         {"square_st1", 2, 32, 2, 32, 32, 32},
         {"square_st2", 2, 64, 2, 32, 32, 32},
         {"asym_rope2", 2, 64, 4, 128, 64, 128},
+        // Tr = 3 rope tiles: the largest count the bw DST budget admits (Tr + 1 = 4
+        // fp32 accumulator slots) — pins the accepted side of the rejection boundary.
+        {"rope3_dst_max", 1, 32, 2, 32, 96, 32},
         {"heads8_s96", 1, 96, 8, 64, 32, 64},
     };
     return cases;

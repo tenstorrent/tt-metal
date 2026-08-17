@@ -15,14 +15,16 @@
 
 class KSplitGramMatmulTest : public ::testing::Test {
 protected:
-    void SetUp() override {
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+    void SetUp() override {
         if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "KSplitGramMatmul is only supported on Blackhole.";
         }
-    }
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -128,14 +130,16 @@ struct VerifyCase {
 
 class KSplitGramMatmulVerifyTest : public ::testing::TestWithParam<VerifyCase> {
 protected:
-    void SetUp() override {
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+    void SetUp() override {
         if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "KSplitGramMatmul is only supported on Blackhole.";
         }
-    }
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -245,6 +249,16 @@ TEST_F(KSplitGramMatmulTest, FullMatrixMultiBlock) {
 
 TEST_F(KSplitGramMatmulTest, FullMatrixPartialEdgeBlock) {
     run_full_matrix_case(5440, 512, "FullMatrixPartialEdgeBlock");
+}
+
+// The kernels reduce whole K tiles and make no assumption about tile-padding contents
+// (upstream ops may leave garbage there), so the op must reject non-tile-aligned logical K
+// instead of silently accumulating out-of-shape columns. K_tiles must also be even.
+TEST_F(KSplitGramMatmulTest, RejectsUnsupportedK) {
+    // K=33 pads to 2 tiles (even), but logical K is not tile-aligned.
+    EXPECT_THROW(ttml::metal::gram_matmul(make_random_tensor(320, 33)), std::exception);
+    // K=96 is tile-aligned but K_tiles=3 is odd.
+    EXPECT_THROW(ttml::metal::gram_matmul(make_random_tensor(320, 96)), std::exception);
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {

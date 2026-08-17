@@ -51,14 +51,28 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
         "SubtractAtTarget: input must be rank 4, got rank {}",
         tensor_args.input.logical_shape().rank());
 
-    // The reader sizes its target-page reads from the target's inner dim, but the program cache
-    // is keyed on the input shape alone; this tie keeps a cached program valid for the target
+    // The reader walks one row-major target page per batch-channel slice of the input
+    // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
+    // inner dim, while the program cache is keyed on the input shape alone. Pinning both the
+    // target's page width and its page count to the input keeps every page index the reader
+    // can form inside the target allocation, and keeps a cached program valid for the target
     // tensor it runs with.
+    const auto& target_shape = tensor_args.target.logical_shape();
     TT_FATAL(
-        tensor_args.target.logical_shape()[-1] == tensor_args.input.logical_shape()[-2],
+        target_shape[-1] == tensor_args.input.logical_shape()[-2],
         "SubtractAtTarget: target inner dim ({}) must equal input sequence dim ({})",
-        tensor_args.target.logical_shape()[-1],
+        target_shape[-1],
         tensor_args.input.logical_shape()[-2]);
+    const auto& input_padded_shape = tensor_args.input.padded_shape();
+    const uint64_t input_nc_pages =
+        input_padded_shape.volume() / (static_cast<uint64_t>(input_padded_shape[-2]) * input_padded_shape[-1]);
+    const uint64_t target_pages = target_shape.volume() / target_shape[-1];
+    TT_FATAL(
+        target_pages == input_nc_pages,
+        "SubtractAtTarget: target must supply one page per input batch-channel slice, got {} page(s) for {} "
+        "slice(s)",
+        target_pages,
+        input_nc_pages);
 
     TT_FATAL(args.local_V > 0U, "SubtractAtTarget: local_V must be > 0");
 
