@@ -612,14 +612,7 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
 }
 
-// Exercises the auto-discovery path that the tt-xla single-galaxy failure actually
-// hits (no MGD file -> generate_mesh_graph_from_physical_system_descriptor). For a
-// 1D ring on a UBB galaxy get_fabric_type() returns TORUS_XY; on a galaxy that only
-// wraps on Y (this board) the both-axis torus cannot cover all 32 chips, so before
-// the fix the mapper silently downgraded to an 8x2 (16-chip) mesh, which later trips
-// `requested_size <= system_size` when tt-xla asks for {1, 32}. After the fix the
-// mapper falls back to the most-connected fabric type that covers every chip
-// (TORUS_Y here) and reports the full 8x4 (32-chip) mesh.
+// Checks that auto-discovery still reports all 32 chips on a galaxy that only wraps on Y.
 TEST_F(ControlPlaneFixture, ProbeWormholeGalaxyAutoDiscoveryFullCoverage) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -628,7 +621,6 @@ TEST_F(ControlPlaneFixture, ProbeWormholeGalaxyAutoDiscoveryFullCoverage) {
 
     auto report = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
         try {
-            // No mesh_graph_desc_file -> auto-discovery from the physical system descriptor.
             auto cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode);
             std::size_t total_chips = 0;
             std::string shapes;
