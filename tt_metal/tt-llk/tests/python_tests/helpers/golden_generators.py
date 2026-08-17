@@ -5099,9 +5099,7 @@ def rope_bands(
 def rope_rotated_rows(**geometry) -> list[int]:
     """Every Dest row the rotation writes, ascending."""
     return sorted(
-        x_row + i
-        for x_row, _, _ in rope_bands(**geometry)
-        for i in range(4)  # rows
+        x_row + i for x_row, _, _ in rope_bands(**geometry) for i in range(4)  # rows
     )
 
 
