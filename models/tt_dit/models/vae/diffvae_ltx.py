@@ -256,12 +256,27 @@ class NeighborhoodAttention(Module):
         self.tp_axis = tp_axis
         self.rope_dim_split = default_rope_dim_split(head_dim)
 
+        # DIFFVAE_DET_FUSED_QKV=1: keep the checkpoint's fused qkv as one matmul and split it with
+        # nlp_create_qkv_heads, partitioning the heads over tp_axis FIRST. The head split otherwise
+        # happens inside the attention, so q/k norm, the scale and both RoPEs run on all the heads
+        # and three quarters of that is then discarded; partitioning up front makes them 1/tp.
+        self.fused_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
+        self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
+        if self.fused_qkv:
+            assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
+        self.heads_local = self.num_heads // self.tp if self.fused_qkv else self.num_heads
+
         # Three projections rather than the checkpoint's fused one. Fused, the (rows, 3*dim) output
         # and the three slices taken from it are live together -- six activations, 15 GiB at 6s
         # 1920x1088 -- where separate matmuls hold three. The weight is split at load instead.
-        self.to_q = Linear(dim, dim, bias=True, mesh_device=mesh_device)
-        self.to_k = Linear(dim, dim, bias=True, mesh_device=mesh_device)
-        self.to_v = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        # Under fused_qkv the partition lands immediately after the matmul, so what is held is
+        # (rows, 3*dim) plus (rows, 3*dim/tp), not six full-width activations.
+        if self.fused_qkv:
+            self.qkv = Linear(dim, 3 * dim, bias=True, mesh_device=mesh_device)
+        else:
+            self.to_q = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+            self.to_k = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+            self.to_v = Linear(dim, dim, bias=True, mesh_device=mesh_device)
         self.proj = Linear(dim, dim, bias=True, mesh_device=mesh_device)
         self.q_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
         self.k_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
@@ -275,13 +290,29 @@ class NeighborhoodAttention(Module):
             # Rows are head-major: (heads, head_dim, ...) — permute within each head.
             return tensor.reshape(self.num_heads, self.head_dim, *tensor.shape[1:])[:, perm].reshape(tensor.shape)
 
+        def device_major(fused: torch.Tensor) -> torch.Tensor:
+            """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q|k|v][heads/tp]``.
+
+            ``mesh_partition`` takes a contiguous slice of the output dim, so this is what makes
+            that slice this chip's own ``[q | k | v]`` — the layout ``nlp_create_qkv_heads`` then
+            expects. Sharding the shipped order instead would hand chip 0 all of q and part of k.
+            """
+            rest = fused.shape[1:]
+            grouped = fused.reshape(3, self.tp, self.dim // self.tp, *rest)
+            axes = (1, 0, 2, *range(3, 3 + len(rest)))
+            return grouped.permute(*axes).reshape(3 * self.dim, *rest)
+
         for leaf in ("weight", "bias"):
             key = f"qkv.{leaf}"
             if key in state:
                 q, k, v = state.pop(key).chunk(3, dim=0)
-                state[f"to_q.{leaf}"] = reorder_head_dim(q)
-                state[f"to_k.{leaf}"] = reorder_head_dim(k)
-                state[f"to_v.{leaf}"] = v
+                q, k = reorder_head_dim(q), reorder_head_dim(k)
+                if self.fused_qkv:
+                    state[key] = device_major(torch.cat([q, k, v], dim=0))
+                else:
+                    state[f"to_q.{leaf}"] = q
+                    state[f"to_k.{leaf}"] = k
+                    state[f"to_v.{leaf}"] = v
         for key in ("q_norm.weight", "k_norm.weight"):
             if key in state:
                 state[key] = state[key][perm]
@@ -298,9 +329,23 @@ class NeighborhoodAttention(Module):
         """``x`` is ``(tokens, dim)`` in TILE layout; returns the same shape. **Consumes** ``x``."""
         t, h, w = dims
         tokens = t * h * w
-        heads_shape = (tokens * self.num_heads, self.head_dim)
-        q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
-        ttnn.deallocate(x)
+        heads = self.heads_local
+        if self.fused_qkv:
+            qkv = ttnn.reshape(self.qkv(x), (1, 1, tokens, 3 * self.dim))
+            ttnn.deallocate(x)
+            # The head partition lands here rather than inside the attention, so the norms, the
+            # scale and both RoPEs below see heads/tp instead of computing every head and letting
+            # the attention discard all but this chip's.
+            partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
+            ttnn.deallocate(qkv)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                partitioned, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
+            )
+            ttnn.deallocate(partitioned)
+        else:
+            heads_shape = (tokens * self.num_heads, self.head_dim)
+            q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
+            ttnn.deallocate(x)
 
         q = self.q_norm(q)
         k = self.k_norm(k)
@@ -311,8 +356,16 @@ class NeighborhoodAttention(Module):
         # 1920x1088 that turns a 1.35 GB activation into a 10.83 GB allocation, three times over
         # for q/k/v, and it was what stopped a 6s decode. In ROW_MAJOR the same split is a pure
         # stride change, and the attention gathers rows in ROW_MAJOR anyway.
-        shape = (1, t, h, w, self.num_heads, self.head_dim)
-        q, k, v = (ttnn.reshape(_consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT), shape) for part in (q, k, v))
+        shape = (1, t, h, w, heads, self.head_dim)
+
+        def to_volume(part: ttnn.Tensor) -> ttnn.Tensor:
+            part = _consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            if self.fused_qkv:
+                # create_heads emits (1, heads, tokens, head_dim); the volume wants heads innermost.
+                part = _consume(part, ttnn.permute, (0, 2, 1, 3))
+            return ttnn.reshape(part, shape)
+
+        q, k, v = (to_volume(part) for part in (q, k, v))
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
@@ -346,6 +399,7 @@ class NeighborhoodAttention(Module):
                 ccl_manager=self.ccl_manager,
                 scale=1.0,
                 tp_axis=self.tp_axis,
+                heads_presharded=self.fused_qkv,
             )
         else:
             attended = neighborhood_attention_3d(
