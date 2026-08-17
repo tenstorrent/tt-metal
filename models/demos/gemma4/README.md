@@ -159,6 +159,8 @@ For 12B on QB2, use `HF_MODEL=google/gemma-4-12B-it` and `MESH_DEVICE=P150x4` (f
 
 Keep defaults for quality: `GEMMA4_HOST_SAMPLE=0` (default; on-device sampling — measured token-for-token identical to host sampling at batch-1 and 128k, and ~+29% / ~+18% decode tok/s respectively. `=1` forces the host path). Prefill chunk follows `GEMMA4_LONG_CONTEXT_POLICY` (usually 4096; **31B/26B-A4B @ ≥128k on QB2/LB → 2048 + bounded**). Avoid `GEMMA4_DEMO_SINGLE_CHUNK=1` on long ISL (known “la la / lapped” collapse). Optional overrides: `GEMMA4_BOUNDED_SLIDING`, `GEMMA4_GEN_PREFILL_CHUNK`, `GEMMA4_MAX_SEQ_LEN`, `GEMMA4_MAX_NEW_TOKENS`.
 
+On-device sampling runs the top-k pipeline by default. `GEMMA4_TT_FORCE_ARGMAX=1` lets a fully-greedy batch (`top_k=1`, `top_p=1.0`, `temperature=0`) take TTSampling's single all-gather + `ttnn.argmax` path instead, and wires a dedicated CCL for that gather on multi-device meshes; unset or `=0` is the default. Verified token-exact on WH T3K at 1x1 / 1x2 / 1x8 (vocab 262144, batch-32), but **slower than the default** on the 31B batch-32 demo: 79.05 vs 73.34 ms/token (12.65 vs 13.63 tok/s/user). That is expected at this vocab — argmax gathers the full 262144-wide bf16 row (~16.7 MB) where the top-k path gathers only 32-wide results — so the flag is for experiments, not a perf default.
+
 ### Short / batch demos (`text_demo_v2.py` batch-1)
 
 ```bash
