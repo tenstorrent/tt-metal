@@ -22,7 +22,7 @@ import torch
 
 import ttnn
 
-from ...layers.linear import Linear
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.na3d import (
     NA3DDevicePlan,
@@ -422,12 +422,55 @@ class NeighborhoodAttention(Module):
 class SwiGLU(Module):
     """``w_down(silu(w_gate(x)) * w_up(x))``, biasless, as upstream ships it."""
 
-    def __init__(self, dim: int, hidden_dim: int, *, mesh_device=None):
+    def __init__(self, dim: int, hidden_dim: int, *, mesh_device=None, tp_axis=None, ccl_manager=None):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.w_gate = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
-        self.w_up = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
-        self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
+        self.dim = dim
+        self.tp_axis = tp_axis
+        self.ccl_manager = ccl_manager
+        # DIFFVAE_DET_TP_MLP=1 shards hidden_dim over tp_axis. Every hidden column is independent
+        # until w_down contracts over it, so gate/up are column-parallel and w_down row-parallel;
+        # its reduce_scatter plus the all_gather below is an all-reduce, which is the one collective
+        # the split costs. Implies the packed weight, since the fused kernel is what consumes it.
+        self.tp_mlp = tp_axis is not None and os.environ.get("DIFFVAE_DET_TP_MLP") == "1"
+        # DIFFVAE_DET_FUSED_SWIGLU=1 packs [up | gate] into one GEMM whose epilogue emits
+        # silu(gate) * up, so the separate silu and multiply passes over the 4x-wide hidden
+        # activation disappear along with their buffers.
+        self.fused = self.tp_mlp or os.environ.get("DIFFVAE_DET_FUSED_SWIGLU") == "1"
+
+        if self.tp_mlp:
+            self.gate_up = ColParallelLinear(
+                dim,
+                hidden_dim,
+                bias=False,
+                activation_fn="swiglu",
+                mesh_device=mesh_device,
+                mesh_axis=tp_axis,
+                ccl_manager=ccl_manager,
+            )
+            self.w_down = RowParallelLinear(
+                hidden_dim, dim, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis, ccl_manager=ccl_manager
+            )
+        elif self.fused:
+            self.gate_up = Linear(dim, hidden_dim, bias=False, activation_fn="swiglu", mesh_device=mesh_device)
+            self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
+        else:
+            self.w_gate = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
+            self.w_up = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
+            self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Pack the shipped ``w_gate``/``w_up`` into the fused ``[up | gate]`` weight.
+
+        ``up`` first: ``Linear`` transposes before handing the packed weight to
+        ``prepare_for_fused_swiglu``, whose default ordering is ``[up (N) | gate (N)]``.
+        """
+        if not self.fused:
+            return
+        gate = state.pop("w_gate.weight", None)
+        up = state.pop("w_up.weight", None)
+        if gate is not None and up is not None:
+            state["gate_up.weight"] = torch.cat([up, gate], dim=0)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """**Consumes** ``x``.
@@ -437,9 +480,32 @@ class SwiGLU(Module):
         1920x1088 is 30 GiB against 31 GiB of usable DRAM. It is pointwise in the site axis, so
         chunking is exact and needs no halo.
         """
-        return _pointwise_in_chunks(x, self._project, width=self.hidden_dim)
+        width = self.hidden_dim // self.mlp_shards
+        return _pointwise_in_chunks(x, self._project, width=width)
+
+    @property
+    def mlp_shards(self) -> int:
+        return int(list(self.gate_up.mesh_device.shape)[self.tp_axis]) if self.tp_mlp else 1
 
     def _project(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.fused:
+            hidden = self.gate_up(x)
+            if self.tp_mlp:
+                # RowParallelLinear reduce_scatters on dim 3 and only unsqueezes rank<=3 once, so a
+                # rank-2 activation would land there as rank 3 with dim out of range. The reshape
+                # aliases its input, so the original must outlive it rather than be consumed.
+                hidden = ttnn.reshape(hidden, (1, 1, hidden.shape[-2], hidden.shape[-1]))
+            # use_persistent_buffer=False: RowParallelLinear otherwise returns the CCL manager's
+            # cached reduce-scatter buffer, which the deallocate below would destroy under it.
+            out = self.w_down(hidden, use_persistent_buffer=False) if self.tp_mlp else self.w_down(hidden)
+            ttnn.deallocate(hidden)
+            if self.tp_mlp:
+                # w_down reduce_scatters, so restore the full width the residual add expects.
+                gathered = self.ccl_manager.all_gather(out, dim=3, mesh_axis=self.tp_axis, use_hyperparams=False)
+                ttnn.deallocate(out)
+                out = ttnn.reshape(gathered, (gathered.shape[-2], self.dim))
+            return out
+
         gate = ttnn.silu(self.w_gate(x))
         up = self.w_up(x)
         product = ttnn.multiply(gate, up)
@@ -480,7 +546,7 @@ class NABlock(Module):
             tp_axis=tp_axis,
         )
         self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
-        self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device)
+        self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device, tp_axis=tp_axis, ccl_manager=ccl_manager)
 
     def forward(
         self,
