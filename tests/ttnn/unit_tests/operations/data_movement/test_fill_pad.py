@@ -492,3 +492,34 @@ def test_fill_pad_program_cache_addr_change(device, factory_case):
     assert entries == 1, "fill_pad should build exactly one program for a fixed config"
     assert len(input_addrs) == 4, "each dispatch must land on a distinct input buffer address"
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize(
+    "shape, shard_shape",
+    [
+        # rank-4 logical shape with a rank-4 ND shard spec. fill_implicit_tile_padding must NOT
+        # collapse a sharded tensor to rank 3 -- if it did, the logical rank (3) would desync from
+        # the shard rank (4) and the Metal 2.0 tensor binding's distribution-spec build would assert
+        # (tensor rank < shard rank). Leading (1, 1) keeps the L1 factory's N_slices == 1.
+        ((1, 1, 18, 26), (1, 1, 32, 160)),  # degenerate shard wider than the tensor (reduce-on-batch repro)
+        ((1, 1, 97, 97), (1, 1, 128, 128)),  # rank-4, multi-tile single shard covering the padded tensor
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+def test_fill_pad_rank_gt3_sharded(device, fill_value, shape, shard_shape, dtype):
+    torch.manual_seed(1234)
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=input_mem_config, device=device
+    )
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)
