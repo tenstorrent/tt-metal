@@ -32,16 +32,6 @@ struct DropoutDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // Patches ALL per-dispatch state (seed, src/dst addresses) into the cached program on every cache
-    // hit -- in place, no descriptor rebuild. seed is hash-excluded (per-device offset applied when
-    // use_per_device_seed); supersedes get_dynamic_runtime_args and resolve_bindings.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

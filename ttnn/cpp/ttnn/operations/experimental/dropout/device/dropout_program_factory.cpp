@@ -350,11 +350,11 @@ tt::tt_metal::ProgramDescriptor DropoutMeshWorkloadFactory::create_descriptor(
     return DropoutProgramFactory::create_descriptor(effective_args, tensor_args, output);
 }
 
-void DropoutDeviceOperation::override_runtime_arguments(
+void DropoutProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const DropoutParams& operation_attributes,
+    const DropoutInputs& tensor_args,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     using namespace tt::tt_metal;
 
@@ -402,6 +402,16 @@ void DropoutDeviceOperation::override_runtime_arguments(
         auto& compute_grid = work.in_group_1 ? compute_group_1_grid : *compute_group_2_grid;
         compute_grid[work.core.x][work.core.y][0] = seed;
     });
+}
+
+void DropoutMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const DropoutParams& operation_attributes,
+    const DropoutInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    DropoutProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim
