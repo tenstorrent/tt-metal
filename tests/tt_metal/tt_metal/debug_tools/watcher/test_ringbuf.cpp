@@ -32,12 +32,10 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-constexpr uint32_t NUM_PUSHES_MULTI = 4;  // Multi-writer test: 4 pushes per thread (6 DMs, or 16 TRISCs)
+// 22 Quasar writers x 5 = 110 entries, within the 128-entry buffer so nothing is evicted
+constexpr uint32_t NUM_PUSHES_MULTI = 5;
 
-// Expected strings for a single-processor ring buffer test.
-// SPSC: pattern (idx << 16) | (idx + 1). MPSC: pattern (thread_idx << 16) | seq.
-// Newest first, limited to buffer capacity (num_pushes is chosen by the caller to exceed
-// capacity, so this always exercises wraparound).
+// Newest-first, limited to buffer capacity.
 std::vector<std::string> get_expected_single_processor(
     HalProgrammableCoreType core_type, uint32_t thread_idx, uint32_t num_pushes) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -60,18 +58,17 @@ std::vector<std::string> get_expected_single_processor(
     return result;
 }
 
-// Each thread's first push must be (hw_thread_id << 16) | 0, where hw_thread_id is the physical
-// hw thread id (get_hw_thread_idx()) actually encoded by the kernel -- not the loop-local index.
-// hw_id_offset maps the local index [0, num_threads) to the physical id range actually launched
-// (e.g. Quasar user DMs launch on DM2..DM7, so hw_id_offset=2).
-std::vector<std::string> get_expected_multi_writer(
-    const std::function<std::string(uint32_t)>& prefix_for_thread, uint32_t num_threads, uint32_t hw_id_offset = 0) {
-    std::vector<std::string> expected = {"debug_ring_buffer="};
+// The kernel encodes get_hw_thread_idx(), so hw_id_offset shifts the loop index onto the physical
+// ids actually launched (Quasar user DMs run on DM2...DM7, so hw_id_offset=2)
+void append_expected_writers(
+    std::vector<std::string>& expected,
+    const std::function<std::string(uint32_t)>& prefix_for_thread,
+    uint32_t num_threads,
+    uint32_t hw_id_offset = 0) {
     for (uint32_t local_idx = 0; local_idx < num_threads; local_idx++) {
         uint32_t hw_id = local_idx + hw_id_offset;
         expected.push_back(fmt::format("[{}]0x{:08x}", prefix_for_thread(hw_id), (hw_id << 16) | 0));
     }
-    return expected;
 }
 
 namespace {
@@ -79,44 +76,38 @@ namespace {
 void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    HalProcessorIdentifier processor,
-    bool multi_dm_test = false) {
+    HalProcessorIdentifier processor) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
     auto* device = mesh_device->get_devices()[0];
+
+    // Depending on riscv type, choose one core to run the test on
+    // and set up the kernel on the correct risc
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = device->arch() == tt::ARCH::QUASAR;
-    // Exceed capacity so every test exercises wraparound, regardless of buffer size.
-    uint32_t num_pushes = multi_dm_test ? NUM_PUSHES_MULTI : (hal.get_ring_buffer_capacity() + 12);
+    // Push past capacity so the oldest entries are overwritten, whatever the buffer size.
+    uint32_t num_pushes = hal.get_ring_buffer_capacity() + 12;
     constexpr const char* kernel_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp";
     constexpr const char* kernel_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
     const experimental::KernelSpecName kRingbufKernelName{"ringbuf_kernel"};
 
-    // Depending on riscv type, choose one core to run the test on
-    // and set up the kernel on the correct risc
     CoreCoord logical_core, virtual_core;
     switch (processor.core_type) {
         case HalProgrammableCoreType::TENSIX: {
             logical_core = CoreCoord{0, 0};
             virtual_core = device->worker_core_from_logical_core(logical_core);
-            // TENSIX cores use the Metal 2.0 host API; ETH/DRAM/DISPATCH cores below remain on the
-            // legacy host API (no Metal 2.0 equivalent exists for those programmable core types).
+            // ETH/DRAM below stay on the legacy host API; it has no Metal 2.0 equivalent.
             experimental::KernelSpec kernel_spec{.unique_id = kRingbufKernelName, .source = kernel_metal2};
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM: {
                     kernel_spec.compile_time_args["num_pushes"] = num_pushes;
                     if (is_quasar) {
-                        // No way to pin a Gen2 DM kernel to a specific hw thread: launch on all 6
-                        // user DM threads (DM0/DM1 are reserved for the runtime) and filter in-kernel.
+                        // Launch on all 6 user DM threads (DM0/DM1 are reserved for the runtime) and filter in-kernel.
                         kernel_spec.num_threads = 6;
-                        if (multi_dm_test) {
-                            kernel_spec.compiler_options.defines = {{"MULTI_DM_TEST", "1"}};
-                        } else {
-                            kernel_spec.compile_time_args["dm_id"] = processor.processor_type;
-                        }
+                        kernel_spec.compile_time_args["dm_id"] = processor.processor_type;
                         kernel_spec.hw_config = experimental::DataMovementGen2Config{};
                     } else {
                         kernel_spec.hw_config = experimental::DataMovementGen1Config{
@@ -129,14 +120,10 @@ void RunTest(
                 }
                 case HalProcessorClassType::COMPUTE: {
                     kernel_spec.compile_time_args["num_pushes"] = num_pushes;
-                    if (multi_dm_test) {
-                        kernel_spec.compiler_options.defines = {{"MULTI_DM_TEST", "1"}};
-                    } else {
-                        kernel_spec.compiler_options.defines = {
-                            {fmt::format("WATCHER_RINGBUF_TRISC{}", processor.processor_type), "1"}};
-                    }
+                    kernel_spec.compiler_options.defines = {
+                        {fmt::format("WATCHER_RINGBUF_TRISC{}", processor.processor_type), "1"}};
                     if (is_quasar) {
-                        kernel_spec.num_threads = multi_dm_test ? 4 : 1;
+                        kernel_spec.num_threads = 1;
                         kernel_spec.hw_config = experimental::ComputeGen2Config{};
                     } else {
                         kernel_spec.hw_config = experimental::ComputeGen1Config{};
@@ -213,110 +200,86 @@ void RunTest(
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
-    if (multi_dm_test) {
-        if (processor.processor_class == HalProcessorClassType::DM) {
-            // DM0/DM1 are reserved for the runtime and never assigned to a kernel (see
-            // ReserveProcessors in program_spec.cpp, which fills bits in ascending order and
-            // treats DM0/DM1 as pre-used), so the 6 launched threads land on DM2..DM7 in order.
-            EXPECT_TRUE(FileContainsAllStrings(
-                fixture->log_file_name,
-                get_expected_multi_writer(
-                    [](uint32_t dm) { return fmt::format("DM{}", dm); }, /*num_threads=*/6, /*hw_id_offset=*/2)));
-        } else {
-            // All 16 TRISCs (4 engines x 4 roles) push; HAL processor index for COMPUTE starts
-            // right after the 8 DM entries.
-            EXPECT_TRUE(FileContainsAllStrings(
-                fixture->log_file_name,
-                get_expected_multi_writer(
-                    [&hal](uint32_t hw_id) {
-                        return hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, hw_id, false);
-                    },
-                    /*num_threads=*/16,
-                    /*hw_id_offset=*/8)));
-        }
-    } else {
-        // Thread index for DM is processor_type (0-7), for TRISC it's 8+ based on HAL mapping
-        uint32_t thread_idx = processor.processor_type;
-        if (processor.processor_class == HalProcessorClassType::COMPUTE) {
-            // Compute processors start after DM processors in the HAL index
-            thread_idx =
-                hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
-        }
-        EXPECT_TRUE(FileContainsAllStringsInOrder(
-            fixture->log_file_name, get_expected_single_processor(processor.core_type, thread_idx, num_pushes)));
-    }
+    uint32_t thread_idx =
+        hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
+    EXPECT_TRUE(FileContainsAllStringsInOrder(
+        fixture->log_file_name, get_expected_single_processor(processor.core_type, thread_idx, num_pushes)));
 }
 
-void RunMultiRiscTestBH(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto* device = mesh_device->get_devices()[0];
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
     CoreCoord logical_core{0, 0};
-    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
+    constexpr const char* kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
 
-    const experimental::KernelSpecName brisc_name{"brisc"};
-    const experimental::KernelSpecName ncrisc_name{"ncrisc"};
-    const experimental::KernelSpecName trisc_name{"trisc"};
+    std::vector<experimental::KernelSpec> specs;
+    std::vector<experimental::KernelSpecName> names;
+    auto add_spec = [&](const char* name, experimental::KernelSpec spec) {
+        spec.unique_id = experimental::KernelSpecName{name};
+        spec.source = kernel;
+        spec.compile_time_args["num_pushes"] = NUM_PUSHES_MULTI;
+        names.push_back(spec.unique_id);
+        specs.push_back(std::move(spec));
+    };
+    auto tensix_name = [&hal](uint32_t hw_id) {
+        return hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, hw_id, false);
+    };
 
-    experimental::KernelSpec brisc_spec{
-        .unique_id = brisc_name,
-        .source = kernel_path,
-        .compile_time_args = {{"num_pushes", NUM_PUSHES_MULTI}},
-        .hw_config =
-            experimental::DataMovementGen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-    };
-    experimental::KernelSpec ncrisc_spec{
-        .unique_id = ncrisc_name,
-        .source = kernel_path,
-        .compile_time_args = {{"num_pushes", NUM_PUSHES_MULTI}},
-        .hw_config =
-            experimental::DataMovementGen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-    };
-    // One ComputeGen1Config kernel builds all 3 TRISC binaries; each needs its own
-    // WATCHER_RINGBUF_TRISC{n} define.
-    experimental::KernelSpec trisc_spec{
-        .unique_id = trisc_name,
-        .source = kernel_path,
-        .compiler_options =
-            {.defines =
-                 {{"WATCHER_RINGBUF_TRISC0", "1"}, {"WATCHER_RINGBUF_TRISC1", "1"}, {"WATCHER_RINGBUF_TRISC2", "1"}}},
-        .compile_time_args = {{"num_pushes", NUM_PUSHES_MULTI}},
-        .hw_config = experimental::ComputeGen1Config{},
-    };
+    std::vector<std::string> expected = {"debug_ring_buffer="};
+    if (is_quasar) {
+        add_spec(
+            "dm",
+            {.num_threads = 6,
+             .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
+             .hw_config = experimental::DataMovementGen2Config{}});
+        add_spec(
+            "compute",
+            {.num_threads = 4,
+             .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
+             .hw_config = experimental::ComputeGen2Config{}});
+        // DM0/DM1 are reserved, so the 6 launched threads land on DM2...DM7. COMPUTE follows the 8
+        // DM entries in the HAL index.
+        append_expected_writers(expected, [](uint32_t dm) { return fmt::format("DM{}", dm); }, 6, 2);
+        append_expected_writers(expected, tensix_name, 16, 8);
+    } else {
+        add_spec(
+            "brisc",
+            {.hw_config = experimental::DataMovementGen1Config{
+                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}});
+        add_spec(
+            "ncrisc",
+            {.hw_config = experimental::DataMovementGen1Config{
+                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}});
+        // One ComputeGen1Config kernel builds all 3 TRISC binaries; each needs its own define.
+        add_spec(
+            "trisc",
+            {.compiler_options =
+                 {.defines =
+                      {{"WATCHER_RINGBUF_TRISC0", "1"},
+                       {"WATCHER_RINGBUF_TRISC1", "1"},
+                       {"WATCHER_RINGBUF_TRISC2", "1"}}},
+             .hw_config = experimental::ComputeGen1Config{}});
+        append_expected_writers(expected, tensix_name, 5);
+    }
 
     experimental::WorkUnitSpec wu{
-        .name = "main",
-        .kernels = {brisc_name, ncrisc_name, trisc_name},
-        .target_nodes = experimental::NodeCoord{logical_core},
-    };
-    experimental::ProgramSpec spec{
-        .name = "watcher_ringbuf_multi_risc",
-        .kernels = {brisc_spec, ncrisc_spec, trisc_spec},
-        .work_units = {wu},
-    };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    workload.add_program(device_range, std::move(program));
+        .name = "main", .kernels = names, .target_nodes = experimental::NodeCoord{logical_core}};
+    experimental::ProgramSpec spec{.name = "watcher_ringbuf_multi", .kernels = specs, .work_units = {wu}};
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
     fixture->RunProgram(mesh_device, workload, true);
 
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    EXPECT_TRUE(FileContainsAllStrings(
-        fixture->log_file_name,
-        get_expected_multi_writer(
-            [&hal](uint32_t thread_idx) {
-                return hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, thread_idx, false);
-            },
-            /*num_threads=*/5)));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected));
 }
 
-// Test parameters for the single-processor (and multi-writer) ring buffer suite.
 struct RingBufferTestParams {
     std::string test_name;
     HalProcessorIdentifier processor;
-    bool multi_dm_test = false;
 };
 
 class WatcherRingBufferTest : public MeshWatcherFixture, public ::testing::WithParamInterface<RingBufferTestParams> {};
@@ -324,7 +287,7 @@ class WatcherRingBufferTest : public MeshWatcherFixture, public ::testing::WithP
 TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
     const auto& params = GetParam();
     const auto& hal = MetalContext::instance().hal();
-    bool is_quasar = (hal.get_arch() == tt::ARCH::QUASAR);
+    const bool is_quasar = (hal.get_arch() == tt::ARCH::QUASAR);
 
     if (!hal.has_programmable_core_type(params.processor.core_type)) {
         GTEST_SKIP() << "Test " << params.test_name << ": core type not available on this architecture";
@@ -337,23 +300,15 @@ TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
                      << " but only " << available_processors << " available on this architecture";
     }
 
-    // Multi-writer test is Quasar-only (uses the Quasar-specific 6-DM/16-TRISC reservation scheme).
-    if (params.multi_dm_test && !is_quasar) {
-        GTEST_SKIP() << "Multi-writer MPSC test is Quasar-only";
-    }
-
-    // On Quasar, DM0/DM1 are reserved for the runtime (ISR/remapper) and never assigned to a
-    // user kernel, so the single-DM Brisc/NCrisc params (processor_type 0/1, meaningful only as
-    // BRISC/NCRISC on Gen1 WH/BH) can't be exercised there.
-    bool is_reserved_quasar_dm =
-        is_quasar && !params.multi_dm_test && params.processor.processor_class == HalProcessorClassType::DM &&
-        params.processor.core_type == HalProgrammableCoreType::TENSIX && params.processor.processor_type < 2;
+    const bool is_reserved_quasar_dm = is_quasar && params.processor.core_type == HalProgrammableCoreType::TENSIX &&
+                                       params.processor.processor_class == HalProcessorClassType::DM &&
+                                       params.processor.processor_type < 2;
     if (is_reserved_quasar_dm) {
         GTEST_SKIP() << "Test " << params.test_name << ": DM0/DM1 are reserved for the runtime on Quasar";
     }
 
-    bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
-    bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
+    const bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
+    const bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
     if ((is_idle_eth || is_dram) && !this->IsSlowDispatch()) {
         GTEST_SKIP() << "Test " << params.test_name << " requires Slow Dispatch";
     }
@@ -361,14 +316,7 @@ TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, params.processor, params.multi_dm_test);
-                if (params.multi_dm_test) {
-                    RunTest(
-                        fixture,
-                        mesh_device,
-                        {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0},
-                        /*multi_dm_test=*/true);
-                }
+                RunTest(fixture, mesh_device, params.processor);
             },
             mesh_device);
     }
@@ -381,7 +329,6 @@ INSTANTIATE_TEST_SUITE_P(
     WatcherRingBufferTests,
     WatcherRingBufferTest,
     ::testing::Values(
-        // DM processors
         RingBufferTestParams{"Brisc", {TENSIX, DM, 0}},
         RingBufferTestParams{"NCrisc", {TENSIX, DM, 1}},
         RingBufferTestParams{"DM2", {TENSIX, DM, 2}},
@@ -390,30 +337,24 @@ INSTANTIATE_TEST_SUITE_P(
         RingBufferTestParams{"DM5", {TENSIX, DM, 5}},
         RingBufferTestParams{"DM6", {TENSIX, DM, 6}},
         RingBufferTestParams{"DM7", {TENSIX, DM, 7}},
-        // TRISC processors
         RingBufferTestParams{"Trisc0", {TENSIX, COMPUTE, 0}},
         RingBufferTestParams{"Trisc1", {TENSIX, COMPUTE, 1}},
         RingBufferTestParams{"Trisc2", {TENSIX, COMPUTE, 2}},
-        // Ethernet processors
+        RingBufferTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Quasar only
         RingBufferTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
         RingBufferTestParams{"IErisc", {IDLE_ETH, DM, 0}},
-        // DRAM (DRISC)
-        RingBufferTestParams{"Drisc", {DRAM, DM, 0}},
-        // Multi-writer MPSC test (Quasar only): 6 user DMs, then 16 TRISCs
-        RingBufferTestParams{"MpscMultiDM", {TENSIX, DM, 0}, /*multi_dm_test=*/true}),
+        RingBufferTestParams{"Drisc", {DRAM, DM, 0}}),
     [](const ::testing::TestParamInfo<RingBufferTestParams>& info) { return info.param.test_name; });
 
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiRiscBH) {
+// Every writer on the core pushes from one program: 22 on Quasar (6 DMs + 16 TRISCs), 5 on
+// Blackhole. The DM-vs-TRISC overlap is what the Quasar semaphore exists to serialize.
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiWriter) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_mpsc_ring_buffer()) {
+        GTEST_SKIP() << "Multi-writer test requires the MPSC ring buffer";
+    }
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
-        if (device->arch() != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Multi-RISC MPSC test is Blackhole-only";
-        }
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunMultiRiscTestBH(fixture, mesh_device);
-            },
-            mesh_device);
+        this->RunTestOnDevice(RunMultiWriterTest, mesh_device);
     }
 }
 

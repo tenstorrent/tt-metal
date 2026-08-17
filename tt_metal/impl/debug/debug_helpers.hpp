@@ -16,6 +16,7 @@
 #include <fmt/ranges.h>
 
 #include <fmt/format.h>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "llrt/core_descriptor.hpp"
@@ -430,7 +431,7 @@ inline int debug_server_finish_timeout_sec(const llrt::RunTimeOptions& rtoptions
     return rtoptions.get_simulator_enabled() ? 30 : 2;
 }
 
-// Format ring buffer output - auto-detects SPSC (WH/BH) vs MPSC (Quasar) based on arch
+// Format ring buffer output - auto-detects SPSC (WH) vs MPSC (Quasar/BH) based on arch
 // For MPSC, thread_indices and core_type are used to prefix entries with processor name
 // Returns vector of lines like ["[0x00270028,...,", " 0x001f0020,...,", "]"]
 // or for MPSC: ["[[DM0]0x00270028,...,", " [DM0]0x001f0020,...,", "]"]
@@ -441,19 +442,26 @@ inline std::vector<std::string> FormatRingBuffer(
     if (data.empty()) {
         return {};
     }
+    TT_ASSERT(
+        thread_indices.empty() || thread_indices.size() == data.size(),
+        "FormatRingBuffer: thread_indices ({}) must be empty or the same length as data ({})",
+        thread_indices.size(),
+        data.size());
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const bool is_mpsc = hal.has_mpsc_ring_buffer();
+
+    constexpr size_t entries_per_line = 8;
 
     std::vector<std::string> lines;
     std::string line = "[";
     for (size_t i = 0; i < data.size(); i++) {
-        if (is_mpsc && !thread_indices.empty()) {
+        if (is_mpsc) {
             auto name = hal.get_processor_class_name(core_type, thread_indices[i], false);
             line += fmt::format("[{}]0x{:08x},", name, data[i]);
         } else {
             line += fmt::format("0x{:08x},", data[i]);
         }
-        if ((i + 1) % 8 == 0 && i + 1 < data.size()) {
+        if ((i + 1) % entries_per_line == 0 && i + 1 < data.size()) {
             lines.push_back(line);
             line = " ";  // Continuation lines start with space
         }
@@ -470,14 +478,15 @@ inline std::vector<std::string> FormatRingBuffer(
     if (buf.current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX) {
         return {};
     }
-    // Extract newest-first: walk backwards from current_ptr, wrap at 0
+    // Extract newest-first: walk backwards from the last written entry, wrapping at 0
     std::vector<uint32_t> data;
-    int16_t ptr = buf.current_ptr;
-    int16_t count = buf.wrapped ? DEBUG_RING_BUFFER_SPSC_ELEMENTS : (ptr + 1);
+    const int16_t last_written_idx = buf.current_ptr;
+    const int16_t count = buf.wrapped ? DEBUG_RING_BUFFER_SPSC_ELEMENTS : (last_written_idx + 1);
+    int16_t idx = last_written_idx;
     for (int16_t i = 0; i < count; i++) {
-        data.push_back(buf.data[ptr]);
-        if (--ptr < 0) {
-            ptr = DEBUG_RING_BUFFER_SPSC_ELEMENTS - 1;
+        data.push_back(buf.data[idx]);
+        if (--idx < 0) {
+            idx = DEBUG_RING_BUFFER_SPSC_ELEMENTS - 1;
         }
     }
     return FormatRingBuffer(data, {}, core_type);

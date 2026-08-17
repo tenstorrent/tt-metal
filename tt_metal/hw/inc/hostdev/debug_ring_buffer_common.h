@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
-// SPSC (WH)
+// We use a magic value to initialize the ring buffer to, so that we can avoid printing it to the
+// watcher log if no ring buffer data has been written. Choose -1 so that we can increment it to
+// 0 and immediately use it as an index for the first write.
 constexpr int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 constexpr int DEBUG_RING_BUFFER_SPSC_ELEMENTS = 32;
 
@@ -17,13 +18,8 @@ struct debug_spsc_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_SPSC_ELEMENTS];
 };
 
-// MPSC (Quasar, Blackhole) - lock-free ring buffer for concurrent writes using 32-bit atomics
-// Works on tt-qsr64 (DM), tt-qsr32 (TRISC), and BH BRISC/NCRISC/TRISC0-2 (Zaamo)
-// Capacity differs per arch: Quasar launches up to 22 concurrent user writers (6 DMs + 16
-// TRISCs) pushing a handful of entries each, so needs enough headroom that one writer's
-// oldest entries don't get evicted before the host can read them (head is a single counter
-// shared by every writer, so entries are evicted in push order, not per-writer). Blackhole
-// only ever launches 5 writers (2 DM + 3 TRISC), so the original, smaller capacity still holds.
+// Writers share one head, so a chatty writer evicts the others: capacity scales with the number of
+// concurrent writers per arch, not just with how much history is wanted.
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR = 128;
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE = 32;
 
@@ -32,46 +28,42 @@ struct debug_mpsc_ring_buf_slot_t {
     uint32_t write_id;  // thread_idx + 1; 0 means never written
 };
 
-// Device-side struct, one capacity per arch. `head` and `slots` stay top-level fields (not
-// nested) so device code (ring_buffer.h) accesses them exactly as before.
+// NEO cluster semaphore reserved for the MPSC head; kernels must not use it. Quasar keeps head here
+// rather than L1 because DM and TRISC atomics run in different coherence domains.
+constexpr uint32_t WATCHER_RING_BUF_SEMAPHORE = 31;
+
 template <int Capacity>
 struct debug_mpsc_ring_buf_msg_tmpl_t {
     uint32_t head;
-    uint8_t _pad[60];  // Pad to 64-byte cache line
     debug_mpsc_ring_buf_slot_t slots[Capacity];
 };
 
 using debug_mpsc_ring_buf_msg_quasar_t = debug_mpsc_ring_buf_msg_tmpl_t<DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR>;
 using debug_mpsc_ring_buf_msg_blackhole_t = debug_mpsc_ring_buf_msg_tmpl_t<DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE>;
 
-inline uint32_t debug_ring_buffer_get_thread_idx(uint32_t write_id) { return write_id - 1; }
-
-inline bool debug_ring_buffer_is_slot_valid(uint32_t write_id) { return write_id != 0; }
-
-// Host-side only: the host doesn't know at compile time which arch's (differently-capacitied)
-// debug_mpsc_ring_buf_msg_t it's reading, so it can't index through a single fixed struct type.
-// `head` and the offset to `slots` are identical in both arch variants regardless of capacity
-// (only the trailing array length differs), so raw pointer arithmetic works for either.
-inline uint32_t debug_mpsc_ring_buffer_head(const uint8_t* base) { return *reinterpret_cast<const uint32_t*>(base); }
-
-inline const debug_mpsc_ring_buf_slot_t* debug_mpsc_ring_buffer_slot(const uint8_t* base, uint32_t idx) {
-    constexpr size_t kSlotsOffset = offsetof(debug_mpsc_ring_buf_msg_tmpl_t<1>, slots);
-    return reinterpret_cast<const debug_mpsc_ring_buf_slot_t*>(
-        base + kSlotsOffset + static_cast<size_t>(idx) * sizeof(debug_mpsc_ring_buf_slot_t));
-}
+// Host doesn't know the target arch at compile time; it reads through the largest variant.
+static_assert(
+    DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE <= DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR,
+    "host view must alias the largest MPSC variant");
+using debug_mpsc_ring_buf_view_t = debug_mpsc_ring_buf_msg_quasar_t;
 
 // Device-side constants (debug_ring_buf_size is in core_config.h for codegen)
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
+// TODO: re-verify on Quasar ERISC/DRISC once runtime support for those cores lands -
+// they may need to fall back to SPSC.
+#if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
+#define DEBUG_RING_BUFFER_MPSC 1
+#endif
+
+#if defined(DEBUG_RING_BUFFER_MPSC)
 #if defined(ARCH_QUASAR)
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS = DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR;
 using debug_mpsc_ring_buf_msg_t = debug_mpsc_ring_buf_msg_quasar_t;
-#elif defined(ARCH_BLACKHOLE)
+#else
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS = DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE;
 using debug_mpsc_ring_buf_msg_t = debug_mpsc_ring_buf_msg_blackhole_t;
 #endif
-
-#if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
 constexpr int DEBUG_RING_BUFFER_ELEMENTS = DEBUG_RING_BUFFER_MPSC_ELEMENTS;
 constexpr uint32_t DEBUG_RING_BUFFER_MASK = DEBUG_RING_BUFFER_MPSC_ELEMENTS - 1;
 #else

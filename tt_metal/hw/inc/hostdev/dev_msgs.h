@@ -445,6 +445,9 @@ static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROC
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
+// debug_ring_buf is a byte array reinterpreted as 4-byte fields, and on Blackhole its head is the
+// target of an atomic, which traps if misaligned.
+static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 

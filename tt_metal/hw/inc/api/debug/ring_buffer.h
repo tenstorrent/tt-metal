@@ -10,47 +10,39 @@
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 
-// Ring buffer modes:
-// - Quasar, Blackhole: MPSC (32-bit atomics, lock-free)
-// - WH: SPSC
+// Ring buffer modes (see DEBUG_RING_BUFFER_MPSC for which cores get which):
+// - Quasar:    MPSC, slot claimed via a NEO cluster semaphore (DM and TRISC caches are not
+//              coherent, so a RISC-V atomic on an L1 word would not serialize between them)
+// - Blackhole: MPSC, slot claimed via a 32-bit RISC-V atomic on the in-mailbox head
+// - Wormhole:  SPSC, no synchronization between RISCs
 
-#if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
+#if defined(DEBUG_RING_BUFFER_MPSC)
 #include "internal/hw_thread.h"
 #include "risc_common.h"
+#if defined(ARCH_QUASAR)
+#include "tensix_neo_reg.h"
+constexpr uintptr_t watcher_ring_buf_sem = TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR;
+#endif
 
-// Must be inline - DM stack is only 1KB, can't afford function call overhead
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(wrapper->data);
 
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Remap to cached for atomics
-    uintptr_t addr = reinterpret_cast<uintptr_t>(buf);
-    if (addr >= MEM_L1_UNCACHED_BASE) {
-        buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
-    }
-#endif  // ARCH_QUASAR
-
-    // Atomically claim a slot
+#if defined(ARCH_QUASAR)
+    // A read at +4*(inc+8) posts `inc` and returns the pre-increment value.
+    uint32_t pos = *reinterpret_cast<volatile uint32_t*>(watcher_ring_buf_sem + 4 * (1 + 8));
+#else
     uint32_t pos = __atomic_fetch_add(&buf->head, 1, __ATOMIC_RELAXED);
+#endif
     uint32_t idx = pos & DEBUG_RING_BUFFER_MASK;
 
-    // Write data
     buf->slots[idx].data = val;
 
     uint32_t thread_idx = internal_::get_hw_thread_idx();
     __atomic_store_n(&buf->slots[idx].write_id, thread_idx + 1, __ATOMIC_RELEASE);
-
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Flush cache line for host visibility
-    // TODO: can this be optimized by flushing only after N amount of heads
-    flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->slots[idx]));
-    // Head needs to be flushed separately since it lies on a different cache line
-    flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->head));
-#endif  // ARCH_QUASAR
 }
 
-#else  // WH: SPSC ring buffer
+#else  // SPSC ring buffer
 
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
@@ -59,7 +51,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     volatile tt_l1_ptr uint16_t* wrapped = &buf->wrapped;
     uint32_t* data = buf->data;
 
-    // Bounds check, set to -1 to wrap since we increment before using
+    // Bounds check, set to -1 to wrap since we increment before using.
     if (*curr_ptr >= DEBUG_RING_BUFFER_ELEMENTS - 1) {
         *curr_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
         *wrapped = 1;
@@ -67,11 +59,22 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     data[++(*curr_ptr)] = val;
 }
 
-#endif  // ARCH_QUASAR || ARCH_BLACKHOLE
+#endif  // DEBUG_RING_BUFFER_MPSC
+
+// Quasar: hardware raises GLOBAL_SEMAPHORES/POST_ON_UNINITIALIZED if a semaphore is posted before it
+// is initialized. DM0 firmware does it. The watcher reads it over NoC later, once the core
+// is out of reset.
+inline __attribute__((always_inline)) void init_ring_buffer() {
+#if defined(ARCH_QUASAR)
+    *reinterpret_cast<volatile uint32_t*>(watcher_ring_buf_sem) = 0;
+#endif
+}
 
 #define WATCHER_RING_BUFFER_PUSH(x) push_to_ring_buffer(x)
+#define WATCHER_RING_BUFFER_INIT() init_ring_buffer()
 #else  // !defined(WATCHER_ENABLED)
 #define WATCHER_RING_BUFFER_PUSH(x)
+#define WATCHER_RING_BUFFER_INIT()
 #endif  // defined(WATCHER_ENABLED)
 
 #endif  // KERNEL_BUILD || FW_BUILD

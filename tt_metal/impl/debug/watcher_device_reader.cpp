@@ -19,6 +19,7 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
+#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -33,7 +34,6 @@
 #include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
-#include "api/debug/ring_buffer.h"
 #include "hostdev/debug_ring_buffer_common.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
@@ -288,6 +288,8 @@ private:
     HalProgrammableCoreType programmable_core_type_;
     std::string core_str_;
     std::vector<std::byte> l1_read_buf_;
+    // Quasar MPSC head, read at snapshot time
+    uint32_t sem_head_ = 0;
     dev_msgs::mailboxes_t::ConstView mbox_data_;
     dev_msgs::launch_msg_t::ConstView launch_msg_;
     const WatcherDeviceReader& reader_;
@@ -300,6 +302,7 @@ private:
     void DumpEthLinkStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
     void DumpMpscRingBuffer(bool to_stdout = false) const;
+    void EmitRingBuffer(const std::vector<std::string>& lines, bool to_stdout) const;
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
@@ -319,6 +322,7 @@ private:
         HalProgrammableCoreType programmable_core_type,
         std::string core_str,
         std::vector<std::byte> l1_read_buf,
+        uint32_t sem_head,
         dev_msgs::Factory dev_msgs_factory,
         const WatcherDeviceReader& reader,
         DumpData& dump_data) :
@@ -326,6 +330,7 @@ private:
         programmable_core_type_(programmable_core_type),
         core_str_(std::move(core_str)),
         l1_read_buf_(std::move(l1_read_buf)),
+        sem_head_(sem_head),
         mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
         launch_msg_(get_valid_launch_message(mbox_data_)),
         reader_(reader),
@@ -600,11 +605,24 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
+
+    // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
+    // rest of the snapshot.
+    uint32_t sem_head = 0;
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        reader.env.get_cluster().read_core(
+            &sem_head,
+            sizeof(sem_head),
+            {static_cast<size_t>(reader.device_id), virtual_coord},
+            TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR);
+    }
+
     return Core(
         virtual_coord,
         programmable_core_type,
         std::move(core_str),
         std::move(l1_read_buf),
+        sem_head,
         dev_msgs_factory,
         reader,
         dump_data);
@@ -904,7 +922,7 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
 
-    // On Quasar and Blackhole (Zaamo-capable), use MPSC ring buffer format
+    // On Quasar and Blackhole, use MPSC ring buffer format
     if (hal.has_mpsc_ring_buffer()) {
         DumpMpscRingBuffer(to_stdout);
         return;
@@ -914,13 +932,15 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     const auto* ring_buf_data =
         reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
-    string out;
-    auto lines = FormatRingBuffer(*ring_buf_data, programmable_core_type_);
-    if (!lines.empty()) {
-        out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
-    }
+    EmitRingBuffer(FormatRingBuffer(*ring_buf_data, programmable_core_type_), to_stdout);
+}
 
-    // This function can either dump to stdout or the log file.
+// Either dumps to stdout or to the log file.
+void WatcherDeviceReader::Core::EmitRingBuffer(const std::vector<std::string>& lines, bool to_stdout) const {
+    if (lines.empty()) {
+        return;
+    }
+    string out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
     if (to_stdout) {
         log_info(tt::LogMetal, "Last ring buffer status: {}", out);
     } else {
@@ -930,50 +950,30 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
 
 void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
-    auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type_);
-    auto watcher_offset = dev_msgs_factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::watcher);
-    auto ring_buf_field_offset =
-        dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::debug_ring_buf);
-    auto ring_buf_offset = watcher_offset + ring_buf_field_offset;
-    const auto* raw_ptr = reinterpret_cast<const uint8_t*>(l1_read_buf_.data());
-    // The host doesn't know at compile time which arch's (differently-capacitied)
-    // debug_mpsc_ring_buf_msg_t is laid out here, so read via arch-agnostic pointer helpers
-    // (head and the offset to slots are identical across arch variants) rather than a fixed
-    // struct type.
-    const uint8_t* rb_base = raw_ptr + ring_buf_offset;
+    const auto* rb =
+        reinterpret_cast<const debug_mpsc_ring_buf_view_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
-    uint32_t mask = hal.get_ring_buffer_mask();
-    uint32_t head = debug_mpsc_ring_buffer_head(rb_base);
-    uint32_t count = head < capacity ? head : capacity;
+    uint32_t mask = capacity - 1;  // capacity is a power of two
+    // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
 
-    std::vector<MpscRingBufEntry> entries;  // newest first
-    for (uint32_t i = 0; i < count; i++) {
-        const auto* slot = debug_mpsc_ring_buffer_slot(rb_base, (head - 1 - i) & mask);
-        if (!debug_ring_buffer_is_slot_valid(slot->write_id)) {
+    // Scan every slot rather than min(head, capacity): the semaphore is 16-bit, so head wraps and
+    // cannot bound the live entries.
+    std::vector<uint32_t> data, thread_indices;  // newest first
+    data.reserve(capacity);
+    thread_indices.reserve(capacity);
+    for (uint32_t i = 0; i < capacity; i++) {
+        const auto& slot = rb->slots[(head - 1 - i) & mask];
+        // write_id is thread_idx + 1, so 0 means the slot was never written.
+        if (slot.write_id == 0) {
             continue;
         }
-        entries.push_back({slot->data, debug_ring_buffer_get_thread_idx(slot->write_id)});
+        data.push_back(slot.data);
+        thread_indices.push_back(slot.write_id - 1);
     }
 
-    if (!entries.empty()) {
-        std::vector<uint32_t> data, thread_indices;
-        data.reserve(entries.size());
-        thread_indices.reserve(entries.size());
-        for (const auto& e : entries) {
-            data.push_back(e.data);
-            thread_indices.push_back(e.thread_idx);
-        }
-
-        auto lines = FormatRingBuffer(data, thread_indices, programmable_core_type_);
-        string out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
-
-        if (to_stdout) {
-            log_info(tt::LogMetal, "Last ring buffer status: {}", out);
-        } else {
-            fprintf(reader_.f, "%s", out.c_str());
-        }
-    }
+    EmitRingBuffer(FormatRingBuffer(data, thread_indices, programmable_core_type_), to_stdout);
 }
 
 void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {

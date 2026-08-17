@@ -23,11 +23,6 @@ constexpr uint32_t DEBUG_SANITIZE_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_SENTINEL_OK_16 = 0xbada;
 constexpr uint8_t DEBUG_SANITIZE_SENTINEL_OK_8 = 0xda;
 
-struct MpscRingBufEntry {
-    uint32_t data;
-    uint32_t thread_idx;
-};
-
 class WatcherDeviceReader {
 public:
     WatcherDeviceReader(

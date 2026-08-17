@@ -42,7 +42,4 @@ constexpr uint8_t subordinate_map_size = sizeof(subordinate_map_t);
 #define LOG_BASE_2_OF_DRAM_ALIGNMENT 6
 #define LOG_BASE_2_OF_L1_ALIGNMENT 4
 
-// Debug ring buffer structs/constants are in debug_ring_buffer_common.h. Reference the concrete
-// per-arch type directly (not the ARCH_BLACKHOLE-gated debug_mpsc_ring_buf_msg_t alias): this
-// header is also pulled in by host-side code (e.g. bh_hal.cpp) that never defines ARCH_BLACKHOLE.
 constexpr uint32_t debug_ring_buf_size = sizeof(debug_mpsc_ring_buf_msg_blackhole_t);
