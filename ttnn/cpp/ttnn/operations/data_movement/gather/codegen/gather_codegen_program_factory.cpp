@@ -38,7 +38,7 @@ constexpr const char* kReaderStreaming =
 constexpr const char* kWriterStreaming =
     "ttnn/cpp/ttnn/operations/data_movement/gather/codegen/kernels/gather_writer_streaming.cpp";
 
-// The device's real per-core CB ceiling, standing in for the Python builders' fixed USABLE_L1.
+// The device's real per-core CB ceiling.
 //
 // L1 tensors are allocated downward from the top of L1 while static CBs stack upward from the
 // allocator base, so any live L1 buffer -- this call's own output when output_mem_config asks for
@@ -63,9 +63,8 @@ uint64_t gather_usable_l1(const Tensor& input_tensor) {
     return ceiling > base ? ceiling - base : 0;
 }
 
-// builder_utils.py::rect_core_range_set — packs `nc` cores into at most two CoreRanges by treating
-// x as the row index and grid.y as the row length, so dispatch carries 1-2 range entries rather
-// than one per core.
+// Packs `nc` cores into at most two CoreRanges by treating x as the row index and grid.y as the row
+// length, so dispatch carries 1-2 range entries rather than one per core.
 CoreRangeSet gather_rect_core_range_set(uint32_t nc, const CoreCoord& grid) {
     const uint32_t cols = static_cast<uint32_t>(grid.y);
     const uint32_t full_rows = nc / cols;
@@ -90,12 +89,11 @@ struct CoreSplit {
     CoreCoord grid;
 };
 
-// builder_utils.py::split_cores. An explicit sub_core_grids is authoritative and goes straight to
-// the splitter; otherwise the candidate set is exactly min(total_work, device cores) cores, so the
-// splitter always sees units >= candidate cores and hands back the candidate set verbatim.
+// An explicit sub_core_grids is authoritative and goes straight to the splitter; otherwise the
+// candidate set is exactly min(total_work, device cores) cores, so the splitter always sees
+// units >= candidate cores and hands back the candidate set verbatim.
 //
-// row_wise=false is what split_cores' own two-argument ttnn.split_work_to_cores() call resolves to,
-// and the resulting column-major group order is load-bearing rather than cosmetic: it makes
+// The column-major group order row_wise=false produces is load-bearing rather than cosmetic: it makes
 // gather_assigned_cores()' walk visit the extra-work group first, and the row-buffered/streaming
 // kernels stride by num_cores from their ordinal, so an ordinal at or above the extra-work core
 // count must never receive a second work unit.
@@ -110,10 +108,9 @@ CoreSplit split_gather_work(IDevice* device, const std::optional<CoreRangeSet>& 
     return CoreSplit{num_cores, core_range, group1, group2, wpc1, wpc2, grid};
 }
 
-// builder_utils.py::iter_cores + factory/emit.py::emit_per_core_rt — walk the whole device grid
-// x-outer/y-inner, yielding each assigned core with its clamped work count. Both the per-core
-// ordinal (row-buffered, streaming) and the contiguous [start, n) offsets (tiled) are numbered in
-// exactly this order.
+// Walk the whole device grid x-outer/y-inner, yielding each assigned core with its clamped work
+// count. Both the per-core ordinal (row-buffered, streaming) and the contiguous [start, n) offsets
+// (tiled) are numbered in exactly this order.
 std::vector<std::pair<CoreCoord, uint32_t>> gather_assigned_cores(const CoreSplit& split, uint32_t total_work) {
     std::vector<std::pair<CoreCoord, uint32_t>> assigned;
     assigned.reserve(split.num_cores);
@@ -189,13 +186,10 @@ bool gather_interleaved_fits_l1(
     const uint64_t output_page = input_page;
     const uint64_t footprint =
         static_cast<uint64_t>(Wt_input) * input_page + index_page + std::max<uint64_t>(4, Wt_index) * output_page;
-    // ops/gather/gather.py::_interleaved_fits_l1 additionally short-circuits
-    // Wt_input <= _WT_ROWBUF_FLOOR (60) to true. That short-circuit is deliberately not carried
-    // over: the gathered axis is the one axis whose index extent is NOT bounded by the input
-    // extent, so a narrow row with a very wide index clears the floor while its
-    // max(4, Wt_index)-deep output CB does not fit, and the row-buffered plan would fail CB
-    // allocation instead of reaching the streaming one. Below the floor with a proportionate index
-    // the footprint always fits, so selection is unchanged wherever the floor was reachable.
+    // Every term is checked, with no short-circuit for a narrow row: the gathered axis is the one
+    // axis whose index extent is NOT bounded by the input extent, so a narrow row with a very wide
+    // index would clear any Wt_input floor while its max(4, Wt_index)-deep output CB does not fit,
+    // and the row-buffered plan would fail CB allocation instead of reaching the streaming one.
     return footprint <= gather_usable_l1(input_tensor);
 }
 
@@ -217,9 +211,9 @@ uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& 
     // Output dtype always equals input dtype, same as gather_interleaved_fits_l1's reasoning.
     const uint64_t fixed_pages = index_page + input_page;
     const uint64_t affordable = usable_l1 > fixed_pages ? (usable_l1 - fixed_pages) / input_page : 0;
-    // Deepest block L1 affords, capped at the row -- build_gather_streaming_factory's own formula.
-    // Two is its floor (keeps the reader's DRAM reads overlapping its scan when L1 is too tight for
-    // more) and is what gather_min_plan_fits_l1() gates against.
+    // Deepest block L1 affords, capped at the row. Two is the floor (it keeps the reader's DRAM
+    // reads overlapping its scan when L1 is too tight for more) and is what
+    // gather_min_plan_fits_l1() gates against.
     const uint32_t max_resident =
         static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(affordable, 2), Wt_input));
     // What the resident depth actually buys is the BLOCK COUNT: both streaming kernels rescan the
@@ -232,8 +226,7 @@ uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& 
     // that needs two blocks then costs 1000 input pages per row instead of 2 * ceiling.
     //
     // Deriving the depth from the block count also makes the page count independent of the budget,
-    // so the port and build_gather_streaming_factory agree on the depth even where their budgets
-    // differ, and a larger budget can only lower the scan count, never raise it.
+    // so a larger budget can only lower the scan count, never raise it.
     const uint32_t n_chunks = (Wt_input + max_resident - 1) / max_resident;
     return (Wt_input + n_chunks - 1) / n_chunks;
 }
@@ -294,8 +287,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Per-core RT follows the ORDINAL convention (spec.py's `_ordinal_rt`): a sequential counter over
-    // assigned cores in iter_cores order, NOT the per-core work offset. Kernel ABI:
+    // Per-core RT follows the ORDINAL convention: a sequential counter over assigned cores in
+    // gather_assigned_cores() order, NOT the per-core work offset. Kernel ABI:
     // reader [index_addr, n, tile_w, tile_h, core_id], writer [in_addr, out_addr, n, core_id].
     uint32_t id = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, geometry.Ht)) {
@@ -329,8 +322,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
 
     ProgramDescriptor desc;
-    // Identical three-CB footprint to the Interleaved factory (see build_gather_tiled_factory's
-    // docstring): `gather_interleaved_fits_l1` remains the correct admission test for this factory.
+    // Identical three-CB footprint to the Interleaved factory, so `gather_interleaved_fits_l1` is
+    // the correct admission test for this factory too.
     desc.cbs.push_back(make_tile_cb(kCbInput, in_t, geometry.Wt_input, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
     desc.cbs.push_back(
@@ -368,8 +361,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Per-core RT is the CONTIGUOUS [start, n) output-tile range emit_per_core_rt assigns (the
-    // default `[n, start]` work-offset convention, unlike Interleaved/Streaming's core ordinal).
+    // Per-core RT is the CONTIGUOUS [start, n) output-tile range, unlike Interleaved/Streaming's
+    // core ordinal.
     // Kernel ABI: reader [index_addr, start, n, tile_w, tile_h], writer [in_addr, out_addr, start, n].
     uint32_t start = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, total_work)) {

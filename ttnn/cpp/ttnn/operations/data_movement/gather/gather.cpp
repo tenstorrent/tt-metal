@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather.hpp"
+#include "gather_force.hpp"
 #include <cstdint>
 
 #include "codegen/gather_codegen_device_operation.hpp"
@@ -179,9 +180,41 @@ Tensor post_gather_transform_tensor(
 
 }  // namespace ttnn::operations::data_movement
 
-namespace ttnn {
+namespace ttnn::operations::data_movement::detail {
 
-Tensor gather(
+// Internal to this file. `detail` is shared across the whole data_movement library and this is a
+// unity-build target, so unprefixed helper names must not have external linkage.
+namespace {
+
+namespace gather_ns = ttnn::operations::data_movement::gather;
+
+// Whether the codegen path can serve this call. Evaluated on the ORIGINAL (pre
+// pre_gather_transform_tensor) tensors and the caller's raw dim -- the same attributes the
+// supported scope is expressed in (dim, layout, dtype as the caller supplied them), before any
+// transpose/4D-fold. Correctness and caller-controlled placement only; perf demotion is a separate,
+// routing-only question.
+bool codegen_can_serve(
+    const Tensor& input_tensor,
+    int8_t dim,
+    const Tensor& input_index_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return gather_ns::supported_execution_controls(input_tensor, memory_config, optional_output_tensor) &&
+           gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor);
+}
+
+Tensor gather_native(
+    const Tensor& input_tensor,
+    int8_t dim,
+    const Tensor& input_index_tensor,
+    bool sparse_grad,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids);
+
+// Shared body: normalize, transform, dispatch to the chosen prim, transform back. `use_codegen` is
+// decided by the caller on the original tensors and is not revisited here.
+Tensor gather_dispatch(
     const Tensor& input_tensor,
     int8_t dim,
     const Tensor& input_index_tensor,
@@ -189,7 +222,7 @@ Tensor gather(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    std::string_view implementation) {
+    const bool use_codegen) {
     // Input tensor
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
@@ -197,36 +230,6 @@ Tensor gather(
     // Index tensor
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
     const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
-
-    // Routing decision, evaluated on the ORIGINAL (pre pre_gather_transform_tensor) tensors and the
-    // caller's raw dim -- the same point the manifest's cases/sweep vectors describe (dim, layout,
-    // dtype as the caller supplied them). Must run before the empty-tensor/composite-hop shortcuts
-    // below so an invalid selector or a forced implementation="codegen" request on an empty or
-    // irregularly-sharded tensor is still validated rather than silently swallowed by a shortcut.
-    namespace gather_ns = ttnn::operations::data_movement::gather;
-    const auto selector = gather_ns::parse_implementation(implementation);
-    const bool controls_ok =
-        gather_ns::supported_execution_controls(input_tensor, memory_config, optional_output_tensor);
-    bool use_codegen = false;
-    switch (selector) {
-        case gather_ns::ImplementationSelector::kNative: use_codegen = false; break;
-        case gather_ns::ImplementationSelector::kCodegen:
-            TT_FATAL(
-                gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor),
-                "gather: implementation=\"codegen\" requested but supported_by_codegen() rejected this input (TILE "
-                "layout, bfloat16, non-sharded input/index only)");
-            TT_FATAL(
-                controls_ok,
-                "gather: implementation=\"codegen\" does not support a sharded output memory config or a sharded "
-                "preallocated output tensor");
-            use_codegen = true;
-            break;
-        case gather_ns::ImplementationSelector::kAuto:
-        default:
-            use_codegen = controls_ok && gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor) &&
-                          !gather_ns::is_demoted(input_tensor, dim, input_index_tensor);
-            break;
-    }
 
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
@@ -253,8 +256,11 @@ Tensor gather(
         const auto tile_index =
             ttnn::to_layout(ttnn::to_memory_config(input_index_tensor, l1_interleaved), tt::tt_metal::Layout::TILE);
         auto requested_mc = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-        const auto tile_out = ttnn::gather(
-            tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids, implementation);
+        // Staying on the native helper rather than re-entering the router: the routing decision was
+        // taken on the tensors the caller passed, and staging them to TILE/interleaved to make this
+        // arm work must not turn a rejected call into an accepted one behind the caller's back.
+        const auto tile_out =
+            gather_native(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
         auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
         // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
         // uses, since to_memory_config does not derive a spec for the actual allocation call.
@@ -324,6 +330,105 @@ Tensor gather(
         normalized_dim,
         input_index_tensor_is_dim_last_idx,
         original_index_tensor_lshape);
+}
+
+// The existing native implementation, unconditionally. Callers that have already been routed here
+// enter this rather than re-entering ttnn::gather, so a call routed to native cannot be routed a
+// second time and land on codegen partway through.
+Tensor gather_native(
+    const Tensor& input_tensor,
+    int8_t dim,
+    const Tensor& input_index_tensor,
+    const bool sparse_grad,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return gather_dispatch(
+        input_tensor,
+        dim,
+        input_index_tensor,
+        sparse_grad,
+        memory_config,
+        std::move(optional_output_tensor),
+        sub_core_grids,
+        /*use_codegen=*/false);
+}
+
+}  // namespace
+
+Tensor gather_force_native(
+    const Tensor& input_tensor,
+    const int8_t dim,
+    const Tensor& input_index_tensor,
+    const bool sparse_grad,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return gather_native(
+        input_tensor,
+        dim,
+        input_index_tensor,
+        sparse_grad,
+        memory_config,
+        std::move(optional_output_tensor),
+        sub_core_grids);
+}
+
+Tensor gather_force_codegen(
+    const Tensor& input_tensor,
+    const int8_t dim,
+    const Tensor& input_index_tensor,
+    const bool sparse_grad,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(
+        codegen_can_serve(input_tensor, dim, input_index_tensor, memory_config, optional_output_tensor),
+        "gather_force_codegen invoked for a case the codegen path does not support (requires a TILE, bfloat16, "
+        "non-sharded input with a TILE non-sharded index, a non-empty shape, an index dtype wide enough to name "
+        "every position on the gathered axis, an interleaved output placement, and enough per-core L1 for the "
+        "shallowest plan any of its factories can be built with). This entry never falls back to native, because "
+        "a forced leg that quietly served native would make any comparison against native vacuous. Use "
+        "ttnn::gather if you want the case routed.");
+    return gather_dispatch(
+        input_tensor,
+        dim,
+        input_index_tensor,
+        sparse_grad,
+        memory_config,
+        std::move(optional_output_tensor),
+        sub_core_grids,
+        /*use_codegen=*/true);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+Tensor gather(
+    const Tensor& input_tensor,
+    const int8_t dim,
+    const Tensor& input_index_tensor,
+    const bool sparse_grad,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    namespace detail = operations::data_movement::detail;
+    namespace gather_ns = operations::data_movement::gather;
+
+    const bool use_codegen =
+        detail::codegen_can_serve(input_tensor, dim, input_index_tensor, memory_config, optional_output_tensor) &&
+        !gather_ns::is_demoted(input_tensor, dim, input_index_tensor);
+
+    return detail::gather_dispatch(
+        input_tensor,
+        dim,
+        input_index_tensor,
+        sparse_grad,
+        memory_config,
+        std::move(optional_output_tensor),
+        sub_core_grids,
+        use_codegen);
 }
 
 }  // namespace ttnn

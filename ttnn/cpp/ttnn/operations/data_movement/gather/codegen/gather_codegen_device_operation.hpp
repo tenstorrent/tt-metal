@@ -21,9 +21,9 @@ struct GatherCodegenParams {
     const bool sparse_grad;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<CoreRangeSet> sub_core_grids;
-    // manifest cache_key_fields: pure functions of the input/index tensor shapes
-    // (compute_gather_geometry), hoisted here so they participate in this struct's hash/equality
-    // instead of being recomputed inside the program factory.
+    // Pure functions of the input/index tensor shapes (compute_gather_geometry), hoisted here so
+    // they participate in this struct's hash/equality instead of being recomputed inside the
+    // program factory.
     const uint32_t Ht;
     const uint32_t Wt_input;
     const uint32_t Wt_index;

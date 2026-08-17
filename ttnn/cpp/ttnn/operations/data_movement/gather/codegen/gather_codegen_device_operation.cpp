@@ -14,11 +14,10 @@
 namespace ttnn::prim {
 using namespace tt::tt_metal;
 
-// Mirrors ops/gather/gather.py's `_gather_impl` builder-selection branch: row-buffered
-// ("interleaved") whenever its exact three-CB footprint fits the device's real per-core L1 budget
-// (gather_interleaved_fits_l1, see gather_codegen_program_factory.cpp), further split by output tile
-// ("tiled") when tile-rows underfill the grid and Wt_index has column parallelism; otherwise the
-// width-independent streaming fallback.
+// Row-buffered ("interleaved") whenever its exact three-CB footprint fits the device's real
+// per-core L1 budget (gather_interleaved_fits_l1, see gather_codegen_program_factory.cpp), further
+// split by output tile ("tiled") when tile-rows underfill the grid and Wt_index has column
+// parallelism; otherwise the width-independent streaming fallback.
 GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -71,8 +70,8 @@ ttsl::hash::hash_t GatherCodegenDeviceOperation::compute_program_hash(
 
 void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Belt-and-suspenders behind the free function's early gate (call_parity.routing): the scope
-    // predicate, never is_demoted (perf-only, auto-branch-only). The gathered axis is -1 here
+    // Belt-and-suspenders behind the free function's early gate: the scope predicate, never
+    // is_demoted (perf-only, and only the router consults it). The gathered axis is -1 here
     // whatever the caller's dim was: pre_gather_transform_tensor has already transposed it last, so
     // this prim -- like ttnn::prim::gather -- is dim-agnostic. attributes.dim is the caller's
     // normalized dim against the caller's rank, which no longer indexes these 4D tensors.

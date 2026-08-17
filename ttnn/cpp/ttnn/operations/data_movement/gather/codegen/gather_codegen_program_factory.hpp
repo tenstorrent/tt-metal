@@ -13,10 +13,10 @@ namespace ttnn::prim {
 struct GatherCodegenParams;
 struct GatherCodegenInputs;
 
-// Host-computed tile-page geometry (ops/gather/gather.py Step 6, `_gather_impl`), computed once
-// from tensor shapes and copied into GatherCodegenParams (the manifest's cache_key_fields) so it
-// participates in program-cache hashing; compute_gather_geometry itself is called only at the
-// gather_codegen() call site, never re-derived inside the factories or select_program_factory.
+// Host-computed tile-page geometry, computed once from tensor shapes and copied into
+// GatherCodegenParams so it participates in program-cache hashing; compute_gather_geometry itself is
+// called only at the gather_codegen() call site, never re-derived inside the factories or
+// select_program_factory.
 struct GatherGeometry {
     uint32_t Ht = 0;
     uint32_t Wt_input = 0;
@@ -28,9 +28,8 @@ struct GatherGeometry {
 
 GatherGeometry compute_gather_geometry(const Tensor& input_tensor, const Tensor& input_index_tensor);
 
-// Mirrors ops/gather/gather.py::_interleaved_fits_l1: whether the row-buffered kernel's three CBs
-// (Wt_input + 1 + max(4, Wt_index) tile pages, the SAME depths the Interleaved/Tiled factories
-// allocate) fit the device's real per-core L1 budget.
+// Whether the row-buffered kernel's three CBs (Wt_input + 1 + max(4, Wt_index) tile pages, the SAME
+// depths the Interleaved/Tiled factories allocate) fit the device's real per-core L1 budget.
 bool gather_interleaved_fits_l1(
     const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input, uint32_t Wt_index);
 
@@ -43,11 +42,9 @@ bool gather_min_plan_fits_l1(const Tensor& input_tensor, const Tensor& input_ind
 // whole index tile once per resident block of input tiles, so its scalar cost per output tile is
 // ceil(Wt_input / depth) * TILE_HW: a block deep enough to hold the entire row costs the single scan
 // the row-buffered reader pays. The block COUNT is therefore what the L1 budget buys (the deepest
-// block the L1 left over by the fixed index and output pages affords, capped at the row --
-// build_gather_streaming_factory's own formula); the depth returned here is the row spread evenly
-// over that count, which keeps the scan count while dropping the tail-block padding re-reads the
-// writer would otherwise issue. See the definition for why the reference's literal depth is not
-// the right thing to copy here.
+// block the L1 left over by the fixed index and output pages affords, capped at the row); the depth
+// returned here is the row spread evenly over that count, which keeps the scan count while dropping
+// the tail-block padding re-reads the writer would otherwise issue.
 uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input);
 
 // Row-buffered: full Wt_input row resident in L1 (kernels/gather_reader.cpp, gather_writer.cpp).
