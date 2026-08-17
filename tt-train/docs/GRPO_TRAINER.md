@@ -647,7 +647,7 @@ python3 reverse_text/reverse_text_training_example.py
 [`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
 
 ```bash
-python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward
+python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward_mean
 ```
 
 [`reverse_text/reverse_text_plot_example.py`](reverse_text/reverse_text_plot_example.py) —

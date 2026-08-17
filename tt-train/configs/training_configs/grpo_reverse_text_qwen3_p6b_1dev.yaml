@@ -32,6 +32,12 @@ training_config:
     max_completion_length: 384
     num_generations: 16
     warmup_steps: 2
+    # Logging surface: the reverse-text run prints one sample generation per
+    # step (previously done manually inside the reward function). The built-in
+    # GRPOMonitor picks these up when log_completions is on.
+    log_completions: true
+    num_completions_to_print: 1
+    report_to: none
 
 device_config:
   enable_ddp: false
