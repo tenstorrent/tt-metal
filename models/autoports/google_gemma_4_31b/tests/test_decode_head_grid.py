@@ -83,16 +83,24 @@ def decode_grid_module():
     spec = importlib.util.spec_from_file_location(module_name, TT_DIR / "decode_head_grid.py")
     module = importlib.util.module_from_spec(spec)
     previous_ttnn = sys.modules.get("ttnn")
+    # Keep the stub in sys.modules only for the duration of exec_module. The
+    # loaded module binds `ttnn` in its own globals, so it keeps using the stub
+    # afterwards without the stub staying globally visible. Holding it for the
+    # whole fixture lifetime instead would break any autouse fixture that does
+    # `import ttnn` at test setup -- the root conftest's ttnn_graph_report does
+    # exactly that, and every test in this file errored on the stub's missing
+    # ttnn.CONFIG.
     sys.modules["ttnn"] = fake_ttnn
     try:
         assert spec.loader is not None
         spec.loader.exec_module(module)
-        yield module
     finally:
         if previous_ttnn is None:
             sys.modules.pop("ttnn", None)
         else:
             sys.modules["ttnn"] = previous_ttnn
+    assert module.ttnn is fake_ttnn
+    yield module
 
 
 def _mesh(width, height):
