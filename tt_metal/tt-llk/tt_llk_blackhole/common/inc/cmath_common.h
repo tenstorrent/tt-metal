@@ -65,7 +65,7 @@ static SrcZeroFlagState src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
 static std::uint32_t src_zero_flag_srca_fmt = 0xff;
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
-inline __attribute__((noinline)) void _configure_src_zero_flag_(const bool disable)
+inline void _configure_src_zero_flag_(const bool disable)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
@@ -86,7 +86,7 @@ inline __attribute__((noinline)) void _configure_default_zero_flag_state_(const 
 
 // PRESERVE: data-movement ops (datacopy / copy_init / transpose_dest / reduce mov-phase) keep the
 // flag disabled so values pass through faithfully (preserves bf16 -0.0 and 16b/32b int datums).
-inline __attribute__((noinline)) void _configure_preserve_zero_flag_state_()
+inline void _configure_preserve_zero_flag_state_()
 {
     if (src_zero_flag_state == SrcZeroFlagState::PRESERVE)
     {
