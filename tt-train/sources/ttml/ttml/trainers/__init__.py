@@ -10,4 +10,5 @@ from .grpo_trainer import (
     GRPOTrainer,
     get_grpo_config,
 )
+from .grpo_monitor import GRPOMonitor
 from ttml.modules.lora import LoraConfig
