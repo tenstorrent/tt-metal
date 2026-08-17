@@ -5078,15 +5078,6 @@ class SamplingGolden:
         return truncate_to_bfloat16(values)
 
 
-# DEST-row geometry of the SFPU rope, shared by the golden and by the tests that
-# build its stimuli. Module-level rather than methods on RopeGolden: under
-# --compile-producer the registry hands out a DummyGoldenGenerator, which only carries
-# __call__, and stimuli are still generated in that phase.
-
-ROPE_VECTOR_ROWS = 4  # DEST rows one SFPU vector covers
-ROPE_FACE_ROWS = 16  # DEST rows per face
-
-
 def rope_bands(
     ht: int,
     wt: int,
@@ -5096,48 +5087,31 @@ def rope_bands(
     sin_base: int,
     cs_stride: int,
 ):
-    """(x_row, cos_row, sin_row) for every vector `sfpu_rope_all_rows` issues.
-
-    cos/sin are shared by all ht heads at a given (width tile, face), which is why the
-    head loop is the innermost one in the LLK too.
-    """
+    """(x_row, cos_row, sin_row) for every vector sfpu_rope_all_rows issues."""
     for w in range(wt):
         for face in range(2):
-            cs_offset = w * cs_stride + face * ROPE_FACE_ROWS
+            cs_offset = w * cs_stride + face * FACE_DIM
             for head in range(ht):
-                x_row = (
-                    x_base + w * x_stride + face * ROPE_FACE_ROWS + head * wt * x_stride
-                )
+                x_row = x_base + w * x_stride + face * FACE_DIM + head * wt * x_stride
                 yield x_row, cos_base + cs_offset, sin_base + cs_offset
 
 
 def rope_rotated_rows(**geometry) -> list[int]:
-    """Every DEST row the rotation writes, ascending."""
+    """Every Dest row the rotation writes, ascending."""
     return sorted(
         x_row + i
         for x_row, _, _ in rope_bands(**geometry)
-        for i in range(ROPE_VECTOR_ROWS)
+        for i in range(4)  # rows
     )
 
 
 @register_golden
 class RopeGolden:
-    """Golden for the SFPU RoPE (experimental/ckernel_sfpu_rope.h).
-
-    Modelled in DEST rows, the frame the LLK addresses in. One SFPU vector is 4 rows
-    x the 16 columns of one face, the LLK issues one per (width tile, face), and
-    adjacent columns of a DEST row form a complex pair:
-
+    """
+    Adjacent columns of a Dest row contain these pairs:
         x'_even = cos*x_even - sin*x_odd
         x'_odd  = sin*x_even + cos*x_odd
-
-    cos/sin are loaded with even-column parity only, so both slots of a pair are
-    rotated by the even slot's angle -- the interleaved layout duplicates each angle
-    across its pair to make that work. Under a scale, cos/sin are multiplied by it
-    first, in the fp32 LReg, so only the final store quantizes.
-
-    Rows no operand covers come back untouched, so this returns a full copy of `dest`
-    rather than only the rotated band; `rope_rotated_rows` reports which rows those are.
+    The golden returns the entire Dest register.
     """
 
     def __call__(
@@ -5151,7 +5125,7 @@ class RopeGolden:
         factor = 1.0 if scale is None else scale
 
         for x_row, cos_row, sin_row in rope_bands(**geometry):
-            for i in range(ROPE_VECTOR_ROWS):
+            for i in range(4):  # rows
                 cos = source[cos_row + i, even] * factor
                 sin = source[sin_row + i, even] * factor
                 x_even = source[x_row + i, even]

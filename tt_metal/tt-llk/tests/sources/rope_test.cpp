@@ -2,32 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for the SFPU RoPE
-// (tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_rope.h).
+// Test for Blackhole SFPU RoPE (sfpu/experimental/ckernel_sfpu_rope.h).
 //
-// sfpu_rope_all_rows is not an eltwise-unary SFPU kernel: it addresses DEST itself in
-// absolute rows and does its own dest setup, so there is no SFPU_UNARY_CALL and no
-// VectorMode here. The call sequence mirrors what the compute API
-// (hw/inc/api/compute/experimental/rope_sfpu.h) emits: configure the addrmod once at
-// init, then dest_setup + all_rows inside the dest section.
-//
-// All TILE_CNT tiles are datacopy'd into ONE dest section, tile i at DEST row 64*i,
-// and every tile is packed back out. The rotation only covers the rows the ROPE_*
-// operand addresses point at, so packing everything lets the test assert that the
-// cos/sin operands and the rest of DEST came back untouched.
-//
-// The operand addresses being absolute DEST rows is what lets the test drive both
-// layouts the LLK documents: stride 64 for copy_tile-shaped operands, and stride 32
-// for a dense-packed matmul result, where two consecutive operands share one tile
-// slot's faces.
-//
-// One SFPU vector is 4 DEST rows x the 16 columns of one face, and the LLK issues one
-// per (width tile, face), so each x operand has only rows base..base+3 of each of its
-// two faces rotated.
-//
-// The loads and stores are hardcoded to InstrModLoadStore::FP16B, so this op is
-// bf16-DEST only: dest_acc=Yes would reinterpret 32-bit DEST words as bf16. The test
-// sweeps dest_acc=No alone.
+// The call sequence mirrors what Compute API does.
+// The kernel only operates on 16-bit Dest.
 
 #include <cstdint>
 
@@ -35,7 +13,6 @@
 #include "llk_defs.h"
 #include "params.h"
 
-// Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -89,13 +66,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // Leaves ADDR_MOD_7 as {srca:0, srcb:0, dest:0}, which is what the rope's own
-    // addrmod configuration also programs.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     sfpu::sfpu_rope_configure_addrmod();
 
-    // One dest section holds every operand: the rotation reads cos/sin and the x tiles
-    // out of DEST at the same time, so they cannot be streamed a tile at a time.
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)

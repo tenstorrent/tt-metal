@@ -687,18 +687,6 @@ class HADAMARD(TemplateParameter):
 
 @dataclass
 class ROPE(TemplateParameter):
-    """Compile-time configuration for the SFPU RoPE test.
-
-    Every address is an absolute DEST row. ``x_base`` / ``x_stride`` place the Ht*Wt
-    x operands and ``cos_base`` / ``sin_base`` / ``cs_stride`` the Wt cos and sin
-    operands; the LLK requires all of them to be 4-row aligned. A stride of 64 is the
-    copy_tile layout (one operand per DEST tile slot) and 32 the dense-packed matmul
-    layout (two operands sharing a slot's faces).
-
-    ``scale_fp32`` is an fp32 bit pattern, and the LLK takes it as a runtime argument
-    rather than a template one: it is folded into cos/sin only under ``has_scale``.
-    """
-
     ht: int = 1
     wt: int = 1
     x_base: int = 0
