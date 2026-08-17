@@ -7,133 +7,6 @@
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
-#if !defined(FULL_KERNEL_NAME)
-#define FULL_KERNEL_NAME "<unknown>"
-#endif
-
-#ifdef LLK_SAN_ENABLE
-
-#if !defined(ENABLE_LLK_ASSERT) && !defined(DEBUG_PRINT_ENABLED)
-#error "llk::san | fault   | LLK_SAN_ENABLE is set but neither ENABLE_LLK_ASSERT nor DEBUG_PRINT_ENABLED is defined"
-#endif
-
-#if defined(LLK_SAN_MOCK)
-
-// Host (lit) mocks of the device print/assert primitives.
-
-#define NOINLINE
-#define NOCLONE
-
-struct ct_string
-{
-    const char* ptr;
-};
-
-#define CTSTR(literal) (ct_string {literal})
-
-struct dp_top_callstack_t
-{
-    std::uintptr_t pc;
-    std::uintptr_t ra;
-    std::uintptr_t skip_frames;
-
-    dp_top_callstack_t(std::uintptr_t pc, std::uintptr_t ra, std::uintptr_t skip_frames) : pc(pc), ra(ra), skip_frames(skip_frames)
-    {
-    }
-};
-
-#if defined(DEBUG_PRINT_ENABLED)
-
-#define FMT_HEADER_ONLY
-#include <fmt/format.h>
-
-template <>
-struct fmt::formatter<ct_string> : fmt::formatter<const char*>
-{
-    auto format(const ct_string s, format_context& ctx) const
-    {
-        return fmt::formatter<const char*>::format(s.ptr, ctx);
-    }
-};
-
-template <>
-struct fmt::formatter<dp_top_callstack_t>
-{
-    constexpr auto parse(format_parse_context& ctx)
-    {
-        return ctx.begin();
-    }
-
-    auto format(const dp_top_callstack_t& callstack, format_context& ctx) const
-    {
-        return fmt::format_to(ctx.out(), "pc=0x{:x} ra=0x{:x} skip={}", callstack.pc, callstack.ra, callstack.skip_frames);
-    }
-};
-
-#define DEVICE_PRINT(...) fmt::print(__VA_ARGS__)
-
-#endif // DEBUG_PRINT_ENABLED
-
-// Mirrors common/llk_assert.h.
-#if defined(ENABLE_LLK_ASSERT)
-
-#include <cstdio>
-#include <cstdlib>
-
-#define LLK_ASSERT(condition, message)        \
-    do                                        \
-    {                                         \
-        if (!(condition))                     \
-        {                                     \
-            std::fputs(message "\n", stderr); \
-            std::abort();                     \
-        }                                     \
-    } while (false)
-
-#else
-
-#define LLK_ASSERT(condition, message) ((void)sizeof((condition)))
-
-#endif // ENABLE_LLK_ASSERT
-
-#else // device
-
-#include "ckernel.h"
-#include "llk_assert.h"
-
-#if defined(DEBUG_PRINT_ENABLED)
-
-#ifdef ENV_LLK_INFRA
-#error "llk::san | fault   | DEBUG_PRINT_ENABLED is not supported in LLK INFRA, only in metal"
-#endif
-
-#include "api/debug/device_print.h"
-
-#else
-
-// Assert-only build: device_print.h is absent, so supply the string carrier the report code expects.
-struct ct_string
-{
-    const char* ptr;
-};
-
-#define CTSTR(literal) (ct_string {literal})
-
-struct dp_top_callstack_t
-{
-    std::uintptr_t pc;
-    std::uintptr_t ra;
-    std::uintptr_t skip_frames;
-
-    dp_top_callstack_t(std::uintptr_t pc, std::uintptr_t ra, std::uintptr_t skip_frames) : pc(pc), ra(ra), skip_frames(skip_frames)
-    {
-    }
-};
-
-#endif // DEBUG_PRINT_ENABLED
-
-#endif // LLK_SAN_MOCK
-
 namespace llk::san
 {
 
@@ -218,13 +91,17 @@ NOINLINE NOCLONE inline void print_full_kernel()
 
 NOINLINE NOCLONE inline void print_compute_info(const UnwindContext context)
 {
-    // sstanisic todo: skip the sanitizer-internal frames again once the context zones are ported.
-    DEVICE_PRINT("{}\r", dp_top_callstack_t(context.pc, context.ra, 0));
+    // Expected stack layout
+    // [0] write_unwind_context
+    // [1] thread_context_push_impl
+    // [2] thread_context_push
+    // [3] FunctionZone::FunctionZone
+    // [4] Compute API <- first frame the user cares about
+    // [5] ...
+    // Discard 4 sanitizer-internal frames, print from Compute API
+    DEVICE_PRINT("{}\r", dp_top_callstack_t(context.pc, context.ra, 4));
 }
 
-// Report a tracked field whose provided value differs from the recorded one. Serves both state
-// kinds: the configured Operand state and the Operation record init() wrote; the message names the
-// hook and the kind.
 template <Trigger L, typename S, typename F>
 NOINLINE NOCLONE inline void field_assert(
     const S& expected, const StateVal<F>& provided, const ct_string message, const UnwindContext update, const UnwindContext current)

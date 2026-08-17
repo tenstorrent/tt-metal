@@ -2,19 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Runtime behaviour of the five guarded entry points: what each one records, and which mismatches it
-// reports.
-//
-// tests/unit/diagnostics/test_api_diagnostics.cpp is the counterweight to this file and only proves
-// that the wrong arguments are rejected at compile time. Nothing there can tell a hook that checks
-// from one that records and returns, which is the whole of what these hooks do -- so the cases below
-// drive real sequences and count the reports.
-//
-// The TU supplies llk::san::state (on device a fixed L1 address). Reporting comes from output.h's
-// LLK_SAN_MOCK backend; each emitted report bumps detail::mock_report_count, which is what the cases
-// count. LLK_ASSERT stays a no-op here (no ENABLE_LLK_ASSERT), so a failing check does not end the
-// run.
-
 // REQUIRES: fmt
 // DEFINE: %{cflags} = -std=c++17 -Wall -Wextra -Werror -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0 -DLLK_SAN_MOCK -DDEBUG_PRINT_ENABLED %{fmt_flags}
 // RUN: %clangxx %{cflags} -I %{sanitizer_include} %s -o %t
