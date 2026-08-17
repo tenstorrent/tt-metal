@@ -92,7 +92,15 @@ void memory::pack_from_segments(const std::string& path, const std::vector<ElfFi
         if (loading_ == Loading::DISCRETE ? !segment.contents.empty() : link_spans_.empty()) {
             link_spans_.emplace_back(segment.address, 0);
         }
-        link_spans_.back().len += segment.contents.size();
+        // For DISCRETE loads no span is created for a segment with no file contents, so
+        // link_spans_ is still empty if the *first* segment in address order has none -- a
+        // .bss-only PT_LOAD has p_filesz == 0, hence zero `contents` words. There is nothing to
+        // accumulate into in that case (contents.size() is 0 and the insert below is a no-op), and
+        // link_spans_.back() on an empty vector would write 8 bytes before the start of the
+        // buffer. Non-DISCRETE loads always emplace on the first iteration, so they are unaffected.
+        if (!link_spans_.empty()) {
+            link_spans_.back().len += segment.contents.size();
+        }
         data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
     }
 }

@@ -35,8 +35,8 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: CodeCoverage
-      build-wheel: true
-      tracy: true
+      build-inplace-wheel: true
+      tracy: false
       skip-tt-train: false
       platform: "Ubuntu 22.04"
       enable-lto: false

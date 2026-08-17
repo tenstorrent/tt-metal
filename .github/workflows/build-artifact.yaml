@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      use-system-sfpi:
+        required: false
+        type: boolean
+        default: false
+        description: "Use the SFPI toolchain already staged in the docker image instead of downloading it. Only safe for internal CI consumption: skips producing the tt-metalium-jit package, so leave false for release/publish builds whose packages need to be self-contained."
       build-ttnn-import-artifact:
         required: false
         type: boolean
@@ -222,6 +227,11 @@ on:
         type: boolean
         default: false
         description: "Package the wheel from the compiled tree (no second compile) instead of the manylinux build-wheel job; in-family CI consumers only"
+      use-system-sfpi:
+        required: false
+        type: boolean
+        default: false
+        description: "Use the SFPI toolchain already staged in the docker image instead of downloading it. Only safe for internal CI consumption: skips producing the tt-metalium-jit package, so leave false for release/publish builds whose packages need to be self-contained."
       architecture:
         required: false
         type: string
@@ -595,7 +605,7 @@ jobs:
       - name: 📦 Compute CPM cache key
         id: cpm-key
         run: |
-          echo "key=cpm-z22-${{ hashFiles(
+          echo "key=cpm-z9l-${{ hashFiles(
             'third_party/CMakeLists.txt',
             'tt_metal/third_party/umd/third_party/CMakeLists.txt',
             'tt-train/cmake/dependencies.cmake') }}" >> "$GITHUB_OUTPUT"
@@ -650,6 +660,11 @@ jobs:
             "--configure-only"
           )
 
+          echo "Use system SFPI: ${{ inputs.use-system-sfpi }}"
+          if [ "${{ inputs.use-system-sfpi }}" = "true" ]; then
+            build_args+=("--use-system-sfpi")
+          fi
+
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "false" ]; then
             build_args+=("--disable-profiler")
@@ -673,12 +688,12 @@ jobs:
       - name: 📦 Pack CPM cache
         # Only pack when we can actually save. For fork PRs the restore step is
         # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
-        # pointless ultra-zstd compression that never gets uploaded.
+        # pointless zstd compression that never gets uploaded.
         if: >-
           steps.cpm-cache.outputs.hit != 'true' &&
           (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         run: |
-          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
         # Only upload on a miss, and only where we have S3 creds (same fork guard).
@@ -815,11 +830,14 @@ jobs:
           # self-contained; targets manylinux_2_35 (ubuntu 22.04 glibc) = in-family only.
           LD_LIBRARY_PATH=/work/build/lib auditwheel repair -w /work/wheelhouse /work/wheelhouse-raw/*.whl
           echo "Repaired wheel(s):"; ls -1sh /work/wheelhouse/*.whl
-          # Name it like the build-wheel job so consumers treat it identically.
+          # Name it like the build-wheel job so consumers treat it identically. Includes the
+          # Python version so two in-place builds (e.g. Ubuntu 22.04 cp310 + 24.04 cp312) in the
+          # same run don't collide on the same artifact name.
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
-          ARTIFACT_NAME="ttnn-dist-inplace-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
+          PYTHON_VERSION_NODOT=$(echo "${{ needs.parse-platform.outputs.python-version }}" | tr -d '.')
+          ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: ☁️ Upload wheel package
@@ -842,7 +860,7 @@ jobs:
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
-          tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
+          tar -I 'zstd -T0 --long -9 -v' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name

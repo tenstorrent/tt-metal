@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 
 namespace tt {
 
@@ -125,6 +126,15 @@ static void watcher_sanitize_host_noc(
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else if (coord_found_p(soc_d.get_cores(CoreType::L2CPU, CoordSystem::NOC0), core)) {
+        // L2CPU tiles address LIM, which does not start at 0, so the worker/eth
+        // address predicates do not apply. Validate against the LIM aperture the
+        // per-tile static TLB covers. get_cores() is empty on architectures
+        // without L2CPU tiles, making this branch unreachable there.
+        if (addr < ll_api::kL2cpuLimBase || addr + lbytes > ll_api::kL2cpuLimTlbEnd) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} L2CPU LIM address {}", what, noc_address(core, addr, lbytes));
         }
     } else {
         // Bad COORD

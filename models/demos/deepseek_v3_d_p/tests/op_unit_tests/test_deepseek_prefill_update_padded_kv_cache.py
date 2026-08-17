@@ -29,7 +29,9 @@ KVPE_HEAD_DIM = 576
 
 # (cache dtype, layout). bfloat8_b/bfloat4_b are block-float (TILE only); fp8_e4m3 is ROW_MAJOR only
 # (Blackhole); bf16 covers the row-major page math in a lossless dtype. The tests assert bit-exact
-# equality against the input read back, so no per-dtype tolerance is needed.
+# equality against the input read back, so no per-dtype tolerance is needed. Every case drives the
+# per-element-tensor (metadata) path via the _update_kv helper below -- it is layout-agnostic, since the
+# writer's page-row unit is a compile arg (TILE_HEIGHT for TILE, 1 for ROW_MAJOR).
 DTYPE_LAYOUT_CASES = [
     (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
@@ -182,14 +184,16 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
                 .to(torch.bfloat16)
                 .reshape(new_isl_global, KVPE_HEAD_DIM)
             )
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            _update_kv(
                 kv_cache,
                 tt_input,
                 slot_idx=u,
+                kv_actual_global=0,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
                 cluster_axis=sp_axis,
+                layout=layout,
+                mesh_device=mesh_device,
             )
 
     ttnn.synchronize_device(mesh_device)
@@ -210,6 +214,42 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
                 f"(max abs diff {(written.float() - expected[(u, l)].float()).abs().max().item()})"
             )
             logger.info(f"  [{dtype}] user {u} layer {l}: exact match")
+
+
+def _make_scalar_tensor(mesh_device, value):
+    """Build one 1-element uint32 DRAM tensor ([1,1,1,1], ROW_MAJOR), replicated across the mesh.
+    The op's per-element-tensor (traceable) path reads element [0] of one such tensor for slot_idx
+    and another for kv_actual_global on-device (no host scalars)."""
+    payload = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _make_meta_tensors(mesh_device, kv_actual_global, slot_idx):
+    """Build the two per-element tensors (slot_idx, kv_actual_global) the traceable path consumes."""
+    return _make_scalar_tensor(mesh_device, slot_idx), _make_scalar_tensor(mesh_device, kv_actual_global)
+
+
+def _update_kv(
+    kv_cache, tt_input, *, slot_idx, kv_actual_global, layer_idx, num_layers, cluster_axis, layout, mesh_device
+):
+    """Drive update_padded_kv_cache through the per-element-tensor (metadata) path, which is the path
+    this PR adds and the one traced prefill uses. It is layout-agnostic (the writer's page-row unit is
+    a compile arg: TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so every dtype/layout case runs on it. The
+    scalar path is covered against it by test_update_padded_kv_cache_metadata_matches_scalar."""
+    del layout  # both layouts drive the same (metadata) path; kept for call-site readability
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual_global, slot_idx=slot_idx)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        kv_cache, tt_input, slot_t, kv_t, layer_idx=layer_idx, num_layers=num_layers, cluster_axis=cluster_axis
+    )
+    ttnn.deallocate(slot_t)
+    ttnn.deallocate(kv_t)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
@@ -299,14 +339,16 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             )
             # Exact reference: the input read back in natural order (same encode/decode as the cache).
             expected[(u, l)] = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            _update_kv(
                 kv_cache,
                 tt_input,
                 slot_idx=u,
+                kv_actual_global=0,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
                 cluster_axis=sp_axis,
+                layout=layout,
+                mesh_device=mesh_device,
             )
 
     ttnn.synchronize_device(mesh_device)
@@ -508,14 +550,16 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                 # scatter its valid rows into the natural-order reference.
                 inp_rb = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
                 expected[(u, l)][flat_t[valid_rows]] = inp_rb[valid_rows]
-                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                _update_kv(
                     kv_cache,
                     tt_input,
                     slot_idx=u,
+                    kv_actual_global=kv_actual,
                     layer_idx=l,
                     num_layers=num_layers,
-                    kv_actual_global=kv_actual,
                     cluster_axis=sp_axis,
+                    layout=layout,
+                    mesh_device=mesh_device,
                 )
         kv_actual = valid_end
 
@@ -554,3 +598,176 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
             logger.info(f"  user {u} layer {l}: exact match")
 
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layout):
+    """The per-element-tensor (traceable) path and the scalar path must produce bit-identical caches.
+
+    Drives the traceable path from two 1-element uint32 DRAM tensors (slot_idx, kv_actual_global)
+    that the writer reads on-device, and compares the written cache against the same write done via
+    the original scalar signature. Exact equality (the op is a pure copy and both paths run the
+    identical writer math) over a couple of (slot, start) chunks."""
+    if dtype == ttnn.fp8_e4m3 and not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    num_users, num_layers = 2, 2
+    new_isl_tiles_per_dev = 4
+    cache_tokens_per_dev = 512
+    chunk_local = new_isl_tiles_per_dev * tile  # per-device new tokens
+    chunk_global = chunk_local * sp  # one global chunk
+    cache_global = cache_tokens_per_dev * sp
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2  # split the chunk across sp devices
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    mesh_device.enable_program_cache()
+
+    # (slot, layer, actual_start). Fix layer_idx=0 across cases so every metadata call hits — and must
+    # REUSE — the same cached program; vary (slot, start): two chunk-aligned starts plus one NON-slab-
+    # aligned start (chunk_global + one tile, so boundary chip 0 writes at a whole-tile offset while the
+    # other chips stay on the slab base — the boundary-straddling write otherwise only exercised on the
+    # scalar path). All fit the cache (4 chunks per slot). Program reuse is asserted after the loop.
+    cases = [(0, 0, 0), (1, 0, chunk_global), (0, 0, chunk_global + tile)]
+    entries_after_first = None
+
+    torch.manual_seed(0)
+    for slot_id, layer_idx, actual_start in cases:
+        # 1) The two per-element metadata tensors the traceable path reads on-device.
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=actual_start, slot_idx=slot_id)
+
+        # 2) One shared KV input slab, and two identical freshly-zeroed caches.
+        slab = torch.randn(chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16).reshape(1, 1, chunk_global, KVPE_HEAD_DIM)
+        tt_input = _make_input(
+            slab,
+            dtype,
+            layout,
+            mesh_device,
+            ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+        )
+
+        def _fresh_cache():
+            return init_kvpe_cache(
+                kvpe_cache_head_dim=KVPE_HEAD_DIM,
+                mesh_device=mesh_device,
+                seq_len=cache_global,
+                mesh_shape=list(mesh_device.shape),
+                sp_axis=sp_axis,
+                num_kvpe_cache_layers=num_users * num_layers,
+                dtype=dtype,
+                layout=layout,
+            )
+
+        cache_meta = _fresh_cache()
+        cache_scalar = _fresh_cache()
+
+        # 3) Per-element-tensor path: slot_idx/kv_actual_global read on-device from slot_t/kv_t.
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache_meta,
+            tt_input,
+            slot_t,
+            kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+        )
+        # 4) Scalar path: original signature with host scalars.
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache_scalar,
+            tt_input,
+            slot_idx=slot_id,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=actual_start,
+            cluster_axis=sp_axis,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        # Compare only the VALID WRITTEN region (the chunk just written), not the whole cache: the
+        # unwritten / aligned ROW_MAJOR page-padding cells are uninitialized and read back as
+        # dtype-dependent garbage (e.g. NaN for bf16) that differs between the two separate cache
+        # allocations — exactly what the existing single/multi-iteration tests sidestep. Both paths
+        # run the identical writer with the same slot/offset, so the written region must byte-match.
+        batch_idx = slot_id * num_layers + layer_idx
+        # Per-chip write offset (tokens): chips before the boundary chip advance a full slab, the boundary
+        # chip advances by its whole-tile pad offset, chips after it stay on the slab base. Chunk-aligned
+        # starts make this uniform; the non-slab case makes it differ per chip (boundary chip straddles).
+        # Mirrors the writer's update_idxt so we extract exactly the cells that were written.
+        boundary_slab = actual_start // chunk_global
+        boundary_chip = (actual_start // chunk_local) % sp
+        boundary_offset = actual_start % chunk_local
+
+        def _local_start_row(c):
+            if c < boundary_chip:
+                return (boundary_slab + 1) * chunk_local
+            if c == boundary_chip:
+                return boundary_slab * chunk_local + boundary_offset
+            return boundary_slab * chunk_local
+
+        def _written_slab(cache):
+            host = ttnn.to_torch(cache, mesh_composer=composer).to(torch.float32)[:, :1, :, :]
+            return torch.cat(
+                [
+                    host[
+                        batch_idx,
+                        0,
+                        c * cache_tokens_per_dev
+                        + _local_start_row(c) : c * cache_tokens_per_dev
+                        + _local_start_row(c)
+                        + chunk_local,
+                        :,
+                    ]
+                    for c in range(sp)
+                ],
+                dim=0,
+            )
+
+        meta_slab = _written_slab(cache_meta)
+        scalar_slab = _written_slab(cache_scalar)
+        assert torch.equal(meta_slab, scalar_slab), (
+            f"slot {slot_id} layer {layer_idx} start {actual_start}: per-element-tensor-path written slab differs "
+            f"from scalar-path (max abs diff {(meta_slab - scalar_slab).abs().max().item()})"
+        )
+        logger.success(
+            f"[{dtype}] slot {slot_id} layer {layer_idx} start {actual_start}: "
+            f"per-element-tensor path == scalar path (bit-exact)"
+        )
+        # After the first case both programs (metadata + scalar, at layer 0) are compiled; capture the
+        # count so we can assert no further growth across the remaining (varied slot/start, same layer)
+        # cases — including the non-slab-aligned one.
+        if entries_after_first is None:
+            entries_after_first = mesh_device.num_program_cache_entries()
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+        ttnn.deallocate(tt_input)
+
+    # The PR's core property: slot_idx / kv_actual_global are read on-device (never hashed), so successive
+    # metadata-tensor calls at the same layer — including the non-slab-aligned one — reuse the one cached
+    # metadata program (and the one scalar-path program) instead of recompiling per chunk.
+    assert mesh_device.num_program_cache_entries() == entries_after_first, (
+        f"program cache grew across metadata-tensor calls at a fixed layer — the metadata and scalar "
+        f"programs should each compile once and be reused: {entries_after_first} -> "
+        f"{mesh_device.num_program_cache_entries()}"
+    )
+    logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} metadata-path chunks")

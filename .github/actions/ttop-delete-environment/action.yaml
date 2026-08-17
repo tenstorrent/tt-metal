@@ -22,10 +22,11 @@ runs:
   using: 'composite'
   steps:
     - name: Delete Environment
-      uses: ./.github/actions/ttop-await-resource
-      with:
-        namespace: ${{ inputs.namespace }}
-        resource: helmrelease/${{ inputs.environmentName }}
-        mode: delete
-        timeoutSeconds: ${{ inputs.timeoutSeconds }}
-        retries: ${{ inputs.retries }}
+      shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: helmrelease/${{ inputs.environmentName }}
+        MODE: delete
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"

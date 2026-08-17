@@ -63,6 +63,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
+    {"gelu_accurate", {{"SFPU_OP_CHAIN_0", "gelu_tile_init<false>(); gelu_tile<false>(0);"}}},
     {"sqrt", {{"SFPU_OP_CHAIN_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
     {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
     {"silu", {{"SFPU_OP_CHAIN_0", "silu_tile_init(); silu_tile(0);"}}},
@@ -145,6 +146,12 @@ float sfpu_function(const std::string& op_name, float input) {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
         auto x3 = input * input * input;
         return input * 0.5 * (1.0 + tanhf(alpha * (input + 0.044715 * x3)));
+    }
+    if (op_name == "gelu_accurate") {
+        // In double: erf(x/sqrt(2)) tends to -1 in the negative tail, so 1 + erf cancels. Computed
+        // in float the golden is already 1.8% off at x = -4.84, past this op's 1% rtol.
+        const double x = input;
+        return static_cast<float>(0.5 * x * (1.0 + erf(x * M_SQRT1_2)));
     }
     if (op_name == "sqrt") {
         return sqrtf(input);
@@ -289,6 +296,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
+    if (op_name == "gelu_accurate") {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed);
+    }
     if ((op_name == "eqz") || (op_name == "nez") || (op_name == "ltz") || (op_name == "gtz") || (op_name == "gez") ||
         (op_name == "lez")) {
         // Include exact zeros so the eqz/nez/lez/gez at-zero branches are exercised.
@@ -367,6 +377,9 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
     }
     if ((op_name == "gelu") || (op_name == "relu")) {
         return {0.15f, 0.001f};
+    }
+    if (op_name == "gelu_accurate") {
+        return {0.01f, 0.001f};
     }
     if (op_name == "exponential") {
         // 16-bit Dest runs the approximate (HW LUT) exp; 32-bit Dest runs the fp32-accurate
@@ -625,8 +638,7 @@ struct SfpuConfig {
     std::string sfpu_op;
     bool approx_mode = true;
     bool dst_full_sync_en = true;      // SyncFull by default (matches today's implicit behavior)
-    bool unpack_to_dest_fp32 = false;  // Quasar Float32 path; default false keeps the bf16 path byte-identical
-    bool unpack_to_dest_en = false;  // explicit unpack-to-dest without forcing fp32 (e.g. 16-bit unpack-to-dest)
+    bool unpack_to_dest = false;       // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
 };
 
@@ -749,10 +761,10 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     experimental::ComputeHardwareConfig compute_hw_config;
     experimental::ComputeUnpackModes unpack_modes{};
-    if (test_config.unpack_to_dest_fp32) {
+    if (test_config.unpack_to_dest) {
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
-    const bool fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32;
+    const bool fp32_dest_acc_en = test_config.en_32bit_dest;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .sfpu_precision_mode =
@@ -760,7 +772,6 @@ std::vector<uint32_t> run_sfpu_pipeline(
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
             .unpack_modes = unpack_modes,
-            .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
@@ -1469,7 +1480,7 @@ bool run_sfpu_typecast(
         .l1_output_data_format = out_fmt,
         .cores = CoreRangeSet({core_range}),
         .approx_mode = false,
-        .unpack_to_dest_fp32 = unpack_to_dest,
+        .unpack_to_dest = unpack_to_dest,
         .en_32bit_dest = fp32_dest_acc,
     };
 
@@ -1496,7 +1507,8 @@ void run_quasar_sfpu_unpack_to_dest_fp32(
         .sfpu_op = sfpu_op,
         .approx_mode = false,
         .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_fp32 = true,
+        .unpack_to_dest = true,
+        .en_32bit_dest = true,
     };
     log_info(
         tt::LogTest, "Quasar SFPU FP32: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
@@ -1519,7 +1531,7 @@ void run_quasar_sfpu_unpack_to_dest_16b(
         .sfpu_op = sfpu_op,
         .approx_mode = false,
         .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_en = true,  // 16-bit operand unpack-to-dest via the explicit flag (fp32_dest_acc_en stays false)
+        .unpack_to_dest = true,  // 16-bit operand unpack-to-dest (fp32_dest_acc_en stays false)
     };
     log_info(
         tt::LogTest, "Quasar SFPU 16b->DEST: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
@@ -1556,8 +1568,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         .sfpu_op = sfpu_op,
         .approx_mode = false};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 
@@ -1589,6 +1601,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "gelu_accurate"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "silu"),
@@ -1601,6 +1614,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "gelu_accurate"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "silu"),
@@ -1640,8 +1654,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
         .sfpu_op = sfpu_op,
         .approx_mode = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -1699,8 +1713,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCo
         .approx_mode = false,
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 
@@ -1718,6 +1732,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "gelu_accurate"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "silu"),
@@ -1729,6 +1744,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "gelu_accurate"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "silu"),
@@ -1768,8 +1784,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
         .approx_mode = true,
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -1840,8 +1856,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
         .sfpu_op = sfpu_op,
         .approx_mode = false};
     log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(device, test_config));
     }
 }
 
@@ -1887,8 +1903,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture, TensixSfpuTern
         .sfpu_op = sfpu_op,
         .approx_mode = false};
     log_info(tt::LogTest, "Testing ternary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_ternary_three_input_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_ternary_three_input_buffer(device, test_config));
     }
 }
 
@@ -1912,8 +1928,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
-    // 16-bit operand explicitly unpack_to_dest_en, impossible before the
-    // unpack-to-dest decision was decoupled from 32-bit format.
+    // 16-bit operand explicitly unpacked to Dest
     for (const bool dst_full_sync_en : {true, false}) {
         for (uint32_t num_tiles : {1u, 4u}) {
             log_info(
@@ -1961,8 +1976,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
         "Testing typecast {} -> {}",
         unit_tests::sfpu_util::typecast_device_format_name(in_fmt),
         unit_tests::sfpu_util::typecast_device_format_name(out_fmt));
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(devices_.at(id), in_fmt, out_fmt, 1));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(device, in_fmt, out_fmt, 1));
     }
 }
 

@@ -126,6 +126,21 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
+      - name: Publish Parquet from CSVs
+        if: always() && hashFiles('tt_metal/tt-llk/perf_data/**/*.csv') != ''
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          PIPELINE: ${{ github.event_name == 'schedule' && 'nightly' || 'PR' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 -m helpers.perf.publish_run \
+            --csv-dir ../../perf_data \
+            --out ../../perf_data/run-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.parquet \
+            --arch ${{ env.CHIP_ARCH }}
+
       - name: Zip performance data
         if: always() && hashFiles('tt_metal/tt-llk/perf_data/**') != ''
         shell: bash

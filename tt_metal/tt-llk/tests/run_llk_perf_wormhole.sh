@@ -5,11 +5,8 @@
 # Wormhole LLK perf runner, shared by the 5 wh matrix groups in
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
-# Standard pytest-split sharding: compile this shard's items (producer),
-# then measure them (consumer) -- one invocation each over the whole perf
-# suite. The Blackhole runner (run_llk_perf_blackhole.sh) additionally
-# slice-packs oversized files and resets the board per slice; Wormhole
-# needs neither.
+# pytest-split sharding: compile this shard's items (producer), then measure
+# them (consumer) -- one invocation each over the whole perf suite.
 #
 # Usage: run_llk_perf_wormhole.sh <group> <n_groups>
 set -euo pipefail

@@ -102,6 +102,12 @@ class _LoRAPipelineMixin:
                 "load_torch_state_dict when drift becomes material."
             )
 
+    @classmethod
+    def create_pipeline(cls, **kwargs):
+        # The base factory defaults lora_enabled=False; runtime LoRA needs it on.
+        kwargs.setdefault("lora_enabled", True)
+        return super().create_pipeline(**kwargs)
+
     def _prepare_transformer(self, idx: int):
         """Re-apply any active LoRA delta after the transformer is reloaded.
 
@@ -256,16 +262,6 @@ class _LoRAPipelineMixin:
 class WanPipelineRuntimeLoRA(_LoRAPipelineMixin, WanPipeline):
     """T2V pipeline with runtime LoRA support."""
 
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineRuntimeLoRA, **kwargs)
-
 
 class WanPipelineI2VRuntimeLoRA(_LoRAPipelineMixin, WanPipelineI2V):
     """I2V pipeline with runtime LoRA support."""
-
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineI2VRuntimeLoRA, **kwargs)

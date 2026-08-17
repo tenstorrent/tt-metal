@@ -4,4 +4,4 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>

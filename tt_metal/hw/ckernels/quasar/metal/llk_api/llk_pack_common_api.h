@@ -11,6 +11,11 @@
 #include "llk_defs.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+namespace llk_pack_detail {
+template <auto...>
+inline constexpr bool always_false_v = false;
+}  // namespace llk_pack_detail
+
 /*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
@@ -43,20 +48,22 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
         }
 
         // TODO: with multiple TCs are there multiple descriptors?
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = get_local_dfb_interface(i).tc_slots[0].base_addr;
-        bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
-        bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-        bd_val.f.y_dim = pack_tile_face_r_dim[i];
-        bd_val.f.z_dim = pack_tile_num_faces[i];
+        // Same HW z_dim rule as the unpack side (see llk_unpack_hw_configure): 4 for a full 2x2 face
+        // grid, 1 otherwise, so a tiny tile is one HW tile per face, which is the granularity
+        // _llk_pack_ scales its L1 and dest tile indices to. Set using construct_tdma_desc helper.
+        const ckernel::TensorShape tensor_shape = get_output_tensor_shape(i);
+        const tdma_descriptor_t bd_td_val = ckernel::trisc::construct_tdma_desc(
+            tensor_shape,
+            get_local_dfb_interface(i).tc_slots[0].base_addr,
+            static_cast<std::uint8_t>(l1_data_format),
+            i,
+            pack_src_format[i]);
 
-        ckernel::trisc::validate_buffer_desc<ckernel::trisc::L1AccessMode::Continuous>(bd_val);
-        ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
+        ckernel::trisc::_configure_buf_desc_table_(i, bd_td_val.buf_desc);
     }
 
     tdma_descriptor_t td_val;
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
-
     _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(td_val, ckernel::ReluConfig::none());
 }
 
@@ -88,16 +95,21 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  * @brief Clears the data valid for destination register after Packer 0 is done packing
  * and zeroes out the dest bank(s) used by packer 0
  *
- * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
- * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
+ * @tparam DST: Destination register banking mode: SyncHalf = double banked (math/pack overlap), SyncFull = one bank
+ *(serialized)
+ * @tparam EN_32BIT_DEST: flag to show if Destination register is set to 32-bit mode
  *
  * @warning SYNC SCHEME: dest-dvalid. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  **/
-template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
+template <DstSync DST, bool EN_32BIT_DEST>
 inline void llk_pack_dest_dvalid_section_done() {
-    _llk_pack_dest_dvalid_section_done_<DST, IS_FP32_MATH_DEST_EN>();
+    static_assert(
+        llk_pack_detail::always_false_v<DST, EN_32BIT_DEST>,
+        "llk_pack_dest_dvalid_section_done belongs to the dest-dvalid sync scheme, should not be mixed with "
+        "semaphores which are currently used in tt-metal.");
+    _llk_pack_dest_dvalid_section_done_<DST, EN_32BIT_DEST>();
 }
 
 /**

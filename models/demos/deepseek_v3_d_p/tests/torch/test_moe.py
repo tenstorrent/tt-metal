@@ -37,17 +37,37 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 
 
+def test_compute_constants_reserves_local_expert_tile_padding():
+    """A raw 256-token budget needs 736 rows when it spans 16 experts."""
+    experts_per_chip, _, dispatch_buffer_rows, max_tokens_per_expert = compute_constants(
+        seq_len_per_chip=64,
+        num_routed_experts=64,
+        num_experts_per_tok=1,
+        num_devices=4,
+        dispatch_group_size=4,
+        dispatch_buffer_capacity_factor=1,
+    )
+
+    assert experts_per_chip == 16
+    assert max_tokens_per_expert == 256
+    assert dispatch_buffer_rows == 736
+
+
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
+#
+# routed_emb_dim / shared_hidden_dim are the Kimi-K3 LatentMoE knobs; None means "same as
+# emb_dim / hidden_dim", i.e. the plain non-latent MoE every other variant uses.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor, use_gate, model_id, layer_idx",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor, use_gate, model_id, layer_idx, routed_emb_dim, shared_hidden_dim",
     [
         # fmt: off
-        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, id="random-weights"),
-        pytest.param(32, 224, 64, 256, 8, 4, 8, True, None, None, id="random-weights-gate"),
-        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,8,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
+        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, None, None, id="random-weights"),
+        pytest.param(32, 224, 64, 256, 8, 4, 8, True, None, None, None, None, id="random-weights-gate"),
+        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,8,False,"deepseek-ai/DeepSeek-V3",3,None,None,id="hf-weights",marks=pytest.mark.slow,
         ),
+        pytest.param(32, 256, 96, 64, 16, 4, 16, False, None, None, 128, 192, id="k3-latent-moe"),
         # fmt: on
     ],
 )
@@ -62,6 +82,8 @@ def test_moe(
     use_gate,
     model_id,
     layer_idx,
+    routed_emb_dim,
+    shared_hidden_dim,
 ):
     """
     Test TorchMoe module with and without integrated gate.
@@ -73,8 +95,16 @@ def test_moe(
     torch.manual_seed(42)
     use_hf_weights = model_id is not None
 
+    # LatentMoE resolution, mirroring TorchMoe's own defaulting.
+    routed_emb = emb_dim if routed_emb_dim is None else routed_emb_dim
+    shared_hidden = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
+    use_latent = routed_emb != emb_dim
+    assert not (use_latent and use_hf_weights), "LatentMoE weights cannot come from a DeepSeek HF checkpoint"
+
     logger.debug(f"\n{'='*60}")
     label = "HF Weights" if use_hf_weights else ("Gate" if use_gate else "Random Weights")
+    if use_latent:
+        label += f" + LatentMoE({emb_dim}->{routed_emb})"
     logger.debug(f"TorchMoe Test ({label})")
     if use_hf_weights:
         logger.debug(f"Model: {model_id}, Layer: {layer_idx}")
@@ -109,12 +139,25 @@ def test_moe(
         gate_weights_dict = None
     else:
         logger.debug("Creating random weights for experts...")
-        routed_expert_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
-        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
+        # Routed experts live at the (possibly reduced) latent width; the shared expert stays at the
+        # full emb_dim with its own intermediate.
+        routed_expert_weights = create_torch_expert_weights(num_routed_experts, routed_emb, hidden_dim)
+        shared_expert_weights = create_shared_expert_weights(emb_dim, shared_hidden)
         if use_gate:
             gate_weights_dict = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32)
         else:
             gate_weights_dict = None
+
+    # LatentMoE projections: emb_dim -> latent before dispatch, latent -> emb_dim after the reduce.
+    latent_weights = (
+        {
+            "down_proj": torch.randn(routed_emb, emb_dim, dtype=torch.float32) * 0.02,
+            "up_proj": torch.randn(emb_dim, routed_emb, dtype=torch.float32) * 0.02,
+            "norm": torch.ones(routed_emb, dtype=torch.float32),
+        }
+        if use_latent
+        else None
+    )
 
     # Prepare gate inputs (pre-computed weights/indices) when not using gate
     if not use_gate:
@@ -157,6 +200,9 @@ def test_moe(
         routed_expert_weights=routed_expert_weights,
         shared_expert_weights=shared_expert_weights,
         gate_weights=gate_weights_dict,
+        routed_emb_dim=routed_emb_dim,
+        shared_hidden_dim=shared_hidden_dim,
+        latent_weights=latent_weights,
     )
 
     if use_hf_weights:
@@ -195,18 +241,31 @@ def test_moe(
     logger.debug(f"  combined_output: {intermediates.combined_output.shape}")
     logger.debug(f"  routed_output: {intermediates.routed_output.shape}")
 
+    # The dispatch buffer carries routed-side rows: latent width when LatentMoE is on, which is the
+    # whole point (half the row width halves the fabric bytes per dispatched token).
     assert intermediates.dispatched_buffer.shape == (
         1,
         dispatch_group_size,
         max_dispatch_buffer_token_size,
-        emb_dim,
+        routed_emb,
     )
+    if use_latent:
+        assert moe.use_latent_moe, "routed_emb_dim was set but TorchMoe did not take the latent path"
+        assert intermediates.latent_input.shape[-1] == routed_emb
+        assert intermediates.latent_routed_output.shape[-1] == routed_emb
+        assert intermediates.combined_output.shape[-1] == routed_emb
+        # ...while the block's own input/output contract is unchanged at the full width.
+        assert intermediates.routed_output.shape[-1] == emb_dim
+        assert intermediates.shared_output.shape[-1] == emb_dim
+    else:
+        assert not moe.use_latent_moe
+        assert intermediates.latent_input is None and intermediates.latent_routed_output is None
     assert intermediates.shared_output.shape == (dispatch_group_size, seq_len_per_chip, emb_dim)
     assert intermediates.combined_output.shape == (
         dispatch_group_size,
         seq_len_per_chip,
         num_experts_per_tok,
-        emb_dim,
+        routed_emb,
     )
     assert intermediates.routed_output.shape == (dispatch_group_size, seq_len_per_chip, emb_dim)
 

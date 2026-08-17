@@ -34,6 +34,9 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     reduction/generic/generic_reductions.hpp
     to_device/to_device.hpp
     typecast/typecast.hpp
+    padded_slice/padded_slice.hpp
+    slice_write/slice_write.hpp
+    op_slicing/op_slicing.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -70,6 +73,21 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     slice/device/slice_program_factory_rm.cpp
     slice/device/slice_program_factory_rm_sharded.cpp
     slice/device/slice_program_factory_rm_stride.cpp
+    # padded_slice (RM Metal-2 port; used by conv2d DRAM slicing on Quasar)
+    padded_slice/padded_slice.cpp
+    padded_slice/device/padded_slice_device_operation.cpp
+    padded_slice/device/padded_slice_utils.cpp
+    padded_slice/device/padded_slice_rm_program_factory.cpp
+    padded_slice/device/padded_slice_tile_program_factory.cpp
+    # slice_write (RM sharded-input Metal-2 port; conv2d DRAM slice write-back on Quasar)
+    slice_write/slice_write.cpp
+    slice_write/device/slice_write_device_operation.cpp
+    slice_write/device/slice_write_rm_sharded_input_program_factory.cpp
+    slice_write/device/slice_write_rm_interleaved_program_factory.cpp
+    slice_write/device/slice_write_tiled_sharded_input_program_factory.cpp
+    # op_slicing (quasar fork of the conv2d DRAM output-height-slicing driver; routes per-slice
+    # padded_slice / slice_write unconditionally through the quasar Metal-2 ops)
+    op_slicing/op_slicing.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
     # transpose
@@ -151,7 +169,9 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     reshape_view/reshape_common.cpp
     reshape_view/device/reshape_device_operation.cpp
     reshape_view/device/reshape_rm_program_factory.cpp
+    reshape_view/device/reshape_rm_metal2_program_factory.cpp
     reshape_view/device/reshape_tiled_program_factory.cpp
+    reshape_view/device/reshape_tiled_metal2_program_factory.cpp
     # untilize
     untilize/untilize.cpp
     untilize/device/untilize_device_operation.cpp
@@ -213,6 +233,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     reshard/reshard_nanobind.cpp
     pool_generic/generic_pools_nanobind.cpp
     conv2d/conv2d_nanobind.cpp
+    padded_slice/padded_slice_nanobind.cpp
+    slice_write/slice_write_nanobind.cpp
     matmul/matmul_nanobind.cpp
     binary/binary_nanobind.cpp
     fold/fold_nanobind.cpp
@@ -223,4 +245,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     to_layout/to_layout_nanobind.cpp
     reallocate/reallocate_nanobind.cpp
     to_device/to_device_nanobind.cpp
+    typecast/typecast_nanobind.cpp
+    sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
+    interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
 )

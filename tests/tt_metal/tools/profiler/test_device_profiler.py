@@ -1119,21 +1119,34 @@ def test_timestamped_events():
         for E in BH_ERISC_COUNTS:
             BH_COMBO_COUNTS.append((T, E))
 
+    # Quasar's profiler is L1-only, the buffer fills and remaining markers are dropped, only the
+    # iterations that fit are captured. Each iteration writes 10 words (zone start + TS_DATA +
+    # TS_EVENT + zone end), so (PROFILER_L1_VECTOR_SIZE - CUSTOM_MARKERS) / 10 = 500 / 10 = 50
+    # iterations per risc, each contributing two event markers.
+    QUASAR_RISC_COUNT = 6 + 4 * 4  # DM2-7 + Neo0-3 * TRISC0-3
+    QUASAR_ITER_COUNT = 50
+    QUASAR_EVENTS_PER_ITER = 2  # DeviceTimestampedData + DeviceRecordEvent
+
     REF_COUNT_DICT = {
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+        # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
+        "quasar": [2 * QUASAR_RISC_COUNT * QUASAR_ITER_COUNT * QUASAR_EVENTS_PER_ITER],
     }
     REF_ERISC_COUNT = {
         "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
         "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
+    TEST_BIN_DICT = {
+        "wormhole_b0": "build/test/tt_metal/tools/profiler/test_timestamped_events",
+        "blackhole": "build/test/tt_metal/tools/profiler/test_timestamped_events",
+        "quasar": "build/programming_examples/profiler/test_timestamped_events",
+    }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(
-        testName="build/test/tt_metal/tools/profiler/test_timestamped_events", setupAutoExtract=True
-    )
+    devicesData = run_device_profiler_test(testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME], setupAutoExtract=True)
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(
@@ -1186,7 +1199,22 @@ def test_noc_event_profiler():
 
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
-        assert len(noc_trace_data) == 8
+        # Zone-marker entries carry no "type" key, so default it rather than indexing.
+        event_types = [event.get("type", "") for event in noc_trace_data]
+
+        # The example kernel's read and write are what NPE consumes; they must always be traced.
+        assert "READ" in event_types, f"missing READ event: {event_types}"
+        assert "WRITE_" in event_types, f"missing WRITE_ event: {event_types}"
+
+        # Barrier/flush/semaphore/inline-write events serve only the NOC debug tool and are compiled out of plain
+        # NOC tracing (see KernelProfilerNocEventMetadata::isDebugOnlyEventType), so the kernel's two barriers
+        # contribute nothing here. That is why this count is 4 (2 zone markers + READ + WRITE_) and not 8.
+        # Debug-mode coverage lives in the C++ unit_tests_noc_debugging suite instead: enabling
+        # TT_METAL_NOC_DEBUG_DUMP routes events into NOCDebugState and no noc trace JSON is written at all.
+        assert not any(
+            "BARRIER" in event_type for event_type in event_types
+        ), f"plain NOC tracing must not record barrier events, got: {event_types}"
+        assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
 
 
 @skip_for_blackhole()
