@@ -4,10 +4,11 @@ Goal: implement the DFlash drafter Muse-Glimmer-30B ships with, and win decode
 t/s/u at batch 1.  The model card advertises **3.1× on an RTX 5090** (74.9 →
 233.4 tok/s) from this feature, and no stage of the original bring-up ported it.
 
-Status: **end to end on device and 3.3× faster than the first working run, but
-still 0.30× of non-speculative decode.**  12.91 t/s/u against a 42.90 t/s/u
-baseline at ISL 67 / OSL 128.  The drafter is no longer the bottleneck; the
-verify forward is, and F9 gives the arithmetic and the remaining design.
+Status: **end to end on device and 5.5× faster than the first working run, but
+still 0.47× of non-speculative decode.**  19.95 t/s/u against a 42.88 t/s/u
+baseline at ISL 67 / OSL 128, warm program cache.  The drafter is no longer the
+bottleneck — the verify forward is 68 % of the iteration.  F9 has the arithmetic,
+and F11 records an attempt at the fix that is scaffolded but not yet working.
 
 ---
 
@@ -359,7 +360,53 @@ a 64-aligned restart plus sliding-tail threading, bounded by re-forwarding at mo
 both O(delta) and one program; (3) acceptance, which at 2.10 matches per block of 15
 is the largest untouched multiplier and is not explained by drafter fidelity (F8).
 
-### F10 — Tooling traps that silently corrupt DFlash measurements
+### F10 — The aligned-restart verify: scaffolded, and failing two ways
+
+Attempted, behind `--verify aligned` / `DFlashRunner(aligned_verify=True)`, and left
+**off by default**.  Recorded in detail because the hard part turned out not to be
+the part everyone expects, and the next attempt should not re-derive it.
+
+**Both supposed blockers are already solved in the port.**  The
+`first working end-to-end run` commit lists two reasons the verify starts at 0:
+`paged_fill_cache` writing from virtual block 0, and sliding layers refusing
+`start_pos > 0` without a K/V tail.  Neither needs new machinery:
+
+* `FunctionalDecoder._chunk_page_table` already shifts the page-table row by
+  `start_pos / block_size` and enforces the alignment.
+* A sliding tail is a contiguous run of K/V rows, so **the tail for an earlier
+  position is a prefix of the tail already held** — exactly what
+  `trim_sliding_tails` produces.  The commit's objection, that `prefill_forward`
+  emits its tail at the call's *end* while the next verify restarts earlier, is
+  therefore not an obstacle: trim it back.
+* The chunked-SDPA offset constraint is handled too — `chunked_q` is halved until it
+  divides `start_pos`, and q/k chunk sizes are set together.
+
+**Failure 1: it is slower.**  39 of the target's 52 layers are `sliding_attention`,
+so a per-iteration trim is **78 device slices** plus 39 tail concats, and verify went
+**106.8 → 157 ms** per iteration: the bookkeeping costs more than the shorter forward
+saves.  The cause is that `prefill_forward` *consumes* the tail it is handed, so a
+fresh trim is needed every call.  The fix is a borrow mode that neither frees the
+tail nor replaces it, after which the trim is only needed when `aligned_start`
+actually advances — once per 64 tokens instead of every iteration.
+
+**Failure 2: one committed token is wrong.**  Reproducible at OSL 128: the aligned
+path emits two tokens (34302, 14166) where both from-0 and greedy emit one (26382),
+at produced index 32 / absolute position 99, after which the streams re-align.  A
+committed token is always the target's own argmax, so this is wrong *history* in the
+verify forward, not a bad guess by the drafter — and note it is a far sharper gate
+than acceptance rate, which barely moved (2.84 vs 3.05).
+
+Ruled out by inspection, so as not to be re-checked: the chunked-SDPA offset;
+tile-padding garbage entering the tail (always trimmed off, because
+`aligned_start' <= anchor_pos + block`); and rejected candidates inside the tail
+(everything below `aligned_start'` is a prefix token or an accepted candidate, and an
+accepted candidate *is* the committed token, so its K/V is correct).  Not yet
+checked: whether `sliding_kv_tail_len` means `min(window, start_pos)` rows ending at
+`start_pos` in the same sense the trim produces, and the interaction with the
+prompt prefill's own tile padding on the very first verify (prompt 67 → padded 96 →
+trimmed to 64).
+
+### F11 — Tooling traps that silently corrupt DFlash measurements
 
 Four, each of which produced a plausible wrong number rather than an error:
 
@@ -409,11 +456,12 @@ from the snapshot so perf work does not depend on it at all.
 
 In impact order, with the arithmetic in F9:
 
-1. **O(block) verify.**  The only change that can flip DFlash to a win — verify is
-   103 ms of a 72 ms break-even budget, so nothing else can compensate.  Needs a
-   page-table slice to a 64-aligned restart plus sliding-tail threading (deep-copied,
-   since `prefill_forward` consumes its tail and consecutive verifies restart at the
-   same position).  Bounded by re-forwarding at most 63 committed rows.
+1. **Finish the aligned verify** (F10) — the only change that can flip DFlash to a
+   win, since verify is 106.8 ms of a 72.7 ms break-even budget.  The scaffold exists
+   and runs; it needs (a) a borrow mode on `prefill_forward` so the sliding tail is
+   not consumed, which removes 78 slices per iteration, and (b) the one-wrong-token
+   bug found.  Gate it on **token equality with `--verify from-zero`**, not on
+   acceptance rate: the bug moved acceptance by 0.2 and moved tokens outright.
 2. **The drafter's constant-shape floor** — 14.3 ms measured, 120 ms today.  Wants
    the *incremental* cache made shape-stable through in-place writes at fixed
    capacity, so it is O(delta) *and* one program, rather than the bucketed

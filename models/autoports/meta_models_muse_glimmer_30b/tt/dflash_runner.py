@@ -65,6 +65,13 @@ class DFlashStats:
     draft_seconds: float = 0.0
     verify_seconds: float = 0.0
     total_seconds: float = 0.0
+    #: ``draft_seconds`` split up.  Worth separating because the drafter *forward*
+    #: turned out to be a minority of it: the candidate step runs the target's LM head
+    #: over a 202k vocabulary and pulls the result to host for an argmax, which is not
+    #: obviously part of "drafting" but is charged to it.
+    draft_noise_seconds: float = 0.0
+    draft_forward_seconds: float = 0.0
+    draft_candidates_seconds: float = 0.0
 
     @property
     def accepted_per_target_forward(self) -> float:
@@ -92,6 +99,9 @@ class DFlashStats:
             "matches": self.matches,
             "committed": self.committed,
             "draft_seconds": self.draft_seconds,
+            "draft_noise_seconds": self.draft_noise_seconds,
+            "draft_forward_seconds": self.draft_forward_seconds,
+            "draft_candidates_seconds": self.draft_candidates_seconds,
             "verify_seconds": self.verify_seconds,
             "total_seconds": self.total_seconds,
             "ms_per_token": self.ms_per_token,
@@ -113,6 +123,7 @@ class DFlashRunner:
         max_verify_rows: int | None = None,
         padded_drafting: bool = True,
         pad_context: bool = True,
+        aligned_verify: bool = False,
     ) -> None:
         self.generator = generator
         self.model = generator.model
@@ -154,6 +165,44 @@ class DFlashRunner:
         #: changing the attention reduction width and flipping near-tied argmaxes
         #: (would vanish without padding).
         self.pad_context = bool(pad_context)
+        #: Restart the verify forward at the page-block boundary below the anchor,
+        #: threading sliding K/V tails, instead of re-forwarding the whole prefix from 0.
+        #:
+        #: **INCOMPLETE - default off.**  This is the change the arithmetic demands: the
+        #: from-0 verify is 106.8 ms of a 157.6 ms iteration (68 %) against a break-even
+        #: budget of 3.12 tokens x 23.31 ms = 72.7 ms, and it *grows* with the prefix, so
+        #: DFlash gets worse the longer it runs.  The scaffold here works end to end and
+        #: the two constraints people expect to block it do not: ``_chunk_page_table``
+        #: already shifts the page table by ``start_pos / block_size``, and a sliding tail
+        #: for an earlier position is a *prefix* of the one already held, which
+        #: ``trim_sliding_tails`` already produces.  Two measured problems remain:
+        #:
+        #: 1. **It is slower, not faster.**  39 of the target's 52 layers are sliding, so
+        #:    trimming every iteration costs 78 device slices plus 39 tail concats, and
+        #:    verify went 106.8 -> 157 ms/iteration: the tail bookkeeping costs more than
+        #:    the shorter forward saves.  The fix is to stop paying it per iteration --
+        #:    ``prefill_forward`` *consumes* the tail it is handed, which forces a fresh
+        #:    trim every call, so it needs a borrow mode that neither frees the tail nor
+        #:    replaces it.  The trim is then only needed when ``aligned_start`` actually
+        #:    advances, i.e. once per ``page_block_size`` tokens rather than 20x more often.
+        #: 2. **One committed token is wrong**, reproducibly.  At OSL 128 the aligned path
+        #:    emits two tokens (34302, 14166) where from-0 and greedy emit one (26382), at
+        #:    produced index 32 / absolute position 99, after which the streams re-align.
+        #:    Committed tokens are the target's own argmax, so a wrong one means the verify
+        #:    forward saw wrong history, not that the drafter guessed badly. Ruled out by
+        #:    inspection: the chunked-SDPA offset (q and k chunk sizes are both shrunk
+        #:    until they divide ``start_pos``), tile-padding garbage in the tail (always
+        #:    trimmed off, since ``aligned_start' <= anchor_pos + block``), and rejected
+        #:    candidates inside the tail (everything below ``aligned_start'`` is either a
+        #:    prefix token or an accepted candidate, whose K/V is by definition correct).
+        #:
+        #: Reproduce with ``--verify aligned``; the gate is token equality against
+        #: ``--verify from-zero``, which is exact and much sharper than acceptance rate.
+        self.aligned_verify = bool(aligned_verify)
+        #: Absolute position where the sliding K/V tails currently held by the model end,
+        #: or None when none are held.  Tracked here rather than asked of the model
+        #: because the tail's *length* is min(window, end) and so does not reveal it.
+        self._tail_end: int | None = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -285,7 +334,17 @@ class DFlashRunner:
         tt_tokens, _ = model.prefill_tokens_to_device(prompt)
         embedded = model.embed_prefill(tt_tokens)
         ttnn.deallocate(tt_tokens)
-        hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=0)
+        # Retain the tail: the very first verify already restarts at a page boundary
+        # below the prompt length (67 -> 64), so it needs a tail from this call.
+        prompt_padded_rows = int(embedded.shape[2])
+        hidden = model.prefill_forward(
+            embedded,
+            page_table=tt_page_table,
+            user_id=0,
+            start_pos=0,
+            keep_sliding_tails=self.aligned_verify,
+        )
+        self._tail_end = prompt_padded_rows if self.aligned_verify else None
         stats.target_forwards += 1
         # Context for iteration 0 is the whole prompt: positions 0..L-1.
         context_host = self._taps_to_host(prompt_len)
@@ -316,14 +375,26 @@ class DFlashRunner:
             if anchor_pos + block >= model.config.max_seq_len:
                 break
             if anchor_pos + block > self.max_verify_rows:
-                # Guard the O(prefix) verify forward rather than let it quietly become
-                # the dominant cost.  Lifting this needs the aligned-restart tail
-                # threading described at the verify forward below.
+                # Two different reasons to stop here, depending on the path.
+                #
+                # from-0 verify: the forward is O(prefix) and would quietly become the
+                # dominant cost.
+                #
+                # aligned verify: the forward is bounded, but the *tail* is not. Past the
+                # sliding window a retained tail holds [end - window, end), so trimming it
+                # back to an earlier restart point needs rows that were never retained,
+                # and trim_sliding_tails raises rather than approximating. Lifting this
+                # means reconstructing the tail from the paged cache instead of carrying
+                # it forward.
+                detail = (
+                    "the retained sliding tail cannot be trimmed back past the window"
+                    if self.aligned_verify
+                    else "the verify forward re-forwards the whole prefix"
+                )
                 raise NotImplementedError(
-                    f"DFlash verify re-forwards the whole prefix, which is only cheap while it "
-                    f"stays small; position {anchor_pos + block} exceeds max_verify_rows="
-                    f"{self.max_verify_rows}. Thread sliding K/V tails at a page-aligned "
-                    "restart point to make the verify forward O(block)."
+                    f"DFlash verify is bounded to the sliding window: {detail}; position "
+                    f"{anchor_pos + block} exceeds max_verify_rows={self.max_verify_rows}. "
+                    "Reconstruct the sliding tail from the paged cache to go further."
                 )
 
             context_len = int(context_host.shape[1])
@@ -331,7 +402,10 @@ class DFlashRunner:
             noise_positions = torch.arange(anchor_pos, anchor_pos + block)
 
             t0 = time.perf_counter()
+            t_noise = time.perf_counter()
             noise = self._noise_embeds(produced[-1])
+            stats.draft_noise_seconds += time.perf_counter() - t_noise
+            t_forward = time.perf_counter()
             if self.padded_drafting:
                 # The accumulated prefix, padded up to a bucket so the shape is constant.
                 valid = int(accumulated_context.shape[1])
@@ -363,8 +437,11 @@ class DFlashRunner:
                     cache=drafter_cache,
                 )
             ttnn.deallocate(tt_context)
+            stats.draft_forward_seconds += time.perf_counter() - t_forward
+            t_candidates = time.perf_counter()
             candidates = self._candidate_ids(drafter_out)
             ttnn.deallocate(drafter_out)
+            stats.draft_candidates_seconds += time.perf_counter() - t_candidates
             stats.draft_seconds += time.perf_counter() - t0
 
             # ------------------------------------------------------ verify
@@ -378,35 +455,74 @@ class DFlashRunner:
             # 32-row one does, and re-forwarding committed tokens rewrites byte-identical
             # K/V at the same positions.
             t0 = time.perf_counter()
-            # Why start at 0 rather than at the nearest page boundary: a sliding-window
-            # layer refuses ANY start_pos > 0 without the previous call's K/V tail --
+            # Restart the verify forward at the nearest page-block boundary at or below
+            # the anchor, instead of re-forwarding the whole prefix from 0.  Two
+            # constraints have to be met at once, and both already have machinery:
             #
-            #   ValueError: continuation prefill at start_pos=64 on a sliding-window
-            #   layer needs sliding_kv_tail: the previous call's last 64 K/V rows.
+            #  * ``paged_fill_cache`` writes from virtual block 0 of the page table it is
+            #    handed, so ``start_pos`` must be a multiple of the page block size.
+            #    ``FunctionalDecoder._chunk_page_table`` shifts the row by
+            #    ``start_pos / block_size`` and enforces exactly that.
+            #  * A sliding-window layer refuses ``start_pos > 0`` without the previous
+            #    call's K/V tail, because the paged chunked SDPA has no sliding-window
+            #    mask and cannot recover the window from the cache.
             #
-            # and threading that is not a one-liner: prefill_forward consumes its tail
-            # and emits a new one at its *end*, while consecutive verifies restart at the
-            # *same* aligned position and so need the same tail repeatedly.  Starting at
-            # 0 needs no tail, satisfies the page-block rule trivially, and reuses the
-            # well-tested from-scratch prefill path, at the cost of re-forwarding the
-            # whole prefix each iteration.
+            # The tail bookkeeping is what made this look hard: ``prefill_forward``
+            # emits its tail at the *end* of the call, i.e. at ``aligned_start + padded``,
+            # while the next verify restarts *earlier* than that.  But a sliding tail is a
+            # contiguous run of K/V rows, so the tail for an earlier position is a
+            # **prefix** of the one we hold -- exactly what ``trim_sliding_tails`` already
+            # does for tile-padded prompts.  So: keep the tail on every forward, then trim
+            # it back to the next restart point.
             #
-            # COST: this is O(prefix) per iteration, not O(block).  At batch 1 the target
-            # is weight-bandwidth bound, so up to a few hundred rows costs little more
-            # than 32 -- fine for the short-context correctness and acceptance-rate
-            # measurement this drives, and NOT how a production implementation should
-            # work.  ``max_verify_rows`` refuses to pretend otherwise.
-            aligned_start = 0
-            lead = anchor_pos - aligned_start
+            # Re-forwards at most ``page_block_size - 1`` committed rows instead of the
+            # entire prefix, which also rewrites byte-identical K/V at those positions.
+            # Bounded to sequences inside the sliding window: past it the tail holds
+            # ``[end - window, end)`` and the rows an earlier position needs were never
+            # retained, which ``trim_sliding_tails`` raises on rather than approximating.
             full_sequence = prompt + produced
+            if self.aligned_verify:
+                page_block = int(model.config.page_block_size)
+                aligned_start = (anchor_pos // page_block) * page_block
+            else:
+                aligned_start = 0
+            lead = anchor_pos - aligned_start
             verify_ids = full_sequence[aligned_start:anchor_pos] + [produced[-1]] + candidates
             assert len(verify_ids) == lead + block, (len(verify_ids), lead, block)
+
+            # Hand the layers a tail ending exactly at ``aligned_start``;
+            # ``sliding_kv_tail_len(start_pos)`` is ``min(window, start_pos)`` and the
+            # shape check is exact, so an untrimmed tail is rejected outright.
+            continuation = aligned_start > 0
+            if continuation:
+                if self._tail_end is None or self._tail_end < aligned_start:
+                    raise AssertionError(
+                        f"verify needs sliding tails ending at {aligned_start} but holds "
+                        f"{self._tail_end}; every forward must run with keep_sliding_tails=True"
+                    )
+                model.trim_sliding_tails(aligned_start, self._tail_end)
+                self._tail_end = aligned_start
+            else:
+                model.release_sliding_tails()
+                self._tail_end = None
 
             model.arm_hidden_state_taps(self._tap_layers())
             tt_tokens, _ = model.prefill_tokens_to_device(verify_ids)
             embedded = model.embed_prefill(tt_tokens)
             ttnn.deallocate(tt_tokens)
-            hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=aligned_start)
+            # ``prefill_tokens_to_device`` tile-pads, so the forward writes K/V for the
+            # padded length and the tail it retains ends there, not at len(verify_ids).
+            padded_rows = int(embedded.shape[2])
+            hidden = model.prefill_forward(
+                embedded,
+                page_table=tt_page_table,
+                user_id=0,
+                start_pos=aligned_start,
+                continuation=continuation,
+                keep_sliding_tails=self.aligned_verify,
+            )
+            if self.aligned_verify:
+                self._tail_end = aligned_start + padded_rows
             stats.target_forwards += 1
             rows = model.prefill_all_logits(hidden, prompt_len=len(verify_ids))
             all_argmax: list[int] = []

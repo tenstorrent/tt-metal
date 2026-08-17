@@ -65,6 +65,19 @@ def main() -> None:
             "padding, kept as the control isolating padding from the rewrite."
         ),
     )
+    parser.add_argument(
+        "--verify",
+        default="from-zero",
+        choices=["aligned", "from-zero"],
+        help=(
+            "from-zero (default): re-forward the whole prefix, O(prefix) and growing, but "
+            "correct. aligned: restart at the page-block boundary below the anchor, threading "
+            "sliding K/V tails, re-forwarding at most page_block_size-1 committed rows -- "
+            "INCOMPLETE, currently both slower (78 tail slices/iteration beat the shorter "
+            "forward) and wrong by one committed token at OSL 128. Token equality against "
+            "from-zero is the gate; see DFlashRunner.aligned_verify."
+        ),
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -93,6 +106,7 @@ def main() -> None:
             drafter,
             padded_drafting=args.drafting in ("padded", "padded-exact"),
             pad_context=args.drafting == "padded",
+            aligned_verify=args.verify == "aligned",
         )
 
         # ---------------------------------------------------------- DFlash
@@ -147,6 +161,7 @@ def main() -> None:
             "prompt_tokens": len(prompt_ids),
             "drafter_weight_dtype": args.drafter_dtype,
             "drafting": args.drafting,
+            "verify": args.verify,
             "dflash": stats.as_dict(),
             "dflash_token_ids": dflash_tokens,
             "baseline_token_ids": baseline_tokens,
