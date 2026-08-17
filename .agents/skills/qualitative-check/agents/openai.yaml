@@ -1,0 +1,4 @@
+interface:
+  display_name: "Qualitative Check"
+  short_description: "Run prompt-correct model qualitative checks."
+  default_prompt: "Use $qualitative-check to run or review model qualitative checks with the correct Hugging Face prompt format."
