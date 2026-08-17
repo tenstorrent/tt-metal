@@ -27,11 +27,24 @@ tt::tt_metal::experimental::MeshProgramDescriptor make_spmd_mesh_program_descrip
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    return ttnn::prim::generic_op(io_tensors, mesh_program_descriptor);
+    return ttnn::prim::generic_op(
+        io_tensors, ttnn::operations::generic::operation_attributes_t{.program = mesh_program_descriptor});
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     return generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
+}
+
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>& tensor_args) {
+    return ttnn::prim::generic_op(
+        io_tensors,
+        ttnn::operations::generic::operation_attributes_t{
+            .program = ttnn::operations::generic::SpecProgram{
+                .spec = spec, .run_args = run_args, .tensor_arg_indices = tensor_args}});
 }
 
 namespace experimental {
@@ -39,7 +52,8 @@ namespace experimental {
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
+    ttnn::prim::prepare_generic_op(
+        io_tensors, ttnn::operations::generic::operation_attributes_t{.program = mesh_program_descriptor});
 }
 
 void prepare_generic_op(
