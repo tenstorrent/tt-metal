@@ -192,3 +192,99 @@ serving-configuration defect, fixable in the eval invocation. **thinking OFF als
 runs to the cap** → the defect is in the port, not the configuration, and the
 `</think>` character index plus the 12-gram repetition rate distinguish a
 degenerate loop from genuinely long reasoning.
+
+---
+
+## Correction: the model DOES stop. Withdrawing this document's headline claim
+
+Measured 2026-08-17, immediately after the sections above were written. The title
+claim — "the model does not stop" — is **too strong and is withdrawn as a general
+statement.** What the probe found:
+
+### Probe results, thinking mode ON (the default, i.e. the graded condition)
+
+| prompt | budget | result |
+|---|---:|---|
+| "What is 2 + 2? Answer with just the number." | 64 | hit cap, `finish_reason=length` |
+| "Name the capital of France in one word." | 64 | hit cap, `finish_reason=length` |
+| easy physics multiple choice, same `doc_to_text` form | 4096 | **stopped at 1362 tokens** |
+
+The easy physics item is decisive:
+
+```
+finish_reason      : stop
+completion_tokens  : 1362 / 4096
+ends terminal punct: True
+contains 'boxed'   : True
+12-gram repetition : 0.0%
+tail: "...The calculated ground state energy matches option (A).\n\n\boxed{A}"
+```
+
+It reasoned, converged, emitted `\boxed{A}` — **the correct answer** — and stopped on
+its own. So:
+
+- **stop tokens are honoured.** vLLM saw an EOS and ended the request.
+- **the model terminates** on an item of exactly the graded form.
+- **there is no degenerate loop** here: 0% 12-gram repetition, coherent prose.
+
+The two trivial prompts hitting a 64-token cap are fully explained by thinking mode:
+their output is coherent reasoning preamble ("Thinking Process: 1. **Identify the
+user's core question:** ...") at 0% repetition. A 64-token budget simply cannot hold
+a reasoning preamble plus an answer. That observation licenses no conclusion about
+stop-token handling, and the probe's own verdict logic — which printed "stop tokens
+are NOT honoured" — was confounded and has been fixed.
+
+### What survives, as a much narrower question
+
+Still true and still unexplained: **real GPQA Diamond document 1 consumed the entire
+32,768-token budget** (1,887.95 s at 17.8 tok/s). That is no longer "the model cannot
+stop". It is:
+
+> Why does a real Diamond item run past 32,768 tokens when an easy item of the same
+> prompt form converges in 1,362?
+
+Three candidates, in the order I would test them:
+
+1. **Hard items produce genuinely non-convergent reasoning.** Diamond is
+   PhD-level; a thinking model can spiral without reaching `</think>`. A model
+   property, not a port defect — but it makes thinking-mode GPQA unusable at any
+   budget the harness would plausibly grant.
+2. **Degenerate looping specific to hard items.** Distinguished from (1) by the
+   12-gram repetition rate, which was 0% on the easy item.
+3. **Something in the lm-eval path my direct API call does not reproduce.** The
+   probe posts `messages` and lets the server render the template once; lm-eval with
+   `--apply_chat_template` renders client-side and then hands the result to the same
+   chat endpoint. The eval config's own comment asserts "the OpenAI server still
+   performs the only token rendering", but that is an assertion to verify, not a
+   fact I have checked. A doubly-applied template would produce a malformed prompt —
+   plausibly two nested `<think>` openings — which is exactly the kind of thing that
+   would prevent convergence.
+
+### The extended probe now queued
+
+It uses the **actual Diamond rows**, built with the task's verbatim `doc_to_text`.
+Row 0 is almost certainly the graded document 1: it is the two-lifetimes
+energy-resolution physics item ("Two quantum states with energies E1 and E2 have a
+lifetime of 10^-9 sec and 10^-8 sec"), and the retained 256-token sample was severed
+mid-expression at `$\Gamma_2 \approx \frac{\hbar}{` — the linewidth calculation for
+precisely that question.
+
+| case | budget | decides |
+|---|---:|---|
+| trivial, thinking OFF | 128 | does the OFF arm terminate at all |
+| easy physics, thinking OFF | 1024 | OFF arm on a known-good item |
+| **Diamond row 0, thinking OFF** | 4096 | can it answer the hard item at all |
+| **Diamond row 0, thinking ON** | 16384 | reproduce the runaway, measure repetition |
+| Diamond row 1 (organic chem), thinking ON | 16384 | is it domain-specific |
+
+It records `</think>`'s character index, the extracted boxed letter against the gold
+answer, and the repetition rate, and checkpoints its JSON after every case so a
+long-running arm cannot lose the earlier results.
+
+### Why the correction matters beyond bookkeeping
+
+The withdrawn claim would have pointed the next reader at the sampler, the EOS
+configuration, or the port's decode path — and I had already spent time ruling
+those out. The evidence says the port's generation and stop handling are working.
+The remaining problem is about how hard items interact with thinking mode and with
+the harness, which is a different investigation with different owners.
