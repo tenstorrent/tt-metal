@@ -16,6 +16,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
+from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
+from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
+from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
+from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
 from models.tt_transformers.tt.common import (
     Mode,
     calculate_hidden_dim,
@@ -3129,88 +3133,53 @@ class ModelArgs:
     # Name of the marker file dropped into a weight-cache directory once every weight for that
     # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
     # warm-cache detector (#48531) to every tt_transformers e2e model.
-    WEIGHT_CACHE_MARKER = ".weights_complete"
-    # Cache-format version embedded in the marker. Bump this whenever the set/naming/layout of
-    # cached weight tensors changes in a way that an existing cache would not satisfy (e.g. a
-    # weight tensor is added or renamed without changing the layer count), OR when the marker
-    # schema itself changes. A marker written by an older format is rejected -> the run
-    # cold-loads and regenerates the cache, rather than building from a stale/incompatible cache.
-    #   v1: model/n_layers/mesh_shape validation only.
-    #   v2: also embeds a {key: [shape, dtype]} manifest so warm runs can build a dataless
-    #       placeholder state_dict (see placeholder_state_dict) instead of loading HF weights.
-    WEIGHT_CACHE_FORMAT_VERSION = 2
+    # Marker filename and schema version both come from models/common/weight_cache.py -- this
+    # class must not define its own, or the two writers diverge (they previously shared a filename
+    # and version number while encoding mesh_shape incompatibly). See that module for the version
+    # history and what each field guarantees.
+    WEIGHT_CACHE_MARKER = _WC_MARKER
+    WEIGHT_CACHE_FORMAT_VERSION = _WC_FORMAT_VERSION
 
-    def weight_cache_is_complete(self, dtype):
-        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
-        fully built by a previous run and carries a weight manifest.
+    def _weight_cache_identity(self, components=None):
+        """Marker identity for this build. `components` names the parts being constructed, so a
+        text-only seed cannot certify a cache for a build that also needs the vision tower."""
+        return dict(
+            model_name=self.model_name,
+            n_layers=self.n_layers,
+            mesh_shape=tuple(self.mesh_device.shape),
+            components=components,
+        )
+
+    def weight_cache_is_complete(self, dtype, components=None):
+        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape, components)
+        was fully built by a previous run and every tensorbin that build produced is still present.
 
         When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
         state_dict is never read, so the caller can skip the expensive from_pretrained host
-        load entirely (the load that OOMs/hangs during prefill, #48509) without needing the
-        manual --skip-model-load flag. Set TT_TRANSFORMERS_FORCE_MODEL_LOAD=1 to force a fresh
-        load (e.g. to regenerate the cache)."""
-        if os.getenv("TT_TRANSFORMERS_FORCE_MODEL_LOAD") == "1":
-            return False
-        cache_path = self.weight_cache_path(dtype)
-        marker = cache_path / self.WEIGHT_CACHE_MARKER
-        if not marker.is_file():
-            return False
-        try:
-            meta = json.loads(marker.read_text())
-        except (ValueError, OSError):
-            return False
-        # Reject a stale marker: an older cache format, a different model, a different mesh
-        # shape, or a partial (num_layers-limited) build whose cache does not cover the full
-        # model we are about to construct. tt_transformers weight_cache_path (unlike GPT-OSS)
-        # does not encode the mesh shape in the path, so we validate it here. A rejected marker
-        # falls back to a cold load (which regenerates the cache) rather than skipping the load
-        # and crashing on a missing/renamed .tensorbin.
-        if meta.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION:
-            return False
-        if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
-            return False
-        if meta.get("mesh_shape") != str(self.mesh_device.shape):
-            return False
-        # Need the shape/dtype manifest to build the placeholder state_dict for a warm run.
-        if not meta.get("weights"):
-            return False
-        # Belt-and-suspenders: the cache dir must still actually hold tensor files.
-        return any(cache_path.glob("*.tensorbin"))
+        load entirely (the load that OOMs/hangs during prefill, #48509). Set
+        TT_TRANSFORMERS_FORCE_MODEL_LOAD=1 to force a fresh load (e.g. to regenerate the cache).
 
-    def mark_weight_cache_complete(self, dtype, state_dict=None):
-        """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
-        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
+        Delegates to models/common/weight_cache.py so there is a SINGLE marker reader/writer: the
+        two used to encode mesh_shape differently while sharing one filename and format_version,
+        so a model reachable from both (gemma3 inherits this class but its demos call the shared
+        helper) had each side reject the other's marker and cold-load forever. (#45400 review)"""
+        return _weight_cache_is_complete(self.weight_cache_path(dtype), **self._weight_cache_identity(components))
 
-        state_dict (the real, just-loaded weights) is captured as a {key: [shape, dtype]}
-        manifest so a later warm run can reconstruct a dataless placeholder without touching HF."""
-        cache_path = self.weight_cache_path(dtype)
-        marker = cache_path / self.WEIGHT_CACHE_MARKER
-        weights = {}
-        if state_dict is not None:
-            for k, v in state_dict.items():
-                shape = getattr(v, "shape", None)
-                dt = getattr(v, "dtype", None)
-                if shape is None or dt is None:
-                    continue  # skip non-tensor entries
-                weights[k] = [list(shape), str(dt)]
-        try:
-            cache_path.mkdir(parents=True, exist_ok=True)
-            marker.write_text(
-                json.dumps(
-                    {
-                        "format_version": self.WEIGHT_CACHE_FORMAT_VERSION,
-                        "model_name": self.model_name,
-                        "n_layers": self.n_layers,
-                        "dtype": str(dtype),
-                        "mesh_shape": str(self.mesh_device.shape),
-                        "is_moe": bool(getattr(self, "is_mixture_of_experts", False)),
-                        "weights": weights,
-                    }
-                )
-            )
-            logger.info(f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights)")
-        except OSError as e:
-            logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
+    def mark_weight_cache_complete(self, dtype, state_dict=None, components=None):
+        """Record that the ttnn weight cache for this (model, dtype, mesh shape, components) was
+        fully built, so subsequent runs can skip the HF state_dict load.
+
+        state_dict (the real, just-loaded weights) is captured as a {key: [shape, dtype]} manifest
+        so a later warm run can reconstruct a dataless placeholder without touching HF. Must be
+        called AFTER the model is constructed, so the tensorbins exist to be recorded."""
+        if state_dict is None:
+            return
+        _mark_weight_cache_complete(
+            self.weight_cache_path(dtype),
+            state_dict,
+            is_moe=bool(getattr(self, "is_mixture_of_experts", False)),
+            **self._weight_cache_identity(components),
+        )
 
     def placeholder_state_dict(self, dtype):
         """Warm-cache build: return a lazy, dataless stand-in for the HF state_dict.

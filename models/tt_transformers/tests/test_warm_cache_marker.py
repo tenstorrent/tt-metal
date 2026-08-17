@@ -36,6 +36,7 @@ class _FakeArgs:
 
     WEIGHT_CACHE_MARKER = ModelArgs.WEIGHT_CACHE_MARKER
     WEIGHT_CACHE_FORMAT_VERSION = ModelArgs.WEIGHT_CACHE_FORMAT_VERSION
+    _weight_cache_identity = ModelArgs._weight_cache_identity
     weight_cache_is_complete = ModelArgs.weight_cache_is_complete
     mark_weight_cache_complete = ModelArgs.mark_weight_cache_complete
     placeholder_state_dict = ModelArgs.placeholder_state_dict
@@ -68,8 +69,8 @@ def test_cold_cache_is_incomplete(tmp_path):
 
 def test_mark_then_complete_roundtrip(tmp_path):
     args = _FakeArgs(tmp_path)
-    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     _touch_tensorbin(tmp_path)  # a real build writes tensor files alongside the marker
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     assert args.weight_cache_is_complete(DTYPE) is True
 
     # Marker payload includes the shape/dtype manifest.
@@ -84,8 +85,8 @@ def test_mark_then_complete_roundtrip(tmp_path):
 def test_marker_without_manifest_is_incomplete(tmp_path):
     # A marker with no weight manifest (e.g. an old v1-style write) can't back a warm build.
     args = _FakeArgs(tmp_path)
-    args.mark_weight_cache_complete(DTYPE)  # no state_dict -> weights == {}
     _touch_tensorbin(tmp_path)
+    args.mark_weight_cache_complete(DTYPE)  # no state_dict -> weights == {}
     assert args.weight_cache_is_complete(DTYPE) is False
 
 
@@ -98,8 +99,8 @@ def test_marker_without_tensorbin_is_incomplete(tmp_path):
 
 def test_force_env_disables_skip(tmp_path, monkeypatch):
     args = _FakeArgs(tmp_path)
-    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     _touch_tensorbin(tmp_path)
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     assert args.weight_cache_is_complete(DTYPE) is True  # warm...
     monkeypatch.setenv("TT_TRANSFORMERS_FORCE_MODEL_LOAD", "1")
     assert args.weight_cache_is_complete(DTYPE) is False  # ...but forced to cold-load
@@ -117,8 +118,8 @@ def test_force_env_disables_skip(tmp_path, monkeypatch):
 )
 def test_stale_marker_rejected(tmp_path, mutate):
     args = _FakeArgs(tmp_path)
-    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     _touch_tensorbin(tmp_path)
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     marker = tmp_path / ModelArgs.WEIGHT_CACHE_MARKER
     meta = json.loads(marker.read_text())
     meta.update(mutate)
@@ -135,8 +136,8 @@ def test_corrupt_marker_is_incomplete(tmp_path):
 
 def test_placeholder_state_dict_is_dataless_and_falsy(tmp_path):
     args = _FakeArgs(tmp_path)
-    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
     _touch_tensorbin(tmp_path)
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
 
     sd = args.placeholder_state_dict(DTYPE)
     # Falsy so reference-building callers (`if not state_dict`) load real weights instead.
@@ -148,3 +149,133 @@ def test_placeholder_state_dict_is_dataless_and_falsy(tmp_path):
     assert tuple(emb.shape) == (4, 8)
     assert emb.dtype == torch.bfloat16
     assert sd["layers.0.attention.wo.weight"].dtype == torch.float32
+
+
+# ---------------------------------------------------------------------------
+# models/common/weight_cache.py -- the shared helper used by the forked loaders.
+# The tests above bind the tt_transformers ModelArgs methods; these cover the shared
+# module's own behaviour: sidecar capture/rejection, per-file completeness, component
+# matching, atomic publish, and the CachedStateDict contract. (#45400 review)
+# ---------------------------------------------------------------------------
+
+from models.common.weight_cache import (  # noqa: E402
+    HOST_WEIGHTS_SIDECAR,
+    WEIGHT_CACHE_MARKER,
+    CachedStateDict,
+    build_cached_state_dict,
+    mark_weight_cache_complete,
+    normalize_mesh_shape,
+    weight_cache_is_complete,
+)
+
+SHARED_ID = dict(model_name="unit/test-model", n_layers=2, mesh_shape=(1, 8))
+
+
+def _seed(tmp_path, *, components=None, is_host_weight=None, sd=None):
+    """Write a tensorbin then mark the cache complete, mimicking a real cold build."""
+    _touch_tensorbin(tmp_path)
+    mark_weight_cache_complete(
+        tmp_path, sd if sd is not None else SAMPLE_SD, components=components, is_host_weight=is_host_weight, **SHARED_ID
+    )
+
+
+def test_shared_marker_roundtrip(tmp_path):
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
+    _seed(tmp_path)
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is True
+
+
+def test_shared_marker_rejects_missing_tensorbin(tmp_path):
+    """A recorded tensorbin that later disappears must force a cold load -- otherwise as_tensor
+    regenerates it from the placeholder and writes garbage into the cache permanently."""
+    _seed(tmp_path)
+    for f in tmp_path.glob("*.tensorbin"):
+        f.unlink()
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
+
+
+def test_shared_marker_finds_tensorbins_in_subdirs(tmp_path):
+    """Forked loaders nest per-layer weights (qwen36 layers.N/, gemma4 layer_N/)."""
+    sub = tmp_path / "layers.0"
+    sub.mkdir()
+    (sub / "wq_dtype_BFLOAT8_B_layout_TILE.tensorbin").write_bytes(b"x")
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, **SHARED_ID)
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is True
+    (sub / "wq_dtype_BFLOAT8_B_layout_TILE.tensorbin").unlink()
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
+
+
+def test_components_subset_matching(tmp_path):
+    """A text-only seed must not certify a build that also needs the vision tower; the reverse
+    (vision seed satisfying a text-only build) is fine."""
+    _seed(tmp_path, components=["text"])
+    assert weight_cache_is_complete(tmp_path, components=["text"], **SHARED_ID) is True
+    assert weight_cache_is_complete(tmp_path, components=["text", "vision"], **SHARED_ID) is False
+
+    _seed(tmp_path, components=["text", "vision"])
+    assert weight_cache_is_complete(tmp_path, components=["text"], **SHARED_ID) is True
+
+
+def test_sidecar_capture_and_corruption_rejected(tmp_path):
+    _seed(tmp_path, is_host_weight=lambda k: k == "tok_embeddings.weight")
+    assert (tmp_path / HOST_WEIGHTS_SIDECAR).is_file()
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is True
+
+    sd = build_cached_state_dict(tmp_path)
+    # The captured host weight is served REAL; everything else is a dataless placeholder.
+    assert torch.equal(sd["tok_embeddings.weight"], SAMPLE_SD["tok_embeddings.weight"])
+
+    # A torn sidecar must degrade to a cold load, not crash every later run.
+    (tmp_path / HOST_WEIGHTS_SIDECAR).write_bytes(b"not a torch file")
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
+
+
+def test_no_temp_files_left_behind(tmp_path):
+    _seed(tmp_path, is_host_weight=lambda k: k == "tok_embeddings.weight")
+    assert not list(tmp_path.glob("*.tmp*")), "atomic publish must not leave temp files"
+
+
+def test_mesh_shape_encoding_is_writer_agnostic(tmp_path):
+    """Both marker writers must encode the mesh identically or each rejects the other's marker."""
+
+    class _MeshShape:
+        def __init__(self, dims):
+            self._dims = dims
+
+        def __iter__(self):
+            return iter(self._dims)
+
+        def __str__(self):
+            return f"MeshShape({list(self._dims)})"
+
+    assert normalize_mesh_shape(_MeshShape((1, 8))) == normalize_mesh_shape((1, 8))
+    _seed(tmp_path)
+    identity = dict(SHARED_ID, mesh_shape=_MeshShape((1, 8)))
+    assert weight_cache_is_complete(tmp_path, **identity) is True
+
+
+def test_cached_state_dict_contract():
+    manifest = {k: [list(v.shape), str(v.dtype)] for k, v in SAMPLE_SD.items()}
+    real = SAMPLE_SD["tok_embeddings.weight"]
+    sd = CachedStateDict(manifest, {"tok_embeddings.weight": real})
+
+    # Truthy and flagged (the tt_transformers placeholder is falsy -- callers must branch on the
+    # attribute, not truthiness).
+    assert sd
+    assert sd.is_placeholder is True
+
+    # Membership must not materialize a tensor.
+    assert "layers.0.attention.wo.weight" in sd
+    assert "nope" not in sd
+    assert sd.get("nope") is None
+
+    # Mutable: loaders setdefault KV-shared weights.
+    sd["extra"] = torch.zeros(2)
+    assert "extra" in sd
+    del sd["extra"]
+    assert "extra" not in sd
+
+    del sd["tok_embeddings.weight"]
+    assert "tok_embeddings.weight" not in sd
+    with pytest.raises(KeyError):
+        sd["tok_embeddings.weight"]

@@ -574,6 +574,7 @@ class Qwen36Model:
             model_name=args.model_name,
             n_layers=args.n_layers,
             mesh_shape=tuple(args.mesh_device.shape),
+            components=["text"] if text_only else ["text", "vision"],
         )
         loaded_real_weights = False
         if (
@@ -590,9 +591,12 @@ class Qwen36Model:
             loaded_real_weights = bool(state_dict) and not getattr(args, "dummy_weights", False)
 
         model = cls(device, args, state_dict, tensor_cache_path=cache_path)
-        # Seed the marker from any full cold build -- text and vision write the same .tensorbin set
-        # (the vision tower's own weights come from the live HF reference, not this cache), so a
-        # vision run's cache is equally valid for a later text-only warm run.
+        # Seed the marker from any full cold build. The recorded `components` says which parts this
+        # build actually wrote: the vision tower is NOT reference-only, its modules
+        # (vision/vision_attention.py, vision_mlp.py, patch_merger.py, vision_layernorm.py) pass
+        # cache_file_name rooted at this same weight_cache_path, so a text-only build leaves those
+        # tensorbins unwritten. Component matching is superset-based, so a vision run's cache still
+        # satisfies a later text-only warm run, but not the reverse. (#45400 review)
         if loaded_real_weights and full_build:
             mark_weight_cache_complete(cache_path, state_dict, **cache_identity)
         return model

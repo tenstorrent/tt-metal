@@ -108,7 +108,7 @@ def create_tt_model(
     if state_dict is None:
         if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
-            state_dict = build_cached_state_dict(cache_dir)
+            state_dict = build_cached_state_dict(cache_dir, args=model_args)
         else:
             state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
             loaded_real_weights = bool(state_dict)
