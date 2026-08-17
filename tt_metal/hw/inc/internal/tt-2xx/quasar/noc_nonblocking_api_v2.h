@@ -398,6 +398,8 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     // TODO: Add ATT configuration here
+
+    overlay_cmd_buff_init(atomic_ret_val);
 }
 
 // set noc local memory state for a single kernel from the global state
