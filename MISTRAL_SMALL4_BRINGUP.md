@@ -44,29 +44,48 @@ Everything lives under `models/demos/deepseek_v3_d_p/` unless noted.
 
 | file | what |
 |---|---|
-| `reference/mistral_small4_config.py` | dims class + `mistral4_hf_config()`; every field traced to `config.json` |
-| `tt/runners/adapters/mistral_small4.py` | `MistralSmall4Adapter(MLAPrefillAdapter)` |
+| `reference/mistral_small4_config.py` | dims class + `mistral4_hf_config()` returning a real `Mistral4Config`; every field traced to `config.json` |
+| `tt/runners/adapters/mistral_small4.py` | `MistralSmall4Adapter(MLAPrefillAdapter)`, incl. the HF reference classes |
 | `tests/test_mla.py` | `test_mistral4_mla`, plus `mistral_small4` in `test_mla_chunked_prefill`'s variant list |
+| `tests/test_prefill_block.py` | `test_mistral4_prefill_block` |
+| `tests/test_prefill_transformer.py` | `test_mistral4_prefill_transformer` |
+| `tt/mla/mla.py`, `reference/mla_reference.py` | `mla_disable_yarn_mscale` flag (see below) |
+| `utils/test_utils.py` | per-tensor fp8 dequant |
+| `utils/transformer_helpers.py` | stacked+fused expert split, zero router bias, reference binding by signature |
 | `models/demos/common/prefill/adapter.py` | `"mistral_small4"` in `ADAPTER_PATHS` *(outside the folder)* |
 
-So the `variant` fixture resolves `mistral_small4` and the MLA tests are addressable. Both MLA tests
-pass at Mistral shapes on random weights today — treat that as the regression baseline, not as
-proof the model is right.
+**Mistral runs end to end on the galaxy with real weights.** embed -> MLA+MoE stack -> norm ->
+lm_head -> sample, at production shapes on 32 chips. Measured so far, all at `(8, 4)`:
+
+| what | result |
+|---|---|
+| MLA, plain + chunked, random weights | green |
+| decoder block, PCC vs HF reference | **0.988** (bar 0.95) |
+| transformer, 2 / 5 layers, random weights | passed |
+| transformer, 2 layers, **real checkpoint** | passed |
+| **transformer, all 36 layers, real checkpoint** | **passed** — 870 s cold (builds the cache), **54 s warm**, `tt_forward` ~3.0 s |
+
+Treat these as the regression baseline, not as proof the model is right — none of them is a
+tight-tolerance comparison against a captured golden.
 
 Two things to know about the adapter as written:
 
-- `supports_pretrained = False`. The pretrained test ids skip with a message rather than failing deep
-  in the dequantizer. Flip it in the same change that lands the weight converters below.
-- `default_gate_mode = "GPT_DEVICE"`. Reasoning in the adapter docstring; **it is an argument, not a
-  test.** See MoE below.
+- `supports_pretrained = True`. The real checkpoint loads: per-tensor fp8 dequant, the stacked+fused
+  expert split and the zero router bias are all handled, on both the random and the layer-by-layer
+  pretrained paths.
+- `default_gate_mode = "GPT_DEVICE"`. This started as an argument and is now **confirmed against the
+  reference implementation**: `Mistral4MoE.route_tokens_to_experts` is
+  `softmax(-1)` over all experts -> top-k -> gather -> renormalize -> x1.0, and with `n_group = 1`
+  the group mask is all-ones so the grouping collapses out entirely. That is the same rule as the
+  GPT-OSS gate. Still worth an independent per-expert token-count assertion.
 
 ## What still needs doing
 
 **Attention** — MLA is the most Mistral-divergent block.
 - Broader chunked coverage: `production-50k+5k`, `deep-*`, `rot-*`, `with_determinism`, `metadata`
 - KV cache layout at `kv_lora_rank = 256`
-- Wire `reference_attention_cls` on the adapter. Until then `run_model`'s second reference check
-  (`test_mla.py`, `run_reference_mla`) returns `None` and **silently does nothing**.
+- `reference_attention_cls` is now wired (transformers' `Mistral4Attention`), so `run_model`'s
+  second reference check no longer silently no-ops — confirm it actually reports a PCC line.
 
 **MoE** — the largest remaining unknown.
 - Gate/routing at 128 experts, top-4, no correction bias
@@ -79,11 +98,11 @@ Two things to know about the adapter as written:
 - LM head in both column- and row-parallel modes
 - These two are the per-stage probes we bisect with when full-model PCC is wrong
 
-**Weights**
-- state_dict mapping (`language_model.` prefix; `detect_language_model_prefix` already handles it)
-- fp8 dequant — Mistral is **per-tensor**, not the `[128,128]` block scheme
-- Expert tensor layout — stacked with gate/up **fused**
-- TTNN weight cache for the chosen mesh
+**Weights** — all of this now works; what is left is coverage, not construction
+- Loading, dequant and the expert split are done and exercised end to end on the real checkpoint
+- The TTNN cache builds at ~24 s/layer; the full 36-layer cache is **65 GB** for the whole 32-chip
+  mesh (~1.8 GB/layer, ~57 MB/device/layer) at `$TT_MISTRAL4_PREFILL_TTNN_CACHE`
+- Still to do: a golden trace to compare against, and the packed-FP8 KV format decision
 
 **Integration**
 - `test_prefill_block_chunked`, then the transformer test
@@ -96,30 +115,50 @@ Each of these was checked against the code or the checkpoint.
 - **fp8 is per-tensor.** `weight_block_size` is `null`; dense weights carry a rank-0 scalar
   `*_scale_inv`, stacked expert tensors carry `[128, 1, 1]`. The shared dequantizer asserts
   `tensor.ndim == inv_scale.ndim` and a matching `block_shape` rank, so it **raises** on both — a
-  loud failure, not silent corruption.
+  loud failure, not silent corruption. **Handled** by `is_per_tensor_fp8` /
+  `_dequantize_per_tensor_fp8_state_dict` in `utils/test_utils.py`; verified against real checkpoint
+  tensors.
 - **Experts are stacked and fused.** `mlp.experts.gate_up_proj` is `[128, 4096, 4096]`, matching
   neither `experts.{i}.*` nor `experts_stacked.*`. transformers 5.12 ships `mistral4` natively, and
   `modeling_mistral4.py` declares it `[num_experts, 2*intermediate_dim, hidden_dim]` consumed with
   `.chunk(2, dim=-1)` — so gate is the first half of the output dim, up the second. Contiguous, not
-  interleaved.
+  interleaved. **Handled** by `_extract_routed_experts*` in `utils/transformer_helpers.py`, on both
+  the random and the pretrained paths.
 - **Router is softmax affinity with no correction bias.** The grouped-topk kernel implements only
   `sigmoid` and `sqrtsoftplus`, so that path is not usable as-is. `n_group = 1` is *not* unusual —
   Kimi, GLM and V4-Flash are ungrouped too; only DeepSeek-V3 uses 8 groups. Note
   `TtMoEGatePrefill.check_cache_complete` requires an `e_score_correction_bias` cache entry that
-  Mistral has no weight for.
+  Mistral has no weight for — zeros are substituted, which is exact (zero is the identity everywhere
+  the bias is read), not a placeholder.
 - **rope: `rope_parameters` → `rope_scaling`, and `rope_theta` must be hoisted out of it.** The
   config builder does both. `original_max_position_embeddings` stays at the checkpoint's 8192 (the
   pre-extension length) — YaRN's frequency ramp is computed against it, so substituting `max_seq`
   changes the rope. GLM's builder does substitute, but only because GLM's `factor` is 1.0 and the
   value is inert there.
-- **YaRN is live** at `factor = 128`, so the attention softmax scale is not the bare
-  `qk_head_dim**-0.5`. `config.json` exposes `llama_4_scaling_beta: 0.1`, which is the same constant
-  `mla.py` hardcodes — they agree today, but nothing reads the field.
+- **⚠ Mistral applies NO YaRN mscale — the softmax scale IS the bare `qk_head_dim**-0.5`.** This is
+  the one real bug found so far, and it was silent. `Mistral4Attention.__init__` sets
+  `self.scaling = qk_head_dim ** -0.5` unconditionally, and `Mistral4RotaryEmbedding.attention_scaling`
+  is `1.0`, so no mscale is applied in the softmax scale *or* baked into cos/sin. DeepSeek folds
+  `mscale**2` in whenever `rope_scaling["mscale_all_dim"]` is truthy — which Mistral's is (1.0) — so
+  both `tt/mla/mla.py` and the CPU `MLAReference` were multiplying the attention logits by **2.2058**.
+  No crash, no shape error, just a wrong softmax temperature. Handled by the
+  `mla_disable_yarn_mscale` flag set in the config builder.
+  **How it was caught, because the method generalises:** A/B the two CPU references against each
+  other on identical weights (`MLAReference` vs `Mistral4Attention`) — 0.948 before, 0.99999 after.
+  That is a one-minute CPU test. A green device PCC only means the device agrees with *the reference
+  you picked*; when a model's own implementation differs from the family's, check the references
+  against each other **first**.
+- `config.json` exposes `llama_4_scaling_beta: 0.1`, the same constant `mla.py` hardcodes in the
+  mscale formula. They agree today, and nothing reads the field.
 - **`kv_lora_rank = 256`** is unprecedented here (family uses 512). It makes the packed-FP8 KV
   cache's rope offset 264 bytes, which is not 16-byte aligned and fails `validate_scaled()`. It does
   **not** affect the MLA tests, which pass the tiled format explicitly. It binds at serving, where 1M
   context likely wants the packed format. Smallest fix looks like 8 bytes of padding (264 → 272);
   worth taking to the MLA owners as a proposal.
+- **Expert weights land on device as `BFLOAT4_B`** (4 bits), not 8. Cache entries are named
+  `layer_N.routed_expert.local_K_{gate,up,down}_dtype_BFLOAT4_B_...`, and the built cache measures
+  ~2.8 GB per layer across the whole 32-chip mesh (~87 MB/device/layer). So the `~3.6 GB/device`
+  weight figure in the planning docs — which assumed 1 byte/param — is conservative by about 2x.
 - **`first_k_dense_replace = 0`** — every layer is MoE. DeepSeek-V3 and GLM have 3 dense layers,
   Kimi 1. This is the first resident with none.
 - **`embed_tokens` and `lm_head` are unquantized bf16** with no scale tensors — the only large
