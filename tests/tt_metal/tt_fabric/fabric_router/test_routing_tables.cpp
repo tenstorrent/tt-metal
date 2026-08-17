@@ -613,45 +613,35 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
 }
 
 // Checks that auto-discovery still reports all 32 chips on a galaxy that only wraps on Y.
-TEST_F(ControlPlaneFixture, ProbeWormholeGalaxyAutoDiscoveryFullCoverage) {
+TEST_F(ControlPlaneFixture, ProbeWormholeSingleGalaxyAutoDiscoveryFullCoverage) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
 
-    auto report = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
-        try {
-            auto cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode);
-            std::size_t total_chips = 0;
-            std::string shapes;
-            for (const auto& mesh_id : cp->get_user_physical_mesh_ids()) {
-                const auto mesh_shape = cp->get_physical_mesh_shape(mesh_id);
-                total_chips += mesh_shape.mesh_size();
-                if (!shapes.empty()) {
-                    shapes += ", ";
-                }
-                std::string shape_str;
-                for (size_t i = 0; i < mesh_shape.dims(); ++i) {
-                    if (i > 0) {
-                        shape_str += "x";
-                    }
-                    shape_str += std::to_string(mesh_shape[i]);
-                }
-                shapes += "mesh " + std::to_string(*mesh_id) + "=" + shape_str;
-            }
-            log_info(tt::LogTest, "[auto-probe]   {}: SUCCESS  [{}]  total_chips={}", label, shapes, total_chips);
-        } catch (const std::exception& e) {
-            std::string msg = e.what();
-            if (msg.size() > 140) {
-                msg = msg.substr(0, 140) + "...";
-            }
-            log_info(tt::LogTest, "[auto-probe]   {}: FAIL: {}", label, msg);
-        }
+    // Auto-discovery must map every physical chip, whatever fabric type it settles on.
+    const std::size_t expected_chips = cluster.number_of_devices();
+
+    auto check_full_coverage = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
+        SCOPED_TRACE(label);
+        std::unique_ptr<tt::tt_fabric::ControlPlane> cp;
+        ASSERT_NO_THROW(
+            cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode));
+
+        const auto mesh_ids = cp->get_user_physical_mesh_ids();
+        ASSERT_EQ(mesh_ids.size(), 1u) << "Auto-discovery should produce a single mesh on a single galaxy";
+
+        const auto mesh_shape = cp->get_physical_mesh_shape(mesh_ids.front());
+        EXPECT_EQ(mesh_shape.mesh_size(), expected_chips)
+            << "Auto-discovery dropped chips: got " << mesh_shape.mesh_size() << " of " << expected_chips;
+        EXPECT_TRUE(
+            mesh_shape == tt::tt_metal::distributed::MeshShape(8, 4) ||
+            mesh_shape == tt::tt_metal::distributed::MeshShape(4, 8))
+            << "Expected an 8x4 (or 4x8) mesh, got: " << mesh_shape[0] << "x" << mesh_shape[1];
     };
 
-    log_info(tt::LogTest, "[auto-probe] === auto-discovery (no MGD) fabric-type coverage ===");
-    report("FABRIC_1D_RING (galaxy -> TORUS_XY)", tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
-    report("FABRIC_2D                          ", tt::tt_fabric::FabricConfig::FABRIC_2D);
+    check_full_coverage("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
+    check_full_coverage("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
