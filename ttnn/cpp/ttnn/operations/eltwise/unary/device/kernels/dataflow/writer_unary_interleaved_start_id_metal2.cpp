@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of writer_unary_interleaved_start_id.cpp, which sits beside it. Identical dataflow
-// logic; only the resource plumbing moves to the Metal 2.0 named bindings: the output CB index
-// compile-time arg becomes dfb::out, the destination tensor becomes tensor::output (so the dst_addr
-// runtime arg and the TensorAccessorArgs compile-time args both disappear), and the page count /
-// start page become named runtime args. The OUT_SHARDED / BACKWARDS variants are kept so this fork
-// stays diffable against its legacy twin. Forked rather than converted in place because the legacy
-// file is instantiated by dozens of factories that are all still on the legacy positional-arg API;
-// delete this fork once the last of them adopts the same rewrite.
+// NOTE: This is the Metal 2.0 fork of writer_unary_interleaved_start_id.cpp, which lives beside it.
+// Ops ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy API.
+// Until the last of them migrates and the original is retired, changes here likely belong there too.
+//
+// The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
+// interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
+// rather than any one op's locals, and are not renamed once a consumer exists.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -22,10 +21,11 @@ void kernel_main() {
     const uint32_t start_id = get_arg(args::start_id);
 
     Noc noc;
-    // dfb::out — the pages produced upstream, drained to the output tensor here
+    // dfb holds the tiles/sticks to drain to the destination tensor; the host binds this kernel as
+    // its consumer.
     DataflowBuffer dfb(dfb::out);
 
-    // Get page size from the DFB (works for both TILE and ROW_MAJOR layouts)
+    // Get page size from the DFB entry size (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = dfb.get_entry_size();
 
 #ifdef OUT_SHARDED
@@ -35,7 +35,7 @@ void kernel_main() {
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(tensor::output);
+    const auto s = TensorAccessor(tensor::dst);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;

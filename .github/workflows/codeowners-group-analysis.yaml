@@ -1028,7 +1028,7 @@ jobs:
                     for member in "${MEMBERS_ARRAY[@]}"; do
                       member_name="$member"
                       if [ -n "$member" ] && [ "$member" != " " ]; then
-                        USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                        USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                         USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                         [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ] && member_name="$USER_NAME"
                       fi
@@ -1173,7 +1173,7 @@ jobs:
                 IFS=',' read -ra DIRECT_ARRAY <<< "$direct_approvers_set"
                 for member in "${DIRECT_ARRAY[@]}"; do
                   [ -z "$member" ] && continue
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
                   direct_approved="$direct_approved$USER_NAME, "
@@ -1185,7 +1185,7 @@ jobs:
                 IFS=',' read -ra SHARED_ARRAY <<< "$shared_approvers_set"
                 for member in "${SHARED_ARRAY[@]}"; do
                   [ -z "$member" ] && continue
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
                   shared_approved="$shared_approved$USER_NAME, "
@@ -1489,7 +1489,7 @@ jobs:
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
             echo "DEBUG: Requester and PR author are different users"
             REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
-            REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            REQUESTER_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$REQUESTER_USER_API" 2>/dev/null)
             REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1574,7 +1574,7 @@ jobs:
           PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"
           if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
             AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-            AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$AUTHOR_USER_API" 2>/dev/null)
             AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1716,7 +1716,7 @@ jobs:
                   # This is an individual user
                   # Get full name from GitHub API
                   USER_API="https://api.github.com/users/$clean_item"
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1788,7 +1788,7 @@ jobs:
                   fi
 
                   USER_API="https://api.github.com/users/$clean_username"
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2490,7 +2490,7 @@ jobs:
               if [ -n "$owner" ]; then
                 # Get user info
                 USER_API="https://api.github.com/users/$owner"
-                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$USER_API" 2>/dev/null)
                 USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2512,7 +2512,7 @@ jobs:
             if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
               # Try to fetch full name from GitHub API
               AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-              AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "$AUTHOR_USER_API" 2>/dev/null)
               AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2714,7 +2714,7 @@ jobs:
                 if [ -n "$owner" ]; then
                   # Get full name for this owner
                   USER_API="https://api.github.com/users/$owner"
-                  USER_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_RESPONSE=$(curl -s -g -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_HTTP_CODE=$(echo "$USER_RESPONSE" | tail -n1)
@@ -2745,7 +2745,7 @@ jobs:
             PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"
             if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
               AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-              AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "$AUTHOR_USER_API" 2>/dev/null)
               AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2767,7 +2767,7 @@ jobs:
             if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
               # Get full name for requester if available
               REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
-              REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              REQUESTER_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "$REQUESTER_USER_API" 2>/dev/null)
               REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2836,7 +2836,7 @@ jobs:
 
                     # Get full name from GitHub API
                     USER_API="https://api.github.com/users/$clean_username"
-                    USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                    USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$USER_API" 2>/dev/null)
                     USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)

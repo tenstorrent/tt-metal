@@ -17,6 +17,7 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -77,6 +78,42 @@ class Mistral7BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
+    # per-group batch (8 = partial batching, design rec); ``disable_batched_prefill`` is the escape
+    # hatch back to the sequential loop. ``max_prefill_chunk_size`` (above) drives the #45234 decline.
+    #
+    # NOW ON for Mistral-7B. The batch_size threading + KV-fill wiring is complete and identical to the
+    # 1B pilot. The prior "ci-eval-32 slot-0 corruption" that kept this OFF was root-caused to COEXISTING
+    # batched-prefill TRACE CAPTURES: ci-eval-32's mixed prompt lengths split into two batched buckets
+    # ({1024,128}); capturing the 2nd bucket's trace while the 1st bucket's KV/residual was live clobbered
+    # the 1st bucket's slot-0 output (hence "user 0 <unk>"). Device-proof: the eager batched path AND a
+    # single traced batched bucket are both ci-eval-32 64/64 clean — only coexisting batched-trace captures
+    # corrupt. Fixed generically in the shared engine (TracedLLMExecutor.prefill_forward): trace at most
+    # ONE batched bucket per prefill call, run any coexisting buckets eager. Single-bucket workloads
+    # (b32 / b32-ci, uniform prompt length) stay traced/fast; mixed-bucket workloads (eval-32) are correct.
+    supports_batched_prefill: bool = True
+    # 32 == max_batch_size: fold all 32 users into a SINGLE traced prefill pass (matching TTTv1's
+    # single-pass batched prefill) so batch-32/-ci TTFT reaches TTTv1 parity (device-measured N300:
+    # 8-fold=27.3ms > TTTv1 25.57ms, but 32-fold=25.6ms == TTTv1). __post_init__ caps this to 8 on a
+    # single device (N150) where a 32-fold [1,1,32*S,dim] intermediate would OOM on top of the full 7B
+    # weights + 32-user KV (~99% DRAM); multi-device shards the fold so the single pass fits. Batched
+    # prefill on N150 is a bonus (TTTv1 can't run batch-32 on a single N150 at all -> no parity target).
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
+
+    def __post_init__(self):
+        # DRAM guard: a single unsharded device (N150) cannot hold a 32-fold batched-prefill intermediate
+        # on top of the full 7B weights + 32-user KV cache, so cap the per-group fold there. The fold
+        # clamp in select_batched_prefill_padded_batch keeps any cap reshape-safe (largest power-of-2
+        # <= this value). Multi-device (N300/T3K) keeps 32 for the single-pass TTTv1-parity TTFT.
+        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
+        if num_devices == 1:
+            self.max_prefill_batch_size = min(self.max_prefill_batch_size, 8)
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
@@ -244,6 +281,10 @@ class _Mistral7BWHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 7B
+    # the prefill matmuls are large, so minimal_matmul is a real prefill-TTFT win (unlike tiny 1B).
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_mistral_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Mistral7BWHTuning:
@@ -257,10 +298,12 @@ def _resolve_mistral_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Mistral
     t.mlp_prefill_len_cutoff = 512 if num_dev == 1 else 1024
     # Decode W1→DRAM spill: leave off by default; promote only if N150 batch decode trips L1.
     t.mlp_decode_spill_w1_to_dram = False
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"MLP tuning for Mistral-7B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
     )
     return t
 
@@ -306,6 +349,7 @@ def _build_decoder_layer(
             paged_attention_config=paged_cfg,
             kv_cache=None,
             kv_cache_dtype=precision.kv_cache_dtype,
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -333,6 +377,7 @@ def _build_decoder_layer(
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
             decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -444,7 +489,11 @@ class Mistral7BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Fractured embed/norm activations must be all-gathered to full ``dim`` before
         # Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
@@ -458,6 +507,7 @@ class Mistral7BDecoderLayer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -719,6 +769,10 @@ class Mistral7B(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                # A/B escape hatch: DISABLE_BATCHED_EXTRACT=1 forces the per-slot last-token extract
+                # (one lm_head per user, bit-identical to the sequential path) instead of the default
+                # gathered extract (one lm_head over the whole group).
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
@@ -748,7 +802,11 @@ class Mistral7B(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -758,6 +816,7 @@ class Mistral7B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
 
         if get_last_token == -1:

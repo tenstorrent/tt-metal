@@ -165,7 +165,11 @@ extern "C" uint32_t _start1() {
             uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                     launch_msg->kernel_config.local_cb_offset);
             uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+#if defined(UCK_CHLKC_PACK)
+            const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+#else
             setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+#endif
 #endif
 
             // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
@@ -213,6 +217,11 @@ extern "C" uint32_t _start1() {
             record_stack_usage(stack_free);
             WAYPOINT("D");
             DEVICE_PRINT_KERNEL_FINISHED();
+
+#if defined(UCK_CHLKC_PACK)
+            // Tear down packer remapper pairs programmed this launch so they cannot leak into the next.
+            dfb_clear_packer_remapper_window(packer_rmp.lo, packer_rmp.hi);
+#endif
 
             // Signal completion
             DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);

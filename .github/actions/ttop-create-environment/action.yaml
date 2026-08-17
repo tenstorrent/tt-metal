@@ -111,15 +111,16 @@ runs:
         echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl --token ${{ steps.token.outputs.idToken }} -n${{ inputs.namespace }} apply -f -
 
     - name: Wait for environment
-      uses: ./.github/actions/ttop-await-resource
-      with:
-        namespace: ${{ inputs.namespace }}
-        resource: helmrelease/${{ inputs.environmentName }}
-        mode: poll
-        jsonpath: '{.status.conditions[?(@.type=="Ready")].status}'
-        expected: 'True'
-        timeoutSeconds: ${{ inputs.timeoutSeconds }}
-        retries: ${{ inputs.retries }}
+      shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: helmrelease/${{ inputs.environmentName }}
+        MODE: poll
+        JSONPATH: '{.status.conditions[?(@.type=="Ready")].status}'
+        EXPECTED: 'True'
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"
 
     - name: Connect to the environment
       shell: bash
@@ -127,4 +128,4 @@ runs:
         echo "Connecting to environment..."
         IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
         echo "::add-mask::${IDTOKEN}"
-        kubectl --token "$IDTOKEN" -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | .github/scripts/environment-ssh-setup.sh
+        kubectl --token "$IDTOKEN" -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | "$GITHUB_ACTION_PATH/../../scripts/environment-ssh-setup.sh"

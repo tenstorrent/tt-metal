@@ -22,14 +22,21 @@ import pytest
 import torch
 
 import ttnn
-from models.common.sampling.tt_sampling import TTSampling
+from models.common.sampling.tt_sampling import TIEBREAK_INDEX_SENTINEL, TTSampling
 
 NUM_USERS = 32
 NUM_CANDIDATES = 64
 # Global vocabulary indices are in the 100k range, like a real gathered candidate set. Deliberately
-# above 2**8: these values are NOT representable in bfloat16, so the test fails if any step of the
-# index comparison silently lands in bf16 instead of float32.
+# far above 2**11: the FPU reduce truncates its source registers to a 10-bit mantissa, so indices this
+# large come back rounded from a float32 ttnn.min and match no real index. Only the int32 reduce is
+# exact here, and these magnitudes are what make the test notice if the index half leaves int32.
 INDEX_BASE = 100_000
+# TTSampling.forward builds the gathered global-index tensor as uint32, so that is what these tests
+# feed by default; uint32 min/max are on the same inexact FPU reduce path as float32, and the method is
+# responsible for casting to int32 itself. INDEX_DTYPES also covers int32 in case a caller pre-casts.
+MODEL_INDEX_DTYPE = ttnn.uint32
+INDEX_DTYPES = [ttnn.uint32, ttnn.int32]
+INDEX_DTYPE_IDS = ["uint32_indices", "int32_indices"]
 
 # (tied maximum, filler). All exactly representable in bf16, filler strictly below the maximum.
 # The magnitudes matter: the boost has to be at least one bf16 ULP of the tied maximum, and bf16
@@ -51,7 +58,13 @@ DEFAULT_MAX_VALUE, DEFAULT_FILLER_VALUE = MAGNITUDES[0]
 SUB_CORE_GRIDS = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 3))})
 
 
-def _build_inputs(device, greedy_users, max_value=DEFAULT_MAX_VALUE, filler_value=DEFAULT_FILLER_VALUE):
+def _build_inputs(
+    device,
+    greedy_users,
+    max_value=DEFAULT_MAX_VALUE,
+    filler_value=DEFAULT_FILLER_VALUE,
+    index_dtype=MODEL_INDEX_DTYPE,
+):
     """Return (values_tt, global_indices_tt, greedy_col_tt, values_torch, indices_torch, tie_positions).
 
     Every user row gets three exact ties at max_value. The global indices are a
@@ -80,8 +93,8 @@ def _build_inputs(device, greedy_users, max_value=DEFAULT_MAX_VALUE, filler_valu
         greedy_col[0, 0, user, 0] = 1.0
 
     values_tt = ttnn.from_torch(values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    indices_tt = ttnn.from_torch(indices, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
-    greedy_col_tt = ttnn.from_torch(greedy_col, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    indices_tt = ttnn.from_torch(indices, device=device, dtype=index_dtype, layout=ttnn.TILE_LAYOUT)
+    greedy_col_tt = ttnn.from_torch(greedy_col, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return values_tt, indices_tt, greedy_col_tt, values, indices, tie_positions
 
 
@@ -94,6 +107,55 @@ def _adjust(values_tt, indices_tt, greedy_col_tt, sub_core_grids):
 def _expected_winner_position(indices_row, tie_positions):
     """Array position of the tied maximum holding the lowest global index."""
     return min(tie_positions, key=lambda pos: int(indices_row[pos]))
+
+
+@pytest.mark.parametrize("index_dtype", INDEX_DTYPES, ids=INDEX_DTYPE_IDS)
+def test_masked_index_min_reduce_is_exact(device, index_dtype):
+    """The index half of the tie-break must be exact at real vocabulary magnitudes.
+
+    ``ttnn.min`` on a float32 or uint32 tensor runs on the FPU, which truncates its source registers to
+    a 10-bit mantissa, so an index above 2**11 comes back rounded to a value that equals no real index:
+    the winner mask ends up empty and the whole adjustment degrades into a silent no-op. This pins the
+    int32 reduce (and the int32 broadcast equality) the implementation depends on, so a regression
+    there fails here and names itself instead of resurfacing as an unexplained tie downstream.
+
+    Runs first in this file on purpose: under ``-x`` it is the failure you want to see.
+    """
+    shape = (1, 1, NUM_USERS, NUM_CANDIDATES)
+    indices = (
+        torch.arange(INDEX_BASE + NUM_CANDIDATES - 1, INDEX_BASE - 1, -1, dtype=torch.int32).expand(shape).contiguous()
+    )
+
+    # Exactly one surviving candidate per row, at a different position in each row so a placement-
+    # dependent reduce cannot pass by accident.
+    kept_positions = [(user * 5) % NUM_CANDIDATES for user in range(NUM_USERS)]
+    not_max = torch.ones(shape, dtype=torch.float32)
+    for user, position in enumerate(kept_positions):
+        not_max[0, 0, user, position] = 0.0
+
+    indices_tt = ttnn.from_torch(indices, device=device, dtype=index_dtype, layout=ttnn.TILE_LAYOUT)
+    not_max_tt = ttnn.from_torch(not_max, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # The same op sequence _adjust_values_for_tiebreak uses for its index half.
+    idx_tt = ttnn.typecast(indices_tt, ttnn.int32, sub_core_grids=SUB_CORE_GRIDS)
+    offset_tt = ttnn.typecast(
+        ttnn.multiply(not_max_tt, TIEBREAK_INDEX_SENTINEL, sub_core_grids=SUB_CORE_GRIDS),
+        ttnn.int32,
+        sub_core_grids=SUB_CORE_GRIDS,
+    )
+    masked_tt = ttnn.add(idx_tt, offset_tt, sub_core_grids=SUB_CORE_GRIDS)
+    row_min_tt = ttnn.min(masked_tt, dim=3, keepdim=True, sub_core_grids=SUB_CORE_GRIDS)
+    row_min = ttnn.to_torch(row_min_tt).flatten()
+    selected = ttnn.to_torch(ttnn.eq(idx_tt, row_min_tt, sub_core_grids=SUB_CORE_GRIDS))
+
+    for user, position in enumerate(kept_positions):
+        expected_index = int(indices[0, 0, user, position])
+        assert int(row_min[user]) == expected_index, (
+            f"user {user}: masked int32 row min returned {int(row_min[user])}, expected the one "
+            f"unmasked global index {expected_index}"
+        )
+        hits = selected[0, 0, user].nonzero().flatten().tolist()
+        assert hits == [position], f"user {user}: int32 broadcast equality selected {hits}, expected [{position}]"
 
 
 @pytest.mark.parametrize("max_value, filler_value", MAGNITUDES, ids=MAGNITUDE_IDS)
@@ -127,12 +189,13 @@ def test_tiebreak_boosts_lowest_global_index_for_greedy_users(device, sub_core_g
         assert changed == [expected_pos], f"user {user}: expected only position {expected_pos} to change, got {changed}"
 
 
+@pytest.mark.parametrize("index_dtype", INDEX_DTYPES, ids=INDEX_DTYPE_IDS)
 @pytest.mark.parametrize("sub_core_grids", [SUB_CORE_GRIDS, None], ids=["sub_core_grid", "full_grid"])
-def test_tiebreak_leaves_random_users_bit_identical(device, sub_core_grids):
+def test_tiebreak_leaves_random_users_bit_identical(device, sub_core_grids, index_dtype):
     """Random (k > 1) rows must be byte-for-byte unchanged, so their sampling is untouched."""
     greedy_users = list(range(0, NUM_USERS, 2))
     random_users = [user for user in range(NUM_USERS) if user not in greedy_users]
-    values_tt, indices_tt, greedy_col_tt, values, _, _ = _build_inputs(device, greedy_users)
+    values_tt, indices_tt, greedy_col_tt, values, _, _ = _build_inputs(device, greedy_users, index_dtype=index_dtype)
 
     adjusted = ttnn.to_torch(_adjust(values_tt, indices_tt, greedy_col_tt, sub_core_grids))
     original = values.to(torch.bfloat16)

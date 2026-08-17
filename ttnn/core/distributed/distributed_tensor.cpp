@@ -8,7 +8,7 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -38,13 +38,28 @@
 namespace ttnn::distributed {
 namespace {
 
-// Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
-// shape. `global_range` must outlive the use of the returned function.
-auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* global_range) {
-    return [distribution_mode, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
+bool is_zero_mesh_offset(const MeshCoordinate& offset) {
+    return std::all_of(offset.coords().begin(), offset.coords().end(), [](uint32_t v) { return v == 0; });
+}
+
+// Remaps distribution-shape coords onto the device. `global_range` must outlive the returned function.
+// In SUBMESH mode, adds `offset` so (0,...,0) maps to `offset`. All-zero (incl. default origin) is a no-op.
+auto get_remap_fn(
+    DistributionMode distribution_mode, const MeshCoordinateRange* global_range, const MeshCoordinate& offset) {
+    return [distribution_mode, offset, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
-            case DistributionMode::SUBMESH: return src_coord;
+            case DistributionMode::SUBMESH: {
+                if (is_zero_mesh_offset(offset)) {
+                    return src_coord;
+                }
+                ttsl::SmallVector<uint32_t> result;
+                result.reserve(src_coord.dims());
+                for (size_t i = 0; i < src_coord.dims(); ++i) {
+                    result.push_back(src_coord[i] + offset[i]);
+                }
+                return MeshCoordinate(result);
+            }
         }
         TT_THROW("Unreachable");
     };
@@ -59,6 +74,45 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
         indices[i] = 0;
     }
     return false;
+}
+
+// Validates `mesh_offset_override`: SUBMESH-only; same dims as the device; sub-rectangle must fit.
+// All-zero offsets (including the default origin) are a no-op and skip checks, regardless of rank.
+void validate_mesh_offset(
+    const MeshCoordinate& mesh_offset_override,
+    DistributionMode distribution_mode,
+    const MeshShape& distribution_shape,
+    const MeshShape& device_shape) {
+    if (is_zero_mesh_offset(mesh_offset_override)) {
+        return;
+    }
+    TT_FATAL(
+        distribution_mode == DistributionMode::SUBMESH,
+        "mesh_offset_override is only supported when the distribution fits within the mesh device per-dimension "
+        "(SUBMESH mode); the supplied mesh_shape_override {} requires a row-major reshape of device shape {}",
+        distribution_shape,
+        device_shape);
+    TT_FATAL(
+        mesh_offset_override.dims() == device_shape.dims(),
+        "The offset {} must have the same dimensionality as the mesh device shape {}",
+        mesh_offset_override,
+        device_shape);
+    TT_FATAL(
+        distribution_shape.dims() == device_shape.dims(),
+        "mesh_offset_override requires the distribution shape {} to have the same dimensionality as the mesh "
+        "device shape {}",
+        distribution_shape,
+        device_shape);
+    for (size_t i = 0; i < device_shape.dims(); ++i) {
+        TT_FATAL(
+            mesh_offset_override[i] <= device_shape[i] - distribution_shape[i],
+            "The sub-rectangle anchored at offset {} with shape {} does not fit within the mesh device shape {} "
+            "(dimension {})",
+            mesh_offset_override,
+            distribution_shape,
+            device_shape,
+            i);
+    }
 }
 
 // Computes tensor spec for shards supplied in `xtensor_shards_views`.
@@ -176,6 +230,7 @@ public:
             case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return extract_logical_data.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.tensor_spec().data_type());
         }
         TT_THROW("Unreachable");
@@ -216,19 +271,20 @@ public:
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
             auto distributed_buffer = make_distributed_host_buffer();
-            auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+            auto remap_fn = get_remap_fn(distribution_mode_, &global_range_, config_.mesh_offset_override);
             std::vector<MeshCoordinate> buffer_coords;
+            buffer_coords.reserve(distribution_shape_.mesh_size());
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 const auto mapped_coord = remap_fn(coord);
                 buffer_coords.push_back(mapped_coord);
                 distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
 
-            const auto tensor_topology =
-                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
+            auto tensor_topology =
+                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, std::move(buffer_coords));
 
             return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
-                std::move(distributed_buffer), tensor_spec, tensor_topology));
+                std::move(distributed_buffer), tensor_spec, std::move(tensor_topology)));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -343,13 +399,14 @@ private:
         }();
 
         auto distributed_buffer = make_distributed_host_buffer();
-        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_, config_.mesh_offset_override);
 
         // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
         using XTensorViewKey = decltype(&sharded_xtensor_views.values().front()->get());
         std::unordered_map<XTensorViewKey, tt::tt_metal::HostBuffer> converted_buffers;
 
         std::vector<MeshCoordinate> buffer_coords;
+        buffer_coords.reserve(sharded_xtensor_views.size());
         size_t num_views_with_value = 0;
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (!xtensor_view.has_value()) {
@@ -398,11 +455,11 @@ private:
         const auto actual_distribution_shape =
             (distribution_shape_.dims() == 1) ? MeshShape(num_views_with_value) : distribution_shape_;
 
-        const auto tensor_topology =
-            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
+        auto tensor_topology =
+            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, std::move(buffer_coords));
 
         return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
-            std::move(distributed_buffer), shard_spec, tensor_topology));
+            std::move(distributed_buffer), shard_spec, std::move(tensor_topology)));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.
@@ -434,7 +491,7 @@ public:
         auto all_gather_tensor = host_ccl::all_gather(cpu_tensor);
         const auto& src_buffer = all_gather_tensor.host_storage().buffer();
 
-        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_, config_.mesh_offset_override);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
 
         for (const auto& dst_coord : MeshCoordinateRange(dst_buffer.shape())) {
@@ -517,6 +574,7 @@ public:
             case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return dispatch_to_concrete.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.dtype());
         }
         TT_THROW("Unreachable");
@@ -562,11 +620,10 @@ TensorToMesh TensorToMesh::create(const MeshShape& mesh_shape, const MeshMapperC
         distributed_shape,
         config);
 
-    return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
-        mesh_shape,
-        compute_distribution_mode(config.mesh_shape_override, mesh_shape),
-        distributed_shape,
-        config));
+    const auto distribution_mode = compute_distribution_mode(config.mesh_shape_override, mesh_shape);
+    validate_mesh_offset(config.mesh_offset_override, distribution_mode, distributed_shape, mesh_shape);
+
+    return TensorToMesh(std::make_unique<TensorToMesh::Impl>(mesh_shape, distribution_mode, distributed_shape, config));
 }
 
 TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMapperConfig& config) {
@@ -583,11 +640,11 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         distributed_shape,
         config);
 
-    return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
-        mesh_device,
-        compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
-        distributed_shape,
-        config));
+    const auto distribution_mode = compute_distribution_mode(config.mesh_shape_override, mesh_device.shape());
+    validate_mesh_offset(config.mesh_offset_override, distribution_mode, distributed_shape, mesh_device.shape());
+
+    return TensorToMesh(
+        std::make_unique<TensorToMesh::Impl>(mesh_device, distribution_mode, distributed_shape, config));
 }
 
 MeshToTensor::MeshToTensor(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -615,11 +672,10 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
         distributed_shape,
         config);
 
-    return MeshToTensor(std::make_unique<Impl>(
-        mesh_device,
-        compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
-        distributed_shape,
-        config));
+    const auto distribution_mode = compute_distribution_mode(config.mesh_shape_override, mesh_device.shape());
+    validate_mesh_offset(config.mesh_offset_override, distribution_mode, distributed_shape, mesh_device.shape());
+
+    return MeshToTensor(std::make_unique<Impl>(mesh_device, distribution_mode, distributed_shape, config));
 }
 
 const MeshMapperConfig& TensorToMesh::config() const { return impl_->config(); }
@@ -743,6 +799,7 @@ Tensor create_distributed_tensor(
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(bfloat16)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(float)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int32_t)
+INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint16_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint32_t)
@@ -755,6 +812,7 @@ template std::pair<std::vector<uint32_t>, Shape> MeshToTensor::compose<uint32_t>
 template std::pair<std::vector<float>, Shape> MeshToTensor::compose<float>(const Tensor& tensor) const;
 template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>(const Tensor& tensor) const;
 template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
+template std::pair<std::vector<int8_t>, Shape> MeshToTensor::compose<int8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
 template std::pair<std::vector<float8_e4m3>, Shape> MeshToTensor::compose<float8_e4m3>(const Tensor& tensor) const;

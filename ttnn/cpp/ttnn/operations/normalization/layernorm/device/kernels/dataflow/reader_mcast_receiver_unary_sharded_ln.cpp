@@ -29,6 +29,10 @@ namespace df = norm::layernorm::device::kernels::dataflow;
  *       in its own combine
  */
 void kernel_main() {
+#ifdef IDLE_CORE
+    return;
+#endif
+
     // ============================================================================
     // Kernel setup
     // ============================================================================

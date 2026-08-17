@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -31,6 +32,12 @@ void kernel_main() {
     CircularBuffer cb_intermed2(intermed_cb_id2);
     CircularBuffer cb_output(output_cb_id);
 
+    // Faces are gathered from cb_intermed1 into cb_intermed2 L1->L1 via a NoC loopback to this
+    // core's own coordinates.
+    UnicastEndpoint local_src;
+    const uint32_t local_noc_x = my_x[noc.get_noc_id()];
+    const uint32_t local_noc_y = my_y[noc.get_noc_id()];
+
     constexpr uint32_t onetile = 1;
     constexpr auto dst_args = TensorAccessorArgs<3>();
     const auto s = TensorAccessor(dst_args, dst_addr);
@@ -40,39 +47,55 @@ void kernel_main() {
     for (uint32_t block_h_id = 0; block_h_id < out_num_blocks_h; block_h_id++) {
         for (uint32_t i = start_id; i < end_id; ++i) {
             cb_intermed2.reserve_back(onetile);
-            uint32_t dst = cb_intermed2.get_write_ptr();
+            uint32_t dst_offset = 0;
 
             // Manually unroll copying into destination face 1+2 and 3+4 to avoid conditional inside loop
             for (uint32_t j = 0; j < FACE_WIDTH; ++j) {
                 cb_intermed1.wait_front(onetile);
-                uint64_t src = get_noc_addr(cb_intermed1.get_read_ptr());
+                const uint32_t src_addr = cb_intermed1.get_read_ptr();
 
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(src, dst, FACE_WIDTH_BYTES);
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(src + FACE_SIZE_BYTES, dst + FACE_SIZE_BYTES, FACE_WIDTH_BYTES);
+                noc.async_read(
+                    local_src,
+                    cb_intermed2,
+                    FACE_WIDTH_BYTES,
+                    {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
+                    {.offset_bytes = dst_offset});
+                noc.async_read(
+                    local_src,
+                    cb_intermed2,
+                    FACE_WIDTH_BYTES,
+                    {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr + FACE_SIZE_BYTES},
+                    {.offset_bytes = dst_offset + FACE_SIZE_BYTES});
                 noc.async_read_barrier();
 
                 cb_intermed1.pop_front(onetile);
 
-                dst += FACE_WIDTH_BYTES;
+                dst_offset += FACE_WIDTH_BYTES;
             }
-            dst += FACE_SIZE_BYTES;
+            dst_offset += FACE_SIZE_BYTES;
 
             // Copy face 3/4 into the destination
             for (uint32_t j = 0; j < FACE_WIDTH; ++j) {
                 cb_intermed1.wait_front(onetile);
-                uint64_t src = get_noc_addr(cb_intermed1.get_read_ptr());
+                const uint32_t src_addr = cb_intermed1.get_read_ptr();
 
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(src, dst, FACE_WIDTH_BYTES);
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(src + FACE_SIZE_BYTES, dst + FACE_SIZE_BYTES, FACE_WIDTH_BYTES);
+                noc.async_read(
+                    local_src,
+                    cb_intermed2,
+                    FACE_WIDTH_BYTES,
+                    {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
+                    {.offset_bytes = dst_offset});
+                noc.async_read(
+                    local_src,
+                    cb_intermed2,
+                    FACE_WIDTH_BYTES,
+                    {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr + FACE_SIZE_BYTES},
+                    {.offset_bytes = dst_offset + FACE_SIZE_BYTES});
                 noc.async_read_barrier();
 
                 cb_intermed1.pop_front(onetile);
 
-                dst += FACE_WIDTH_BYTES;
+                dst_offset += FACE_WIDTH_BYTES;
             }
             cb_intermed2.push_back(onetile);
 

@@ -249,7 +249,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             .accessor_name = "out",
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };

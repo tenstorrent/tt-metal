@@ -10,11 +10,11 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -352,6 +352,85 @@ TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
     // This should throw because BFLOAT8_B forces TILE layout, which forces alignment to be
     // a multiple of the tile size. So output physical shape width will be 32 instead of 24.
     EXPECT_ANY_THROW(to_dtype(source, DataType::BFLOAT8_B));
+}
+
+TEST(HostTensorToDtype, Float32ToInt8RowMajorValueCheck) {
+    const Shape shape{32, 64};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+
+    for (float& i : data) {
+        i = static_cast<float>(static_cast<int8_t>(static_cast<int>(i)));
+    }
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+
+    auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = HostTensor::from_vector<float>(data, source_spec);
+
+    auto result = to_dtype(source, DataType::INT8);
+
+    auto expected_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::INT8);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+
+    auto result_data = result.to_vector<int8_t>();
+    EXPECT_EQ(result_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result_data[i], static_cast<int8_t>(data[i]));
+    }
+}
+
+TEST(HostTensorToDtype, Int8ToInt32RowMajorValueCheck) {
+    const Shape shape{32, 64};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int8_t>(shape.volume());
+    data[0] = -128;
+    data[1] = 127;
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+
+    auto source_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = HostTensor::from_vector<int8_t>(data, source_spec);
+
+    auto result = to_dtype(source, DataType::INT32);
+
+    auto expected_spec = TensorSpec(shape, TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::INT32);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+
+    auto result_data = result.to_vector<int32_t>();
+    EXPECT_EQ(result_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result_data[i], static_cast<int32_t>(data[i]));
+    }
+}
+
+TEST(HostTensorToDtype, Int32ToInt8RowMajorValueCheck) {
+    const Shape shape{32, 64};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int32_t>(shape.volume());
+
+    for (int32_t& i : data) {
+        // Intentional signed wrap into the INT8 range so the INT32->INT8 conversion stays in-range
+        // and covers the -128/127 edges; the signed-char narrowing here is deliberate.
+        // NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
+        i = static_cast<int32_t>(static_cast<int8_t>(i));
+    }
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+
+    auto source_spec = TensorSpec(shape, TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = HostTensor::from_vector<int32_t>(data, source_spec);
+
+    auto result = to_dtype(source, DataType::INT8);
+
+    auto expected_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::INT8);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+
+    auto result_data = result.to_vector<int8_t>();
+    EXPECT_EQ(result_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result_data[i], static_cast<int8_t>(data[i]));
+    }
 }
 
 }  // namespace

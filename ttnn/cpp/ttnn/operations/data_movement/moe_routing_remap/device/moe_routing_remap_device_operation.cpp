@@ -23,20 +23,38 @@ void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
         input_routing_weights_shape.rank() == 2 && input_routing_weights_shape[0] == 1, "expected input shape [1,E]");
     const auto num_cluster_experts = input_routing_weights_shape[1];
 
+    // A zero count reaches the factory as non_zero_per_device == 0, which builds the c_1 index CB
+    // with a zero page size and total size instead of failing here.
+    TT_FATAL(operation_attributes.non_zero_weight_size > 0, "Number of non zero weights must be non-zero");
     TT_FATAL(
         operation_attributes.non_zero_weight_size <= num_cluster_experts,
         "Number of non Zero weights must be less than or equal to weights");
 
     const auto& expert_parallel_size = operation_attributes.expert_parallel_size;
-    TT_FATAL(num_cluster_experts % expert_parallel_size == 0, "Number of experts must be evenly divisible by cluster");
+    TT_FATAL(expert_parallel_size > 0, "expert parallel size must be non-zero");
+    TT_FATAL(
+        num_cluster_experts % expert_parallel_size == 0,
+        "Number of experts ({}) must be evenly divisible by cluster ({})",
+        num_cluster_experts,
+        expert_parallel_size);
+    // The program factory divides these to get non_zero_per_device; a remainder would be truncated.
+    TT_FATAL(
+        operation_attributes.non_zero_weight_size % expert_parallel_size == 0,
+        "Number of non zero weights ({}) must be evenly divisible by expert parallel size ({})",
+        operation_attributes.non_zero_weight_size,
+        expert_parallel_size);
 
     const auto cluster_axis = operation_attributes.cluster_axis;
     TT_FATAL(cluster_axis == 0 || cluster_axis == 1, "Invalid cluster axis, should be 0 (rows), or 1 (cols)");
 
     const auto mesh_view = input_routing_weights.device()->get_view();
+    const auto cluster_axis_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(
-        expert_parallel_size == (cluster_axis == 0) ? mesh_view.num_cols() : mesh_view.num_rows(),
-        "expert parallel size should be the same as size of cluster axis");
+        expert_parallel_size == cluster_axis_size,
+        "expert parallel size ({}) should be the same as size of cluster axis {} ({})",
+        expert_parallel_size,
+        cluster_axis,
+        cluster_axis_size);
 
     const auto& optional_output_routing_weights = tensor_args.optional_output_routing_weights;
     if (optional_output_routing_weights.has_value()) {

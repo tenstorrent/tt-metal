@@ -107,6 +107,8 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: tmu-crt0.o, noc.o and substitutes.o.
+        objs.reserve(3);
         if (params.is_fw) {
             // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
             // For 2 erisc, erisc0 is launched from base firmware so it's not needed
@@ -130,6 +132,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 8 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(11);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");

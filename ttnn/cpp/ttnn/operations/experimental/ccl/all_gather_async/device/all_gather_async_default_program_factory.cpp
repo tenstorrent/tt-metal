@@ -334,8 +334,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
