@@ -100,16 +100,16 @@ place to start. Points 5 and 6 are one line each.
       precision, how tensors are split. The one category for changing the computation itself is where
       every large win came from, and it names only three things to try, none of which the agent used.
       It improvised the rest, which is why the run was good and why another would not repeat it.
-    - Worth naming, each with a condition for when it fires. The theme is fewer and bigger kernels:
+    - Worth naming, each with a condition for when it fires:
         - fold a repeated evaluation into rows of one larger matmul, rather than repeating the call
-          or the tensor. Two instances of this gave us 2.23x and 1.40x
+          or the tensor
         - fold an add into the matmul that consumes it
         - concatenate projections that share an input, as with Q, K and V
         - bake a constant scale into the weights at load
         - use in-place variants when an operand dies immediately
         - try both orders when a projection sits next to a slice or gather. This one goes both ways,
           so it has to be measured rather than assumed
-        - chunk attention above a measured length when the window is bounded, rather than building
+        - chunk attention above a measured length when it uses a sliding window, rather than building
           the whole score matrix and masking most of it away
         - pad a varying input to a few sizes chosen for the model's own range, rather than borrowing a
           ladder from another workload, since the padding is wasted work on every call
