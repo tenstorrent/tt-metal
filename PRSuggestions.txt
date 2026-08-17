@@ -15,13 +15,13 @@
       with a confusing error:
         - a local folder gets a shallower check, and the run dies three stages later pointing at the
           wrong thing
-        - the optimize stage treats a local model folder as a demo folder, so you cannot point it at
-          the model at all
-        - passing the demo folder instead loses track of which model it is, so optimize cannot build
-          its own correctness check even though it already wrote one. We had to name that check by
-          hand.
-    - Fix: accept a folder anywhere a Hub name is accepted, and keep both the model and the demo
-      folder instead of one replacing the other.
+        - the optimize stage confuses the folder holding the weights with the folder holding the
+          generated code, so you cannot point it at the model at all
+        - pointing it at the generated code instead loses track of which model that code came from,
+          so optimize cannot build its own correctness check even though it already wrote one. We had
+          to name that check by hand.
+    - Fix: accept a folder anywhere a Hub name is accepted, and keep track of both the model and the
+      generated code, instead of one replacing the other.
     - Related: models that ship their own code only work if their name is in a hardcoded list, and
       that list has one entry. Ours passed the early checks, then failed when it ran, with an error
       blaming the model rather than the loader. Fix: look at the model instead, its config already
@@ -54,12 +54,12 @@
         - the test only passes arguments whose names are on a recognised list, and the cache is not
           on it, so it always arrives empty.
       Using the cache and ignoring it therefore score the same, so the simpler version was accepted.
-    - The demo then has no choice but to recompute. It must use the accepted components, and one
-      that ignores the cache can only be given the whole prompt plus everything generated so far, on
-      every frame.
+    - The version that actually generates speech then has no choice but to recompute. It must use
+      the accepted components, and one that ignores the cache can only be given the whole prompt plus
+      everything generated so far, on every frame.
     - Careful when fixing: the plan expects the model to run once per frame plus once for the
-      prompt, so a correct fix will fail that check and the one verifying the demo uses the accepted
-      components. Update both in the same change or a good fix looks like a regression.
+      prompt, so a correct fix will fail that check, and the one verifying that the accepted
+      components are the ones being used. Update both in the same change or a good fix looks like a regression.
     - The traced version is correct at any position when called normally. It is stuck at one
       position only once recorded, because the position is baked in: a recording made at position
       200 always writes to slot 200. To replay it in a loop the position has to live on the device.
@@ -74,5 +74,5 @@
            shows how it should work.
         4. update the expected call counts, and both checks, in the same change
         5. for the traced version, make the position live on the device
-    - Also worth adding: before measuring speed, check that the code being measured is reachable
-      from the demo. That alone would have caught this.
+    - Also worth adding: before measuring speed, check that the code being measured is the code that
+      actually generates speech. That alone would have caught this.
