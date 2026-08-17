@@ -25,7 +25,7 @@ import os
 
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
@@ -38,8 +38,39 @@ from ...tests.test_factory import (
     _get_model_path,
     compare_tensors,
     get_pcc_threshold,
+    load_real_substate,
     parametrize_mesh_with_fabric,
+    real_weight_index,
 )
+
+
+def _real_lm_head_weight():
+    """The checkpoint's trained lm_head weight, ``[vocab, hidden]``.
+
+    Reads the one tensor out of the safetensors shards rather than building the
+    HF model to reach ``embed_tokens``. Two reasons, both load-bearing:
+
+    * The unified multimodal releases (12B) cannot be instantiated by
+      ``AutoModelForCausalLM`` at all — the checkpoint's ``embed_vision`` shapes
+      contradict the adapted text ``config.json`` — so a full-model load left
+      these tests unrunnable on that variant even though every text weight,
+      this one included, reads fine.
+    * Materializing a 31B model to CPU to clone a single tensor costs ~59 GB and
+      minutes; the shard read costs one ``get_tensor``.
+
+    Prefers an explicit ``lm_head.weight`` when a checkpoint carries one, and
+    otherwise falls back to the tied ``embed_tokens.weight``
+    (``tie_word_embeddings=True`` on every shipped Gemma4 variant).
+    """
+    from safetensors import safe_open
+
+    untied = sorted(key for key in real_weight_index() if key.endswith("lm_head.weight"))
+    if untied:
+        key = untied[0]
+        with safe_open(real_weight_index()[key], framework="pt") as f:
+            weight = f.get_tensor(key)
+        return weight.to(torch.bfloat16) if weight.dtype == torch.float32 else weight
+    return load_real_substate("embed_tokens")["weight"]
 
 
 def _lm_head_weight_dtype(mesh_device):
@@ -74,14 +105,8 @@ def _run_lm_head_decode_batch32(mesh_device, *, lm_head_dtype, use_decode_config
     cap = getattr(text_config, "final_logit_softcapping", 0.0) or 0.0
     batch = 32
 
-    logger.info(f"Loading HF reference weights from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
-    embed_module = getattr(getattr(hf_model.model, "language_model", hf_model.model), "embed_tokens")
-    embed_weight = embed_module.weight.data.clone()  # [vocab, hidden]
-    del hf_model
-    import gc
-
-    gc.collect()
+    logger.info(f"Reading the real lm_head weight from {model_path}...")
+    embed_weight = _real_lm_head_weight()  # [vocab, hidden]
 
     x_torch = torch.randn(1, 1, batch, hidden_size, dtype=torch.bfloat16)
 
@@ -155,16 +180,8 @@ def test_lm_head(mesh_device, reset_seeds, request):
     hidden_size = text_config.hidden_size
     cap = getattr(text_config, "final_logit_softcapping", 0.0) or 0.0
 
-    # Load just the embedding (which is tied to lm_head). full HF model
-    # construction is expensive but matches what test_full_model does.
-    logger.info(f"Loading HF reference weights from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
-    embed_module = getattr(getattr(hf_model.model, "language_model", hf_model.model), "embed_tokens")
-    embed_weight = embed_module.weight.data.clone()  # [vocab, hidden]
-    del hf_model
-    import gc
-
-    gc.collect()
+    logger.info(f"Reading the real lm_head weight from {model_path}...")
+    embed_weight = _real_lm_head_weight()  # [vocab, hidden]
 
     seq_len = 32
 
