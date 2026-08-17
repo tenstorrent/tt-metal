@@ -1712,7 +1712,7 @@
   cmd: |
     ./tt-train/scripts/setup_pth.sh
     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
-  model: tinyllama_1_1b_ddp32_shakespeare
+  model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
     bh_galaxy:
       timeout: 35
@@ -1724,7 +1724,7 @@
   cmd: |
     ./tt-train/scripts/setup_pth.sh
     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
-  model: llama_8b_tp8_ddp4_shakespeare
+  model: "[tt-train] llama_8b_tp8_ddp4"
   skus:
     bh_galaxy:
       timeout: 20
@@ -1736,7 +1736,7 @@
   cmd: |
     ./tt-train/scripts/setup_pth.sh
     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "qwen3_1_7b_ddp32_shakespeare"
-  model: qwen3_1_7b_ddp32_shakespeare
+  model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
     bh_galaxy:
       timeout: 15
@@ -1748,7 +1748,7 @@
   cmd: |
     ./tt-train/scripts/setup_pth.sh
     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tiny_deepseek_v3_ddp32_char_shakespeare"
-  model: tiny_deepseek_v3_ddp32_char_shakespeare
+  model: "[tt-train] tiny_deepseek_v3_ddp32_char"
   skus:
     bh_galaxy:
       timeout: 90
@@ -1760,7 +1760,7 @@
   cmd: |
     ./tt-train/scripts/setup_pth.sh
     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_70b_tp8_fsdp4_shakespeare"
-  model: llama_70b_tp8_fsdp4_shakespeare
+  model: "[tt-train] llama_70b_tp8_fsdp4"
   skus:
     bh_galaxy:
       timeout: 90
@@ -1773,7 +1773,7 @@
 #   cmd: |
 #     ./tt-train/scripts/setup_pth.sh
 #     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
-#   model: llama_8b_tp4_ddp8_shakespeare
+#   model: "[tt-train] llama_8b_tp4_ddp8"
 #   skus:
 #     bh_galaxy:
 #       timeout: 25
