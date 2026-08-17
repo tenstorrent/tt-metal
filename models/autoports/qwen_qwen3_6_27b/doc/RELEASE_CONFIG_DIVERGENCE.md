@@ -361,3 +361,87 @@ Onboard `Qwen/Qwen3.6-27B` the same way its sibling `Qwen/Qwen3.8-27B` is onboar
 the wall-clock consequence on this hardware: at the measured 56 ms/token an 80 x 1024
 budget is up to ~76 min per document, so the YAML's own 32,768 is the affordable
 starting point for CI and the larger budget belongs to a published-number run.
+
+---
+
+## Correction: upstream, this model has NO standard eval task at all
+
+Checked 2026-08-17 against `tt-inference-server` `origin/main` (`6d8c1aab`) and branch
+`vvukoman/add-8-models-to-release-flow` (`60f80c4b`).
+
+Earlier sections of this document describe the Qwen3.6-27B `EvalConfig` as containing
+`meta_ifeval` -> `ifeval` and `meta_gpqa_cot` -> `gpqa_diamond_cot_zeroshot`. **That is
+true only of the local checkout, not of upstream.**
+
+| | standard eval tasks for `Qwen/Qwen3.6-27B` |
+|---|---|
+| local checkout `b9a18e8f` | `meta_ifeval` -> `ifeval`, `meta_gpqa_cot` -> `gpqa_diamond_cot_zeroshot`, `terminal_bench_2` |
+| upstream `main` **and** the new branch | **`terminal_bench_2` only** (with `swe_bench_verified` commented out) |
+
+Evidence:
+
+- The branch's diff of `reference_config/evals/eval_config.py` has **zero deletions** and
+  mentions `Qwen3.6-27B` only inside *comments* on the newly added entries, which refer to
+  it as "the sibling Qwen3.6-27B config above". So the branch does not modify this model's
+  entry.
+- `git log origin/main..HEAD` in the local checkout shows `b9a18e8f` — *"Qwen3.6-27B: eval
+  config, terminal-bench token budget, external-chat meta evals"* — and
+  `git merge-base --is-ancestor HEAD origin/main` reports **not an ancestor**. The tree is
+  clean, so the AUTOFIX change is committed locally and **never upstreamed**.
+- `git log -S "meta_gpqa_cot"` attributes the addition to that same local commit.
+
+### Consequence when the branch lands
+
+The under-onboarding that `AUTODEBUG.md` diagnosed is **still live upstream**: the
+standard release child admits only `EVALS_COMMON` / `EVALS_META` / `EVALS_VISION`, this
+model's only active task is `EVALS_AGENTIC`, so standard selection returns `[]` — and the
+workflow converts an empty task result into a **successful no-op**.
+
+So when the commit lands, this model is evaluated on **neither** `r1_gpqa_diamond` **nor**
+`gpqa_diamond_cot_zeroshot`. It runs only `terminal_bench_2`, which additionally needs
+Docker that the model container does not have.
+
+This also corrects the prediction recorded above that the release "scores 0.00 on GPQA".
+That prediction was derived from the local checkout's configuration. Upstream there is no
+GPQA task to score, which is a worse failure mode than 0.00 because a zero is visible in
+a report and a silent empty selection is not.
+
+### What the fix should be
+
+Not to upstream the local AUTOFIX as written — its `meta_gpqa_cot` -> `cot_zeroshot`
+mapping is the variant with the 256-token default, the `["</s>"]` stop list, and greedy
+sampling, i.e. the configuration proven above to produce a repetition loop.
+
+Instead, onboard this model the way the same branch onboards its sibling
+`Qwen/Qwen3.8-27B`:
+
+```python
+EvalTask(
+    task_name="r1_gpqa_diamond",
+    workflow_venv_type=WorkflowVenvType.EVALS_COMMON,
+    use_chat_api=True,                      # server applies the chat template
+    model_kwargs={"max_length": 262144},
+    gen_kwargs={
+        "stream": "false",                  # lm-eval streaming parser raises KeyError
+        "max_gen_toks": 32 * 1024,          # 80*1024 is ~76 min/doc at 56 ms/token here
+        "until": [],
+        "do_sample": "true",
+        "temperature": 1.0, "top_k": 20, "top_p": 0.95,   # this model's own card
+    },
+    score=EvalTaskScore(
+        published_score=...,                # from the Qwen3.6-27B card
+        score_func=score_task_single_key,
+        score_func_kwargs={"result_keys": ["exact_match,none"], "unit": "percent"},
+    ),
+    limit_samples_map={EvalLimitMode.CI_NIGHTLY: 0.05, EvalLimitMode.SMOKE_TEST: 0.01},
+)
+```
+
+plus an `ifeval` task if instruction-following is wanted — noting that IFEval's checks
+inspect response *shape*, so it should be run either with a reasoning parser configured
+or with thinking disabled, or it grades the think block rather than the answer.
+
+The budget choice deserves a deliberate decision rather than copying 80*1024: at the
+measured 56 ms/token that is up to ~76 minutes per document on this hardware, whereas the
+task YAML's own 32,768 is ~31 minutes and the measured convergence for this item under
+non-greedy sampling should be far below either.

@@ -398,3 +398,104 @@ run cheaply when a GPU is available: **does HF, in thinking mode, converge on Di
 row 0 within 32,768 tokens?** If it does and this port does not, the divergence is
 port-side and the numerical policy is implicated. If neither converges, it is a model
 property and the benchmark configuration is what needs to change.
+
+---
+
+## RESOLVED: greedy decoding sends the model into a repetition loop on hard items
+
+Measured 2026-08-17. This is the root cause, and it is a configuration defect, not a
+port defect.
+
+### The three-way comparison
+
+Same model, same port, same server, thinking mode ON in all three, temperature 0.0
+(greedy) unless stated:
+
+| case | tokens | finish_reason | 12-gram repetition | answer |
+|---|---:|---|---:|---|
+| easy physics MCQ | 1,362 / 4,096 | **stop** | **0.0%** | `\boxed{A}` correct |
+| **real Diamond row 0** | **16,384 / 16,384** | **length** | **50.1%** | none |
+| real Diamond row 0, thinking **OFF** | 1,849 / 4,096 | **stop** | **0.0%** | `\boxed{A}` correct |
+
+A 50.1% duplicate-12-gram rate is a **degenerate repetition loop**, not long reasoning.
+Half of every twelve-word window in a 16,384-token generation is a repeat of another.
+That definitively separates the two hypotheses this document had open:
+
+- **rejected**: "genuinely non-convergent PhD-level reasoning" — the model answers the
+  same item correctly in 1,849 tokens when thinking is off, so it is not short of
+  ability or of budget;
+- **confirmed**: degenerate looping, specific to hard items, under greedy decoding.
+
+### Why the configuration causes it
+
+`gpqa_diamond_cot_zeroshot` — the task that actually ran — sets
+
+```yaml
+generation_kwargs:
+  until: ["</s>"]
+  do_sample: false
+  temperature: 0.0
+```
+
+Greedy decoding. This model's own `generation_config.json` specifies the opposite for
+generation:
+
+```json
+{"do_sample": true, "temperature": 1.0, "top_k": 20, "top_p": 0.95}
+```
+
+and `r1_gpqa_diamond`, the task the release flow uses for this family, sets
+`temperature: 0.6, top_k: 40, top_p: 0.95`, while the release `gen_kwargs` for the
+sibling `Qwen/Qwen3.8-27B` sets the card's own `temperature 1.0, top_k 20, top_p 0.95`.
+
+Greedy decoding is a well-known repetition trap for long-form reasoning: with no
+sampling noise, a model that enters a self-similar reasoning cycle has no mechanism to
+leave it. Every graded run on this branch, and every probe here until this point, used
+greedy — because that is what the task YAML dictates.
+
+### The full causal chain, end to end
+
+1. This model's `EvalConfig` was under-onboarded, so the pipeline's AUTOFIX added
+   `meta_gpqa_cot` mapped to **`gpqa_diamond_cot_zeroshot`** — the wrong task variant
+   for a reasoning model.
+2. That task sets **no `max_gen_toks`**, so lm-eval fell back to **256** tokens.
+3. It also sets **greedy** decoding, against the model card.
+4. On a hard Diamond item, greedy sends the model into a **repetition loop** (50.1%).
+5. The loop never emits `</think>`, so no `\boxed{}` answer is ever produced.
+6. At 256 tokens the response is a truncated reasoning fragment: **0/20 contained
+   `boxed`**, 16/20 filtered to `[invalid]`, giving `flexible-extract` **0.30** —
+   one document above four-choice chance.
+
+Every link is measured. None of them is a defect in the port.
+
+### What this retracts
+
+`NON_TERMINATION.md` earlier framed this as the model failing to stop, then narrowed it
+to "why do hard items not converge". The answer is that they *do* converge — under the
+sampling the model was designed for. The port's generation, stop-token handling, and
+sampler are sound: measured stop at 2 tokens on a trivial prompt with thinking off,
+1,362 tokens on an easy item with thinking on, and 1,849 tokens with the correct answer
+on the hard item with thinking off.
+
+### What to do
+
+1. **Use `r1_gpqa_diamond`** with the release `gen_kwargs` (`do_sample=true`,
+   `temperature=1.0`, `top_k=20`, `top_p=0.95`, explicit `max_gen_toks`), exactly as the
+   branch onboards `Qwen/Qwen3.8-27B`. This fixes the budget, the stop list, the
+   sampling, and the extractor in one change.
+2. **Do not grade this model under greedy decoding.** Any task whose
+   `generation_kwargs` set `do_sample: false` / `temperature: 0.0` will reproduce the
+   loop. That includes `gpqa_diamond_cot_zeroshot` as currently written.
+3. Optionally add a **repetition guard** as defence in depth — a nonzero
+   `presence_penalty` or `repetition_penalty`. The branch's `meta-models/Muse-Glimmer-30B`
+   entry already does this ("a nonzero presence penalty on a..."), so there is
+   precedent in the same file.
+
+### Still to verify by measurement
+
+The non-greedy arms on Diamond row 0 are queued in `release_grading_probe.py`
+(`temperature 0.6/top_k 40/top_p 0.95` and `temperature 1.0/top_k 20/top_p 0.95`, both at
+32,768). The prediction, recorded before running: **both converge well inside the budget
+with low repetition**, and at least one produces the correct `\boxed{A}`. If a non-greedy
+arm *also* loops, then sampling is not sufficient and a repetition penalty is required —
+which would still be a configuration fix rather than a port fix.
