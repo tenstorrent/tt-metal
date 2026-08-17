@@ -130,6 +130,26 @@ Nothing here justifies re-architecting on a hunch. It justifies measuring EP at
 batch 32 before treating uniform TP=4 as settled for this model, because the
 pipeline chose it by template rather than by comparison.
 
+**Converging analysis, with evidence this review lacked.**
+`doc/IMPROVEMENT_EXPERT_PARALLEL.md` (pushed independently while this was being
+written) reaches the same diagnosis — the 192-wide per-device expert matmul is the
+bottleneck and expert parallelism is the lever — and supplies two things this
+review could not:
+
+- `doc/multichip_decoder/mesh_plan.md` **rejected EP=4 analytically, not by
+  measurement**, on batch-1 dispatch/combine and imbalance grounds — the same doubt
+  raised above.
+- The fleet corpus already ran that experiment on **gpt-oss-20b**, same 1×4
+  Blackhole mesh: EP4 with whole experts per rank beat TP-fracture decisively
+  (decode 0.599 vs 0.656 ms, prefill 26.7 vs 39.8), and an analytic EP drop was
+  recorded there as the inferior call.
+
+That resolves the batch-1 doubt in EP's favour on prior evidence, so EP is the
+larger lever and should be measured first. The expert gate/up packing proposed
+above stays worth doing and is complementary: it is a contained change that keeps
+the current TP decomposition, whereas EP changes the weight layout and the
+collective structure.
+
 ## Memory: the full-attention KV cache is stored twice
 
 Derived from the config and `model.py:273`. The model has
