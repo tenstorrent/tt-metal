@@ -130,7 +130,7 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
     });
 
     // create read/write kernel
-    KernelDescriptor::CompileTimeArgs reader_ct_args = {};
+    KernelDescriptor::CompileTimeArgs reader_ct_args = {mask_h};
     TensorAccessorArgs(*output.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*output_grad.buffer()).append_to(reader_ct_args);
 
@@ -221,7 +221,7 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
         }
 
         reader_desc.emplace_runtime_args(
-            core, {output.buffer(), output_grad.buffer(), num_tiles_per_core, tile_offset, Ht, Wt, mask_h});
+            core, {output.buffer(), output_grad.buffer(), num_tiles_per_core, tile_offset, Ht, Wt});
 
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset, Ht, Wt});
 

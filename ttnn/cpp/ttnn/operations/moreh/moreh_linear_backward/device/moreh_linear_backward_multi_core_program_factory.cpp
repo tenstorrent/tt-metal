@@ -129,8 +129,8 @@ tt::tt_metal::ProgramDescriptor MorehBiasAddBackwardOperation::MultiCoreProgramF
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args =
-        TensorAccessorArgs(*output_grad.buffer()).get_compile_time_args();
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {mask_h};
+    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_compile_time_args);
     KernelDescriptor::CompileTimeArgs writer_compile_time_args =
         TensorAccessorArgs(*bias_grad.buffer()).get_compile_time_args();
 
@@ -221,9 +221,7 @@ tt::tt_metal::ProgramDescriptor MorehBiasAddBackwardOperation::MultiCoreProgramF
              Wt,
              num_cols_per_core,
              tile_offset,
-             mask_h,
              mask_w,
-             static_cast<uint32_t>(do_mask_h),
              static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
 
         writer_desc.emplace_runtime_args(core, {bias_grad_buf, num_cols_per_core, tile_offset});

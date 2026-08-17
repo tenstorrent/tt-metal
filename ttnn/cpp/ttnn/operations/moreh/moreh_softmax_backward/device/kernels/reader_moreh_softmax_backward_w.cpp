@@ -16,8 +16,6 @@ void kernel_main() {
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
     uint32_t Wt = get_arg_val<uint32_t>(4);
 
-    uint32_t mask_w = get_arg_val<uint32_t>(5);
-
     constexpr auto cb_y = tt::CBIndex::c_0;
     constexpr auto cb_dy = tt::CBIndex::c_1;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
@@ -27,16 +25,18 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    constexpr auto y_args = TensorAccessorArgs<0>();
+    constexpr uint32_t mask_w = get_compile_time_arg_val(0);
+    constexpr auto y_args = TensorAccessorArgs<1>();
     constexpr auto dy_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    if (mask_w < tt::constants::TILE_WIDTH) {
+    if constexpr (mask_w < tt::constants::TILE_WIDTH) {
         dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
             cb_scaler,
             ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>(mask_w);
+            ckernel::ReduceDim::REDUCE_ROW,
+            mask_w>();
     } else {
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();

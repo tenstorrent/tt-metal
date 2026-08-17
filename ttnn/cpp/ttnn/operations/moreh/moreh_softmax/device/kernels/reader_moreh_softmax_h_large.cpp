@@ -16,7 +16,8 @@ void kernel_main() {
     const std::uint32_t tile_offset = get_arg(args::tile_offset);
     const std::uint32_t Ht = get_arg(args::Ht);
     const std::uint32_t Wt = get_arg(args::Wt);
-    const std::uint32_t mask_h = get_arg(args::mask_h);
+
+    constexpr std::uint32_t mask_h = get_arg(args::mask_h);
 
     // Constants
     constexpr auto dfb_in = dfb::in;
@@ -32,9 +33,12 @@ void kernel_main() {
     const auto src_in = TensorAccessor(tensor::src);
 
     // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
-    if (mask_h < tt::constants::TILE_HEIGHT) {
+    if constexpr (mask_h < tt::constants::TILE_HEIGHT) {
         dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
-            dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>(mask_h);
+            dfb_max_scaler,
+            ckernel::PoolType::MAX,
+            ckernel::ReduceDim::REDUCE_COL,
+            mask_h>();
     } else {
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>();

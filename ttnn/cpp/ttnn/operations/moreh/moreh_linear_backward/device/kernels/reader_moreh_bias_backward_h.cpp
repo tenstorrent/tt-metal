@@ -14,21 +14,23 @@ void kernel_main() {
     const uint32_t Wt = arg_fetcher.get_next_arg_val<uint32_t>();
     const uint32_t Wt_per_core = arg_fetcher.get_next_arg_val<uint32_t>();
     const uint32_t start_id = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t mask_h = arg_fetcher.get_next_arg_val<uint32_t>();
     const uint32_t mask_w = arg_fetcher.get_next_arg_val<uint32_t>();
-    const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
-    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr uint32_t mask_h = get_compile_time_arg_val(0);
+    constexpr bool do_mask_h = mask_h < tt::constants::TILE_HEIGHT;
+
+    constexpr auto src0_args = TensorAccessorArgs<1>();
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
 
-    if (do_mask_h) {
+    if constexpr (do_mask_h) {
         dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
             cb_id_scaler,
             ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_COL>(mask_h);
+            ckernel::ReduceDim::REDUCE_COL,
+            mask_h>();
     } else {
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
