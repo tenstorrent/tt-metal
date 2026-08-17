@@ -5466,12 +5466,35 @@ to PCC 0.99 against a wrong target, and no gate in the pipeline could have notic
 docstring even anticipates the risk (*"worth knowing before you 'fix' the RoPE"*), which makes the
 absence of a check more striking, not less.
 
-Compounding it: the resolver is **off by default** (`_ENV_FLAG`), and only runs *after* a component
-has already failed to load. So for any model not natively loadable by `transformers` — most of TTS —
-the default experience is "unsupported", while the capability to handle it already exists and works.
+### Second defect: the gating is inconsistent, and one docstring states the opposite of the behaviour
 
-**Fix:** turn it on by default; and when it writes a from-scratch implementation, make it write and
-run a self-check too. It cannot compare against a reference that isn't there, but it can assert what
+There are three trigger paths, and they do not agree:
+
+| path | gate | effect |
+|---|---|---|
+| `bringup_cc.py:475` pre-flight (**default engine**) | `_non_transformers or is_enabled()`, then calls `resolve(..., enabled=True)` | **runs regardless of the env flag** |
+| `module_tree.py:608` discovery | `is_enabled()` | needs the flag |
+| `bringup_mcp.py:928,982` repair rung | `is_enabled() and is_load_failure(text)` | needs the flag *and* a matching failure string |
+
+Measured with the flag unset (`is_enabled() == False`):
+
+```
+native (Mistral-format)    hf_native=False  non_transformers=True   -> pre-flight fires: True
+our hand-made HF export    hf_native=True   non_transformers=False  -> pre-flight fires: False
+```
+
+The default engine is `cc` (`cli.py:9821`), so on the default path the resolver **already runs by
+itself** for exactly the models this is about. Meanwhile `bringup_mcp.py:895` documents the feature as
+*"OFF unless TT_HW_PLANNER_LOADER_RESOLVER=1. Only the gate should route you here … when a component
+failed to build its torch reference"* — untrue of the pre-flight path, which force-enables it.
+
+This also explains why we never saw it in the pipeline runs, and it is our own doing (S1): we handed
+the tool an HF-format export we had built by hand, so `_hf_native` was true, `_non_transformers` was
+false, and the one path that would have fired never did. **Our workaround suppressed the feature that
+existed to remove the need for the workaround.**
+
+**Fix:** pick one gating rule for all three paths and correct the docstring to match; and when it
+writes a from-scratch implementation, make it write and run a self-check too. It cannot compare against a reference that isn't there, but it can assert what
 it already knows: the checkpoint bijection it enforces, shape and finiteness at every stage, cached
 vs recomputed equivalence, and determinism under a pinned seed. Then say plainly in the log which of
 the two things happened — adapted an existing implementation, or wrote one unverified.
@@ -5517,6 +5540,11 @@ the two things happened — adapted an existing implementation, or wrote one unv
   implementations and copies hidden, it wrote a 1064-line architecture from scratch that matches our
   reference on every stage (7/7, flow codes bit-identical). See F48. The real defect is narrower and
   worse: nothing verifies what it writes.
+- **"The resolver is off by default and only runs after a component has failed" was WRONG**, and I
+  had put it in the PR-facing document. It is true of two of the three trigger paths. The third —
+  pre-flight in `bringup_cc.py`, on the **default** engine — calls `resolve(..., enabled=True)` and
+  runs whenever the checkpoint is not HF-format, flag or no flag. Verified by evaluating the gate with
+  the flag unset. Corrected in F48 and in the PR document.
 - **The codec decoder is NOT off by PCC 0.9998.** I measured that and started localising it as a
   codec defect. The cause was my own test: the from-scratch loader takes model-emitted codes
   `(B, T, 37)` and strips the 2 audio special tokens itself, while our reference takes stripped codes

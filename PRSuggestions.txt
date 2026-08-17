@@ -4,22 +4,27 @@
       VITS/MMS, Bark, Parler-TTS, Moshi, CSM, Dia). Most ship their own code: XTTS-v2, StyleTTS2,
       F5-TTS, CosyVoice, GPT-SoVITS, Kokoro, Voxtral-TTS and others. Being on the HF Hub does not
       mean transformers can load it.
-    - You already have something for this, but it is off by default and only runs after a component
-      has already failed, so these models just look unsupported.
-    - We turned it on and it worked. In 12 minutes it wrote a loader that reads the native 8 GB
-      checkpoint, matches our reference exactly, and produces audio. But an existing PyTorch version
-      of the model was on the machine and it adapted that, so this did not prove much.
+    - You already have this, and it works better than we first thought. Pointed at a checkpoint that
+      is not in HF format, the default path writes the loader on its own. Two other places that use
+      the same feature need an environment variable that is off by default, and one of them says the
+      feature is off unless you set it, which is not true. Worth settling on one rule and describing
+      it correctly. We only missed this at first because we had already converted the model to HF
+      format by hand, which is the one condition that stops it from running.
+    - It worked. In 12 minutes it wrote a loader that reads the native 8 GB checkpoint, matches our
+      reference exactly, and produces audio. But an existing PyTorch version of the model was on the
+      machine and it adapted that, so this did not prove much.
     - So we hid every PyTorch version on the machine and ran it again. It wrote the architecture
       itself, about a thousand lines covering all three stacks, from the checkpoint and the model's
       own description. We then tested it against our reference: every stage matches to rounding and
       the audio codes come out identical. It even wrote a working cached decode step, which is more
-      than the component it later brings up does.
+      than the component it later brings up does. It is a published architecture though, so this does
+      not show it could do the same for something genuinely new.
     - What is missing is a check. When it can compare against an existing version it writes itself a
       check and runs it. When it writes the architecture from scratch there is nothing to compare
       against, so it writes no check at all, and that file becomes what every later test is scored
       against. Ours was correct. A slightly wrong one, one RoPE convention or one norm epsilon, would
       set every component's target wrong and nothing in the run could tell.
-    - Fix: turn it on by default. When it writes the architecture itself, have it check what it can
+    - Fix: when it writes the architecture itself, have it check what it can
       without a reference: that every weight in the checkpoint got used, that each stage returns the
       expected shape and finite numbers, that the cached and recomputed paths agree, and that the
       same seed gives the same result. And say in the log which of the two it did.
