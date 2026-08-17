@@ -78,9 +78,8 @@ void kernel_main() {
             fabric_arg_idx);
 
     // A peer's route follows the connection args, two words per peer in the order the
-    // loop below takes them. The words mean different things per fabric — a hop count on
-    // 1D, the peer's node on 2D — so the host encodes them and the header type here
-    // decides how to read them back.
+    // loop below takes them: the peer's mesh and chip, since the header type this kernel
+    // is compiled against routes by node rather than by hop count.
     const size_t route_arg_idx = fabric_arg_idx;
 
     // One payload header and one increment header per peer: a header carries its
