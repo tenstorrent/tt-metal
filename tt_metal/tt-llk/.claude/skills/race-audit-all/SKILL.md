@@ -30,7 +30,12 @@ parse pass; it feeds every sub-audit a complete known-pattern worklist over one
 shared fact base (which is also what makes the JOIN a lookup rather than a
 schema reconciliation):
 
-    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar>
+    tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar>
+    # The path is relative to the TT-METAL REPO ROOT, which is the usual session CWD; in a
+    # session rooted at tt-llk itself, drop the `tt_metal/tt-llk/` prefix. Invoke it by path
+    # and never `cd` first: loading a skill does NOT change the shell's CWD, so a bare
+    # `cd .claude/...` fails from the repo root. run.sh self-locates (and always writes to
+    # the tool's own out/), so the CWD it runs from does not matter.
     # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
     # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
     #                                    semaphore-handshake, reconfig-stall,
@@ -193,8 +198,9 @@ must never read as "all kernels covered").
 1. **Get a build log** carrying the JIT compile commands — either
    `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 <workload> > build.log 2>&1` captured on
    hardware once (then audit offline), or let bootstrap run the workload for you.
-2. **Run the tier:** `LLK_KT_LOG=build.log ./run.sh <arch> --full-jit` (log path),
-   or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' ./run.sh <arch> --full-jit`
+2. **Run the tier** (same `run.sh` path as the preflight above — by path, no `cd`):
+   `LLK_KT_LOG=build.log tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit`
+   (log path), or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' <same run.sh> --full-jit`
    (run-a-workload path). bootstrap → `capture.py` (scrape → GCC→clang translate →
    `llk_extract` per kernel → merged fact base) → cb/noc/read/atomic/l1/mailbox over it.
 3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every

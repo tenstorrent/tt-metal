@@ -19,7 +19,8 @@ user_invocable: true
 ## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
 Get the deterministic candidate list before manual analysis:
 
-    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks semaphore-handshake
+    tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks semaphore-handshake
+    # repo-root-relative path; run.sh self-locates, so any CWD works
     # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["semaphore-handshake"].findings
 

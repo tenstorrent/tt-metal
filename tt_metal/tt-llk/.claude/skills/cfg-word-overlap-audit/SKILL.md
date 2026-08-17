@@ -21,7 +21,8 @@ Get the deterministic candidate list before manual analysis (it resolves every
 cfg write to its 32-bit word via cfg_defines.h, per register file, and attributes
 the thread):
 
-    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks cfg-word-overlap
+    tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks cfg-word-overlap
+    # repo-root-relative path; run.sh self-locates, so any CWD works
     # PR-scoped: add --changed [BASE] (default main) to report only words touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["cfg-word-overlap"].findings
 
