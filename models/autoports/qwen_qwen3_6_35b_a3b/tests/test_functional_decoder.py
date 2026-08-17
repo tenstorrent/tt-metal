@@ -1000,6 +1000,32 @@ def test_docs_match_artifacts():
     assert probes and probes.group(1) == probes.group(2), "op probes are not all passing"
     assert f"| {probes.group(2)} device op-behaviour probes" in readme
 
+    # --- section 3.2: the real-weight table, from pcc_real_weights.jsonl ---
+    # Round 6 found this table still carrying round 3's `decode[full]` numbers, because the renderer
+    # and this test both covered section 3.1 only.
+    real = {}
+    for line in (harness.ARTIFACT_DIR / "pcc_real_weights.jsonl").read_text().splitlines():
+        if line.strip():
+            row = json.loads(line)
+            real[row["label"]] = row
+    for kind in ("linear", "full"):
+        pre = real[f"prefill[{kind}] seq=1024 start=0 user=0"]
+        assert (
+            f"| `prefill[{kind}] seq=1024` | {pre['pcc']:.7f} | {100 * pre['rel_rms']:.2f}% |" in readme
+        ), f"section 3.2 prefill[{kind}] row disagrees with pcc_real_weights.jsonl"
+        a, b = real[f"decode[{kind}] pos=512 batch=2"], real[f"decode[{kind}] pos=513 batch=2"]
+        expected = (
+            f"| `decode[{kind}] pos=512/513, batch=2` | {a['pcc']:.7f} / {b['pcc']:.7f} | "
+            f"{100 * a['rel_rms']:.2f}% / {100 * b['rel_rms']:.2f}% |"
+        )
+        assert expected in readme, f"section 3.2 decode[{kind}] row disagrees with pcc_real_weights.jsonl"
+
+    # --- the work log carries the same counts and was never checked, which is how its probe count
+    # --- stayed at 21 after the README's was fixed to 24
+    worklog = (harness.ARTIFACT_DIR / "work_log.md").read_text()
+    assert f"**{probes.group(2)}/{probes.group(2)} ok**" in worklog, "work_log probe count disagrees with the log"
+    assert f"({passed.group(1)} tests:" in worklog, "work_log suite count disagrees with the log"
+
     # --- the advertised-context table cannot quote a PCC that long_context.jsonl does not hold ---
     recorded = {
         f"{json.loads(l)['pcc']:.7f}"
@@ -1033,15 +1059,23 @@ def test_sdpa_chunk_and_start_pos_alignment_agree(expect_error):
     for good in (32, 64, 128):
         cfg = fd.DecoderConfig.from_hf(hf_config, 3, None, sdpa_chunk=good)
         assert cfg.sdpa_chunk == good
-        # PREFILL_ALIGN-aligned offsets stay legal at every accepted value, so lowering the knob can
-        # only widen what prefill accepts, never narrow it.
+        # The accepted `start_pos` alignment is `PREFILL_ALIGN`, and it has to be a multiple of every
+        # constraint, not just this knob: the SDPA chunk index, the paged fill's block offset, and the
+        # padding. Round 5 divided by `sdpa_chunk` alone, which made `sdpa_chunk=32` accept
+        # `start_pos=32` -- fine for the chunk index, silently wrong for `32 // block_size == 0`.
         assert fd.PREFILL_ALIGN % cfg.sdpa_chunk == 0
+        assert fd.PREFILL_ALIGN % cfg.block_size == 0
+        # every offset prefill accepts must be legal for the paged fill at *any* legal sdpa_chunk
+        for start_pos in (0, fd.PREFILL_ALIGN, 4 * fd.PREFILL_ALIGN):
+            assert start_pos % cfg.sdpa_chunk == 0, (good, start_pos)
+            assert start_pos % cfg.block_size == 0, (good, start_pos)
 
     # 256 is the case that used to be accepted and silently wrong; 48 and 16 are not tile multiples.
     for bad in (256, 512, 48, 16, 0):
         with expect_error(ValueError, "sdpa_chunk"):
             fd.DecoderConfig.from_hf(hf_config, 3, None, sdpa_chunk=bad)
 
-    # And the runtime check divides by the op's divisor, not by the padding constant.
+    # And the runtime bound is the one that covers all three consumers.
     source = inspect.getsource(fd.FunctionalDecoder.prefill_forward)
-    assert "cfg.sdpa_chunk if not cfg.is_linear" in source, "prefill_forward no longer aligns to cfg.sdpa_chunk"
+    assert "start_pos % PREFILL_ALIGN" in source, "prefill_forward no longer bounds start_pos by PREFILL_ALIGN"
+    assert "padded seq_len" in source, "prefill_forward no longer checks start_pos + padded_len"

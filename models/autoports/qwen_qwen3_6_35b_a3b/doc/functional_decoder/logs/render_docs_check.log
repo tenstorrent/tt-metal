@@ -12,7 +12,7 @@ postprocess_docs:
   updated  advertised-context table
   updated  row counts (276/6/8)
   updated  batched long-context row (0.9999939)
-render_docs:
+render_docs --check:
   updated  section 3.1 table (17 families, overall 0.9999450)
   updated  section 3.8 (generated from the two diagnostic logs)
   updated  section 5 (gap 0.049-0.470%, context 8192)
@@ -26,8 +26,9 @@ render_docs:
   updated  advertised-context table
   updated  row counts (276/6/8)
   updated  batched long-context row (0.9999939)
-  updated  freshness list in README.md (8 files)
-  updated  freshness list in work_log.md (8 files)
+  same     freshness list in README.md (8 files)
+  same     freshness list in work_log.md (8 files)
   same     real-weight table (§3.2, 4 rows)
-  updated  unary group total (12/iter, 10.462 ms/iter)
+  same     unary group total (12/iter, 10.462 ms/iter)
   updated  counts (106 passed = 32 CPU + 75 device, 24 probes, 18 layer keys)
+render_docs --check: committed docs match the artifacts

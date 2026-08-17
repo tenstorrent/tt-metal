@@ -22,3 +22,10 @@ confirmed health with **no reset**.
 
 Full incident write-up, including the cause and the mitigation: `../work_log.md` §6, entry
 "2026-08-17 ~15:34-15:40 — device-profiler marker mismatch aborted one Tracy case".
+
+**Second occurrence (2026-08-17 ~21:24), same outcome.** `tt-triage-perf-hang.txt` is also 0 bytes,
+captured while a `tracy-capture` left over from the second device-profiler abort still held the
+device (`timeout 180` -> rc 124). Same explanation as above and the same conclusion: while a hung
+profiler process owns the device lock, `tt-triage` cannot get far enough to write a report, so this
+stage has no triage capture for its one recurring hardware-adjacent failure mode. Both incidents,
+with the exact signatures and the recovery steps, are in `work_log.md` section 6.

@@ -22,10 +22,16 @@ are under the limit and committed.
 Everything derived from them *is*: the filtered per-op CSV and the human-readable table above
 are exactly the signpost-filtered view of those rows.
 
-Regenerate any of them with one command, e.g.:
+Regenerate **all four** cases (no arguments) before trusting the derived numbers:
 
 ```bash
-./models/autoports/qwen_qwen3_6_35b_a3b/tests/run_perf.sh decode linear
+./models/autoports/qwen_qwen3_6_35b_a3b/tests/run_perf.sh
 ```
+
+A single case is available for debugging one artifact — `run_perf.sh decode linear` — but it is not
+how the committed set should be produced: `perf_summary.json` and README section 5 aggregate all four,
+and the script only resets `perf_host_summary.jsonl` on a full run (it warns on a partial one). The
+work log's section 6 profiler incident is also why the committed set comes from one contiguous run
+rather than being spliced case by case.
 
 To re-run `tt-perf-report` against a committed ops CSV, `gunzip -k` it first.

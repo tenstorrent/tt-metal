@@ -17,8 +17,17 @@ cd "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 AUTOPORT=models/autoports/qwen_qwen3_6_35b_a3b
 ARTIFACT_DIR="$AUTOPORT/doc/functional_decoder"
 TEST=$AUTOPORT/tests/test_perf.py
-# one run == one evidence file; each case appends its host-wall row
-rm -f "$ARTIFACT_DIR/perf_host_summary.jsonl"
+# one run == one evidence file; each case appends its host-wall row. Reset it **only for a full
+# run**: a single-case invocation (`run_perf.sh decode linear`, which tracy/README.md offers for
+# regenerating one artifact) would otherwise leave a 1-row file while perf_summary.json and README
+# section 5 still quote four cases -- evidence quietly shrinking, the same failure class as the
+# provenance-log resets in conftest.py.
+if [ $# -eq 0 ]; then
+  rm -f "$ARTIFACT_DIR/perf_host_summary.jsonl"
+else
+  echo "partial run ($*): keeping perf_host_summary.jsonl; re-run with no arguments before" \
+       "trusting it or summarize_perf.py" >&2
+fi
 
 run_one() {
   local mode=$1 kind=$2

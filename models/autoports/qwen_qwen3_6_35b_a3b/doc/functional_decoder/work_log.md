@@ -181,15 +181,15 @@ epsilon rescale is what it is.
 ## 4. TTNN op probes (device)
 
 `tests/probe_ttnn_ops.py` checks, on device, every op behaviour the design depends on before
-any of it was written. Final state: **21/21 ok**. It is kept as a script (not a pytest) so a
+any of it was written. Final state: **24/24 ok**. It is kept as a script (not a pytest) so a
 failure prints the exact op and shapes.
 
-The committed log (`logs/probe_ttnn_ops.log`) is the **final** state of the script: 21 probes
+The committed log (`logs/probe_ttnn_ops.log`) is the **final** state of the script: 24 probes
 that all pass, each printing its shapes and PCC. The table below is the *design* record — several
 rows are conclusions from running variants of these probes during development (a rejected core
 grid, a dtype the op refuses, a precision comparison between two spellings). Those variants are
 not in the final script, because a probe file that keeps deliberately-failing calls cannot report
-`21/21 ok`. The `evidence in final log` column says which rows a reader can re-derive from the
+`24/24 ok`. The `evidence in final log` column says which rows a reader can re-derive from the
 committed log and which are development findings recorded here so a later stage does not
 re-discover them.
 
@@ -205,7 +205,7 @@ re-discover them.
 | `ttnn.softplus` | fp32 relmax 3.4e-4, bf16 relmax 3.2e-2 | the `a + dt_bias` path is forced to fp32 (`dt_bias` reaches +15.6) | no — development finding |
 | `ttnn.exp` with a `-1e30` additive mask | -> 0, no NaN | decay masks are added **before** `exp`; cumulative gates reach ~-1e5 so `exp` of the unmasked upper triangle would overflow to `inf` and produce `0*inf = NaN` | no — development finding; the behaviour it justifies is exercised by every `linear` test |
 | `ttnn.permute` `(0,3,2,1)` / `(2,3,0,1)` | ok | gets `beta`/`g` from `[1,1,T,32]` into the `[.., heads, .., 1]` broadcast layout without a relayout | no — development finding; exercised by every `linear` test |
-| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999775 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
+| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999778 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
 
 Three further aliasing facts were **not** established by `probe_ttnn_ops.py` (which only checks
 buffer addresses for the in-place case, `p_inplace`) but by ad-hoc buffer-address comparisons while
@@ -756,7 +756,30 @@ Acted on from the same review's "Other Concerns" and "Hard-Check Gaps":
 | `logs/test_suite_gate.log` was committed but unlisted; §7 item 6's unary group total was quoted as an exact figure; the 7.45 ms decode-SDPA figure is batch 1 against a batch-32 profiled row | All three fixed: the gate log is described (and marked as not the authoritative run), the unary total is derived, and both batches are now named where the comparison is made. |
 | `_record_contract` is a one-way `max()` ratchet in a file the stage treats as derived | Documented as a convenience writer, with the two things that stop it going stale: the file is regenerated from `long_context.jsonl`, and the contract test asserts *equality* against the evidence rows, so an inflated field fails. |
 
-## 14. Commits
+## 14. Independent stage review (round 6) and the work it produced
+
+`$stage-review` returned **more-work-needed** a sixth time. No P1. It re-derived essentially the whole
+stage successfully — §3.1, §4, §5, §3.8's four tables, the watcher run, the sparse-matmul derivation,
+the non-aligned coverage and both operational incidents from round 5 — and then found three things,
+one of which was a **correctness defect this stage introduced in round 5**.
+
+| finding | outcome |
+|---|---|
+| **P2 — round 5's `sdpa_chunk` fix widened the `start_pos` contract into a silent page-write bug.** Dividing by `cfg.sdpa_chunk` closed the `sdpa_chunk=256` hole but opened one downwards: at `sdpa_chunk=32` a `start_pos` of 32 passed validation, and the paged fill computes its block offset as `abs_pos // block_size = 32 // 64 = 0` — writing the chunk into the wrong page while the SDPA masks as if it were elsewhere. Same for the padded end, which is `PREFILL_ALIGN`-rounded and could overrun the RoPE and page-table rows | **Real defect, fixed** (README §7 item 10). `start_pos` has **three** consumers with independent alignment requirements — the SDPA chunk index, the paged block offset, and the padding bound — and the accepted value is the *maximum*, not any one of them. The runtime bound is `PREFILL_ALIGN` again, `__post_init__` now asserts it is a multiple of **both** `sdpa_chunk` and `block_size` so that single bound is sufficient, and the padded end is bounds-checked explicitly. The lesson worth keeping: "widening a contract" is a claim about every consumer, and I checked one. The test now asserts the block-alignment property instead of the "lowering can only widen" claim that *was* the bug, and README §2/§9 no longer advertise `sdpa_chunk` as a lever it never was. |
+| **P2 — the committed PCC evidence was written by the suite run the README calls *not* authoritative, after the docs were rendered and checked.** Round 5's pass ended with a gate re-run, so `pcc.jsonl` postdated `render_docs.py` and `test_docs_match_artifacts` by three minutes; inside that last run the docs test stood down by its own newer-artifacts rule. The numbers happened to agree — `--check` passes — but the pass had not established that | Ordering fixed at the source: the provenance-log suite now runs **exactly once and last** among the writers, then the docs are rendered from those files, then `render_docs.py --check` proves the match and its output is committed as `logs/render_docs_check.log`. No suite run happens after the render. |
+| **P2 — doc numbers disagreed with artifacts for the sixth round running, in the three places the new machinery does not reach**: README §3.2's `decode[full]` row still carried round 3's numbers (0.9999856/0.9999908, 0.54%/0.44% vs the artifact's 0.9999864/0.9999911, 0.52%/0.43%); work_log §4 said "21/21 ok" in three places where the log says 24/24 (the README's copy had been fixed, but nothing read the work log); and the freshness command listed eight files while the prose claimed six | Coverage extended rather than the instances patched: `render_docs.py` now generates §3.2 from `pcc_real_weights.jsonl`, rewrites the work log's probe and suite counts, and **enumerates the freshness command's actual output** into both documents. `test_docs_match_artifacts` now checks §3.2 row by row and reads `work_log.md`. The pattern across six rounds is unambiguous — a number that is written by hand goes stale — so the response each time is to move it into the renderer, not to correct it. |
+
+Acted on from the same review's "Other Concerns":
+
+| concern | outcome |
+|---|---|
+| `tracy/README.md` offered `run_perf.sh decode linear` for regenerating one artifact, while `run_perf.sh` unconditionally deletes `perf_host_summary.jsonl` — so a single-case rerun silently left a 1-row file against four quoted cases | Fixed in the script, not just the doc: the reset now happens **only** on a full run, and a partial run warns on stderr. The doc now says to regenerate all four and explains why. |
+| the two remaining raw `ttnn.to_layout` + unconditional-deallocate sites in the MoE are the exact aliasing shape round 3 routed through `_tilized` everywhere else | Both go through a new `_row_major` now; `_tilized` and it share a `_relayout` core, so **every** `to_layout` on the runtime path answers the ownership question instead of assuming it. |
+| §3.8's `token*8` row claimed the attention branch is "bit-identical" under input scaling; one of the three columns moves in its last digit (0.9874978 -> 0.9874977) | Generated text corrected to "unchanged to within 1e-7", naming which columns repeat exactly. |
+| `triage/README.md` explained only the first empty triage capture; README §8 described the directory in the singular | Both cover the second occurrence now. |
+| README §3's count sentence read "106 passed ... 32 CPU-only + 75 device" without saying 107 were collected | The generated line now states the collected total and names the one skip. |
+
+## 15. Commits
 
 Local only; nothing pushed.
 
@@ -795,8 +818,24 @@ find models/autoports/qwen_qwen3_6_35b_a3b/doc -type f \
   ! -newer models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py
 ```
 
-should list only `weight_stats/*.json` (checkpoint-derived), the `.gitignore` / `README.md` files
-that describe the artifact policy, and `triage/` (a record of the §6 incident when it happened).
+It currently lists exactly these, and each is explained:
+
+* `.gitignore`
+* `functional_decoder/logs/measure_expert_union.log`
+* `functional_decoder/logs/probe_dram_capacity.log`
+* `functional_decoder/tracy/.gitignore`
+* `functional_decoder/triage/tt-triage-perf-hang.txt`
+* `functional_decoder/triage/tt-triage.txt`
+* `functional_decoder/weight_stats/layer_00.json`
+* `functional_decoder/weight_stats/layer_03.json`
+
+None of them can have been produced by a different version of the shipped layer: the
+`weight_stats/*.json` are checkpoint-derived, the `.gitignore` files describe the artifact policy,
+`triage/` records the two incidents in work_log section 6, and the `logs/` entries are the
+expert-union and DRAM-capacity probes, neither of which imports `functional_decoder`. The list is
+generated by `tests/render_docs.py`, which excludes only the three logs the pass writes *after*
+rendering (`render_docs.log`, `render_docs_check.log`, `test_docs.log`) -- running the raw command
+may show those, and their age says nothing about the layer.
 
 **That command deliberately does not use the newest file under `tests/`, and round 4 was right to
 flag the earlier wording for glossing over it.** Test and harness files are edited after the layer
@@ -817,6 +856,18 @@ reset rule (which governs only which of `pcc.jsonl` / `pcc_real_weights.jsonl` a
 load at all). A hit that a change to `tt/functional_decoder.py` could explain is a real staleness
 finding, and there are none: the round-4 pass re-ran both SDPA sweeps *after* the last edit to the
 shipped layer, so no decision artifact predates it.
+
+**Cross-process reproducibility, measured.** Rounds 5 and 6 both noticed that two nominally
+identical suite runs had produced different worst-case rows in README §3.1, and round 6 recorded it as
+unexplained residual risk ("cross-process PCC values are not perfectly reproducible"). They are. The
+round-6 pass runs the whole suite twice — once as the gate, once as the authoritative writer — so
+snapshotting `pcc.jsonl` between them measures it directly: **all 276 rows are bit-identical**, same
+label sequence, and `pcc`, `maxabs` and `rel_rms` all match exactly. The earlier discrepancy was not
+run-to-run variance; it was §3.1 being rendered from a *partially written* `pcc.jsonl` (the renderer
+had been run while a suite was mid-flight — the incident that added the missing-artifact guard to
+`render_docs.py`). Two separate reviews reached for non-determinism as the explanation, and the actual
+cause was an ordering mistake of mine, which is why the pass now writes the provenance logs exactly
+once and last.
 
 Three numbers reproduced **bit-identically** across independent re-runs, which is worth recording
 because it makes the determinism claim concrete: the advertised-context PCCs, the on-model

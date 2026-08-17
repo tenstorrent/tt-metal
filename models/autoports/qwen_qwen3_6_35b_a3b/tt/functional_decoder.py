@@ -197,6 +197,12 @@ class DecoderConfig:
             raise ValueError(f"sdpa_chunk must be a multiple of {TILE} and at least {TILE}")
         if PREFILL_ALIGN % self.sdpa_chunk:
             raise ValueError(f"sdpa_chunk must divide PREFILL_ALIGN ({PREFILL_ALIGN}), got {self.sdpa_chunk}")
+        # `prefill_forward` tests `start_pos % PREFILL_ALIGN` once and relies on that single bound
+        # covering the paged fill's block offset too, so the padding alignment has to be a multiple of
+        # the page size. It is for every supported `block_size`; asserted so a later stage changing
+        # either constant finds out here rather than through a mis-paged cache write.
+        if PREFILL_ALIGN % self.block_size:
+            raise ValueError(f"block_size must divide PREFILL_ALIGN ({PREFILL_ALIGN}), got {self.block_size}")
         # Q/K of the delta rule are repeat_interleaved from key heads up to value heads. The
         # duplication is folded into the projection and conv weights at load time so the
         # runtime path never needs a repeat_interleave (see from_state_dict).
@@ -331,15 +337,28 @@ def _decode_sdpa_program_config(cfg: DecoderConfig):
     )
 
 
-def _tilized(tensor):
-    """``(tile_layout_tensor, owned)``. ``owned`` is False when the input already was TILE.
+def _relayout(tensor, layout):
+    """``(tensor_in_layout, owned)``. ``owned`` is False when the input already had that layout.
 
     ``ttnn.to_layout`` returns the *input* if no conversion is needed, so the caller cannot
-    unconditionally deallocate the result -- the same aliasing trap as ``_subview`` / ``_move``.
+    unconditionally deallocate the result -- the same aliasing trap as ``_subview`` / ``_move``. Every
+    ``to_layout`` on the runtime path goes through here so that the ownership question is answered
+    rather than assumed; the MoE's two ROW_MAJOR conversions were correct only because their inputs
+    happen to be TILE today.
     """
-    if tensor.layout == ttnn.TILE_LAYOUT:
+    if tensor.layout == layout:
         return tensor, False
-    return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT), True
+    return ttnn.to_layout(tensor, layout), True
+
+
+def _tilized(tensor):
+    """``(tile_layout_tensor, owned)``; see ``_relayout``."""
+    return _relayout(tensor, ttnn.TILE_LAYOUT)
+
+
+def _row_major(tensor):
+    """``(row_major_tensor, owned)``; see ``_relayout``."""
+    return _relayout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
 
 def _zero_(tensor) -> None:
@@ -696,18 +715,35 @@ class FunctionalDecoder(LightweightModule):
         # misaligned offset therefore places the causal-mask diagonal in the wrong tile and returns
         # silently wrong values, so reject it instead of rounding.
         #
-        # The divisor is `cfg.sdpa_chunk`, which is what `_sdpa_program_config` passes as
-        # `q_chunk_size` -- *not* `PREFILL_ALIGN`, which is the padding/page alignment. They are equal
-        # at the default (both 128) and `__post_init__` keeps `sdpa_chunk` dividing `PREFILL_ALIGN`,
-        # so this bound is never looser than the padding one. Checking the op's own divisor is what
-        # makes lowering `sdpa_chunk` an actual lever: at `sdpa_chunk = 32` a `start_pos` of 32 is
-        # legal here, and at 256 it would not be -- which the validation now rules out anyway.
-        align = cfg.sdpa_chunk if not cfg.is_linear else PREFILL_ALIGN
-        if start_pos % align:
-            raise ValueError(f"start_pos must be a multiple of {align}, got {start_pos}")
+        # `PREFILL_ALIGN` is the bound because **three** consumers constrain `start_pos`, not one,
+        # and it is a multiple of all of them (`__post_init__` checks that, so this single test is
+        # sufficient rather than merely convenient):
+        #
+        #   1. the SDPA chunk index above, divisor `cfg.sdpa_chunk`;
+        #   2. the paged fill's block offset, `abs_pos // cfg.block_size` below -- a `start_pos` that
+        #      is not a multiple of `block_size` writes the chunk into the wrong page;
+        #   3. the padding, which rounds up to `PREFILL_ALIGN` and must still fit the RoPE and
+        #      page-table rows (the `start_pos + padded_len` check below).
+        #
+        # An earlier revision divided by `cfg.sdpa_chunk` alone, so `sdpa_chunk = 32` accepted
+        # `start_pos = 32` -- legal for (1) and silently wrong for (2) and (3). Lowering `sdpa_chunk`
+        # is therefore **not** a lever for accepting finer offsets: the accepted alignment is the max
+        # of the three constraints, and lowering only one of them changes nothing.
+        if start_pos % PREFILL_ALIGN:
+            raise ValueError(f"start_pos must be a multiple of {PREFILL_ALIGN}, got {start_pos}")
         if start_pos + seq_len > cfg.supported_context:
             raise ValueError(
                 f"start_pos + seq_len = {start_pos + seq_len} exceeds supported context " f"{cfg.supported_context}"
+            )
+        # Constraint (3) explicitly: the padded length is what actually gets written and indexed, and
+        # it can exceed the logical end. Unreachable while `supported_context` is a multiple of
+        # `PREFILL_ALIGN` and `start_pos` is too, but it is one comparison and the alternative is a
+        # silent out-of-table read.
+        if start_pos + math.ceil(seq_len / PREFILL_ALIGN) * PREFILL_ALIGN > cfg.supported_context:
+            raise ValueError(
+                f"start_pos {start_pos} + padded seq_len "
+                f"{math.ceil(seq_len / PREFILL_ALIGN) * PREFILL_ALIGN} exceeds supported context "
+                f"{cfg.supported_context}"
             )
         if not cfg.is_linear and page_table is None:
             raise ValueError("full_attention prefill requires a page_table")
@@ -1625,12 +1661,17 @@ class FunctionalDecoder(LightweightModule):
             mask_grouped = _view(mask, (1, groups, TILE, e))
             # one sparsity pattern per tile group = the union of its 32 tokens' top-k
             sparsity = ttnn.max(mask_grouped, dim=2, keepdim=True)
-            sparsity_rm = ttnn.to_layout(sparsity, ttnn.ROW_MAJOR_LAYOUT)
+            sparsity_rm, owns_sparsity_rm = _row_major(sparsity)
             weights = ttnn.permute(_view(dense, (1, groups, TILE, e)), (1, 3, 2, 0))
-            _dealloc(sparsity)
+            if owns_sparsity_rm:
+                _dealloc(sparsity)
 
             reduced_chunks.append(self._experts(grouped, sparsity_rm, weights, TILE))
-            _dealloc(sparsity_rm, weights, dense, mask)
+            if owns_sparsity_rm:
+                _dealloc(sparsity_rm)
+            else:
+                _dealloc(sparsity)
+            _dealloc(weights, dense, mask)
             if owns_block:
                 _dealloc(block)
 
@@ -1653,9 +1694,11 @@ class FunctionalDecoder(LightweightModule):
         # one token per group: [1, 1, batch, *] -> [1, batch, 1, *]
         rows = ttnn.transpose(x, 1, 2)
         mask_rows = ttnn.transpose(mask, 1, 2)
-        sparsity = ttnn.to_layout(mask_rows, ttnn.ROW_MAJOR_LAYOUT)
+        sparsity, owns_sparsity = _row_major(mask_rows)
         weights = ttnn.permute(dense, (2, 3, 0, 1))  # [batch, e, 1, 1]
-        _dealloc(dense, mask, mask_rows)
+        _dealloc(dense, mask)
+        if owns_sparsity:
+            _dealloc(mask_rows)
 
         reduced = self._experts(rows, sparsity, weights, 1)
         _dealloc(rows, sparsity, weights)
