@@ -296,6 +296,37 @@ not in script bodies.  Install the cron entries with
 an orchestrator/owner step, both entries flock-guarded and logging to
 `~/sfpi-uplift/sweep-logs/`).
 
+### Enforcement layer (ledger item 10 — by-memory rules turned into gates)
+
+The wave-5/6 reviews found the same failure repeated: the measurement rules
+existed only as prose and kept being skipped under pressure.  Four of them
+are now mechanical; each has a self-test both wrappers run first, so a broken
+gate can never bless a sweep:
+
+1. **REVIEW_RECORD required** — a sweep whose phases include silicon and that
+   passes `--allow-hardware` refuses in preflight unless
+   `<evidence-root>/../REVIEW_RECORD-<cc1plus-12hex>.md` exists for the
+   CURRENT pin, quotes the full cc1plus sha256, and names reviewer/commits/
+   gates (template `REVIEW_RECORD_TEMPLATE.md`; per-pin records are also
+   checked in under `review_records/`).  The record's sha256 lands in the
+   run's `preflight.json`/`MANIFEST.txt`.  HANDOFF §1(4) as code.
+2. **conf-lint** — `conf_lint.sh` (self-test `selftest_conf_lint.sh`) refuses
+   the sweep, before the conf is even sourced, when the pin sha values, the
+   conf's CURRENT PIN prose, the PIN HISTORY `(CURRENT)` entry, and the
+   baseline TSV header anchors disagree — printing the exact disagreeing
+   lines.  A re-pin must update prose+header in the same commit.
+3. **issue_slot_lb required on macro-launch rows** — the classify phase
+   disassembles every leg's `math.elf` (objdump is a preflight-verified
+   tool); a row whose ON binary contains SFPLOADMACRO launches or ON-only
+   fire-and-forget `ttreplay` launches with an empty `issue_slot_lb` is RED,
+   named in the report with the §1 caveat (units rule in the
+   `sweep_2x2_ops.tsv` header; self-test `selftest_enforcement_gates.py`).
+4. **Sim sha pins** — `PINNED_SIM_BH/WH_SHA256` in `sweep_2x2.conf` under the
+   same reviewed-guard discipline as the compiler pins; `sweep_2x2.py`
+   verifies the libttsim sha256 at preflight and every phase entry
+   (`--sim-bh-sha`/`--sim-wh-sha` from the wrappers).  A pinned-but-missing
+   simulator refuses loudly instead of degrading to SKIP_NO_SIMULATOR.
+
 ## Reproduce a baseline
 
 Build the simulator libraries, provision the normal tt-llk test virtualenv,

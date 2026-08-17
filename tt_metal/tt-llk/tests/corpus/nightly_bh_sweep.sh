@@ -31,6 +31,14 @@ for _a in "$@"; do
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
+# conf-lint FIRST (enforcement layer, ledger item 10): the pin audit trail
+# (conf values ↔ prose ↔ PIN HISTORY ↔ baseline header) must agree before the
+# conf is even sourced — a lying audit trail refuses the whole sweep.  The
+# linter's own self-test runs first so a broken linter can never bless one.
+bash "$HERE/selftest_conf_lint.sh" > /tmp/nightly-selftest-conf-lint.$$ 2>&1 \
+  || { echo "FATAL: conf-lint self-test failed:"; cat /tmp/nightly-selftest-conf-lint.$$; rm -f /tmp/nightly-selftest-conf-lint.$$; exit 2; }
+bash "$HERE/conf_lint.sh" || { echo "FATAL: conf-lint refused — pin audit trail disagrees (fix conf prose/baseline header in the same commit as the pin change)"; exit 2; }
+
 # shellcheck source=sweep_2x2.conf
 source "$HERE/sweep_2x2.conf" || { echo "FATAL: sweep_2x2.conf refused (pin override without --allow-pin-override?)"; exit 2; }
 
@@ -58,6 +66,11 @@ python3 "$HERE/selftest_sweep_2x2_report.py" > "$EV/selftest-report-gate.txt" 2>
   || GATE_SELFTEST_RC=1
 bash "$HERE/selftest_dejagnu_gate.sh" > "$EV/selftest-dejagnu-gate.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
+python3 "$HERE/selftest_enforcement_gates.py" > "$EV/selftest-enforcement-gates.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
+# Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
+{ mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
+bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 || GATE_SELFTEST_RC=1
 if [ "$GATE_SELFTEST_RC" -ne 0 ]; then
   echo "FATAL: gate self-tests failed (see $EV/selftest-*.txt) — refusing to sweep"
   exit 2
@@ -127,6 +140,7 @@ python3 "$HERE/sweep_2x2.py" \
   --cc1plus-sha "$PINNED_CC1PLUS_SHA256" \
   --compiler-sha "$PINNED_COMPILER_SHA256" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
+  --sim-bh-sha "$PINNED_SIM_BH_SHA256" --sim-wh-sha "$PINNED_SIM_WH_SHA256" \
   --allow-hardware \
   --baseline "$BASELINE" \
   --max-drift-pct "$MAX_DRIFT_PCT" \
@@ -146,6 +160,9 @@ if [ -f "$EV/REPORT.md" ]; then
     echo '```'
     tail -n 3 "$EV/selftest-report-gate.txt"
     tail -n 1 "$EV/selftest-dejagnu-gate.txt"
+    tail -n 1 "$EV/selftest-enforcement-gates.txt" 2>/dev/null || echo "enforcement-gates self-test: (no record)"
+    tail -n 1 "$EV/selftest-conf-lint.txt" 2>/dev/null || true
+    tail -n 1 "$EV/conf-lint.txt" 2>/dev/null || echo "conf-lint: (no record)"
     cat "$EV/corpus-compile-gate-status.txt" 2>/dev/null || echo "corpus-compile-gate: (no status recorded)"
     echo '```'
   } >> "$EV/REPORT.md"

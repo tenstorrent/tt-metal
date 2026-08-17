@@ -43,6 +43,38 @@ Post-review hardening (PULL_ANALYSIS-20260817 §4):
     row's pinned flag set (default profitability gate), keeping the checked
     -in baseline pair and the compiler pin coherent.
 
+Enforcement layer (ledger item 10, 2026-08-17 — the wave-6 violations were
+"all one missing enforcement layer, repeated"; these convert the by-memory
+rules into mechanical gates):
+  * REVIEW RECORD REQUIRED (makes HANDOFF §1(4) unbypassable): a sweep whose
+    phases include silicon and that authorizes hardware REFUSES in preflight
+    unless <evidence-root>/../REVIEW_RECORD-<cc1plus-12hex>.md exists for the
+    CURRENT cc1plus pin, names a reviewer, lists the reviewed commits and the
+    gates checked, and quotes the full cc1plus sha256 (pin-match).  The
+    record's sha256 is written into preflight.json and MANIFEST.txt so the
+    evidence carries which review authorized it.  Template:
+    corpus/REVIEW_RECORD_TEMPLATE.md.
+  * SIM SHA PINNED (closes ledger 8(e): "any env-supplied libttsim.so
+    satisfies the D3 gate"): --sim-bh-sha/--sim-wh-sha carry the reviewed
+    libttsim sha256 pins from sweep_2x2.conf; preflight and EVERY phase
+    entry (verify_toolchain) re-hash the simulators against them and refuse
+    on mismatch, exactly like the compiler pins.
+  * MACRO-LAUNCH ROWS REQUIRE issue_slot_lb (closes ledger 8(i)/V3: the
+    check was "opt-in per row, not structural" and a headline rode an empty
+    lb): the classify phase disassembles each leg's math.elf (objdump is a
+    preflight-verified tool) and records a macro_scan verdict; a row whose
+    ON binary contains SFPLOADMACRO launches, or fire-and-forget replay
+    launches absent from the OFF leg, with an EMPTY issue_slot_lb is RED —
+    named in the report with the §1 caveat — never a silent no-op.
+  * issue_slot_lb units: the bound is compared against the row's RECORDED
+    cell values.  For marker=TILE_LOOP rows the post CSV mean(...) is
+    already per-tile (helpers/perf/core.py postprocess_tile_loop divides by
+    loop_factor*tile_cnt) and _perf_value divides by tile_cnt again — a
+    historical units convention kept for baseline continuity (uniform
+    across cells, every booked ratio unaffected).  A TILE_LOOP row's lb
+    must therefore be the true per-tile issue-slot bound divided by the
+    fixture tile_cnt; each row's note records the raw arithmetic.
+
 Sweep-hardening round 2 (adversarial review, 2026-08-16):
   * the silicon phase trusts NOTHING unkeyed: the BH CRAQ gate re-validates
     every verdict against THIS run's cc1plus+simulator+tt-metal keys, and a
@@ -151,6 +183,101 @@ def sha256(path):
     return h.hexdigest()
 
 
+# ---------------- enforcement-layer gate primitives (selftest-covered) ----
+# Kept as module-level pure(ish) functions so selftest_enforcement_gates.py
+# can drive the REAL gate logic without a toolchain or device.
+
+
+def check_review_record(record_path, cc1plus_sha256):
+    """REVIEW_RECORD gate (HANDOFF §1(4) as code).
+
+    Returns (ok, detail).  A silicon-authorized sweep refuses unless the
+    record at <evidence-root>/../REVIEW_RECORD-<cc1plus-12hex>.md exists,
+    quotes the FULL cc1plus sha256 (pin-match — a record for another build
+    never authorizes this one), names a reviewer, and carries the reviewed
+    commits and gates-checked sections.  Content honesty stays human; the
+    gate makes the record's EXISTENCE and pin-binding mechanical.
+    """
+    record_path = pathlib.Path(record_path)
+    if not record_path.is_file():
+        return False, f"missing review record {record_path}"
+    text = record_path.read_text(errors="replace")
+    if cc1plus_sha256 not in text:
+        return False, (
+            f"review record {record_path} does not quote the full pinned "
+            f"cc1plus sha256 {cc1plus_sha256} — pin-match failed (a record "
+            "minted for another build does not authorize this one)"
+        )
+    checks = (
+        (r"(?mi)^\s*(?:[-*]\s*)?Reviewer\s*:\s*\S", "a non-empty 'Reviewer:' line"),
+        (r"(?mi)^##\s*Reviewed\b", "a '## Reviewed ...' commits/branches section"),
+        (r"(?mi)^##\s*Gates\b", "a '## Gates checked' section"),
+    )
+    missing = [what for pat, what in checks if not re.search(pat, text)]
+    if missing:
+        return False, (
+            f"review record {record_path} is malformed — missing "
+            + "; ".join(missing)
+            + " (see corpus/REVIEW_RECORD_TEMPLATE.md)"
+        )
+    return True, "ok"
+
+
+# Fire-and-forget replay launch = TT_OP_REPLAY with execute_while_loading=0
+# and load_mode=0 (a pure launch of previously recorded slots).  Record-form
+# replays (…,1,1 / …,0,1) are the drain-synchronous record path and are NOT
+# launches.
+_SCAN_PATTERNS = {
+    "sfploadmacro": re.compile(r"\bsfploadmacro\b"),
+    "replay_launch": re.compile(r"\bttreplay\s+\d+,\s*\d+,\s*0,\s*0\b"),
+}
+
+
+def scan_disasm_text(text):
+    """Mnemonic census of one disassembly relevant to macro-launch detection."""
+    return {name: len(pat.findall(text)) for name, pat in _SCAN_PATTERNS.items()}
+
+
+def classify_macro_launch(on_counts, off_counts=None):
+    """Macro-launch classification of an ON leg census vs its OFF leg.
+
+    Returns 'MACRO_LAUNCH' (SFPLOADMACRO launches present),
+    'REPLAY_LAUNCH' (fire-and-forget replay launches beyond the OFF leg's —
+    source-level lltt::record replays appear in both legs and do not count),
+    or None.  With no OFF census (single-leg pinpair rows) only the
+    SFPLOADMACRO criterion applies; replay counts stay informational.
+    """
+    if on_counts.get("sfploadmacro", 0) > 0:
+        return "MACRO_LAUNCH"
+    if off_counts is not None and on_counts.get("replay_launch", 0) > off_counts.get(
+        "replay_launch", 0
+    ):
+        return "REPLAY_LAUNCH"
+    return None
+
+
+def macro_lb_red(op, marker, issue_slot_lb, macro_scan):
+    """RED message for a macro-launch row with an EMPTY issue_slot_lb, else
+    None.  Ledger 8(i)/wave-6 V3: an empty lb silently no-opped the §1
+    issue-slot sanity check under exactly the shapes that need it most."""
+    if not macro_scan or issue_slot_lb is not None:
+        return None
+    cls = macro_scan.get("classification")
+    if not cls:
+        return None
+    return (
+        f"{op}: {cls} row measured at marker {marker} with EMPTY "
+        f"issue_slot_lb (ON binary: {macro_scan.get('sfploadmacro_on', 0)} "
+        f"SFPLOADMACRO launches, {macro_scan.get('replay_launch_on', 0)} "
+        "fire-and-forget replay launches) — HANDOFF §1 metric caveat: a "
+        "BODY-family reading on a fire-and-forget shape is INVALID below the "
+        "payload's issue-slot lower bound, and without issue_slot_lb that "
+        "check cannot run; populate issue_slot_lb (units: the row's recorded "
+        "cell units, see sweep_2x2_ops.tsv header) or move the row to the "
+        "drain-inclusive KERNEL marker"
+    )
+
+
 def load_config(path):
     with path.open() as f:
         rows = list(
@@ -217,6 +344,7 @@ class Sweep:
             args.compiler or TESTS / "sfpi/compiler/bin/riscv-tt-elf-g++"
         ).resolve()
         self.objcopy = self.compiler.with_name("riscv-tt-elf-objcopy")
+        self.objdump = self.compiler.with_name("riscv-tt-elf-objdump")
         self.python = self._find_python(args.venv)
         self.rows = [
             r for r in load_config(args.config) if not args.ops or r["op"] in args.ops
@@ -290,6 +418,48 @@ class Sweep:
                 "continue (evidence already produced is keyed to the "
                 "preflight identity)"
             )
+        # Sim sha pin: re-verified at EVERY phase entry, not just preflight —
+        # a mid-run libttsim swap must never let an unpinned oracle open the
+        # CRAQ gate (ledger 8(e)).
+        self._verify_sim_pins(phase)
+
+    def _verify_sim_pins(self, phase):
+        """Hash each provided simulator against its reviewed pin (and the
+        preflight-recorded identity); refuse on any mismatch."""
+        for arch in ("bh", "wh"):
+            sim = getattr(self.a, f"sim_{arch}")
+            pin = getattr(self.a, f"sim_{arch}_sha", None)
+            if not pin:
+                continue
+            pin = self._pin_value(pin, f"libttsim {arch} (--sim-{arch}-sha)")
+            if not sim or not sim.is_file():
+                sys.exit(
+                    f"SIM PIN {arch} set ({pin}) but no simulator file at "
+                    f"'{sim}' (phase '{phase}') — a pinned CRAQ oracle that "
+                    "silently degrades to SKIP_NO_SIMULATOR would withhold "
+                    "silicon rows one by one instead of failing loudly; "
+                    "build/point the pinned libttsim or drop the pin through "
+                    "review"
+                )
+            found = sha256(sim)
+            if found != pin:
+                sys.exit(
+                    f"SIM SHA MISMATCH ({arch}, phase '{phase}'): pinned "
+                    f"{pin}, found {found} at {sim} — refusing (the CRAQ "
+                    "oracle is pinned like the compiler: any env-supplied "
+                    "libttsim.so must hash to the reviewed value; re-pin "
+                    "through review, never through the environment)"
+                )
+            recorded = (
+                self.info.get(f"sim_{arch}_sha256") if hasattr(self, "info") else None
+            )
+            if recorded and recorded != found:
+                sys.exit(
+                    f"SIMULATOR CHANGED MID-RUN ({arch}, phase '{phase}'): "
+                    f"preflight recorded {recorded}, now {found} at {sim} — "
+                    "refusing (evidence already produced is keyed to the "
+                    "preflight identity)"
+                )
 
     def preflight(self):
         self.ev.mkdir(parents=True, exist_ok=True)
@@ -421,6 +591,41 @@ class Sweep:
             sim = getattr(self.a, f"sim_{arch}")
             info[f"sim_{arch}"] = str(sim) if sim else ""
             info[f"sim_{arch}_sha256"] = sha256(sim) if sim and sim.is_file() else ""
+            info[f"sim_{arch}_sha_pin"] = getattr(self.a, f"sim_{arch}_sha", "") or ""
+        # objdump is a GATE TOOL (macro-launch classification): a missing
+        # objdump would silently disable the issue_slot_lb requirement — the
+        # exact silent-no-op class this enforcement layer exists to kill.
+        if not self.objdump.is_file():
+            sys.exit(
+                f"missing objdump {self.objdump} — the classify phase "
+                "disassembles every leg to detect macro-launch shapes "
+                "(issue_slot_lb enforcement); a toolchain without objdump "
+                "cannot run a gated sweep"
+            )
+        self.info = info  # phase-entry checks below read the recorded identity
+        self._verify_sim_pins("preflight")
+        # REVIEW RECORD gate (HANDOFF §1(4) as code): silicon-authorized
+        # sweeps refuse without a pin-matched review record beside the
+        # evidence root.  --phases without silicon (classify/craq-only
+        # runs) and non-hardware runs stay ungated: they produce no device
+        # evidence.
+        info["review_record"] = ""
+        info["review_record_sha256"] = ""
+        if "silicon" in self.a.phases and self.a.allow_hardware:
+            record = self.ev.parent / f"REVIEW_RECORD-{info['cc1plus_sha256'][:12]}.md"
+            ok, detail = check_review_record(record, info["cc1plus_sha256"])
+            if not ok:
+                sys.exit(
+                    "REVIEW RECORD REQUIRED (silicon phases authorized): "
+                    + detail
+                    + " — HANDOFF §1(4): independent review of compiler "
+                    "mutations BEFORE silicon.  Write the record from "
+                    "corpus/REVIEW_RECORD_TEMPLATE.md for the CURRENT "
+                    f"cc1plus pin ({info['cc1plus_sha256']}), place it at "
+                    f"{record}, then re-run.  No record, no silicon."
+                )
+            info["review_record"] = str(record)
+            info["review_record_sha256"] = sha256(record)
         (self.ev / "preflight.json").write_text(json.dumps(info, indent=2) + "\n")
         man = [
             f"Lane sweep-2x2 evidence — {self.ev.name}",
@@ -433,8 +638,24 @@ class Sweep:
             f"phase entry): {info['harness_toolchain_realpath']}",
             f"compiler version: {info['compiler_version']}",
             f"tt-metal: {info['tt_metal_head']}",
-            f"libttsim bh sha256: {info['sim_bh_sha256']}",
-            f"libttsim wh sha256: {info['sim_wh_sha256']}",
+            f"libttsim bh sha256: {info['sim_bh_sha256']}"
+            + (
+                f" (VERIFIED against reviewed pin {info['sim_bh_sha_pin']})"
+                if info["sim_bh_sha_pin"]
+                else " (UNPINNED — no --sim-bh-sha)"
+            ),
+            f"libttsim wh sha256: {info['sim_wh_sha256']}"
+            + (
+                f" (VERIFIED against reviewed pin {info['sim_wh_sha_pin']})"
+                if info["sim_wh_sha_pin"]
+                else " (UNPINNED — no --sim-wh-sha)"
+            ),
+            (
+                f"review record: {info['review_record']} sha256 "
+                f"{info['review_record_sha256']}"
+                if info["review_record"]
+                else "review record: not required (no silicon authorization this run)"
+            ),
             f"OFF flags: {OFF_FLAGS}",
             f"ON flags: {ON_FLAGS}",
             "loadmacro flags: CONFIRMED error on use (removed with quarantined exact-calendar pass)",
@@ -530,6 +751,9 @@ class Sweep:
             if (
                 verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
                 and verdict.get("tt_metal_head") == self.info["tt_metal_head"]
+                and (
+                    verdict.get("status") != "OK" or "macro_scan" in verdict
+                )  # pre-enforcement-layer verdicts lack the scan: re-derive
             ):
                 return verdict
         work.mkdir(parents=True, exist_ok=True)
@@ -583,10 +807,54 @@ class Sweep:
                 "all": "IDENTICAL" if a_set == b_set else "CHANGED",
                 "math": "IDENTICAL" if math_a == math_b else "CHANGED",
             }
+        verdict["macro_scan"] = self._macro_scan(work, legnames)
         verdict["cc1plus_sha256"] = self.info["cc1plus_sha256"]
         verdict["tt_metal_head"] = self.info["tt_metal_head"]
         verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
         return verdict
+
+    def _scan_leg_disasm(self, work, leg):
+        """Sum the macro-launch census over every archived math.elf of a
+        classify leg (objdump -d; the classify phase already archives the
+        ELFs, so the scan adds no compile work)."""
+        counts = {name: 0 for name in _SCAN_PATTERNS}
+        elfs = sorted((work / f"elf-{leg}").rglob("math.elf"))
+        for elf in elfs:
+            dis = subprocess.run(
+                [str(self.objdump), "-d", str(elf)], capture_output=True, text=True
+            )
+            if dis.returncode != 0:
+                sys.exit(
+                    f"objdump failed on {elf} (macro-launch classification "
+                    "is a gate; it must not silently degrade): "
+                    f"{dis.stderr.strip()[:400]}"
+                )
+            for name, n in scan_disasm_text(dis.stdout).items():
+                counts[name] += n
+        counts["math_elfs"] = len(elfs)
+        return counts
+
+    def _macro_scan(self, work, legnames):
+        """Macro-launch verdict for a classify evidence dir.
+
+        Two-leg rows scan ON vs OFF (replay-launch = ON-only launches);
+        single-leg rows (pinpair) scan their only leg with the
+        SFPLOADMACRO criterion.  Returns the dict stored in the classify
+        verdict as 'macro_scan'."""
+        if len(legnames) == 1:
+            on = self._scan_leg_disasm(work, legnames[0])
+            off = None
+        else:
+            off = self._scan_leg_disasm(work, legnames[0])
+            on = self._scan_leg_disasm(work, legnames[1])
+        cls = classify_macro_launch(on, off)
+        return {
+            "classification": cls,
+            "sfploadmacro_on": on.get("sfploadmacro", 0),
+            "replay_launch_on": on.get("replay_launch", 0),
+            "replay_launch_off": (off or {}).get("replay_launch", 0),
+            "math_elfs_on": on.get("math_elfs", 0),
+        }
 
     def _classify_texts(self, row, sel, leg, tag="classify"):
         """This run's .text hash set for (row, sel, leg) from the classify
@@ -907,6 +1175,22 @@ exit $RC
             "notes": [],
         }
 
+    def _macro_lb_gate(self, row, classifications, result):
+        """Structural issue_slot_lb requirement (enforcement layer): a
+        macro-launch row without a bound is RED, named in the report with
+        the §1 caveat — never a silent no-op.  Uses the measured perf leg's
+        classification when present, else the correctness leg's."""
+        scan = None
+        for sel in ("sem-perf", "sem-corr"):
+            v = classifications.get(sel) or {}
+            if v.get("macro_scan"):
+                scan = v["macro_scan"]
+                break
+        msg = macro_lb_red(row["op"], row["marker"], row["issue_slot_lb"], scan)
+        if msg:
+            self.reds.append(msg)
+            result["notes"].append(msg)
+
     def _issue_slot_check(self, row, result):
         """HANDOFF §1 metric caveat as code: a BODY-family reading on a
         macro-launch shape must be >= the payload's issue-slot lower bound
@@ -950,6 +1234,11 @@ exit $RC
         discipline as the 2x2: correctness first, then 3 fresh processes per
         selector alternating gen/hand, hash-matched resume per job."""
         result = self._result_skeleton(row, classifications)
+        self._macro_lb_gate(row, classifications, result)
+        if self.a.dry_run:
+            result["notes"].append(
+                "DRY-RUN: device jobs printed, not executed; no cells expected"
+            )
         flags = row["pin_flags"]
         result["notes"].append(f"pinpair leg flags: {flags}")
         for sel in ("sem-corr", "hand-corr"):
@@ -1000,6 +1289,14 @@ exit $RC
         if row["kind"] == "pinpair":
             return self.silicon_pinpair(row, classifications)
         result = self._result_skeleton(row, classifications)
+        self._macro_lb_gate(row, classifications, result)
+        if self.a.dry_run:
+            # A dry run proves gate wiring, never metrics: mark the row so
+            # report() treats its empty cells as blocked-by-design instead
+            # of INVALID_METRIC RED.
+            result["notes"].append(
+                "DRY-RUN: device jobs printed, not executed; no cells expected"
+            )
         # correctness first, OFF then ON; byte-identical pair => one run fills both
         for sel in ("sem-corr", "hand-corr"):
             if not row["nodes"][sel]:
@@ -1447,13 +1744,23 @@ exit $RC
                     "issue-slot lower bound (KERNEL marker required): RED"
                 )
                 rag = "RED"
+            # acceptance 1d (enforcement layer): a macro-launch row with an
+            # EMPTY issue_slot_lb is RED — the §1 issue-slot check silently
+            # no-ops on empty lb, under exactly the fire-and-forget shapes
+            # that need it (wave-6 V3).
+            if any("EMPTY issue_slot_lb" in n for n in r.get("notes", [])):
+                verdicts.append(
+                    "MACRO-LAUNCH ROW WITHOUT issue_slot_lb — HANDOFF §1 "
+                    "metric caveat unenforceable on this row's cells: RED"
+                )
+                rag = "RED"
             # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
             # history that produced NO parsable metric this run is
             # INVALID_METRIC RED — a profiler/post-CSV or marker rename must
             # never turn the nightly permanently GREEN while measuring
             # nothing.  Withheld/blocked rows already carry their own RED.
             blocked = any(
-                "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n
+                "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n or "DRY-RUN" in n
                 for n in r.get("notes", [])
             )
             if not blocked:
@@ -1748,6 +2055,18 @@ def main():
         "--sim-bh", type=pathlib.Path, help="BH libttsim.so (generic-path CRAQ oracle)"
     )
     ap.add_argument("--sim-wh", type=pathlib.Path, help="WH libttsim.so")
+    ap.add_argument(
+        "--sim-bh-sha",
+        help="required FULL sha256 of the BH libttsim.so — the reviewed CRAQ "
+        "oracle pin (sweep_2x2.conf PINNED_SIM_BH_SHA256); verified at "
+        "preflight and every phase entry; prefixes are rejected",
+    )
+    ap.add_argument(
+        "--sim-wh-sha",
+        help="required FULL sha256 of the WH libttsim.so — the reviewed CRAQ "
+        "oracle pin (sweep_2x2.conf PINNED_SIM_WH_SHA256); verified at "
+        "preflight and every phase entry; prefixes are rejected",
+    )
     ap.add_argument("--venv", type=pathlib.Path, help="tt-llk virtualenv root")
     ap.add_argument(
         "--compiler",

@@ -136,6 +136,78 @@ macro formation must enforce restore_exec < store_exec (done in sfpi-gcc
   craq-sim 9f324140; corrected-sim negative control in
   `~/sfpi-uplift/laneAI-evidence-20260817/`.
 
+## 9. FE-swap dependency guard — user-spelled all-lanes ENCC must stay pinned UNREACHABLE (REPORTED to sfpi-gcc; spec only, deliberately not implemented from this repo)
+
+Status: **REPORTED** (Lane AW, 2026-08-17; enforcement-layer lane).  Owner:
+sfpi-gcc.  Implementation withheld here on purpose — active compiler lanes
+own `gcc/config/riscv/tt/` and the tensix testsuite, and the guard must land
+co-located with the code it pins.
+
+**The landmine (HANDOFF §5 item 7 residual → wave-6 "soundness landmine"):**
+the all-lanes-enable proof chain is load-bearing on a pre-existing FE wart.
+`rvtt-effects.cc` (~line 156, `e.cc_write_all_lanes`) proves a CC write is
+all-lanes only when its operands re-encode word-exact to
+`rvtt_macro::sfpencc_all_lanes_word()` = `sfpencc_encode(3, 10)` =
+`0x8a00300a` (`rvtt-macro-tables.cc:631–650`; NOTES-wp6-prep.md "SFPENCC
+all-lanes", ESTABLISHED).  The FE operand-role swap (historically
+`gimple-rvtt-check.cc:164`; the `rvtt_sfpencc` template prints `"%1, %0"` —
+operand 1 = imm12, operand 0 = mod1) means USER-SPELLED
+`__builtin_rvtt_sfpencc(...)` can never reach that exact word: only the
+compiler-synthesized ENCC (`gimple-rvtt-cc.cc:207–211`, built with
+`SFPENCC_IMM12_BOTH`) and the dst-ownership word-exact restore
+(`rtl-rvtt-dst-ownership.cc:60–65`) produce it.  The WP10 lane proof and the
+ambient-CC model therefore use *word-unreachability-from-user-source* as an
+implicit provenance proof.  An innocent FE fix (un-swapping the roles, or
+widening the `{U,2}` check in `rvtt-insn.def:102`) would let user source
+spell the exact word — silently opening a semantics-changing enable hoist:
+a user CC write inside a lane-predicated region would be accepted as the
+ambient all-lanes enable.
+
+**Exact guard spec** (a test that pins the wart and FAILS LOUDLY if the wart
+is ever fixed), co-located with the WP10 lane proof at
+`gcc/testsuite/g++.target/riscv/tt/tensix/macro-planner-cc-enable-user-unreachable-bh.C`
+(beside `macro-planner-cc-enable-unproved-bh.C`, reusing
+`macro-planner-cc-enable-body.h` via `CC_ENABLE_STMT`):
+
+1. Kernel: the formable eight-row Min/Max region with
+   `#define CC_ENABLE_STMT __builtin_rvtt_sfpencc (3, 10)` — the TEXTUAL
+   all-lanes spelling (`SFPENCC_IMM12_BOTH`, `SFPENCC_MOD1_EI_RI`) from user
+   source.
+2. `dg-options` identical to the sibling cc-enable tests
+   (`-mcpu=tt-bh-tensix -O2 -fno-exceptions -fno-rtti
+   -mtt-tensix-macro-planner -fdump-rtl-rvtt_macro_planner-details`).
+3. Pinned expectations (all must hold TODAY, under the wart):
+   `scan-rtl-dump-times "Macro-planner refusal: cc-enable-unproved" 1`;
+   `scan-rtl-dump-not "Macro-planner formed"`;
+   `scan-assembler-not "SFPLOADMACRO"`; and **the tripwire**:
+   `scan-assembler-not "0x8a00300a"` (plus the `.ttinsn` spelling) — user
+   source must NOT be able to emit the architectural all-lanes word.  That
+   line is what fails the day an FE fix lands.
+4. A positive control twin (compiler-synthesized enable, no user CC write)
+   still forms — proving the test discriminates provenance, not formation.
+5. Lattice sweep: variants for EVERY user-spellable operand pair the FE
+   check admits (`rvtt-insn.def:102`: imm12 `{U,2}` = 0..3 × mod1 mask
+   `{M,0x707}`), each asserting via the effects dump that
+   `cc_write_all_lanes` stays unproved (one table-driven `.h` twin keeps
+   this compact).
+6. In-test comment (the point of the guard): "This test PINS A WART.  If it
+   fails because user-spelled SFPENCC now reaches 0x8a00300a, do NOT weaken
+   it: first replace word-exactness with an explicit provenance bit on
+   compiler-synthesized ENCC, re-prove the CRAQ envelope for user-spelled
+   all-lanes, and only then update this test."
+
+Acceptance: test exists at the named location, green on tip, runs inside the
+focused `macro-planner*` DejaGnu family (the weekly gate covers it), and its
+failure mode demonstrated once against a scratch build with the FE roles
+un-swapped (recorded in the landing commit or an oracle note).
+
+- Evidence: PULL_ANALYSIS-20260817 §2a D1/§4 P0; HANDOFF §5 items 7 and 10
+  (wave-6 SMELLS: "the WP10 lane proof is LOAD-BEARING on the pre-existing
+  FE operand-role swap … a soundness landmine, not a curiosity"); sfpi-gcc
+  nkapre/sfpi `rvtt-effects.cc:150–172`, `rvtt-macro-tables.cc:631–650`,
+  `gimple-rvtt-cc.cc:207–211`, `rtl-rvtt-dst-ownership.cc:60–65`,
+  `rvtt-insn.def:102`.
+
 ---
 
 Maintenance: append new items with the same status legend and an evidence
