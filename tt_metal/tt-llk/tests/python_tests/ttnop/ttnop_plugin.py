@@ -12,6 +12,7 @@ Load it with `-p ttnop_plugin` and this directory on PYTHONPATH.
 
 import os
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -26,11 +27,7 @@ import scanner
 import sweep as sweep_module
 import torch
 from cave import DetourError, Injector
-from helpers.device import (
-    LLKAssertException,
-    commit_tensix_soft_reset,
-    set_tensix_soft_reset,
-)
+from helpers.device import LLKAssertException
 from helpers.logger import logger
 from helpers.test_config import TestConfig
 from ttexalens.tt_exalens_lib import read_word_from_device, write_words_to_device
@@ -41,6 +38,9 @@ _SKIPPED = (pytest.skip.Exception, pytest.xfail.Exception)
 _FAILED = pytest.fail.Exception
 
 _writer = None
+# Set once a hang has asked for a card reset, so the worker stops after the case
+# it is reporting rather than in the middle of it.
+_parked = False
 
 
 def _hb() -> heartbeat.Writer:
@@ -49,6 +49,36 @@ def _hb() -> heartbeat.Writer:
     if _writer is None:
         _writer = heartbeat.Writer()
     return _writer
+
+
+def _hang_closes_case(nodeid: str, variant: str) -> None:
+    """Close a case out on a hang, and ask for the card the hang cost us back."""
+    global _parked
+    # Done, not retried: a case that just hung a core mostly hangs the next one,
+    # and the resume after the reset has to step over it. The red pytest reports
+    # is what carries the result.
+    _hb().mark_done(nodeid)
+    _hb().request_reset(nodeid, variant)
+    # Nobody is watching an unsupervised run, so there is no reset coming and
+    # nothing to wait for.
+    _parked = _hb().enabled
+
+
+def _park() -> None:
+    """Stop taking cases and wait for the supervisor to kill this run.
+
+    A hung core is not this worker's to fix, and every case it pulls off the
+    queue meanwhile fails against that core in about a second — marked done for
+    a run it never really got, so permanently red for a fault it never saw. That
+    is how one hang turned seventy cases red. Sleeping instead costs only the
+    seconds until the supervisor's next poll.
+
+    The DONE beat first, so the silence that follows is read as a worker with
+    nothing left to do rather than one that stopped answering.
+    """
+    _hb().finish()
+    while True:
+        time.sleep(60)
 
 
 @contextmanager
@@ -163,19 +193,8 @@ class Perturber:
             baseline.had_result = (
                 baseline.had_result or getattr(outcome, "result", None) is not None
             )
-            # The harness already knows which variants are not bit-reproducible —
-            # l1_acc adds onto the previous run, coverage builds and deliberately
-            # undefined state never repeat — so reuse its answer rather than
-            # rediscovering it, and compare nothing when it says no.
             if config_self._bit_exact_unsupported_reason() is not None:
                 self._comparable = False
-            # ponytail: the decoded result is already in hand, so drift costs no
-            # extra device traffic — but nothing clears the result buffer between
-            # variants, so a delay that makes the packer write *fewer* tiles leaves
-            # the tail holding the previous variant's identical bytes and reads as
-            # no change. Closing that means clear_result_buffer() before each run
-            # and comparing _read_output_regions() instead, at one extra L1 write
-            # and read per variant.
             self._results.append(getattr(outcome, "result", None))
             return outcome
 
@@ -224,11 +243,41 @@ class Perturber:
             },
         )
 
+    def _scanned_elf_dir(self) -> Path:
+        return Path(self.baseline.config.temp_elfs[0]).resolve().parent
+
+    def _reload_scanned_image(self) -> None:
+        """Put the kernel we scanned back in L1.
+
+        For test_generalized_moe_gate_idx_offset: two GMG_IDX_OFFSET
+        specializations in one node, so the last kernel is still loaded when we
+        arm. Re-flash the scanned ELFs and drop injector bookkeeping —
+        restore() would write the old kernel's word onto the new image.
+        """
+        self._forget_kernel_image()
+        config = self.baseline.config
+        with quiet_harness():
+            config.write_runtimes_to_L1()
+            if config.variant_stimuli:
+                config.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+            config.run_elf_files()
+            config.wait_for_tensix_operations_finished()
+        self._injector_for_device().forget()
+
+    def _prepare_arm(self) -> None:
+        loaded = TestConfig.LAST_LOADED_ELFS
+        if loaded is not None and Path(loaded).resolve() == self._scanned_elf_dir():
+            return
+        self._reload_scanned_image()
+
     def run(self, variant):
         self.beat(variant)
         # The ELF is already in L1 and the cores are idle, so arming is a couple of
         # word writes. Leaving the image alone is what keeps a 100-delay sweep cheap:
         # a reload per variant would cost three ELFs to buy the same one instruction.
+        # Reload only when the body left a different kernel than we scanned
+        # (test_generalized_moe_gate_idx_offset).
+        self._prepare_arm()
         self._injector_for_device().arm(
             variant.thread,
             self.scans[variant.thread],
@@ -306,35 +355,6 @@ class Perturber:
                 f">> {item.nodeid}: not reproducible, drift off ({reason})", flush=True
             )
 
-    def recover(self) -> bool:
-        """Soft reset after a hang. False means the device needs a manual reset."""
-        location = TestConfig.TENSIX_LOCATION
-        try:
-            self._injector_for_device().restore()
-        except Exception:
-            pass
-        # Soft reset takes BRISC down with it, so its image really is stale here.
-        self._forget_kernel_image()
-        TestConfig.BRISC_ELF_LOADED = False
-        for _ in range(3):
-            try:
-                commit_tensix_soft_reset(1, location=location)
-                break
-            except TimeoutError:
-                # commit_ polls for an exact readback, which a wedged core can miss.
-                # Re-assert without polling and give it another go.
-                set_tensix_soft_reset(1, location=location)
-        else:
-            return False
-        # Reload a clean image (no nested sweep) so the next arm() sees the scan's words.
-        try:
-            with quiet_harness():
-                self._item.obj(**self._kwargs)
-        except Exception:
-            pass
-        self._injector_for_device().forget()
-        return True
-
     # -- driving one test --------------------------------------------------
 
     def sweep(self, item) -> list:
@@ -406,6 +426,9 @@ class Perturber:
                 "filler": variant.filler,
                 "filler_word": variant.filler_word,
                 "delay": variant.delay,
+                # Plan position, so a log several workers appended to can still be
+                # read in sweep order.
+                "seq": variant.seq,
                 "runs": self.config.repeats,
                 "fails": fails,
                 "tag": ",".join(sorted(tags)),
@@ -457,7 +480,16 @@ def pytest_runtest_call(item):
         ):
             _hb().mark_done(item.nodeid)
             return
-        findings = perturber.sweep(item)
+        try:
+            findings = perturber.sweep(item)
+        except sweep_module.DeviceWedged as err:
+            # The hang is both the finding and the end of the case; clearing the
+            # core is the supervisor's job, so all this does is say so.
+            _hang_closes_case(item.nodeid, str(err))
+            outcome.force_exception(
+                AssertionError(f"hang: {err} wedged the core; card reset requested")
+            )
+            return
         # After sweep(), not in a finally: a case that died with the device
         # must stay on the resume list, not be recorded as covered.
         _hb().mark_done(item.nodeid)
@@ -506,6 +538,10 @@ def pytest_runtest_logfinish(nodeid, location):
     # supervisor must not read the gap as a stall — at the tail of a sweep that
     # gap is however long the slowest worker still has left to run.
     _hb().idle()
+    # Here rather than where the hang was caught, so the case that asked for the
+    # reset is fully reported before this worker stops answering for work.
+    if _parked:
+        _park()
 
 
 def pytest_sessionfinish(session, exitstatus):

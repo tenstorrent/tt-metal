@@ -60,11 +60,13 @@ REPORT_DIR="$(cd "$REPORT_DIR" && pwd)"
 export TTNOP_REPORT_DIR="$REPORT_DIR"
 
 # Heartbeat / resume state. Wiped per invocation so a stale done-log cannot
-# skip the whole sweep.
+# skip the whole sweep, and wiped again on exit so the report dir is only
+# report.md, failures.jsonl, and junit.xml.
 STATE_DIR="${TTNOP_STATE_DIR:-$REPORT_DIR/.state}"
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 export TTNOP_STATE_DIR="$STATE_DIR"
+trap 'rm -rf "$STATE_DIR"' EXIT
 
 build_scanner
 cd "$PYTHON_TESTS"
@@ -98,7 +100,7 @@ if [[ -z "$NODEIDS" ]]; then
 
     echo ">> [2/3] collecting"
     NODEIDS="$(mktemp /tmp/ttnop-nodeids-XXXXXX)"
-    trap '[[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
+    trap 'rm -rf "$STATE_DIR"; [[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
     python3 -m pytest --collect-only -q --compile-consumer \
         "${QUIET_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
         | grep '::' > "$NODEIDS" || true
@@ -126,5 +128,8 @@ if [[ ! -f "$REPORT_DIR/junit.xml" ]]; then
     echo ">> ttnop: sweep did not complete — no junit.xml in $REPORT_DIR" >&2
     status=70
 fi
+# Heartbeats and the done-log are resume internals. Drop them so the report dir
+# is report.md, failures.jsonl, and junit.xml.
+rm -rf "$STATE_DIR"
 echo ">> timing: compile=${compile_s}s sweep=$((SECONDS - started))s total=${SECONDS}s"
 exit "$status"
