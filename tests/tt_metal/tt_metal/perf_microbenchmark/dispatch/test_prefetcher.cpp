@@ -2603,7 +2603,6 @@ public:
                     break;
                 }
                 case CQ_PREFETCH_CMD_RELAY_INLINE: {
-                    // worker_range() collapses mcast to unicast on single-core arches (Quasar) to stay within grid.
                     const CoreRange multi_worker_range = this->worker_range(worker_core, /*multi_core=*/true);
                     auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                     if (result.has_value()) {
@@ -2870,8 +2869,7 @@ public:
         const bool fd_kernels_on_same_core = (phys_prefetch == phys_disp);
 
         // prefetch_sync_sem: dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem =
-            tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
+        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
         uint32_t di_sync_sem = pf_sync_sem;
         if (!fd_kernels_on_same_core) {
             di_sync_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
@@ -2883,8 +2881,7 @@ public:
         // dispatch (init=0, the received-pages count).
         const uint32_t pf_downstream_cb_sem =
             tt_metal::CreateSemaphore(program, {prefetch_logical}, dispatch_buffer_pages, cq_core_type);
-        const uint32_t di_dispatch_cb_sem =
-            tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
+        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
         if (!fd_kernels_on_same_core) {
             TT_FATAL(
                 pf_downstream_cb_sem == di_dispatch_cb_sem,
