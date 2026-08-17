@@ -7,9 +7,9 @@
 
 2. Fix bring-up from a local folder
     - A folder on disk is not treated like a Hub name. It gets a shallower check and the run dies
-      three stages later pointing at the wrong thing. Optimize then confuses the folder holding the weights
-      with the folder holding the generated code, and loses track of which model it came from, so it
-      cannot build its own correctness check. We named it by hand.
+      three stages later pointing at the wrong thing. Optimize then confuses the folder holding the
+      weights with the folder holding the generated code, and loses track of which model it came from,
+      so it cannot build its own correctness check. We named it by hand.
     - Fix: accept a folder anywhere a Hub name works, and keep track of both.
     - Also, models that ship their own code only work if their name is on a hardcoded list, and that
       list has one entry. Read the config instead, it already says so. We changed this and it worked.
