@@ -152,6 +152,32 @@ anchor_check() { # anchor_check <rule> <anchor-text> <expected-64hex> <what>
 [ -n "$CC1" ] && anchor_check R5 "CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256" "$CC1" "cc1plus"
 [ -n "$SBH" ] && anchor_check R6 "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" "$SBH" "BH sim"
 
+# ---- R7: LLK-pristine (owner ruling 2026-08-17) ----
+# The tt_llk_* library trees must be byte-identical to the reviewed upstream
+# base: the compiler proves effects algorithmically — no trusted markers,
+# typed shims, or any other source edit in the consumed library.  Semantic
+# rewrites live under tests/ only.
+LLKBASE=$(sed -n 's/^_REVIEWED_LLK_UPSTREAM_BASE=//p' "$CONF")
+if [ -n "$LLKBASE" ]; then
+  # Anchor repo discovery at this script's own checkout (fixture confs live
+  # in temp dirs outside any repo; the LLK trees under test are always ours).
+  REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$REPO_ROOT" ] && git -C "$REPO_ROOT" cat-file -e "$LLKBASE^{commit}" 2>/dev/null; then
+    # Diff the WORKTREE against the base (not HEAD) so an uncommitted edit —
+    # or an uncommitted revert — is judged by what would actually compile.
+    LLK_DIRT=$(git -C "$REPO_ROOT" diff --name-only "$LLKBASE" -- \
+      tt_metal/tt-llk/tt_llk_blackhole tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/tt_llk_quasar)
+    if [ -n "$LLK_DIRT" ]; then
+      fail R7 "LLK library trees differ from the reviewed upstream base $LLKBASE (LLK-pristine rule: no edits to consumed LLK headers, ever):"
+      printf '%s\n' "$LLK_DIRT" | sed 's|^|    |'
+    fi
+  else
+    fail R7 "reviewed LLK upstream base $LLKBASE is not a commit in this repo (rebase without updating _REVIEWED_LLK_UPSTREAM_BASE?)"
+  fi
+else
+  fail R7 "conf lacks _REVIEWED_LLK_UPSTREAM_BASE (the LLK-pristine rule is unenforceable without it)"
+fi
+
 if [ "$RED" -eq 0 ]; then
   echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…)"
   exit 0

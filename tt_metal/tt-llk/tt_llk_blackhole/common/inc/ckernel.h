@@ -819,35 +819,10 @@ inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
     return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
 }
 
-// Converts between int32 sign-magnitude and 2's-complement in `src`, using `dst`
-// as scratch: the SFPCAST writes the converted value into `dst`, and the SFPSETSGN
-// moves it back into `src` (imod=0 writes (dst & 0x7FFFFFFF) | (src & 0x80000000)).
-// Callers pass InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP (mod1=3) for BOTH
-// directions: per the BH ISA (SFPCAST_IntInt.md) mod1=3 is a self-inverse,
-// sign-preserving conditional negate that implements both conversions identically.
-//
-// NOTE (stale attribution corrected, 2026-08): the SFPSETSGN below was historically
-// commented as "required after cast due to a bug in Blackhole RTL"
-// (tenstorrent/tt-llk-bh#16 lineage). That attribution is stale. The actual BH RTL
-// bug is in SFPCAST mod1=2 (the enum's INT32_2S_COMP_TO_INT_SIGN_MAGN): intended as
-// a conversion, it computes a 2's-complement ABS instead (SFPCAST_IntAbs.md: "due
-// to a hardware bug") and is used nowhere in tt-llk. The mod1=3 cast used here
-// needs no sign fixup — its result's sign bit already equals the source's by
-// construction, so the SFPSETSGN is VALUE-REDUNDANT as a workaround; its live
-// effect is only the move of the result back into `src` that the callers' register
-// allocation relies on. Do not delete it as "dead workaround" without retargeting
-// every caller to read `dst`.
-// Evidence: convert-smag-evidence-20260816 (Lane N README, "Errata-scope
-// findings") — BH ISA docs SFPCAST_IntInt.md/SFPCAST_IntAbs.md, sfpi_constants.h
-// and craq-sim agree; adversarially confirmed by the boundary-value suite
-// (+/-0, +/-1, +/-INT32_MAX magnitudes, sign transitions): the bare mod1=3 cast
-// (no SETSGN, generated smag_to_int lowering) matches the cast+SETSGN hand form
-// bit-exactly on BH CRAQ and p150 silicon, OFF and ON flag legs, including the
-// ISA-defined corner SM32 -0 <-> most-negative int32.
 inline void apply_sign_magnitude_conversion(std::uint32_t src, std::uint32_t dst, InstrModCast cast_mode)
 {
     TTI_SFPCAST(src /*lreg*/, dst /*ldest*/, cast_mode);
-    // Value-redundant sign fixup; kept as the result move back into `src` (see above).
+    // Required after cast due to a bug in Blackhole RTL (Refer tenstorrent/tt-llk-bh#16)
     TTI_SFPSETSGN(0 /* imm */, dst /*lreg_c*/, src /*ldest*/, 0 /*imod*/);
 }
 

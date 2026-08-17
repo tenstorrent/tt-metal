@@ -153,11 +153,13 @@ ON_FLAGS = (
     "-mtt-tensix-macro-planner "
     "-mtt-tensix-macro-planner-replay "
     "-mtt-tensix-optimize-mop-form "
-    "-mtt-tensix-optimize-capture-rotation "
-    # M3 fire (pin 9): prgm-const needs the tt-metal ttregion markers compiled
-    # in, and markers without the fire are pure ghost-scheduling ripple (AQ),
-    # so the flag and the define travel together or not at all.
-    "-mtt-tensix-optimize-prgm-const -DLLK_ENABLE_TTREGION_MARKERS"
+    "-mtt-tensix-optimize-capture-rotation"
+    # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
+    # its only engagement channel was the trusted TTREGION source markers in
+    # the LLK headers, and trusted source annotation of the consumed library
+    # is rejected at the design level (LLK-pristine rule, conf R7).  The flag
+    # returns when the compiler PROVES region effects algorithmically
+    # (mop_cfg template-programming dataflow derivation — Lane BC).
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -174,9 +176,6 @@ KNOBS = {
     "planner-replay": "-mtt-tensix-macro-planner-replay",
     "mop-form": "-mtt-tensix-optimize-mop-form",
     "capture-rotation": "-mtt-tensix-optimize-capture-rotation",
-    # The knob leg must carry the marker define for the same reason as the ON
-    # set: prgm-const without ttregion markers cannot fire.
-    "prgm-const": "-mtt-tensix-optimize-prgm-const -DLLK_ENABLE_TTREGION_MARKERS",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"

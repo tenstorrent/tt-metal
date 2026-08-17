@@ -37,8 +37,12 @@ _REVIEWED_CC1PLUS_SHA256=$cc1
 _REVIEWED_COMPILER_SHA256=$drv
 _REVIEWED_SIM_BH_SHA256=$sbh
 _REVIEWED_SIM_WH_SHA256=$swh
+_REVIEWED_LLK_UPSTREAM_BASE=${LLK_BASE_FOR_FIXTURES}
 EOF
 }
+# R7 fixtures inherit the real conf's reviewed upstream base (the repo's LLK
+# trees are pristine against it, so GREEN fixtures stay GREEN).
+LLK_BASE_FOR_FIXTURES=$(sed -n 's/^_REVIEWED_LLK_UPSTREAM_BASE=//p' "$(dirname "$0")/sweep_2x2.conf")
 
 write_baseline() { # write_baseline <file> <cc1-prefix> <sbh-prefix>
   cat > "$1" <<EOF
@@ -105,8 +109,15 @@ check "non-64-hex sim pin refuses RED" 1 $?
 check "checked-in conf+baseline lint GREEN" 0 $?
 grep -q "conf-lint: GREEN" "$TMP/out8.log" || { echo "SELFTEST FAIL: shipping-state lint did not report GREEN"; overall=1; }
 
+# 9. R7 LLK-pristine: a bogus upstream base -> RED (base must be a real commit)
+sed 's/^_REVIEWED_LLK_UPSTREAM_BASE=.*/_REVIEWED_LLK_UPSTREAM_BASE=1111111111111111111111111111111111111111/' \
+  "$TMP/ok.conf" > "$TMP/badllkbase.conf"
+"$LINT" "$TMP/badllkbase.conf" "$TMP/ok.tsv" > "$TMP/out9.log" 2>&1
+check "R7 bogus LLK upstream base refuses RED" 1 $?
+grep -q "R7" "$TMP/out9.log" || { echo "SELFTEST FAIL: bogus-base RED is not attributed to R7"; overall=1; }
+
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi
