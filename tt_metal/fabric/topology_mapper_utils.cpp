@@ -89,17 +89,24 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
 namespace {
 
-// Apply many-to-many pinning groups as a single required constraint per group. Groups are applied as
-// written, without filtering to the mesh being mapped: every group must resolve to at least one ASIC
-// present in this physical mesh and must stay satisfiable alongside the constraints already added.
-// Otherwise an error is returned so the caller skips this mesh pairing and tries the next candidate.
+// Apply many-to-many pinning groups as a single required constraint per group. Fabric nodes belonging to
+// another logical mesh are dropped, so a group that says nothing about this mesh is skipped. Every group
+// that does apply must resolve to at least one ASIC present in this physical mesh and must stay satisfiable
+// alongside the constraints already added; otherwise an error is returned so the caller skips this mesh
+// pairing and tries the next candidate.
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids) {
     for (const auto& group : pinning_groups) {
-        const std::set<FabricNodeId> fabric_nodes(group.fabric_nodes.begin(), group.fabric_nodes.end());
+        // If its related to another logical mesh skip it.
+        std::set<FabricNodeId> fabric_nodes;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            if (fabric_node.mesh_id == logical_mesh_id) {
+                fabric_nodes.insert(fabric_node);
+            }
+        }
         if (fabric_nodes.empty()) {
             continue;
         }

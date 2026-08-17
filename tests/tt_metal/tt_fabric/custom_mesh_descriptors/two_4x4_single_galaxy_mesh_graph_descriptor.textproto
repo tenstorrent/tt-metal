@@ -13,8 +13,9 @@ mesh_descriptors {
 mesh_descriptors {
   name: "M1"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 4 ] dim_types: [ RING, LINE ] }
-  host_topology   { dims: [ 1, 4 ] }
+
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 4, 1 ] }
   channels { count: 2 policy: RELAXED }
 }
 graph_descriptors {
@@ -28,14 +29,25 @@ graph_descriptors {
     channels { count: 16 policy: RELAXED }
   }
 }
-# Pin M0 onto the Middle quadrants (tray 1-4, asic {3,4,7,8}) and M1 onto the Edge quadrants
-# (tray 1-4, asic {1,2,5,6}) so each is confined to its host-half and they tile disjointly.
+# --- Pinnings ---------------------------------------------------------------
+
 pinnings {
-  logical_fabric_node_id { mesh_id: 0 chip_id_regex: "0-15" }
-  physical_asic_position { tray_id_regex: "1-4" asic_location_regex: "3,4,7,8" }
+  logical_fabric_node_id { mesh_id: 0 chip_id_regex: "0,3,12,15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location: 3 }
 }
+
 pinnings {
-  logical_fabric_node_id { mesh_id: 1 chip_id_regex: "0-15" }
-  physical_asic_position { tray_id_regex: "1-4" asic_location_regex: "1,2,5,6" }
+  logical_fabric_node_id { mesh_id: 1 chip_id_regex: "0,3,12,15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location: 2 }
+}
+
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 1 }
+  physical_asic_position { tray_id: 1 asic_location: 7 }
+}
+
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 2 }
+  physical_asic_position { tray_id: 4 asic_location: 6 }
 }
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

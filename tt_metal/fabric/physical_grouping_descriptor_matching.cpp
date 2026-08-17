@@ -821,6 +821,35 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
     return node_to_position;
 }
 
+// The set of local mesh ids covered by a given MGD mesh instance name (used to filter pinnings down to those
+// that belong to the mesh currently being matched).
+std::set<uint32_t> get_mesh_ids_for_mgd_instance_name(
+    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
+    std::set<uint32_t> mesh_ids;
+    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
+    for (const GlobalNodeId global_id : instance_ids) {
+        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
+        if (instance.kind == NodeKind::Mesh || instance.kind == NodeKind::Switch) {
+            mesh_ids.insert(instance.local_id);
+        }
+    }
+    return mesh_ids;
+}
+
+// Keep only the pinning groups that belong to this MGD mesh instance. After per-mesh expansion each group
+// names a single mesh, so a group belongs here iff its first fabric node's mesh is in applicable_mesh_ids.
+std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filter_pinnings_for_mesh_ids(
+    const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinnings,
+    const std::set<uint32_t>& applicable_mesh_ids) {
+    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filtered;
+    for (const auto& group : pinnings) {
+        if (!group.fabric_nodes.empty() && applicable_mesh_ids.contains(group.fabric_nodes.front().mesh_id.get())) {
+            filtered.push_back(group);
+        }
+    }
+    return filtered;
+}
+
 // Returns the number of required constraints added (one per many-to-many pinning group that resolved to >=1 PGD
 // node per side). Can be fewer than `pinnings.size()` when a group's pinned ASIC positions map to no PGD node in
 // this grouping, or when a group is unsatisfiable here; the caller requires every group to land and skips the PGD
@@ -910,6 +939,58 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
         const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
 
+        // Only pinnings related to THIS mesh instance must land on a candidate grouping. Pinnings for other
+        // meshes (e.g. an odd mesh's asic-2 corner pin while matching an even/Middle mesh) are irrelevant here
+        // and must not force the grouping to be rejected.
+        const std::set<uint32_t> applicable_mesh_ids =
+            get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
+        const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> mesh_pinnings =
+            pinnings.has_value() ? filter_pinnings_for_mesh_ids(*pinnings, applicable_mesh_ids)
+                                 : std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>{};
+
+        // A single MGD descriptor may be instantiated as several meshes (e.g. gemma's M_4x4_h14 for meshes
+        // 1..7), and different instances can be pinned to different physical columns (even -> Middle asic 3,
+        // odd -> Edge asic 2). Applying all their pins to one candidate grouping can never succeed, so we
+        // partition this descriptor's mesh ids by pin-set and run the match/commit once PER distinct pin-set,
+        // committing every group's result together. First bucket the pins by the instance mesh they target.
+        std::map<uint32_t, std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pinnings_by_mesh;
+        for (const auto& group : mesh_pinnings) {
+            if (!group.fabric_nodes.empty()) {
+                pinnings_by_mesh[group.fabric_nodes.front().mesh_id.get()].push_back(group);
+            }
+        }
+
+        // Collapse mesh ids that share the SAME physical pin-set (target asic positions) into one pass: gemma's
+        // meshes 1,3,5,7 all carry the asic-2 Edge pin-set, 2,4,6 all carry the asic-3 Middle pin-set, so
+        // M_4x4_h14 yields exactly two passes (Edge, Middle) while M_4x4_h11 (mesh 0) yields one (Middle). Each
+        // entry of pin_set_variants is applied on its own; an empty variant preserves the no-pin (0,0) anchor.
+        std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants;
+        if (pinnings_by_mesh.empty()) {
+            pin_set_variants.emplace_back();
+        } else {
+            auto pin_set_signature =
+                [](const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pin_set) {
+                    std::vector<std::pair<uint32_t, uint32_t>> positions;
+                    for (const auto& group : pin_set) {
+                        for (const auto& pos : group.asic_positions) {
+                            positions.emplace_back(pos.first.get(), pos.second.get());
+                        }
+                    }
+                    std::sort(positions.begin(), positions.end());
+                    std::string sig;
+                    for (const auto& [tray, asic] : positions) {
+                        sig += fmt::format("{}:{},", tray, asic);
+                    }
+                    return sig;
+                };
+            std::set<std::string> seen_signatures;
+            for (const auto& [mesh_id, pin_set] : pinnings_by_mesh) {
+                if (seen_signatures.insert(pin_set_signature(pin_set)).second) {
+                    pin_set_variants.push_back(pin_set);
+                }
+            }
+        }
+
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
@@ -960,189 +1041,196 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
         }
 
-        // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds
+        // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds.
+        // Run one match/commit pass per distinct pin-set (pin_set_variants); each pass commits its own
+        // groupings, so a shared descriptor accumulates both its Middle and Edge column groupings, which
+        // find_all_in_psd then maps together.
         std::vector<MeshTopologyMatch> best_matches_topology;
         std::vector<MeshTopologyMatch> best_matches_psd_placed;
         size_t last_topology_match_count = 0;
 
         bool committed_pgd_matches = false;
-        for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
-            best_matches_topology.clear();
-            best_matches_psd_placed.clear();
-            best_matches_topology.reserve(name_idx_pairs.size());
+        for (const auto& active_pinnings : pin_set_variants) {
+            for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
+                best_matches_topology.clear();
+                best_matches_psd_placed.clear();
+                best_matches_topology.reserve(name_idx_pairs.size());
 
-            for (const auto& [name, idx] : name_idx_pairs) {
-                const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
+                for (const auto& [name, idx] : name_idx_pairs) {
+                    const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
 
-                // Necessary-condition prefilter: a variant with fewer edges than the MGD cannot contain it
-                // (every MGD edge needs a distinct variant edge). Skip without paying for the SAT solve.
-                const size_t variant_edges = count_undirected_edges(grouping_info.adjacency_graph);
-                if (variant_edges < required_edges) {
-                    log_debug(
-                        tt::LogFabric,
-                        "Skipping {} for {}: {} edges < {} MGD edges (cannot contain the topology)",
-                        name,
-                        mgd_grouping_info.name,
-                        variant_edges,
-                        required_edges);
-                    continue;
-                }
-
-                const bool mgd_is_1xN_strip =
-                    device_topo.has_value() && device_topo->dims.size() >= 2 &&
-                    std::any_of(device_topo->dims.begin(), device_topo->dims.end(), [](int32_t d) { return d == 1; });
-
-                // Same ASIC count but different grid factorization (e.g. MGD 1×32 vs PGD 4×8): still allow the
-                // topology solve unless the MGD declares a full 2D grid (both dims > 1).
-                if (node_diff == 0 && !required_grid_dims.empty() &&
-                    grouping_info.flattened_node_grid_dims.size() >= 2 &&
-                    normalized_dims(grouping_info.flattened_node_grid_dims) != required_grid_dims &&
-                    !mgd_is_1xN_strip) {
-                    log_debug(
-                        tt::LogFabric,
-                        "Skipping {} for {}: flattened node grid dims [{},{}] do not match MGD device topology",
-                        name,
-                        mgd_grouping_info.name,
-                        grouping_info.flattened_node_grid_dims[0],
-                        grouping_info.flattened_node_grid_dims[1]);
-                    continue;
-                }
-
-                MappingConstraints<uint32_t, uint32_t> constraints;
-                if (pinnings.has_value() && !pinnings->empty()) {
-                    const std::size_t pinning_constraints_added =
-                        add_mgd_to_pgd_asic_position_pinning_constraints(constraints, grouping_info, *pinnings);
-                    // Every pinning group must be representable on this grouping; a partial application would
-                    // let the solve satisfy only some of the pins, so this grouping is not a fit.
-                    if (pinning_constraints_added != pinnings->size()) {
-                        continue;
-                    }
-                } else {
-                    // No pinning for this MGD instance: keep the (0,0) anchor so the solve stays constrained
-                    // instead of running unconstrained.
-                    constraints.add_required_constraint(0, 0);
-                }
-                auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
-                    mgd_grouping_info.adjacency_graph,
-                    grouping_info.adjacency_graph,
-                    constraints,
-                    ConnectionValidationMode::STRICT,
-                    true);
-                if (mapping_result.success) {
-                    best_matches_topology.push_back({name, idx, std::move(mapping_result)});
-                } else {
-                    log_debug(
-                        tt::LogFabric,
-                        "Failed to solve topology mapping for {} and {}, with error: {}",
-                        mgd_grouping_info.name,
-                        name,
-                        mapping_result.error_message);
-                }
-            }
-
-            if (best_matches_topology.empty()) {
-                continue;
-            }
-            last_topology_match_count = best_matches_topology.size();
-
-            // The grouping committed for this MGD mesh is the matched PGD topology variant itself. Each variant
-            // already encodes its own topology (the MESH grid, or RING wrap edges for TORUSX/TORUSY/TORUSXY) and
-            // was pre-filtered by can_map_to_psd during flattening, so we PSD-validate and commit the variant's
-            // own adjacency directly rather than rebuilding it from the MGD device topology. Keeping the PGD
-            // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
-            auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
-                GroupingInfo committed = mesh_flat_groupings.at(match.name)[match.idx];
-                // The topology solve used the MGD mesh adjacency as target and this PGD variant as global, so
-                // target_to_global is MGD-node -> PGD grouping-node. Compose logical chip_id -> PGD slot pinning
-                // now so downstream consumes it directly without re-deriving the intermediate node pairing.
-                committed.mesh_node_to_asic_position =
-                    compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
-                return committed;
-            };
-
-            // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
-            // smallest topology that matches is used. The downstream set-packing solver de-duplicates variants
-            // that cover the same physical ASIC set (find_all_in_psd / solve_for_many_groupings_to_psd), so
-            // committing variants MESH-first means each physical region keeps its MESH form rather than a torus
-            // form, while distinct physical regions (e.g. two tray-pairs for a 2x8) are each committed.
-            auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
-                const std::string& type = mesh_flat_groupings.at(m.name)[m.idx].type;
-                if (type == "MESH") {
-                    return 0;
-                }
-                if (type == "TORUSX") {
-                    return 1;
-                }
-                if (type == "TORUSY") {
-                    return 2;
-                }
-                if (type == "TORUSXY") {
-                    return 3;
-                }
-                return 4;
-            };
-            std::stable_sort(
-                best_matches_topology.begin(),
-                best_matches_topology.end(),
-                [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
-                    return variant_priority(a) < variant_priority(b);
-                });
-
-            if (physical_system_descriptor != nullptr) {
-                for (const auto& match : best_matches_topology) {
-                    const GroupingInfo committed_candidate = make_committed_grouping(match);
-                    std::vector<std::string> psd_errors;
-                    const auto mapped_asics =
-                        find_any_in_psd(committed_candidate, *physical_system_descriptor, psd_errors);
-                    if (!mapped_asics.empty()) {
-                        best_matches_psd_placed.push_back(match);
-                    } else if (!psd_errors.empty()) {
+                    // Necessary-condition prefilter: a variant with fewer edges than the MGD cannot contain it
+                    // (every MGD edge needs a distinct variant edge). Skip without paying for the SAT solve.
+                    const size_t variant_edges = count_undirected_edges(grouping_info.adjacency_graph);
+                    if (variant_edges < required_edges) {
                         log_debug(
                             tt::LogFabric,
-                            "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD under current "
-                            "constraints: {}",
-                            committed_candidate.name,
+                            "Skipping {} for {}: {} edges < {} MGD edges (cannot contain the topology)",
+                            name,
                             mgd_grouping_info.name,
-                            psd_errors.front());
+                            variant_edges,
+                            required_edges);
+                        continue;
+                    }
+
+                    const bool mgd_is_1xN_strip =
+                        device_topo.has_value() && device_topo->dims.size() >= 2 &&
+                        std::any_of(
+                            device_topo->dims.begin(), device_topo->dims.end(), [](int32_t d) { return d == 1; });
+
+                    // Same ASIC count but different grid factorization (e.g. MGD 1×32 vs PGD 4×8): still allow the
+                    // topology solve unless the MGD declares a full 2D grid (both dims > 1).
+                    if (node_diff == 0 && !required_grid_dims.empty() &&
+                        grouping_info.flattened_node_grid_dims.size() >= 2 &&
+                        normalized_dims(grouping_info.flattened_node_grid_dims) != required_grid_dims &&
+                        !mgd_is_1xN_strip) {
+                        log_debug(
+                            tt::LogFabric,
+                            "Skipping {} for {}: flattened node grid dims [{},{}] do not match MGD device topology",
+                            name,
+                            mgd_grouping_info.name,
+                            grouping_info.flattened_node_grid_dims[0],
+                            grouping_info.flattened_node_grid_dims[1]);
+                        continue;
+                    }
+
+                    MappingConstraints<uint32_t, uint32_t> constraints;
+                    if (!active_pinnings.empty()) {
+                        // Every pin in THIS group's pin-set must land on the candidate grouping (all-or-nothing);
+                        // a variant that can host only part of the set is not a valid home for this column.
+                        const std::size_t added = add_mgd_to_pgd_asic_position_pinning_constraints(
+                            constraints, grouping_info, active_pinnings);
+                        if (added != active_pinnings.size()) {
+                            continue;
+                        }
+                    } else {
+                        // No pinning for this MGD instance: keep the (0,0) anchor so the solve stays constrained
+                        // instead of running unconstrained.
+                        constraints.add_required_constraint(0, 0);
+                    }
+                    auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
+                        mgd_grouping_info.adjacency_graph,
+                        grouping_info.adjacency_graph,
+                        constraints,
+                        ConnectionValidationMode::STRICT,
+                        true);
+                    if (mapping_result.success) {
+                        best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                     } else {
                         log_debug(
                             tt::LogFabric,
-                            "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD (no ASIC embedding "
-                            "found)",
-                            committed_candidate.name,
-                            mgd_grouping_info.name);
+                            "Failed to solve topology mapping for {} and {}, with error: {}",
+                            mgd_grouping_info.name,
+                            name,
+                            mapping_result.error_message);
                     }
                 }
-            } else {
-                best_matches_psd_placed = best_matches_topology;
-            }
 
-            if (!best_matches_psd_placed.empty()) {
-                for (const auto& match : best_matches_psd_placed) {
-                    auto lookup_it = mesh_flat_groupings.find(match.name);
-                    if (lookup_it != mesh_flat_groupings.end() && match.idx < lookup_it->second.size()) {
-                        result[instance_type][instance_name].push_back(make_committed_grouping(match));
-                    }
+                if (best_matches_topology.empty()) {
+                    continue;
                 }
-                committed_pgd_matches = true;
-                std::string committed_summary;
-                for (size_t i = 0; i < best_matches_psd_placed.size(); ++i) {
-                    const auto& match = best_matches_psd_placed[i];
-                    const auto& grouping = mesh_flat_groupings.at(match.name)[match.idx];
-                    if (i > 0) {
-                        committed_summary += ", ";
+                last_topology_match_count = best_matches_topology.size();
+
+                // The grouping committed for this MGD mesh is the matched PGD topology variant itself. Each variant
+                // already encodes its own topology (the MESH grid, or RING wrap edges for TORUSX/TORUSY/TORUSXY) and
+                // was pre-filtered by can_map_to_psd during flattening, so we PSD-validate and commit the variant's
+                // own adjacency directly rather than rebuilding it from the MGD device topology. Keeping the PGD
+                // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
+                auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
+                    GroupingInfo committed = mesh_flat_groupings.at(match.name)[match.idx];
+                    // The topology solve used the MGD mesh adjacency as target and this PGD variant as global, so
+                    // target_to_global is MGD-node -> PGD grouping-node. Compose logical chip_id -> PGD slot pinning
+                    // now so downstream consumes it directly without re-deriving the intermediate node pairing.
+                    committed.mesh_node_to_asic_position =
+                        compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
+                    return committed;
+                };
+
+                // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
+                // smallest topology that matches is used. The downstream set-packing solver de-duplicates variants
+                // that cover the same physical ASIC set (find_all_in_psd / solve_for_many_groupings_to_psd), so
+                // committing variants MESH-first means each physical region keeps its MESH form rather than a torus
+                // form, while distinct physical regions (e.g. two tray-pairs for a 2x8) are each committed.
+                auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
+                    const std::string& type = mesh_flat_groupings.at(m.name)[m.idx].type;
+                    if (type == "MESH") {
+                        return 0;
                     }
-                    committed_summary += fmt::format("{} ({})", grouping.name, grouping.type);
+                    if (type == "TORUSX") {
+                        return 1;
+                    }
+                    if (type == "TORUSY") {
+                        return 2;
+                    }
+                    if (type == "TORUSXY") {
+                        return 3;
+                    }
+                    return 4;
+                };
+                std::stable_sort(
+                    best_matches_topology.begin(),
+                    best_matches_topology.end(),
+                    [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
+                        return variant_priority(a) < variant_priority(b);
+                    });
+
+                if (physical_system_descriptor != nullptr) {
+                    for (const auto& match : best_matches_topology) {
+                        const GroupingInfo committed_candidate = make_committed_grouping(match);
+                        std::vector<std::string> psd_errors;
+                        const auto mapped_asics =
+                            find_any_in_psd(committed_candidate, *physical_system_descriptor, psd_errors);
+                        if (!mapped_asics.empty()) {
+                            best_matches_psd_placed.push_back(match);
+                        } else if (!psd_errors.empty()) {
+                            log_debug(
+                                tt::LogFabric,
+                                "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD under current "
+                                "constraints: {}",
+                                committed_candidate.name,
+                                mgd_grouping_info.name,
+                                psd_errors.front());
+                        } else {
+                            log_debug(
+                                tt::LogFabric,
+                                "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD (no ASIC "
+                                "embedding "
+                                "found)",
+                                committed_candidate.name,
+                                mgd_grouping_info.name);
+                        }
+                    }
+                } else {
+                    best_matches_psd_placed = best_matches_topology;
                 }
-                log_info(
-                    tt::LogFabric,
-                    "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), committed: {}",
-                    mgd_grouping_info.name,
-                    best_matches_topology.size(),
-                    committed_summary);
-                break;
+
+                if (!best_matches_psd_placed.empty()) {
+                    for (const auto& match : best_matches_psd_placed) {
+                        auto lookup_it = mesh_flat_groupings.find(match.name);
+                        if (lookup_it != mesh_flat_groupings.end() && match.idx < lookup_it->second.size()) {
+                            result[instance_type][instance_name].push_back(make_committed_grouping(match));
+                        }
+                    }
+                    committed_pgd_matches = true;
+                    std::string committed_summary;
+                    for (size_t i = 0; i < best_matches_psd_placed.size(); ++i) {
+                        const auto& match = best_matches_psd_placed[i];
+                        const auto& grouping = mesh_flat_groupings.at(match.name)[match.idx];
+                        if (i > 0) {
+                            committed_summary += ", ";
+                        }
+                        committed_summary += fmt::format("{} ({})", grouping.name, grouping.type);
+                    }
+                    log_info(
+                        tt::LogFabric,
+                        "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), committed: {}",
+                        mgd_grouping_info.name,
+                        best_matches_topology.size(),
+                        committed_summary);
+                    break;
+                }
             }
-        }
+        }  // end per-pin-set pass (pin_set_variants)
 
         if (!committed_pgd_matches) {
             // No PGD grouping both matched MGD and placed on PSD — use the MGD grouping info itself
