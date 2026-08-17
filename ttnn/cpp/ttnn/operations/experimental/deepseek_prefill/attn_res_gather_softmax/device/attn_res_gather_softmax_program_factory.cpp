@@ -212,9 +212,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     if (fold_core_budget > max_fold_cores) {
         fold_core_budget = Ht;
     }
-    if (fold_core_budget > max_fold_cores) {
-        fold_core_budget = max_fold_cores;
-    }
+    fold_core_budget = std::min(fold_core_budget, max_fold_cores);
     const CoreRangeSet fold_grid = num_cores_to_corerangeset(fold_core_budget, grid, /*row_wise=*/true);
     const auto [num_fold_cores, all_fold_cores, fold_group_1, fold_group_2, tiles_per_core_1, tiles_per_core_2] =
         tt::tt_metal::split_work_to_cores(fold_grid, num_output_tiles, /*row_wise=*/true);
