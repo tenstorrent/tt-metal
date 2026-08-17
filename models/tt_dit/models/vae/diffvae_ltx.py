@@ -580,9 +580,11 @@ class DeterministicStages(Module):
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         def block_backend(stage: int) -> str:
-            # Stage 0 runs replicated (its W is not shardable); the rest shard over W.
+            # Stage 0 runs replicated (its W is not shardable), but on the fast gather backend (its
+            # plan query-shards across the mesh) -- NOT op, which is ~5x slower and would swamp the
+            # W-shard win on stages 1+. The rest shard over W.
             if self._w_sharded:
-                return "op" if stage == 0 else "op_sp_w_sharded"
+                return "gather" if stage == 0 else "op_sp_w_sharded"
             return self.na3d_backend
 
         self.det_stages = ModuleList(
