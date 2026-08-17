@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
@@ -25,6 +27,26 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
+
+
+# Select the cache slot with a device-valued begin index instead of a host int, so a captured
+# per-chunk trace can replay any user's slot (request mode). Default off = host-int slice, unchanged.
+_DEVICE_SLOT_SLICE = os.environ.get("PREFILL_DEVICE_SLOT_SLICE", "0") == "1"
+
+
+def _slot_slice_device(packed, kv_cache, layer_idx, slot, n_rows, head_dim, mesh_device):
+    # ttnn.slice's device-tensor path is a partition-select: it splits slice_dim into num_devices
+    # equal parts and picks the one at the device-valued begin, reshaping ONLY slice_dim. num_devices
+    # = the slot count makes unit slices, so the begin tensor selects slot `slot` on dim 0 and a trace
+    # replays any user's slot. The row-count bound (dim 2, constant per KV-length bucket) stays a
+    # host-int slice, since the partition path cannot bound the other dims. The begin tensor is
+    # persistent (kv_cache) so a captured trace re-targets the slot by an in-place host update.
+    n_slots = packed.shape[0]
+    max_rows = packed.shape[2]
+    start = kv_cache.read_slot_start(layer_idx, slot, mesh_device)
+    end = kv_cache.read_slot_end(max_rows, head_dim, mesh_device)
+    slot_full = ttnn.slice(packed, starts=start, ends=end, slice_dim=0, num_devices=n_slots)
+    return ttnn.slice(slot_full, (0, 0, 0, 0), (1, 1, n_rows, head_dim))
 
 
 def attention_forward(
@@ -221,9 +243,20 @@ def attention_forward(
                     v_int = ttnn.to_memory_config(kv_cache.v, ttnn.DRAM_MEMORY_CONFIG)
                     ik_int = ttnn.to_memory_config(kv_cache.index_k, ttnn.DRAM_MEMORY_CONFIG)
                 with zone("slice", FINE):
-                    k_acc = ttnn.slice(k_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-                    v_acc = ttnn.slice(v_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-                    ik_acc = ttnn.slice(ik_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+                    if _DEVICE_SLOT_SLICE:
+                        k_acc = _slot_slice_device(
+                            k_int, kv_cache, layer_idx, slot, n_rows, config.head_dim, mesh_device
+                        )
+                        v_acc = _slot_slice_device(
+                            v_int, kv_cache, layer_idx, slot, n_rows, config.head_dim, mesh_device
+                        )
+                        ik_acc = _slot_slice_device(
+                            ik_int, kv_cache, layer_idx, slot, n_rows, config.head_dim, mesh_device
+                        )
+                    else:
+                        k_acc = ttnn.slice(k_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+                        v_acc = ttnn.slice(v_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+                        ik_acc = ttnn.slice(ik_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
                 k_int.deallocate(True)
                 v_int.deallocate(True)
                 ik_int.deallocate(True)
