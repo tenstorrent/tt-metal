@@ -102,3 +102,93 @@ hours, from one server start:
 It records `finish_reason`, `completion_tokens` against the cap, whether the text
 ends in terminal punctuation, whether it contains `boxed`, and the most-repeated
 12-gram with its count.
+
+---
+
+## The cause: this is a thinking model, and the template leaves `<think>` open
+
+Found by reading the tokenizer's chat template. This explains the 256-token result
+exactly and predicts the 32,768-token result.
+
+### The template
+
+`tokenizer_config.json`'s chat template contains `enable_thinking`, and its
+generation-prompt tail is:
+
+```jinja
+{%- if enable_thinking is defined and enable_thinking is false %}
+{{- '<think>\n\n</think>\n\n' }}      {# closed empty block: answer directly #}
+{%- else %}
+{{- '<think>\n' }}                    {# DEFAULT: an OPEN think tag #}
+```
+
+So unless `enable_thinking=false` is passed explicitly, **every prompt ends with an
+unclosed `<think>`**, and the model is expected to reason, emit `</think>`, and only
+then produce the answer.
+
+lm-eval's `--apply_chat_template` renders the template with no `enable_thinking`
+argument. So the default branch applied to **every graded response on this branch**.
+
+### Why this explains the observations exactly
+
+The retained 256-token samples showed: median 120 words, **0/20 containing
+`boxed`**, 16/20 filtered to `[invalid]`, tails severed mid-expression
+(`$\Gamma_2 \approx \frac{\hbar}{`). That is precisely what a reasoning chain cut at
+256 tokens looks like — the entire budget was spent inside the `<think>` block, so
+the `\boxed{}` the prompt asked for was never reached. The extractor was not
+failing; there was nothing yet to extract.
+
+It also predicts the 32,768 result: document 1 consumed the whole budget, meaning
+`</think>` had still not arrived. Whether that is a very long chain or a loop is
+what the two-arm probe measures.
+
+### A second, independent configuration gap
+
+The server starts with `reasoning_parser=''` (visible in its own startup config
+dump). With no reasoning parser, the whole think block is returned in `content`
+rather than split into `reasoning_content`. For the `boxed_choice` filter this is
+survivable — it will find `\boxed{}` wherever it sits — but it means the graded
+"answer" text is mostly reasoning, and any metric that inspects response shape,
+length, or formatting is measuring the think block. IFEval's instruction checks are
+exactly such metrics, which is worth remembering when reading its 15/43.
+
+### Two legitimate configurations; the pipeline chose neither
+
+- **Thinking ON with an adequate budget.** This is how a reasoning model's GPQA
+  number is normally produced, and is the comparable condition for a model-card
+  reference. It requires the model to actually close `</think>`, which is exactly
+  what is in doubt.
+- **Thinking OFF (`chat_template_kwargs: {"enable_thinking": false}`).** The
+  template pre-closes an empty block, the model answers directly, and a modest
+  budget suffices. Terminating and cheap, but a weaker and different benchmark
+  condition, so it is not interchangeable with a published thinking-mode score.
+
+What actually happened was neither: thinking mode was inherited by default and
+combined with lm-eval's implicit 256-token cap. Nothing in the pipeline chose that,
+and nothing detected it.
+
+### Why no stage caught it
+
+Because, as recorded in this document, **no test on this branch waits for
+generation to end.** Fixed-length tests (`--gen-len 100`, `--decode-tokens 128`)
+cannot distinguish a model that is mid-reasoning from one that has answered, and
+teacher-forced top-1 agreement is measured against HF running in the same thinking
+mode — so it agrees, correctly, about reasoning tokens. Every piece of correctness
+evidence on this branch is compatible with a model that never closes `</think>`.
+
+### Pending measurement
+
+`tests/thinking_mode_probe.py` runs two arms per prompt, everything else identical:
+
+| arm | budget | decides |
+|---|---:|---|
+| trivial, thinking OFF | 128 | do stop tokens work at all? |
+| trivial, thinking ON | 4096 | does a trivial question still trigger long reasoning? |
+| GPQA-style, thinking OFF | 1024 | does it answer, with `\boxed{}`, and terminate? |
+| GPQA-style, thinking ON | 8192 | where does `</think>` land, and is there repetition? |
+
+Reads: **thinking OFF terminates** → stop handling is sound and this is a
+serving-configuration defect, fixable in the eval invocation. **thinking OFF also
+runs to the cap** → the defect is in the port, not the configuration, and the
+`</think>` character index plus the 12-gram repetition rate distinguish a
+degenerate loop from genuinely long reasoning.
