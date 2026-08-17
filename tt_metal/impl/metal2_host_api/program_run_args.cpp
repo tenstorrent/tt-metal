@@ -13,6 +13,7 @@
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -32,6 +33,59 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
 
 const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
+}
+
+// Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
+// throw. Called only on the rejection path: the branches mirror the match to produce a specific
+// message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
+static void report_tensor_arg_mismatch(
+    const TensorParamName& param_name,
+    const TensorSpec& runtime_spec,
+    const TensorSpec& expected_spec,
+    const TensorSpecRelaxations& relaxation) {
+    if (relaxation.dynamic_tensor_shape) {
+        TT_FATAL(
+            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+            "binding's "
+            "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
+            "page_config, memory_config, and alignment must still match exactly.",
+            param_name);
+        TT_FATAL(
+            runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
+            "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
+            "remain constant.",
+            param_name,
+            runtime_spec.logical_shape().rank(),
+            expected_spec.logical_shape().rank());
+    } else if (relaxation.match_padded_shape_only) {
+        TT_FATAL(
+            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+            "binding's "
+            "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
+            "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
+            "still match exactly.",
+            param_name);
+        TT_FATAL(
+            runtime_spec.padded_shape() == expected_spec.padded_shape(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
+            "declared padded_shape. match_padded_shape_only requires padded_shape to be preserved across binds; "
+            "use dynamic_tensor_shape if you need padded_shape to vary as well.",
+            param_name);
+    } else {
+        TT_FATAL(
+            runtime_spec == expected_spec,
+            "TensorArgument for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
+            "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; "
+            "the supplied tensor must conform to it.",
+            param_name);
+    }
+    TT_THROW(
+        "TensorArgument for binding '{}' supplied a MeshTensor whose TensorSpec does not match the declared "
+        "spec under the active relaxation.",
+        param_name);
 }
 
 // Internal validation function - validates a TensorArgument list against the Program's TensorParameters.
@@ -64,53 +118,12 @@ void ValidateTensorArgs(
         const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(param_name.get());
         TT_FATAL(expected_spec != nullptr, "TensorArgument references unknown TensorParameter '{}'.", param_name);
         const TensorSpec& runtime_spec = mesh_tensor_of(tensor_arg).tensor_spec();
-        const bool dyn_shape = program_impl.get_tensor_parameter_dynamic_tensor_shape(param_name.get());
-        const bool padded_only = program_impl.get_tensor_parameter_match_padded_shape_only(param_name.get());
-        if (dyn_shape) {
-            // dynamic_tensor_shape: tensor_layout must match exactly; logical_shape may differ in
-            // per-dim values, but rank must still match. (Wins over match_padded_shape_only if both
-            // are set: dynamic is strictly more permissive.)
-            TT_FATAL(
-                runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-                "binding's "
-                "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
-                "page_config, memory_config, and alignment must still match exactly.",
-                param_name);
-            TT_FATAL(
-                runtime_spec.logical_shape().rank() == expected_spec->logical_shape().rank(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
-                "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
-                "remain constant.",
-                param_name,
-                runtime_spec.logical_shape().rank(),
-                expected_spec->logical_shape().rank());
-        } else if (padded_only) {
-            // match_padded_shape_only: tensor_layout must match exactly, and padded_shape must
-            // match exactly. logical_shape may differ provided it produces the same padded_shape.
-            // Purely a host-side validation loosening: the accessor's CTAs/CRTAs are unchanged
-            // (tensor_shape_in_pages is derived from padded_shape, which is fixed across binds).
-            TT_FATAL(
-                runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-                "binding's "
-                "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
-                "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
-                "still match exactly.",
-                param_name);
-            TT_FATAL(
-                runtime_spec.padded_shape() == expected_spec->padded_shape(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
-                "declared padded_shape. match_padded_shape_only requires padded_shape to be preserved across binds; "
-                "use dynamic_tensor_shape if you need padded_shape to vary as well.",
-                param_name);
-        } else {
-            TT_FATAL(
-                runtime_spec == *expected_spec,
-                "TensorArgument for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
-                "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; "
-                "the supplied tensor must conform to it.",
-                param_name);
+        const TensorSpecRelaxations relaxation = program_impl.get_tensor_parameter_relaxations(param_name.get());
+        // Authoritative accept/reject via the same predicate the program-cache hash keys on, so
+        // run-time validation and cache-equivalence cannot disagree. On rejection,
+        // report_tensor_arg_mismatch emits a specific diagnostic (and always throws).
+        if (!tensorspecs_match_with_relaxation(runtime_spec, *expected_spec, relaxation)) {
+            report_tensor_arg_mismatch(param_name, runtime_spec, *expected_spec, relaxation);
         }
     }
     // Completeness is only enforced on the full path. On the partial-update path any TensorParameter

@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
 
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 

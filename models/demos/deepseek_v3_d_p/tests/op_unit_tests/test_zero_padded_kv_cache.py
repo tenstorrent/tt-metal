@@ -359,3 +359,157 @@ def test_zero_padded_kv_cache_layers_users(
     assert pad.max() < 0.1, f"target pad [{valid_global},{ceil_v}) not zeroed (max={pad.max()})"
     assert rest.min() > 0.9, f"target rows past window touched (min={rest.min()})"
     logger.success(f"layers={num_layers} users={num_users} slot={slot_idx} layer={layer_idx} PASSED")
+
+
+# (slot_idx, valid_global): a single-tile partial (740), a 3-tile window (2600), a full-tile window
+# with row_start=0 (4512), and a non-zero slot.
+_EQUIV_CASES = [(0, 740), (0, 2600), (0, 4512), (1, 2600)]
+_EQUIV_IDS = [f"slot{s}_v{v}" for (s, v) in _EQUIV_CASES]
+
+
+def _make_scalar_tensor(mesh_device, value):
+    """A 1-element uint32 tensor [1,1,1,1], ROW_MAJOR, DRAM, replicated across the mesh -- the
+    per-element view the tensor-path overload reads element 0 from."""
+    t = torch.tensor([[[[value]]]], dtype=torch.int32)  # ttnn maps int32->uint32 storage
+    return ttnn.from_torch(
+        t,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("slot_idx,valid_global", _EQUIV_CASES, ids=_EQUIV_IDS)
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid_global):
+    """The per-element-tensor path and the scalar path must produce bit-identical caches.
+
+    Builds two 1-element uint32 replicated-DRAM tensors (slot_idx, valid_global), hands them to the
+    tensor-path overload (the reader/writer read element 0 of each on-device), and compares the zeroed
+    cache against the same call done via the original scalar signature, per device, bit-exact."""
+    mesh_shape = list(mesh_device.shape)
+    sp_axis = 0
+    sp = mesh_shape[sp_axis]
+    kvpe = 64
+    chunk_size_global = 5120
+    seq_len_cache = 5120
+    seq_len_local = seq_len_cache // sp
+    num_users, num_layers = 2, 1
+
+    def _make_seeded_cache():
+        c = init_kvpe_cache(
+            kvpe, mesh_device, seq_len_cache, mesh_shape, sp_axis, num_kvpe_cache_layers=num_layers, num_users=num_users
+        )
+        ones = torch.ones(1, 1, seq_len_local, kvpe, dtype=torch.bfloat16)
+        tt_ones = ttnn.from_torch(
+            ones,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for b in range(num_users * num_layers):
+            ttnn.fill_cache(c, tt_ones, b, update_idx=0)
+        return c
+
+    mesh_device.enable_program_cache()
+    cache_scalar = _make_seeded_cache()
+    cache_tensor = _make_seeded_cache()
+    ttnn.synchronize_device(mesh_device)
+
+    # 1-element uint32 tensors: slot_idx and valid_global, each read element 0 on-device.
+    tt_slot_idx = _make_scalar_tensor(mesh_device, slot_idx)
+    tt_valid_global = _make_scalar_tensor(mesh_device, valid_global)
+
+    # Scalar path and per-element-tensor path on identical seeded caches.
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache_scalar, slot_idx, 0, num_layers, valid_global, chunk_size_global, sp_axis, 128
+    )
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache_tensor, tt_slot_idx, tt_valid_global, 0, num_layers, chunk_size_global, sp_axis, 128
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    scalar_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_scalar)]
+    tensor_devs = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(cache_tensor)]
+    for di, (a, b) in enumerate(zip(tensor_devs, scalar_devs)):
+        assert torch.equal(a, b), (
+            f"slot {slot_idx} v {valid_global} device {di}: tensor-path cache differs from scalar-path "
+            f"(max abs diff {(a - b).abs().max().item()})"
+        )
+    logger.success(f"slot={slot_idx} valid_global={valid_global}: tensor path == scalar path (bit-exact)")
+    ttnn.deallocate(tt_slot_idx)
+    ttnn.deallocate(tt_valid_global)
+
+
+@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
+    """Cache-HIT coverage of the tensor path: two successive tensor-overload calls with DIFFERENT
+    1-element metadata tensors (distinct DRAM addresses) must reuse ONE cached program, and the second
+    call must zero ITS OWN window -- proving override_runtime_arguments patches the metadata tensor
+    addresses (common args 10/11) on the cache hit rather than reusing the first call's tensors. (The
+    tensor path is TILE-only, so this uses a TILE cache.)"""
+    sp_axis = 0
+    kvpe = 64
+    chunk_size_global = 5120
+    seq_len_cache = 5120
+    num_users, num_layers = 2, 1
+
+    cache = _init_cache_filled_with_ones(
+        mesh_device,
+        head_dim=kvpe,
+        seq_len_cache=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        sp_axis=sp_axis,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        num_layers=num_layers,
+        num_users=num_users,
+    )
+    mesh_device.enable_program_cache()
+
+    # Two DISTINCT (slot, valid_global) pairs, each via its OWN metadata tensors (distinct DRAM addresses).
+    slot_a, va = 0, 740
+    slot_b, vb = 1, 2600
+    ceil128 = lambda v: math.ceil(v / 128) * 128  # noqa: E731
+
+    slot_ta, valid_ta = _make_scalar_tensor(mesh_device, slot_a), _make_scalar_tensor(mesh_device, va)
+    # First tensor-overload call: program-cache MISS (compiles the tensor program).
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache, slot_ta, valid_ta, 0, num_layers, chunk_size_global, sp_axis, 128
+    )
+    ttnn.synchronize_device(mesh_device)
+    entries_after_first = mesh_device.num_program_cache_entries()
+
+    slot_tb, valid_tb = _make_scalar_tensor(mesh_device, slot_b), _make_scalar_tensor(mesh_device, vb)
+    # Second call with DIFFERENT tensors -> program-cache HIT; the override must patch the new DRAM
+    # addresses (common args 10/11) so the kernel reads slot_b/vb, not the first call's slot_a/va.
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache, slot_tb, valid_tb, 0, num_layers, chunk_size_global, sp_axis, 128
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    assert mesh_device.num_program_cache_entries() == entries_after_first, (
+        f"tensor-path program was recompiled on the second call instead of reused "
+        f"({entries_after_first} -> {mesh_device.num_program_cache_entries()}) -- successive chunks must "
+        f"reuse one cached program via the patched metadata addresses"
+    )
+    # Both windows zeroed, every other element still one: proves the SECOND (cache-hit) call read the NEW
+    # tensors' values (slot_b/vb) via the patched addresses. If patching had failed it would have re-zeroed
+    # slot_a/va and slot_b's window would still be all ones -> this assertion would fail.
+    _assert_cache_windows(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+        num_layers=num_layers,
+        windows={(slot_a, 0): (va, ceil128(va)), (slot_b, 0): (vb, ceil128(vb))},
+    )
+    logger.success("tensor-path program reused across chunks; second (cache-hit) call zeroed its own window")
+    for t in (slot_ta, valid_ta, slot_tb, valid_tb):
+        ttnn.deallocate(t)

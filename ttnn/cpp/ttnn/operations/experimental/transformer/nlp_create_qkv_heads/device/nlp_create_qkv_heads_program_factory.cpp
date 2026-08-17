@@ -5,7 +5,9 @@
 #include <filesystem>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -288,8 +290,8 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     KernelRunArgs reader_run{.kernel = QKV_IV_READER};
     KernelRunArgs writer_run{.kernel = QKV_IV_WRITER};
 
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t num_blocks_written = 0;
+    for (const CoreCoord& core : split.cores) {
         uint32_t num_blocks_per_core = 0;
         if (core_group_1.contains(core)) {
             num_blocks_per_core = num_blocks_per_core_group_1;

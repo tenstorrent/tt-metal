@@ -12,6 +12,14 @@ on:
       enabled-skus:
         required: true
         type: string
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/runtime_perf_tests.yaml
+      budget-subheading:
+        required: false
+        type: string
+        default: "perf"
 
 jobs:
   load-test-matrix:
@@ -19,7 +27,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_perf_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,7 +46,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "perf"
+            "${{ inputs.budget-subheading }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |

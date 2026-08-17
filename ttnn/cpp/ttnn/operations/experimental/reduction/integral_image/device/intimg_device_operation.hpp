@@ -16,7 +16,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -36,10 +37,17 @@ struct IntImgDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+    // Metal 2.0 factory (MetalV2FactoryConcept). Emits a ProgramSpec + ProgramRunArgs from the single
+    // interleaved config. Wrapped in a single-alternative program_factory_t so the framework's
+    // Metal 2.0 adapter selects it (the DirectDescriptor fallback wraps create_descriptor, not this).
+    struct ProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory>;
 };
 
 }  // namespace ttnn::experimental::prim

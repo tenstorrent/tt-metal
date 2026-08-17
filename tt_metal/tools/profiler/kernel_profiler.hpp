@@ -212,10 +212,15 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 #if defined(ARCH_QUASAR)
 inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
 #if defined(COMPILE_FOR_TRISC)
+    // The wall clock counter is per-Neo. Empirically the four Neo wall clocks are synchronized and
+    // cycle-aligned, so a TRISC reading its own Neo's clock stays on the same timeline as the others.
+    // Guaranteeing that synchronization explicitly would be better, see the TODO below.
     constexpr uint32_t wall_clock_0_addr = LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_OFFSET;
     constexpr uint32_t wall_clock_1_at_addr =
         LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_OFFSET;
 #else
+    // DMs read NEO0's wall clock counter, so DM and TRISC timestamps share one timeline and can be compared directly.
+    // TODO: switch to read the DM's own wall clock and synchronize DM and TRISC clock domains.
     constexpr uint32_t wall_clock_0_addr = NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR;
     constexpr uint32_t wall_clock_1_at_addr = NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_ADDR;
 #endif
@@ -278,7 +283,10 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
     profiler_control_buffer[PROFILER_DONE] = !condition;
 }
 
-inline __attribute__((always_inline)) bool get_profiler_zone_valid() {
+// True when PROFILER_DONE is set: either this iteration was marked invalid by
+// set_profiler_zone_valid(false), or the cycle has already been finished. Either way
+// there is nothing more to do for this iteration.
+inline __attribute__((always_inline)) bool get_profiler_zone_invalid() {
     return profiler_control_buffer[PROFILER_DONE] == 1;
 }
 
@@ -490,15 +498,18 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
 #endif
         return;
     }
+    // All workers get a GO regardless of whether they run a kernel. Skip if a worker does not run a kernel,
+    // otherwise this risc's end index is published while the ID stamping below is skipped, leaving markers
+    // with no identity for the consumer to attribute to the wrong core.
+    if (get_profiler_zone_invalid()) {
+        return;
+    }
     risc_finished_profiling();
 #if defined(COMPILE_FOR_DM)
     // Quasar DM0 additionally writes the per-risc ID words the host, then advances RUN_COUNTER and
     // marks PROFILER_DONE.
     // TODO: Quasar profiler is L1-only, no DRAM/NoC push. Can merge with logic below once DRAM path is supported.
     if (myRiscID != 0) {
-        return;
-    }
-    if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
@@ -511,9 +522,6 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
     profiler_control_buffer[PROFILER_DONE] = 1;
 #elif defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
-    if (profiler_control_buffer[PROFILER_DONE] == 1) {
-        return;
-    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
     bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
@@ -913,9 +921,10 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
         expected_size == 0 || total_data_count == expected_size,
         "Number of arguments does not match expected size for this PacketType");
 
-    constexpr uint32_t additional_slots = sizeof...(trailers);
+    // Total number of words to write: 2 for the marker + 2 for the data + 2 for each trailer
+    constexpr uint32_t words_written = PROFILER_L1_MARKER_UINT32_SIZE * (2 + sizeof...(trailers));
 
-    if (bufferHasRoom<dispatch>(additional_slots)) {
+    if (bufferHasRoom<dispatch>(words_written - 1)) {
         mark_time_at_index_inlined(wIndex, get_const_id(data_id, packet_type));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 

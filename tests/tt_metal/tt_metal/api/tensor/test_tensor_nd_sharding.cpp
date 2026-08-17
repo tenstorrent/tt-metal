@@ -30,11 +30,11 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -42,9 +42,9 @@
 #include <numeric>
 #include <tuple>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 
@@ -1222,9 +1222,9 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
     auto host_tensor = HostTensor::from_vector(data, tensor_spec);
     auto& cq = mesh_device_->mesh_command_queue();
-    auto tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    auto tensor = cq.enqueue_write_tensor(host_tensor);
     EXPECT_TRUE(tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().has_value());
-    auto readback_data = enqueue_read_tensor(cq, tensor).to_vector<uint16_t>();
+    auto readback_data = cq.enqueue_read_tensor(tensor).to_vector<uint16_t>();
 
     for (size_t i = 0; i < volume; i++) {
         EXPECT_EQ(data[i], readback_data[i]);
@@ -1246,7 +1246,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     std::vector<uint16_t> empty_data(volume);
     auto host_empty = HostTensor::from_vector(empty_data, tensor_spec);
-    auto tensor = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host_empty, *mesh_device_);
+    auto tensor = mesh_device_->mesh_command_queue().enqueue_write_tensor(host_empty);
 
     const auto& buffer = tensor.mesh_buffer();
 
@@ -1297,7 +1297,7 @@ TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDist
         TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
         TensorSpec tensor_spec(shape, tensor_layout);
 
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology{});
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
         EXPECT_TRUE(tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().has_value());
     }
 
@@ -1306,7 +1306,7 @@ TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDist
         TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
         TensorSpec tensor_spec(shape, tensor_layout);
 
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology{});
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
         EXPECT_TRUE(tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().has_value());
     }
 }
@@ -1327,8 +1327,8 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
         auto host_tensor = HostTensor::from_vector(data, tensor_spec);
 
         auto start = std::chrono::high_resolution_clock::now();
-        auto device_tensor = enqueue_write_tensor(
-            mesh_device_->mesh_command_queue(), host_tensor, *mesh_device_, tensor_spec.memory_config());
+        auto device_tensor =
+            mesh_device_->mesh_command_queue().enqueue_write_tensor(host_tensor, tensor_spec.memory_config());
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
         return duration.count();
@@ -1372,7 +1372,7 @@ TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
     TensorLayout tensor_layout(DataType::UINT8, PageConfig(Layout::TILE), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
 
-    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology{});
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
     auto* buffer = tensor.mesh_buffer().get_reference_buffer();
     EXPECT_EQ(buffer->size(), params.expected_buffer_size);
     EXPECT_EQ(buffer->num_pages(), params.expected_num_pages);

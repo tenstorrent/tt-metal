@@ -431,6 +431,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             i,
             sender_channels_producer_terminate_connection_address[i],
             eth_word_l1_alignment);
+        // Load-bearing: the producer reads this block as a whole SenderChannelProducerCursor in a
+        // single NOC read at connection open, so it must be aligned, not merely 4B aligned.
+        TT_FATAL(
+            (sender_channels_buffer_index_semaphore_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_buffer_index_semaphore_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_buffer_index_semaphore_address[i],
+            eth_word_l1_alignment);
     }
     TT_FATAL(
         std::unordered_set<size_t>(
@@ -1068,11 +1076,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // peer that makes the speedy receiver path safe on this link.
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
-    const bool vc0_is_worker_only_nonforwarding_after_trim =
-        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->worker_only_nonforwarding;
-    const bool vc0_enable_terminal_speedy_rx_after_trim =
-        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->enable_terminal_speedy_rx;
-
     const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
@@ -1082,9 +1085,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // shape, and optionally enable a terminal-only speedy receiver when the
     // host has already proven that the exact peer on this link is the
     // matching worker-only source router.
-    const bool enable_speedy_vc0 = (actual_sender_channels_vc0 == 1 && !base_enable_deadlock_avoidance) ||
-                                   vc0_is_worker_only_nonforwarding_after_trim ||
-                                   vc0_enable_terminal_speedy_rx_after_trim;
+    const bool enable_speedy_vc0 = vc0_speedy_path_enabled(
+        actual_sender_channels_vc0,
+        base_enable_deadlock_avoidance,
+        vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1377,6 +1381,24 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             uint32_t sender_slots = static_cast<uint32_t>(static_alloc->get_sender_channel_number_of_slots(0));
             receiver_amort_freq = std::max<uint32_t>(std::min<uint32_t>(4u, receiver_slots / 2), 1);
             sender_amort_freq = std::max<uint32_t>(std::min<uint32_t>(2u, sender_slots / 2), 1);
+
+            if (vc0_trim_fast_path_info_.has_value()) {
+                // Intentionally use the default payload here, rather than the configured
+                // maximum packet size. The original packet-count cadence was tuned for
+                // this byte budget; using an override-aware maximum would make the cap a no-op.
+                const uint32_t reference_packet_size_bytes =
+                    static_cast<uint32_t>(FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) +
+                    static_cast<uint32_t>(fabric_context.get_fabric_packet_header_size_bytes());
+                sender_amort_freq = limit_credit_amortization_frequency_by_packet_size(
+                    sender_amort_freq,
+                    reference_packet_size_bytes,
+                    vc0_trim_fast_path_info_->local_sender_max_packet_size_bytes,
+                    !vc0_trim_fast_path_info_->terminal_only_nonforwarding);
+                receiver_amort_freq = limit_credit_amortization_frequency_by_packet_size(
+                    receiver_amort_freq,
+                    reference_packet_size_bytes,
+                    vc0_trim_fast_path_info_->peer_sender_max_packet_size_bytes);
+            }
         }
     }
     named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;

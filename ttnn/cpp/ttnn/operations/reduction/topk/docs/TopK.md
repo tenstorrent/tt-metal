@@ -28,8 +28,8 @@ The operation returns both:
 
 ### Usage Limitations
 
-- Supported index tensor types: `uint16`, `uint32`
-- Supported value tensor types: `bfloat16`, `bfloat8_b`
+- Supported index tensor types: `uint16`, `uint32` (a user-provided `indices_tensor` must be `uint32` when the input tensor is `float32`, since fp32 forces UINT32 index CBs)
+- Supported value tensor types: `bfloat16`, `bfloat8_b`, `float32`
 - Input tensor must be in **TILE** layout
 - Input shape must be 4D (after internal transformations)
 - The dimension to select top K from must have at least 64 elements (min_dim_per_core)

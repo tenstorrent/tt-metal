@@ -11,6 +11,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
@@ -23,18 +24,23 @@ struct RandDeviceOperation {
         Layout layout;
         const MemoryConfig memory_config;
         MeshDevice* device;
-        const float from;
-        const float to;
+        const float lower_bound;
+        const float upper_bound;
         uint32_t seed;
         ttsl::SmallVector<bool> mesh_dim_is_sharded;
+        std::optional<tt::tt_metal::TensorTopology> tensor_topology;
+        std::optional<std::vector<ttnn::MeshCoordinate>> restricted_mesh_coords;
 
-        // Cache key. seed/from/to are omitted (re-applied per dispatch via override_runtime_arguments,
-        // so calls differing only in those values reuse the cached program). `device` must be FIRST:
+        // Cache key. Seed, bounds, and topology-dependent seed mapping are dynamic and are re-applied per dispatch
+        // via override_runtime_arguments. A restricted coordinate set changes which devices have programs, so it is
+        // structural and must be included. `device` must be FIRST:
         // rand has no input tensor, so the framework discovers the mesh device via
         // get_first_object_of_type over attribute_values(), whose tuple path inspects only element 0.
         static constexpr auto attribute_names =
-            std::forward_as_tuple("device", "shape", "dtype", "layout", "memory_config");
-        auto attribute_values() const { return std::forward_as_tuple(device, shape, dtype, layout, memory_config); }
+            std::forward_as_tuple("device", "shape", "dtype", "layout", "memory_config", "restricted_mesh_coords");
+        auto attribute_values() const {
+            return std::forward_as_tuple(device, shape, dtype, layout, memory_config, restricted_mesh_coords);
+        }
     };
 
     struct tensor_args_t {};
@@ -67,14 +73,17 @@ struct RandDeviceOperation {
 }  // namespace ttnn::operations::rand
 
 namespace ttnn::prim {
+// lower_bound and upper_bound are inclusive, dtype-representable output bounds
+// selected by the caller from the public half-open interval.
 ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     const ttnn::Shape& shape,
     DataType dtype,
     Layout layout,
     const MemoryConfig& memory_config,
     MeshDevice& device,
-    float from,
-    float to,
+    float lower_bound,
+    float upper_bound,
     uint32_t seed,
-    ttsl::SmallVector<bool> mesh_dim_is_sharded = {});
+    ttsl::SmallVector<bool> mesh_dim_is_sharded = {},
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 }  // namespace ttnn::prim

@@ -67,6 +67,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -74,7 +75,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
@@ -138,6 +139,7 @@ jobs:
   # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
     with:

@@ -8,7 +8,7 @@
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
-#include <vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <memory>
@@ -106,6 +106,32 @@ void finalize_dfb_masks(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 
+// Size the CrossNodeDFB dense kernel-config index from the workload-wide max slot count.
+// Each fixed entry is [absolute_config_buffer_addr, entry_size, relay_dfb_id].
+uint32_t finalize_cross_node_dfbs(
+    uint32_t programmable_core_type_index, ttsl::Span<detail::ProgramImpl*> programs, uint32_t base_offset);
+
+// Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
+// Each rectangle in `cores` can be covered by a single multicast.
+struct CrossNodeDFBCoreGroup {
+    // word[0]=num_slots, then num_slots x [config_page_addr, entry_size, relay_dfb_id].
+    std::vector<uint32_t> payload;
+    // Any core of the group; used to recover the participant records behind the payload.
+    CoreCoord representative_core;
+    CoreRangeSet cores;
+};
+
+// A kernel-group range is not necessarily homogeneous: non-participant cores can sit next to
+// participants, and relay_dfb_id differs between sender and receiver cores. Multicasting one
+// core's payload to the whole range would skip participants or overwrite others with the wrong
+// slot/relay config, so group by identical payload first. Non-participant cores are omitted.
+// Host participant records are sparse; num_program_slots sizes the dense device payload.
+std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
+    const CoreRangeSet& kernel_group_cores,
+    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::CrossNodeDFBParticipant>>&
+        per_core_cross_node_dfbs,
+    uint8_t num_program_slots);
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,
@@ -128,6 +154,9 @@ void reserve_space_in_kernel_config_buffer(
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
     uint32_t expected_num_workers_completed,
+    // Non-zero: stall before config writes until this many workers complete. Used to
+    // order re-launches of the same CrossNode program.
+    uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md);
 
 void update_program_dispatch_commands(
@@ -137,7 +166,6 @@ void update_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -151,7 +179,6 @@ void update_traced_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update,
@@ -167,7 +194,6 @@ void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
-    CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program,
     bool send_binary = true);

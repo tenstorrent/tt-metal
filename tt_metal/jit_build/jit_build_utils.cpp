@@ -236,12 +236,20 @@ uint64_t FileRenamer::unique_id_ = []() {
 }();
 
 std::string FileRenamer::generate_temp_path(const std::filesystem::path& target_path) {
+    // unique_id_ is initialized once per process, so a fork()ed child inherits the
+    // parent's value and would otherwise generate byte-identical temp paths. Mix in
+    // the live pid so forked siblings -- e.g. pytest --forked test processes sharing
+    // one kernel cache -- never collide on the same temp file.
+    //
+    // Formatted in one call rather than through an intermediate tag string: this runs
+    // once per source file during JIT setup, and the extra allocation measured more
+    // expensive than the getpid() syscall it accompanies.
     std::filesystem::path path(target_path);
     if (path.has_extension()) {
-        path.replace_extension(fmt::format("{}{}", unique_id_, path.extension().string()));
+        path.replace_extension(fmt::format("{}_{}{}", unique_id_, ::getpid(), path.extension().string()));
         return path.string();
     }
-    return fmt::format("{}.{}", target_path.string(), unique_id_);
+    return fmt::format("{}.{}_{}", target_path.string(), unique_id_, ::getpid());
 }
 
 FileRenamer::FileRenamer(const std::string& target_path) :

@@ -23,7 +23,8 @@ struct ExecuteTopK {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
         const std::optional<Tensor>& indices_tensor = std::nullopt,
-        std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors = std::nullopt);
+        std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors = std::nullopt,
+        bool stable = false);
 };
 }  // namespace ttnn::operations::reduction::topk
 
@@ -38,6 +39,7 @@ std::vector<Tensor> topk(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<Tensor>& indices_tensor = std::nullopt,
-    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors = std::nullopt);
+    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors = std::nullopt,
+    bool stable = false);
 
 }  // namespace ttnn

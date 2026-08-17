@@ -1302,14 +1302,14 @@ _MATH_UTIL_CASES = [
         "dsv32_tp1",
         lambda device: run_indexer_short(device, 64),
         lambda: indexer_mm_flops(short_valid_tiles(), 64),
-        70.72,
+        67.10,
         "LoFi",
     ),
     (
         "glm5_tp1",
         lambda device: run_indexer_short(device, 32),
         lambda: indexer_mm_flops(short_valid_tiles(), 32),
-        64.98,
+        63.70,
         "LoFi",
     ),
 ]

@@ -11,10 +11,9 @@
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingProgramFactory {
-    // Contract (1): single ProgramDescriptor.  Sharded variants set CBDescriptor::buffer
-    // so the framework patches dynamic CB addresses on cache hit; per-core runtime args
-    // and CB total_sizes (which depend on input shape) are re-applied via
-    // apply_descriptor_runtime_args.
+    // Contract (1): single ProgramDescriptor.  Sharded variants set CBDescriptor::buffer.  Cache-hit
+    // re-application is owned by RotaryEmbeddingDeviceOperation::override_runtime_arguments, which
+    // patches the addresses and decode scalars in place -- this is a cache-miss-only path.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RotaryEmbeddingParams& operation_attributes,
         const RotaryEmbeddingInputs& tensor_args,

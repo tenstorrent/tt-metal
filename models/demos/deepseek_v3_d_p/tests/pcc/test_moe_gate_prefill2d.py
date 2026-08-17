@@ -6,6 +6,7 @@ import os
 import random
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 import torch
@@ -16,8 +17,16 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    GATE_KEY_PREFIX_DEEPSEEK,
+    GATE_KEY_PREFIX_KIMI_K3,
     create_fabric_router_config,
     create_gate_weights,
     get_max_payload_size,
@@ -43,9 +52,38 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 GATE_MODELS = {
     "deepseek_v3": DeepSeekV3Config,
     "kimi": KimiK26Config,
+    "kimi_k3": KimiK3Config,
+    "glm_5_1": GLM51Config,
+    "minimax_m2_7": MiniMaxM27Config,
+    "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
+
+# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig re-keys
+# its tuned matmul configs by sp_dim, so assigning it afterwards silently drops to default tiling.
+GATE_SP_DIM = 640
+
+
+def _gate_config(gate_model: str) -> TtMoEGateConfig:
+    """Gate config at GATE_SP_DIM, minus tuned matmul entries authored for a different depth.
+
+    A tuned entry encodes its shard height in per_core_M, but TtMoEGateConfig re-keys every entry to
+    the sp_dim in use, so one tuned at 4096 claims to apply at 640 while still carrying per_core_M=2
+    -- and the matmul rejects it outright: "per_core_M (2) must equal shard_shape[0] (32) / in0_tile
+    height (32)". Entries that already match this depth are kept (K3's is authored at 640); the rest
+    are dropped so TTNN picks its default tiling, which is what the untuned models do here anyway.
+    """
+    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
+    shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
+    shard_height = ((shard_height + 31) // 32) * 32
+    config.mm_configs = {
+        key: value
+        for key, value in config.mm_configs.items()
+        if not isinstance(key, tuple) or value.per_core_M == shard_height // 32
+    }
+    return config
+
 
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
 # trace stores its gate input as post_attn_norm_layer_3.
@@ -59,33 +97,73 @@ _MOE_LAYER_IDX = 3
 # pcc_scores remains the correctness backstop for the selected-weight distribution.
 RECALL_WEIGHT_RTOL = 0.002
 
-_DEFAULT_HF_REPO = "deepseek-ai/DeepSeek-V3"
-_LOCAL_FALLBACKS = (
-    "models/demos/deepseek_v3/reference",
-    "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
-)
+
+class _RealGateSource(NamedTuple):
+    """Where a model's real router weights live, and under which HF key layout.
+
+    The correction bias is loaded at the weight dtype (bf16) for every source, and there is no knob to
+    widen it: the device gate op requires a bf16 bias, TtMoEGatePrefill caches it as bf16 and rebuilds
+    its host-fallback torch_bias from that cache, and this test's golden downcasts the whole reference
+    router to bf16. A wider host bias would therefore not reach the device at all, and under HOST_ALL
+    it would only desynchronize the two sides at exactly the top-k tie-break the recall thresholds
+    were calibrated against.
+    """
+
+    env_var: str
+    fallbacks: tuple[str, ...]
+    hf_repo: str
+    key_prefix_template: str
 
 
-def _resolve_model_id() -> str:
+# Models with loadable real router weights; anything absent falls back to seeded random weights.
+_REAL_GATE_SOURCES = {
+    "deepseek_v3": _RealGateSource(
+        env_var="DEEPSEEK_V3_HF_MODEL",
+        fallbacks=(
+            "models/demos/deepseek_v3/reference",
+            "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
+        ),
+        hf_repo="deepseek-ai/DeepSeek-V3",
+        key_prefix_template=GATE_KEY_PREFIX_DEEPSEEK,
+    ),
+    # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
+    "kimi_k3": _RealGateSource(
+        env_var="KIMI_K3_HF_MODEL",
+        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
+        hf_repo="moonshotai/Kimi-K3",
+        key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
+    ),
+}
+
+
+def _resolve_model_id(source: _RealGateSource) -> str:
     """Resolve a model identifier (local dir or HF repo ID) for gate weight loading.
 
-    Checks DEEPSEEK_V3_HF_MODEL and standard local paths first; falls back to the
-    HF repo ID so that ``load_hf_state_dict_filtered`` can resolve from the HF cache.
+    Checks the model's env var and its known local paths first; falls back to the HF repo ID so that
+    ``load_hf_state_dict_filtered`` can resolve from the HF cache.
     """
-    env_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    env_path = os.getenv(source.env_var)
     if env_path and (Path(env_path) / "model.safetensors.index.json").exists():
         return env_path
-    for fallback in _LOCAL_FALLBACKS:
+    for fallback in source.fallbacks:
         if (Path(fallback) / "model.safetensors.index.json").exists():
             return fallback
-    return _DEFAULT_HF_REPO
+    return source.hf_repo
 
 
-def _try_load_real_gate_weights(n_routed_experts: int, dim: int) -> dict | None:
-    """Try to load real gate weights from HF; return None on failure."""
-    model_id = _resolve_model_id()
+def _try_load_real_gate_weights(gate_model: str, n_routed_experts: int, dim: int) -> dict | None:
+    """Try to load real gate weights for ``gate_model``; return None if unavailable."""
+    source = _REAL_GATE_SOURCES.get(gate_model)
+    if source is None:
+        return None
+    model_id = _resolve_model_id(source)
     try:
-        gate_w = load_gate_weights_from_hf(model_id, layer_idx=3, dtype=torch.bfloat16)
+        gate_w = load_gate_weights_from_hf(
+            model_id,
+            layer_idx=_MOE_LAYER_IDX,
+            dtype=torch.bfloat16,
+            key_prefix_template=source.key_prefix_template,
+        )
         gate_w["weight"] = gate_w["weight"][:n_routed_experts, :dim]
         gate_w["e_score_correction_bias"] = gate_w["e_score_correction_bias"][:n_routed_experts]
         return gate_w
@@ -187,6 +265,14 @@ REGULAR_GATE_CASES = [
     pytest.param("deepseek_v3", GateComputeMode.DEVICE_FP32, id="deepseek_v3-device_fp32"),
     pytest.param("kimi", GateComputeMode.HOST_ALL, id="kimi-host_all"),
     pytest.param("kimi", GateComputeMode.DEVICE_FP32, id="kimi-device_fp32"),
+    pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
+    pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
+    pytest.param("glm_5_1", GateComputeMode.HOST_ALL, id="glm_5_1-host_all"),
+    pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
+    pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
+    pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
+    pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
+    pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
 ]
@@ -276,7 +362,7 @@ def _validate_gate(
         reference_logits,
         1,
         n_sp_devices,
-        compare_pcc(logits_pcc_threshold),
+        compare_pcc(logits_pcc_threshold, label="pcc_logits"),
         name="pcc_logits",
         broadcast_groups=n_tp_devices,
     )
@@ -286,7 +372,7 @@ def _validate_gate(
         reference_topk_scores,
         1,
         n_sp_devices,
-        compare_pcc(scores_pcc_threshold),
+        compare_pcc(scores_pcc_threshold, label="pcc_scores"),
         name="pcc_scores",
         broadcast_groups=n_tp_devices,
     )
@@ -323,16 +409,21 @@ def test_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model])
+    config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
-    # Real DeepSeek gate weights/input (V3, 256 experts, sigmoid) can't be reshaped to other expert
-    # counts or activations, so only attempt the real load for the 256-expert sigmoid path.
-    use_real = config.n_routed_experts == 256 and config.score_func == "sigmoid"
-    gate_w = _try_load_real_gate_weights(config.n_routed_experts, config.dim) if use_real else None
+    # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
+    # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
+    use_real_weights = (
+        gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
+    ) or gate_model == "kimi_k3"
+    gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+
+    # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
+    use_real = gate_model == "deepseek_v3" and use_real_weights
 
     n_sp_devices = mesh_device.shape[0]
     total_seq_len = config.sp_dim * n_sp_devices
@@ -341,7 +432,40 @@ def test_forward_pass(
     # Reference forward pass: V4 (sqrtsoftplus) routes through the activation-parametrized grouped
     # gate (single group -> plain top-k, matching the V4 reference router); V3/Kimi use the V3 gate.
     reference_logits = torch_input @ gate_w["weight"].T
-    if config.score_func == "sqrtsoftplus":
+    if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE):
+        # GPT-OSS golden from the actual reference router: top-k on (x@W + bias), then softmax over the
+        # selected top-k values. torch.topk (sorted=True, descending) matches _device_gpt_gate's order,
+        # so no reordering is needed for the position-wise scores PCC.
+        ref_config = SimpleNamespace(
+            num_experts_per_tok=config.n_activated_experts,
+            num_local_experts=config.n_routed_experts,
+            hidden_size=config.dim,
+        )
+        router = GptOssTopKRouter(ref_config)
+        router.weight.data = gate_w["weight"].float()  # (n_experts, dim), HF layout
+        router.bias.data = gate_w["e_score_correction_bias"].float()
+        router.eval()
+        with torch.no_grad():
+            _, reference_topk_scores, reference_topk_indices = router(torch_input.float())
+    elif gate_model == "minimax_m2_7":
+        # MiniMax golden from the actual reference routing (route_tokens_to_experts): sigmoid, add
+        # correction bias for selection, top-k, gather unbiased sigmoid, sum-normalize (no route scale).
+        # Called unbound with a duck-typed self so the 256-expert block is never constructed.
+        router_logits = torch_input.float() @ gate_w["weight"].float().T  # gate is bias-free
+        router_shim = SimpleNamespace(
+            top_k=config.n_activated_experts,
+            e_score_correction_bias=gate_w["e_score_correction_bias"].float(),
+        )
+        minimax_indices, minimax_scores = MiniMaxM2SparseMoeBlock.route_tokens_to_experts(router_shim, router_logits)
+        # route_tokens_to_experts uses topk(sorted=False); reorder to descending selection score so the
+        # weights line up with the device/golden order for the position-wise scores PCC.
+        selection_scores = (torch.sigmoid(router_logits) + router_shim.e_score_correction_bias).gather(
+            1, minimax_indices
+        )
+        order = selection_scores.argsort(dim=-1, descending=True)
+        reference_topk_indices = minimax_indices.gather(1, order)
+        reference_topk_scores = minimax_scores.gather(1, order)
+    elif config.score_func == "sqrtsoftplus":
         logits_fp32 = torch_input.float() @ gate_w["weight"].float().T
         reference_topk_indices, reference_topk_scores = grouped_gate_golden_act(
             logits_fp32,
@@ -384,15 +508,26 @@ def test_forward_pass(
     )
     tt_topk_scores, tt_topk_indices, tt_logits = tt_model(tt_input)
 
-    # Validation thresholds depend on gate compute mode
+    # Validation thresholds depend on gate compute mode. Host modes (exact torch top-k) use the tight
+    # set; on-device modes are looser because bf16 matmul shifts near-tie top-k selection and weights.
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         recall_threshold = 0.997
+        logits_pcc_threshold = 0.997
+        scores_pcc_threshold = 0.99
+    elif gate_fallback_mode == GateComputeMode.GPT_HOST:
+        # GPT_HOST runs the matmul on device (bf16) and only the top-k/softmax on host, so top-k
+        # selection recall is bf16-limited like the on-device modes, while the softmax weights (given
+        # the selection) stay exact and keep the tight scores threshold.
+        recall_threshold = 0.95
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.99
     else:
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.93
+        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
+        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
+        scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
 
     _validate_gate(
         mesh_device,
@@ -441,7 +576,7 @@ def test_hash_gate_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model])
+    config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 

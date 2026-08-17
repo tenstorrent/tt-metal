@@ -218,6 +218,7 @@ void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
 
 std::vector<size_t> WorkerConfigBufferMgr::get_queued_entry_indices(size_t buffer_type) const {
     std::vector<size_t> indices;
+    indices.reserve(this->entries_.size());
     // Walk the ring buffer from the oldest freeable entry (free_index_) up to, but not including,
     // the alloc entry (alloc_index_). Starting from alloc_index_ here would make the loop empty.
     size_t free_index = this->free_index_[buffer_type];
