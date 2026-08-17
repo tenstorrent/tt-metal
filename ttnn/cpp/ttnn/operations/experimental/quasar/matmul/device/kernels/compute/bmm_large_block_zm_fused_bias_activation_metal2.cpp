@@ -274,10 +274,17 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+#ifndef ARCH_QUASAR
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#else
+            // Quasar: ckernel::ThreadId has no BriscThreadId (WH/BH-only), and the BRISC->TRISC
+            // is_batch_valid mailbox handoff is unsupported on Quasar. The batch-sparsity
+            // (get_batch_from_reader) path is not exercised on Quasar, so treat the batch as valid.
+            const bool is_batch_valid = true;
+#endif
             if (!is_batch_valid) {
                 continue;
             }
