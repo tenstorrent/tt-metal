@@ -311,7 +311,11 @@ def _conv3x3_native_fwd(v, wv, b, h, w, c, cout):
         device=wv.device(),
         in_channels=c,
         out_channels=cout,
-        batch_size=b,
+        # Data-movement ops (reshape/slice/pad/concat) take GLOBAL logical
+        # shapes on dp-sharded tensors and apply per shard automatically;
+        # conv2d's explicit batch_size is PER-SHARD — the one place the
+        # local/global distinction matters.
+        batch_size=_local_b(b),
         input_height=h,
         input_width=w,
         kernel_size=(3, 3),
@@ -339,7 +343,7 @@ class Conv3x3Im2col(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias, h, w):
         v, wv, bv = x.get_value(), weight.get_value(), bias.get_value()
-        b = _local_b(v.shape[0])
+        b = v.shape[0]
         c = v.shape[-1]
         cout = wv.shape[-1]
         ctx.save_for_backward(x, weight)
@@ -455,7 +459,7 @@ class AvgPool2x2(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, h, w):
         v = x.get_value()
-        b, c = _local_b(v.shape[0]), v.shape[-1]
+        b, c = v.shape[0], v.shape[-1]
         ctx.dims = (b, h, w, c)
         s = _sum_pool2x2_rm(_tokens_to_nhwc_rm(v, b, h, w, c), b, h, w, c)
         return ttnn.multiply(_nhwc_rm_to_tokens(s, b, h // 2, w // 2, c), 0.25)
@@ -479,7 +483,7 @@ class UpsampleNearest2(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, h, w):
         v = x.get_value()
-        b, c = _local_b(v.shape[0]), v.shape[-1]
+        b, c = v.shape[0], v.shape[-1]
         ctx.dims = (b, h, w, c)
         up = _nearest_up2_rm(_tokens_to_nhwc_rm(v, b, h, w, c), b, h, w, c)
         return _nhwc_rm_to_tokens(up, b, 2 * h, 2 * w, c)
@@ -505,7 +509,7 @@ class GroupNormMoreh(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, gamma, beta, num_groups, h, w):
         v = x.get_value()
-        b, c = _local_b(v.shape[0]), v.shape[-1]
+        b, c = v.shape[0], v.shape[-1]
         nhwc = _tokens_to_nhwc_rm(v, b, h, w, c)
         nchw = _tile(ttnn.permute(nhwc, (0, 3, 1, 2)))  # [B,C,H,W]
         out, mean, rstd = ttnn_moreh.group_norm(
@@ -565,7 +569,7 @@ class GroupNormNHWC(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, gamma, beta, num_groups, h, w):
         v, gv, bv = x.get_value(), gamma.get_value(), beta.get_value()
-        b, c = _local_b(v.shape[0]), v.shape[-1]
+        b, c = v.shape[0], v.shape[-1]
         hw = h * w
         with _prof("gn_nhwc_fwd"):
             pool = _gn_pool_matrix(c, num_groups, hw)
