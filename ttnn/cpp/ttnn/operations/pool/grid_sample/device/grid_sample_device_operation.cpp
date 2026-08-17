@@ -106,11 +106,9 @@ void GridSampleOperation::validate_on_program_cache_miss(
 
     TT_FATAL(operation_attributes.padding_mode == "zeros", "Only zeros padding mode is currently supported");
 
-    // Mode and precomputed grid compatibility validation
-    TT_FATAL(
-        !(operation_attributes.mode == "nearest" && !operation_attributes.use_precomputed_grid),
-        "use_precomputed_grid = false is not supported with mode = 'nearest'. Please use precomputed grid with nearest "
-        "mode.");
+    // Mode validation: nearest supports both precomputed and non-precomputed (raw [-1,1]) grids.
+    // For a non-precomputed nearest grid the device kernel computes the nearest pixel index from the
+    // raw coordinates on-device (align_corners handled in-kernel), mirroring the bilinear path.
 
     // Memory layout validation - support interleaved and height sharded
     auto input_memory_layout = input_tensor.memory_config().memory_layout();

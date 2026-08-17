@@ -73,15 +73,10 @@ ALWI void process_grid_point_nearest(
         // Transform to image coordinates using the same formula as prepare_grid.cpp
         const float h_coord_image = ((h_coord_rel + 1.0f) * height_scale) + height_offset;
         const float w_coord_image = ((w_coord_rel + 1.0f) * width_scale) + width_offset;
-        if constexpr (align_corners) {
-            // For align_corners=True, use floor(coord) directly
-            nearest_h = static_cast<int32_t>(round(h_coord_image));
-            nearest_w = static_cast<int32_t>(round(w_coord_image));
-        } else {
-            // For nearest neighbor, use floor(coord + 0.5) to match preprocessing
-            nearest_h = static_cast<int32_t>(floor(h_coord_image + 0.5f));
-            nearest_w = static_cast<int32_t>(floor(w_coord_image + 0.5f));
-        }
+        // Round half to even to match PyTorch grid_sample nearest (std::nearbyint). The rounding rule
+        // is identical for both align_corners modes; only the coordinate transform above differs.
+        nearest_h = round_half_to_even(h_coord_image);
+        nearest_w = round_half_to_even(w_coord_image);
     }
 
     // Full coordinate validation for both precomputed and regular grids.
