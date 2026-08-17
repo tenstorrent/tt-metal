@@ -2,8 +2,8 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-17 (revision 16), against
-`ldjurovic/sfpu_edge_cases_phase_3` @ `26c61ff80e9`
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-17 (revision 17), against
+`ldjurovic/sfpu_edge_cases_phase_3` @ `1430f442ba3`
 **Wormhole measurement:** [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md)
 **Scope:** every SFPU op reachable from the tt-llk Python test infra
 (`tt_metal/tt-llk/tests/python_tests/`), which is where the suites, the registries and all the gates
@@ -24,6 +24,49 @@ audit treats them together and notes arch-specific gaps inline. Quasar has its o
 > practice — §2.5's cat-F list has always been mostly `llk_sfpu` kernels — but the old one-line scope
 > statement sent anyone re-auditing it to the wrong directory.
 
+> ### Revision 17 — cat B reaches the binary and reduce families, and the total order turns out to be *lost* on six ops
+>
+> Implemented in `1430f442ba3` on `ldjurovic/sfpu_edge_cases_phase_3` and measured on a **Wormhole
+> n150**. Plan: [SFPU_FAMILY_COVERAGE_PLAN.md](SFPU_FAMILY_COVERAGE_PLAN.md).
+>
+> Three of the four families whose whole `Edge sweep` column was ⬜ are now driven. The fourth, §4.9's
+> FPU eltwise, was **deliberately descoped** — SFPU ops only — so `SrcFormatModel` and
+> `_compute_eltwise` are untouched and the `Elwmul` fidelity defect that plan §5.2 measured is still
+> open.
+>
+> | Suite | Revision 16 | Revision 17 |
+> |---|---|---|
+> | `test_sfpu_unary.py` | 6044 p · 573 s · 23 xf · 6 XP · 0 F | **6044 p · 573 s · 23 xf · 6 XP · 0 F** — unchanged, cell for cell |
+> | `test_sfpu_binary.py` (`-k "not bcast"`) | 313 p · 128 s · 33 xf · 16 XP · 0 F | **445 p · 552 s · 9 xf · 16 XP · 0 F** |
+> | `test_sfpu_reduce.py` | 978 p · 548 s · 0 F | **1074 p · 548 s · 0 F** |
+> | `test_sfpu_domains.py` (host-side) | 111 p | **120 p** |
+>
+> **`+132` binary assertions and `-24` xfails, and the two are the same event.** §5.13 has the finding;
+> the short version is that `BinarySFPUGolden` modelled neither the Dest width nor the pack path, so on
+> a pipeline too narrow to hold a NaN the packer's substituted infinity read as the kernel having
+> produced one. Once the golden modelled both steps, `div(0,0)`, `xlogy(0,0)`, `fmod(x,0)` and
+> `remainder(x,0)` **passed on every cell where a NaN reaches L1** and diverged only where it cannot.
+> §5.3's "0/0 and x%0 return inf where IEEE says nan" is therefore **retracted**, along with its entry
+> in §5.6's owner questions — it was the pipeline, not the arithmetic.
+>
+> **The 24 cells are recovered as assertions rather than withdrawn.** §5.10 asks for "a golden that
+> accepts either infinity" and records it as unwritten; it is written for these two families, scoped to
+> exactly the lanes where the ISA declines to specify a sign. So 24 tolerated divergences became 24
+> checked assertions — the opposite of what the §5.10 gate did on the unary side.
+>
+> **The headline correction, and the one worth carrying forward: the total order is *not* what six of
+> these ops implement.** §5.8 established a documented total order (`-NaN < -Inf < … < +Inf < +NaN`) on
+> `SFPGT`/`SFPLE`/`SFPSWAP` and enrolled seven unary ops on it. All eight of the binary
+> `lt/gt/le/ge/eq/ne/max/min` route through `SFPSWAP` too — so the ISA page predicts the total order for
+> all eight, and that prediction is **wrong for the six comparisons**: their kernels wrap the swap in an
+> explicit NaN rejection, so a NaN operand never reaches the compare and IEEE's unordered answer stands.
+> `binary_max_min` is a bare `SFPSWAP` with no guard and does follow the order. **§5.13 records which
+> ops keep the total order and which lose it, and why the ISA page alone cannot tell you.**
+>
+> Also: §4.5's five rows are a **naming artifact** rather than a coverage gap (§2.4), the Int32
+> comparisons were running positive-only and tie-free and now are not, `SfpuAtan2` gained its registered
+> `B = 0` branch point, and cat B exists for the reduce family for the first time (§4.8).
+>
 > ### Revision 16 — regenerated against the code branch; the tables held, the prose had drifted
 >
 > Revisions 6–15 were written against `ldjurovic/sfpu_edge_cases_phase_3` but this document lives on a
@@ -298,23 +341,32 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | ↳ with ≥1 deliberate edge value (cat A and/or D) | **50** (§4.1) |
 | ↳ smooth everywhere, so cat B is their *only* edge | **47** (§4.2) |
 | Unary ops **outside** the registry — in neither sweep | **21** (§4.3): 5 predicates, 3 threshold, 4 int max/min, 2 unary shift, `Typecast`, `Relu`, 4 perf-only int, `SfpuSwiGLU` |
-| Binary SFPU ops (float + shift) | 43 — 11 with a registered domain, 5 with a driven pole |
-| Binary integer / ternary / scalar / reduce / FPU-binary ops | 5 / 5 / 5 / 3 / 3 |
-| `_OP_SINGULARITIES` entries | **21** — +2 for the ternary operand-C poles |
+| Binary SFPU ops (float + shift) | 43 — 11 with a registered domain, 6 with a driven pole; **18 of the 22 float rows now reach the edge sweep** (was 5) |
+| Binary integer / ternary / scalar / reduce / FPU-binary ops | 5 / 5 / 5 / 3 / 3 — the 5 binary-integer members are Quasar spellings of kernels covered under `SfpuElw*` at `Int32` (§4.5, §2.4) |
+| `_OP_SINGULARITIES` entries | **22** — +2 for the ternary operand-C poles, +1 for `SfpuAtan2`'s `B = 0` branch point |
 | `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
-| `SPECIALS_READY_OPS` (cat B opt-in) | **67 of 97 unary**, plus all **5 scalar binops**; all 30 unary still outside wait on §5.6's two questions or on a harness — none is work this suite can simply do |
+| `SPECIALS_READY_OPS` (cat B opt-in, unary + scalar) | **67 of 97 unary**, plus all **5 scalar binops**; all 30 unary still outside wait on §5.6's two questions or on a harness — none is work this suite can simply do |
+| `BINARY_SPECIALS_READY_OPS` (cat B opt-in, binary) | **12 of the 21 float ops** reaching the shared driver. The other 9 are recorded in `_BINARY_SPECIALS_NOT_READY` under **five** causes, not nine investigations — 6 on §5.6's Q1, `SfpuMask` on Q3, `SfpuIsclose` on one read-back, `SfpuLogsigmoid` out by construction (§4.4) |
+| Cat B for the reduce family | **6 classes × 4 pools × 2 ops × 2 formats = 96 variants** (`test_float_reduce_specials`), where a special reaches the output *through the fold* (§4.8) |
 | `(format, dest_acc)` triples that can carry specials | 7 cells of 50, **re-confirmed on Wormhole** (250 variants, 85 failing); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
-| Ops diverging from their golden at a driven edge | **12 ops over 70 cells** — 7 unary over 24 (`Sign` 2, `Heaviside` 2, `RsqrtCompat` 8, `Erfinv` 2, `Reciprocal` 6, `Sqrt` 2, `Rsqrt` 2) and 5 binary over 46. **16 of the binary cells are arch-gated to Wormhole.** Revisions 12–15 recorded "12 over 46", which was the binary cell count used as the total |
-| Host-side guards over the gates and metadata | **111** tests (`test_sfpu_domains.py`) |
+| Ops diverging from their golden at a driven edge | **8 ops over 46 cells** — 7 unary over 24 (`Sign` 2, `Heaviside` 2, `RsqrtCompat` 8, `Erfinv` 2, `Reciprocal` 6, `Sqrt` 2, `Rsqrt` 2) and 1 binary over 22 (`SfpuElwpow`'s `0**0` 6, plus the 16 arch-gated signed-zero cells). **Revision 17 removed 24 binary cells** — the `both_zero`/`nan_golden` classes of `div`, `xlogy`, `fmod` and `remainder`, which were the pack path rather than a divergence (§5.3, §5.13). Revisions 12–16 recorded "12 ops over 70" |
+| Host-side guards over the gates and metadata | **120** tests (`test_sfpu_domains.py`) |
 
-**Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
-for 67 of the 97 unary ops plus all 5 scalar binops; the 30 still outside all wait on §5.6's two
-questions or on a harness · C ✅ closed for the 5 ops whose kernels claim the
-full int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ✅ closed, unary
-and binary · F ⬜ **14** kernels untouched (§2.5 — re-derived in revision 16; was 11).
+**Category status:** A ✅ closed for every op that has a boundary — unary, **binary** (`SfpuAtan2`'s
+branch point was the last unregistered one) **and ternary** · B 🟡 live for 67 of the 97 unary ops, all
+5 scalar binops, **12 of the 21 float binary ops and the reduce family**; the 30 unary and 9 binary
+still outside wait on §5.6's questions, on one read-back, or on a harness · C ✅ closed for the 5 ops
+whose kernels claim the full int32 range, **plus the 4 ordered Int32 comparisons** added in revision 17
+· D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries **and the Int32 comparison tie** · E ✅
+closed, unary and binary · F ⬜ **14** kernels untouched (§2.5).
 
 **So five of the six categories are closed or bounded**, and what is left is one large build (F) and
 two questions someone else has to answer.
+
+**One family is deliberately still ⬜ and should not be read as an oversight:** §4.9's FPU eltwise
+(`Elwadd`/`Elwmul`/`Elwsub`). It runs on the FPU rather than the SFPU, so `specials_safe()` — measured
+on the unpack→Dest path — does not apply to it and has to be re-measured for SrcA/SrcB before any
+golden work is worth doing. Plan §5 has the design and the measured `Elwmul` fidelity defect.
 
 **Blackhole status (p300a, 2026-08-13) — ⚠️ unverified at HEAD.** All four suites passed, through the
 two-phase compile-producer / compile-consumer flow that CI uses. This was measured two commits before
@@ -332,12 +384,26 @@ vectorisation.
 **Wormhole status (n300) — re-measured 2026-08-17 at `26c61ff80e9`.** The 2026-08-13 column is the
 revision-15 run, kept because the difference between the two columns *is* §5.10's gate landing:
 
-| Suite | 2026-08-13 (revision 15) | 2026-08-17 (revision 16) |
-|---|---|---|
-| `test_sfpu_unary.py` | 6034 passed · 533 skipped · **49 failed** (§5.10) · 30 xfailed · **6 xpassed** (§5.11) | **6044 passed · 573 skipped · 0 failed · 23 xfailed · 6 xpassed** |
-| `test_sfpu_binary.py` | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** (§5.12) · 0 failed | 33 xfailed · **16 xpassed** · 0 failed — see the caveat below |
-| `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed | 39 passed · 25 skipped · 0 failed |
-| `test_sfpu_binop_scalar.py` | 67 passed · 72 skipped · **1 failed** — `ScalarRsub` | 67 passed · **73 skipped · 0 failed** |
+| Suite | 2026-08-13 (revision 15) | 2026-08-17 (revision 16) | 2026-08-17 (revision 17, n150) |
+|---|---|---|---|
+| `test_sfpu_unary.py` | 6034 passed · 533 skipped · **49 failed** (§5.10) · 30 xfailed · **6 xpassed** (§5.11) | **6044 passed · 573 skipped · 0 failed · 23 xfailed · 6 xpassed** | **6044 · 573 · 0 F · 23 xf · 6 XP** — identical, which is the point: the shared golden changed |
+| `test_sfpu_binary.py` | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** (§5.12) · 0 failed | 33 xfailed · **16 xpassed** · 0 failed — see the caveat below | **445 passed · 552 skipped · 9 xfailed · 16 xpassed · 0 failed** (`-k "not bcast"`; rev-16 comparable is 313 p · 128 s · 33 xf) |
+| `test_sfpu_reduce.py` | not reported | 978 passed · 548 skipped · 0 failed | **1074 passed · 548 skipped · 0 failed** |
+| `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed | 39 passed · 25 skipped · 0 failed | not re-run — untouched by revision 17 |
+| `test_sfpu_binop_scalar.py` | 67 passed · 72 skipped · **1 failed** — `ScalarRsub` | 67 passed · **73 skipped · 0 failed** | not re-run — untouched by revision 17 |
+
+**The revision-17 binary numbers account exactly, which is worth checking rather than assuming.**
+`+132` passed and `-24` xfailed against the rev-16 `-k "not bcast"` baseline: 24 of the +132 are the
+retracted `both_zero`/`nan_golden` cells turning from XFAIL into PASS, and the remaining 108 are new
+cat-B and Int32-comparison variants. **The 16 XPASSes are unchanged and deliberately so** — that is
+§5.12's signed-zero arch gate, which revision 17 does not touch. Skips rise to 552 because the sweep now
+collects 5 classes × 17 ops × 8 cells, and the 9 unenrolled ops skip their cat-B classes with a recorded
+reason.
+
+**Blackhole is unverified for revision 17** — no Blackhole card on the audit host. Two things are
+measured on Wormhole only and are *asserted* rather than tolerated on Blackhole, so Blackhole is where
+they first get checked: `generated_nan_sign_is_asserted()` is Wormhole-gated by construction (Blackhole
+specifies the canonical NaN), and the 24 retracted cells are asserted in full there including the sign.
 
 **All 49 unary failures and the 1 scalar failure are gone, and none of them was fixed** — the gate in
 §5.10 stops sending the probe. In the edge sweep the 752 selected variants went `475 passed · 198
@@ -493,6 +559,14 @@ Wormhole or Blackhole calls them.
 > `LogicalNot`/`LogicalNotUnary` — and in both cases the test names the second spelling
 > (`test_sfpu_ternary.py` and `test_sfpu_unary.py` respectively). A grep for the canonical name finds
 > nothing. Any tooling over this audit has to resolve aliases; §7's inventory does.
+>
+> **Revision 17: there is a third and harder kind of alias, and it produced five wrong rows in §4.5.**
+> The two above are alias *pairs inside one enum*, which §7's inventory resolves. The five
+> `SFPU_BINARY_INT` members alias **across a `MathOpType` boundary**: `SfpuGtInt` and `SfpuElwGt` are
+> different members with different dispatch types that reach the *same kernel* on WH/BH, one via
+> `MathOpType.SFPU_BINARY_INT` (Quasar-only) and the other via `SFPU_BINARY` at `DataFormat.Int32`. No
+> name comparison finds that — the resolution has to go through the arch's `BinaryOp` enum and the
+> dispatch header. §4.5 has the corrected table and the guard that now pins it.
 
 **Perf-only — a perf test exists, no functional golden or assert (7 ops):**
 `AddInt32`, `SubInt32`, `AbsInt32`, `BitwiseNot` (all in `perf_eltwise_unary_sfpu_int32.py`; the file
@@ -607,7 +681,7 @@ mechanism currently prevents this rather than enabling it. Untouched since the o
 |---|---|---|
 | 1 | Unary float sweep is positive-only (`uniform(0.1, 1.1)`, no `spec_A`) | ✅ **fixed.** The sweep defaults `spec_A` to the op's registered signed domain, bounded by the narrowest format in the pipeline (`for_op_pipeline` + `exclude_undefined`), and a missing registry entry is a hard `KeyError`. 31 ops gained their `x<0` branch |
 | 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | 🟡 **closed for binary and for the ternary pole.** 11 of 43 binary ops have a registered domain; the other 32 keep the format default. Ternary now reaches the registry for the operand that matters — `OperandSpecs.spec_C` and `Operand.C` exist, and `addcdiv` / `snake_beta` carry a registered pole (§4.6). Still open: no ternary op has a registered *domain*, and scalar has the plumbing but nothing to read |
-| 3 | IEEE specials injected for exactly one op family | 🟡 **enabled for 67 of the 97 unary ops plus all 5 scalar binops, gated per op.** No longer "measured and switched off": `SPECIALS_READY_OPS` has 72 entries, and the five isinf/isnan predicates inject specials besides. The safe `(format, dest_acc)` surface is data (§6) pinned by **111** host-side tests. The **30** unary ops still outside are gated on their *goldens*, not on the pipeline — §2.1. (Revisions 7–15 said "6 families … the remaining 87 ops", which was the revision-7 figure) |
+| 3 | IEEE specials injected for exactly one op family | 🟡 **enabled for four families now, gated per op.** Unary: 67 of 97. Scalar: all 5. **Binary: 12 of the 21 float ops (`BINARY_SPECIALS_READY_OPS`). Reduce: both swept ops, over 6 fold-interaction classes.** Plus the five isinf/isnan predicates. The safe `(format, dest_acc)` surface is data (§6) pinned by **120** host-side tests. What is still outside is gated on *goldens* and on §5.6's questions, not on the pipeline — §2.1, §4.4. (Revisions 7–15 said "6 families … the remaining 87 ops", the revision-7 figure; revision 16 said 67 unary + 5 scalar) |
 | 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | 🟡 **closed where the kernels allow it.** Extremes go through a raw `src_A_override`; `test_sfpu_binary_int_extremes` drives `{INT32_MIN+1, -1, 0, 1, INT32_MAX}²` over the 5 ops that claim the full range. The other 12 are out of scope by kernel design — §2.6 |
 
 **None of #2–#4 reaches a plain "fixed", and for the same reason each time:** the mechanism was the
@@ -779,61 +853,122 @@ unreachable, or genuinely uncovered — the last column says which.
 
 #### 4.4 Binary (float + shift) SFPU ops (43 ops)
 
-| Op | Kernel | Registered domain | Cat A pole | Edge sweep | Driven by |
-|---|---|---|---|---|---|
-| `SfpuAddTopRow` | `ADD_TOP_ROW` | yes | — | ⬜ | `binary` |
-| `SfpuAtan2` | `ATAN2` | no (format default) | — | ⬜ | `binary` |
-| `SfpuBinaryFmod` | `FMOD` | no (format default) | B=0.0 (bot) | ✅ | `binary` |
-| `SfpuBinaryMax` | `MAX` | no (format default) | — | ⬜ | `binary` |
-| `SfpuBinaryMin` | `MIN` | no (format default) | — | ⬜ | `binary` |
-| `SfpuBinaryRemainder` | `REMAINDER` | no (format default) | B=0.0 (bot) | ✅ | `binary` |
-| `SfpuBitwiseAnd` | `BITWISE_AND` | no (format default) | — | ⬜ | `binary` |
-| `SfpuBitwiseOr` | `BITWISE_OR` | no (format default) | — | ⬜ | `binary` |
-| `SfpuBitwiseXor` | `BITWISE_XOR` | no (format default) | — | ⬜ | `binary` |
-| `SfpuDivInt32` | `DIV_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuDivInt32Floor` | `DIV_INT32_FLOOR` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwEq` | `EQ` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwGe` | `GE` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwGt` | `GT` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwLe` | `LE` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwLeftShift` | `LSHFT` | yes | — | ⬜ | `binary` |
-| `SfpuElwLogicalRightShift` | `LOGICAL_RSHFT` | yes | — | ⬜ | `binary` |
-| `SfpuElwLt` | `LT` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwNe` | `NE` | no (format default) | — | ⬜ | `binary` |
-| `SfpuElwRightShift` | `RSHFT` | yes | — | ⬜ | `binary` |
-| `SfpuElwadd` | `ADD` | yes | — | ⬜ | `binary` |
-| `SfpuElwdiv` | `DIV` | yes | B=0.0 (bot) | ✅ | `binary` |
-| `SfpuElwmul` | `MUL` | yes | — | ⬜ | `binary` |
-| `SfpuElwpow` | `POW` | yes | A=0.0 (abo) | ✅ | `binary`, `zz_measure_tol` |
-| `SfpuElwrsub` | `RSUB` | yes | — | ⬜ | `binary` |
-| `SfpuElwsub` | `SUB` | yes | — | ⬜ | `binary` |
-| `SfpuEqInt` | `EQ_INT` | no (format default) | — | ⬜ | `binary` |
-| `SfpuFmodInt32` | `FMOD_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuGcd` | `GCD` | no (format default) | — | ⬜ | `binary` |
-| `SfpuIsclose` | `ISCLOSE` | no (format default) | — | ⬜ | `binary` |
-| `SfpuLcm` | `LCM` | no (format default) | — | ⬜ | `binary` |
-| `SfpuLogsigmoid` | `LOGSIGMOID` | no (format default) | — | ⬜ | `binary` |
-| `SfpuMask` | `MASK` | no (format default) | — | ⬜ | `binary` |
-| `SfpuMaxInt32` | `MAX_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuMaxUint32` | `MAX_UINT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuMinInt32` | `MIN_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuMinUint32` | `MIN_UINT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuMulInt32` | `MUL_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuNeInt` | `NE_INT` | no (format default) | — | ⬜ | `binary` |
-| `SfpuRemainderInt32` | `REMAINDER_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuRemainderUint32` | `REMAINDER_UINT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuRsubInt32` | `RSUB_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuXlogy` | `XLOGY` | yes | B=0.0 (abo) | ✅ | `binary`, `zz_measure_tol` |
+| Op | Kernel | Registered domain | Cat A pole | Cat B | Edge sweep | Driven by |
+|---|---|---|---|---|---|---|
+| `SfpuAddTopRow` | `ADD_TOP_ROW` | yes | — | — | ⬜ | `binary` |
+| `SfpuAtan2` | `ATAN2` | no (format default) | B=0.0 (bot) | 🟡 §5.6 Q1 | ✅ | `binary`, `binary_edges` |
+| `SfpuBinaryFmod` | `FMOD` | no (format default) | B=0.0 (bot) | 🟡 §5.6 Q1 | ✅ | `binary` |
+| `SfpuBinaryMax` | `MAX` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuBinaryMin` | `MIN` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuBinaryRemainder` | `REMAINDER` | no (format default) | B=0.0 (bot) | 🟡 §5.6 Q1 | ✅ | `binary` |
+| `SfpuBitwiseAnd` | `BITWISE_AND` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuBitwiseOr` | `BITWISE_OR` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuBitwiseXor` | `BITWISE_XOR` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuDivInt32` | `DIV_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuDivInt32Floor` | `DIV_INT32_FLOOR` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuElwEq` | `EQ` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwGe` | `GE` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwGt` | `GT` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwLe` | `LE` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwLeftShift` | `LSHFT` | yes | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuElwLogicalRightShift` | `LOGICAL_RSHFT` | yes | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuElwLt` | `LT` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwNe` | `NE` | no (format default) | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwRightShift` | `RSHFT` | yes | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuElwadd` | `ADD` | yes | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwdiv` | `DIV` | yes | B=0.0 (bot) | 🟡 §5.6 Q1 | ✅ | `binary` |
+| `SfpuElwmul` | `MUL` | yes | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwpow` | `POW` | yes | A=0.0 (abo) | 🟡 §5.6 Q1 | ✅ | `binary`, `zz_measure_tol` |
+| `SfpuElwrsub` | `RSUB` | yes | — | ✅ driven | ✅ | `binary` |
+| `SfpuElwsub` | `SUB` | yes | — | ✅ driven | ✅ | `binary` |
+| `SfpuEqInt` | `EQ_INT` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuFmodInt32` | `FMOD_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuGcd` | `GCD` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuIsclose` | `ISCLOSE` | no (format default) | — | 🟡 read-back | ⬜ | `binary` |
+| `SfpuLcm` | `LCM` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuLogsigmoid` | `LOGSIGMOID` | no (format default) | — | ➖ unary in B | ⬜ | `binary` |
+| `SfpuMask` | `MASK` | no (format default) | — | 🟡 §5.6 Q3 | ⬜ | `binary` |
+| `SfpuMaxInt32` | `MAX_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuMaxUint32` | `MAX_UINT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuMinInt32` | `MIN_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuMinUint32` | `MIN_UINT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuMulInt32` | `MUL_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuNeInt` | `NE_INT` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuRemainderInt32` | `REMAINDER_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuRemainderUint32` | `REMAINDER_UINT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuRsubInt32` | `RSUB_INT32` | no (format default) | — | ➖ int axis | ⬜ | `binary` |
+| `SfpuXlogy` | `XLOGY` | yes | B=0.0 (abo) | 🟡 §5.6 Q1 | ✅ | `binary`, `zz_measure_tol` |
+
+**Reading the two new columns.** `Cat B` is `BINARY_SPECIALS_READY_OPS`, the golden-side gate — the
+pipeline-side one is still `specials_safe()`, and both must pass. **12 ops are enrolled and green on
+Wormhole across all 6 safe cells.** The markers on the rest name the single thing holding each out, the
+same convention §4.1/§4.2 use:
+
+- **🟡 §5.6 Q1** — 6 ops, all compositions over a primitive the ISA specifies only inside a stated
+  range (`div` and `fmod`/`remainder` via a reciprocal, `xlogy` via a log, `pow` via `exp(b·ln a)`,
+  `atan2` via a ratio plus a format-specific polynomial). This is the *binary half of the same question*
+  that holds 23 unary ops out — one answer decides all 29.
+- **🟡 §5.6 Q3** — `SfpuMask` alone. `calculate_mask` is `v_if(mask == 0)`, which lowers to `SFPSETCC`,
+  whose contract is conditioned *"provided that VC is neither negative zero nor any kind of NaN"*. The
+  same sentence holds `Sign` and `Heaviside` out on the unary side.
+- **🟡 read-back** — `SfpuIsclose` alone, and the narrowest item in the document.
+  `ckernel_sfpu_isclose.h` documents torch.isclose semantics *including* `EQUAL_NAN=false` and
+  bit-inspects for `±Inf` against NaN, so both sides claim to agree and do not. One per-cell read-back
+  says which is wrong. **Do not adjust the golden first** — that is how a kernel divergence gets
+  laundered into a golden that agrees with it.
+- **➖ unary in B** — `SfpuLogsigmoid` is out *by construction*, not pending. The kernel reads `in1` only
+  on its `x > 4` branch and the golden ignores operand B outright (verified: `logsigmoid(1, y)` is
+  constant in `y`), so a special injected into B is not a stimulus for anything.
+- **➖ int axis** — the 21 int-typed rows. `specials_safe()` returns False for an integer input, so there
+  is no IEEE special to inject; their edges are cat C and cat E, covered by
+  `test_sfpu_binary_int_extremes` and the shift sweeps.
+
+`Edge sweep` flips to ✅ for an op that gains **either** a registered singularity **or** a cat-B entry —
+`_BINARY_EDGE_OPS` is `ops_with_singularity() | BINARY_SPECIALS_READY_OPS`, so 18 of the 22 float rows
+are collected where 5 were. The three ⬜ float rows are exactly the ops with no pole *and* no cat B.
 
 #### 4.5 Binary integer SFPU ops (5 ops)
 
-| Op | Kernel | Registered domain | Cat A pole | Edge sweep | Driven by |
-|---|---|---|---|---|---|
-| `SfpuElwmulInt` | `MUL` | no (format default) | — | ⬜ | **none (WH/BH)** |
-| `SfpuGeInt` | `GE_INT` | no (format default) | — | ⬜ | **none (WH/BH)** |
-| `SfpuGtInt` | `GT_INT` | no (format default) | — | ⬜ | **none (WH/BH)** |
-| `SfpuLeInt` | `LE_INT` | no (format default) | — | ⬜ | **none (WH/BH)** |
-| `SfpuLtInt` | `LT_INT` | no (format default) | — | ⬜ | **none (WH/BH)** |
+> **⚠️ Revision 17 correction: these five are a *naming artifact*, not a coverage gap.** Revisions 6–16
+> recorded them as driven by "none (WH/BH)", which is true of the **enum members** and false of the
+> **kernels**. All five kernels are covered on Wormhole and Blackhole under a different spelling, and the
+> alias crosses a `MathOpType` boundary — which is why §2.4's alias warning did not catch it.
+>
+> - The WH/BH `BinaryOp` enum (`tt_llk_<arch>/common/inc/ckernel_defs.h`) has **no** `GT_INT` /
+>   `LT_INT` / `LE_INT` / `GE_INT`; those four names exist only in the Quasar enum. So these members
+>   carry `MathOpType.SFPU_BINARY_INT`, which only `sfpu_operations_quasar.h` implements, and are
+>   **unreachable** on WH/BH rather than untested.
+> - Meanwhile `sfpu_operations.h` routes `BinaryOp::LT/GT/LE/GE` to `calculate_binary_comp_int32`
+>   whenever `MATH_FORMAT == Int32`, and `test_sfpu_binary_int` drives `SfpuElwLt/Gt/Le/Ge` at `Int32`
+>   on both arches. **That is the same kernel.**
+> - `SfpuElwmulInt`'s `cpp_enum_value` is `MUL`, reaching `_mul_int32_` on Quasar; on WH/BH the same
+>   kernel is `MUL_INT32`, driven by `test_sfpu_binary_int_uniform` as `SfpuMulInt32`.
+>
+> Pinned by `test_quasar_int_binary_members_alias_covered_kernels`, which parses the arch header rather
+> than mirroring it — so if one of these ever *becomes* dispatchable, or the alias stops being driven,
+> that fails instead of this paragraph going quietly stale.
+
+| Op | Kernel | Registered domain | WH/BH reachability | Kernel covered on WH/BH via |
+|---|---|---|---|---|
+| `SfpuElwmulInt` | `MUL` (int) | no (format default) | ➖ Quasar-only member | `SfpuMulInt32` (`MUL_INT32`) — `binary_int_uniform` |
+| `SfpuGeInt` | `GE_INT` | no (format default) | ➖ not in the WH/BH `BinaryOp` enum | `SfpuElwGe` at `Int32` — `binary_int`, `binary_int_comparison_*`, `binary_int_extremes` |
+| `SfpuGtInt` | `GT_INT` | no (format default) | ➖ not in the WH/BH `BinaryOp` enum | `SfpuElwGt` at `Int32` — as above |
+| `SfpuLeInt` | `LE_INT` | no (format default) | ➖ not in the WH/BH `BinaryOp` enum | `SfpuElwLe` at `Int32` — as above |
+| `SfpuLtInt` | `LT_INT` | no (format default) | ➖ not in the WH/BH `BinaryOp` enum | `SfpuElwLt` at `Int32` — as above |
+
+**What *was* genuinely missing, and is now covered.** The Int32 comparison kernel was being driven
+entirely on `generate_stimuli`'s integer default — `uniform(0, INT32_MAX // 2 - 1)`, which is
+**positive-only and tie-free**. Measured: a 1024-element draw contained **0 negatives and 0 ties**. That
+is finding #1 of the original audit surviving on the integer axis, and it left three holes:
+
+| Gap | Why it mattered | Closed by |
+|---|---|---|
+| the exact-equality input | `a == b` is the **only** input on which `lt`/`gt` disagree with `le`/`ge`; a comparator with its tie inverted passed the whole integer sweep | `test_sfpu_binary_int_comparison_ties` (reuses the float sweep's three-way builder) |
+| operands crossing zero | the kernel normalises by computing `a - b` and folding the sign — sign is the entire mechanism, and it was never exercised | `test_sfpu_binary_int_comparison_across_zero`, `twos_complement=True`; **verified delivered**, 1024 of 2048 lanes negative, so the assertion is not vacuous |
+| cat C at the int32 extremes | `INT32_MAX - (INT32_MIN + 1)` does not fit in int32, so whether the sign-fold survives overflow is exactly what "exact on the full range" has to mean. These kernels document no sub-range, so §2.6's exclusion does not apply to them | the 4 ordered comparisons added to `_INT_EXTREME_OPS` |
+
+All green on Wormhole. The kernel is correct at every one of these; the point is that now it is
+*asserted* rather than assumed.
 
 #### 4.6 Ternary ops (5 ops)
 
@@ -889,11 +1024,43 @@ operand.
 
 #### 4.8 Reduce ops (3 ops)
 
-| Op | Kernel | Registered domain | Cat A pole | Edge sweep | Driven by |
-|---|---|---|---|---|---|
-| `ReduceColumn` | `REDUCE_COL` | yes | — | ⬜ | `reduce`, `reduce`, `reduce_sdpa` |
-| `ReduceRow` | `REDUCE_ROW` | yes | — | ⬜ | `reduce`, `reduce` |
-| `ReduceScalar` | `REDUCE_SCALAR` | yes | — | ⬜ | `reduce` |
+| Op | Kernel | Registered domain | Cat A pole | Cat B | Cat C | Driven by |
+|---|---|---|---|---|---|---|
+| `ReduceColumn` | `REDUCE_COL` | yes | — | ✅ 6 classes × 4 pools × 2 formats | ✅ `int32_reduce_extreme` | `reduce`, `float_reduce_specials`, `reduce_sdpa` |
+| `ReduceRow` | `REDUCE_ROW` | yes | — | ✅ as `ReduceColumn` | ✅ `int32_reduce_extreme` | `reduce`, `float_reduce_specials` |
+| `ReduceScalar` | `REDUCE_SCALAR` | yes | — | ⬜ **different driver** | ⬜ | `reduce` |
+
+**Why the `Edge sweep` column is gone for this family rather than ticked.** All three carry a plain
+`uniform(-1, 1)` domain with no singularity and no knee, so `edge_spec()` returns `None` and **no edge
+sweep can reach them however it is pointed** — that is a property of the registry, and revision 17 does
+not change it. What they have instead is cat B, and it behaves unlike cat B anywhere else here: a
+reduction *propagates* its special to the single output element, so one poisoned lane is not one probe
+among 4096, it is the whole answer. The pool is a *parameter* rather than part of the op, so
+"the identity of this pool" is not something `_OP_EDGE_POINTS` can hold; the classes are parametrized in
+the test file, following `test_int32_reduce_extreme`'s shape.
+
+The six classes, and what each asserts that no element-wise sweep can:
+
+| Class | Stimulus | What it pins |
+|---|---|---|
+| `pos_inf` / `neg_inf` | one lane, 31 finite | absorption for `Max`/`Sum`; **transparency** for `Min` — the asymmetry is the point |
+| `both_inf` | `+inf` and `-inf` in one column | `Sum` must be NaN; `Max`/`Min` must still answer `±inf` |
+| `nan` | one lane | the total-order case — see §5.13. `Min` over a column holding `+NaN` must return the **finite** minimum, where `torch.min` propagates |
+| `all_inf` | every lane `+inf` | the degenerate fold, where the pool identity is the only other operand |
+| `signed_zero` | every lane `-0.0` | IEEE keeps `-0` under addition; Wormhole's SFPMAD flushes it and Blackhole preserves it |
+
+Injection is down **one column** rather than scattered, so a single reduced lane carries the special and
+the other 31 stay asserted — a scattered injection leaves every lane poisoned and the variant can then
+only report "something in this tensor diverges".
+
+**96 variants, all green on Wormhole**, after two golden corrections that the class list exposed: the
+reduce path returned from `UnarySFPUGolden.__call__` *before* the Dest/pack modelling (§5.13), and
+`Max`/`Min` were folding with `torch.max`/`torch.min` instead of the comparator the kernel uses.
+
+**Cat C for this family was already closed** by `test_int32_reduce_extreme` and is not re-filed.
+`ReduceScalar` stays outside: it is driven from `test_reduce.py` / `test_mul_reduce_scalar.py` rather
+than `test_sfpu_reduce.py`, so covering it means a second driver. **That is an open item, recorded here
+so it is a decision rather than an omission.**
 
 #### 4.9 FPU binary (eltwise) ops (3 ops)
 
@@ -1032,8 +1199,8 @@ Asserting a zero's sign needs a bitwise comparator, which is a suite-wide change
 
 | Finding | Ops |
 |---|---|
-| **`0/0` and `x%0` return `inf`, not `nan`.** `SFPMAD` says NaN/±Inf inputs follow "the usual IEEE754 rules", which makes `0 × inf` a NaN — so this is the kernels' own reciprocal composition, not the multiply. Specifically the indeterminate form: the finite poles agree exactly and every ±inf lines up | `div`, `fmod`, `remainder`, `xlogy` |
-| **`0**0` returns 0** where C, torch and the golden give 1. `pow` evaluates `exp(b·ln a)`, so a composition artifact | `pow` |
+| ~~**`0/0` and `x%0` return `inf`, not `nan`.**~~ **⚠️ RETRACTED in revision 17 — it was the pack path, not the kernel.** The kernels return a genuine NaN; `BinarySFPUGolden` modelled neither the Dest width nor the pack out of it, so on a pipeline too narrow to hold a NaN the packer's substituted infinity (SFPSTORE: *"NaN is also converted to infinity"*) read as the kernel having produced one. **Measured once the golden modelled both steps: all four PASS on every cell where a NaN reaches L1** — `Float32→Float32` and `Float16_b→Float32`, both at `dest_acc=Yes` — and diverge only where `nan_survives_to_l1()` is False. A divergence appearing exactly on the cells that cannot carry the datum is a statement about the pipeline. 24 xfails deleted; what remains on the narrowing cells is only the *sign* of the substituted infinity, i.e. §5.10's generated-NaN sign, now handled by `generated_nan_sign_is_asserted()` | ~~`div`, `fmod`, `remainder`, `xlogy`~~ |
+| **`0**0` returns 0** where C, torch and the golden give 1. `pow` evaluates `exp(b·ln a)`, so a composition artifact. **Survives the retraction above** — both operands and the result are finite, no NaN anywhere near it, which is what `_class_generates_a_nan()` keeps it out of that gate for | `pow` |
 | **`RsqrtCompat(0)` saturates to `1.7014118e38`** (`0x7F000000`) instead of `inf`, on all 8 combinations — while plain `Rsqrt` over the same probe does **not** diverge. Two implementations of one function disagreeing at their shared pole, with nothing in the ISA prescribing either answer | `RsqrtCompat` |
 | **`Erfinv(±1)` saturates** rather than returning ±inf, on the fp32-dest combinations only — tolerance-shaped rather than semantic | `erfinv` |
 
@@ -1222,6 +1389,28 @@ positive NaN at a 32-bit Dest and a sign-set one at 16-bit.
 > its sign observable) and `specials_after_nan_sign_gate()`, which switches **cat B off** for exactly
 > those variants when running on Wormhole. It is wired into `test_sfpu_unary.py`
 > (`_gate_unspecified_nan_sign`) and `test_sfpu_binop_scalar.py`.
+
+> **✅ Revision 17 — the proposed fix is now written, for the binary and reduce families.** "Accept
+> either infinity" exists: `unspecified_nonfinite_sign` in the binary driver and the per-lane equivalent
+> in `test_float_reduce_specials` clear the sign on **only** the elements where both sides are already
+> non-finite *and* the golden's answer is a NaN the op invented. Magnitude, finiteness and every finite
+> lane in the tensor stay checked — a kernel returning a finite value, a zero, or a NaN where an
+> infinity is due still fails. Only the one bit the ISA declines to pin is excused, and only on Wormhole:
+> Blackhole specifies the canonical `0x7fc00000`, so it keeps the full assertion including the sign
+> (`generated_nan_sign_is_asserted()`).
+>
+> **This is why revision 17's 24 retracted cells became 24 passes rather than 24 skips**, which is the
+> opposite of what the gate above did on the unary side. The gate withdraws an assertion; this restores
+> one. The distinction between a *forwarded* NaN (an operand was already NaN — the sign is the datum's,
+> assert it) and a *generated* one (neither operand was — IEEE leaves the sign to the implementation) is
+> derived per element in `BinarySFPUGolden._canonicalise_generated_nan`, not per op, because `sub`
+> forwards at `(NaN, 1)` and invents at `(inf, inf)` and no per-op answer is right for both.
+>
+> **Still open on the unary side**, where the gate remains a probe withdrawal rather than a restored
+> assertion. The same treatment should port: the binary implementation is the worked example, and the
+> unary version needs `GENERATED_NAN_SIGN_OPS` membership to select the lanes instead of the
+> operand-derived rule (a unary op has only one operand, so "did an operand carry the NaN" is exactly
+> what that set already records).
 >
 > Cat B is switched off rather than the variant skipped, deliberately: `edge_values()` puts the cat-A,
 > cat-D and cat-B probes in one `StimuliSpec.custom`, so dropping the variant would take `Hardmish`'s
@@ -1310,17 +1499,71 @@ needs a bitwise comparator (the suite-wide change §5.2 already asks for), with 
 hardware returns `-0.0`, Wormhole is not flushing and the gate's premise is wrong on its own terms. Until
 then `_WORMHOLE_ONLY_EDGE_CLASSES` is unverified. Plan §9.2.
 
+### 5.13 New: the total order is **lost** on six of the eight ops that route through `SFPSWAP`
+
+**This is the finding to carry forward, because the ISA page predicts the opposite and the prediction is
+wrong.** §5.8 established a documented total order — `-NaN < -Inf < … < -0 < +0 < … < +Inf < +NaN`,
+specified on `SFPGT`, `SFPLE` and `SFPSWAP` through `SignMagIsSmaller()` — and revision 12 enrolled seven
+*unary* ops on it as plain passes. That work stands. What revision 17 measured is that the order does
+**not** survive into the answer for six of the eight binary ops built on the same instruction.
+
+**Which ops keep it and which lose it:**
+
+| Op(s) | Kernel | Guard around the swap | Order that reaches the result |
+|---|---|---|---|
+| `SfpuBinaryMax`, `SfpuBinaryMin` | `binary_max_min` | **none** — a bare `TTI_SFPSWAP(VEC_MIN_MAX)` | ✅ **total order.** `+NaN` is the maximum, `-NaN` the minimum |
+| reduce `Max` / `Min` | `ckernel_sfpu_reduce.h` | **none** — bare `TTI_SFPSWAP` | ✅ **total order.** `Min` over a column holding `+NaN` returns the *finite* minimum |
+| `SfpuElwLt`, `SfpuElwGt` | `calculate_binary_comp_fp32_strict_ordered` | pre-stores 0, then `SFPIADD(inf, abs(a) + abs(b), CC_GTE0)` — commented **"rejects NaN"** | ⬜ **lost.** `lt(NaN, x) = 0` — IEEE unordered |
+| `SfpuElwLe`, `SfpuElwGe` | `calculate_binary_comp_fp32_weak_ordered` | pre-stores 1, rejects if false, then stores 0 under *"abs(a) + abs(b) > inf; a or b is NaN"* | ⬜ **lost.** `le(NaN, x) = 0` |
+| `SfpuElwEq`, `SfpuElwNe` | `calculate_binary_comp_fp32_equal` | same "rejects NaN" predicate; the pre-stored default stands | ⬜ **lost.** `eq(NaN, x) = 0`, `ne(NaN, x) = 1` |
+| `SfpuElwLt/Gt/Le/Ge` at `Int32` | `calculate_binary_comp_int32` | n/a | ➖ plain two's complement — subtract and fold the sign. No NaN exists on that axis |
+
+**A NaN operand never reaches the compare in the six**, so the answer is IEEE's unordered one *by
+construction, deliberately*. The order is a property of `SFPSWAP`; whether it reaches the result is a
+property of what the kernel wraps around it.
+
+**How this was found, and the cost of getting it backwards.** All eight goldens were first rewritten onto
+the total order, reasoning from the `SFPSWAP` page — the same reasoning that was correct in revision 12.
+On a Wormhole n150 the six comparisons then failed **4 cells each (24 total)** and `max`/`min` passed
+everywhere. Reverting the six to IEEE and keeping `max`/`min` on the order took the binary edge sweep to
+0 failures.
+
+**`max` is the trap in this group and the reason a one-sided probe is not enough.** `torch.maximum`
+agrees with the total order on `+NaN` **by coincidence** — both give NaN — and disagrees on `-NaN`:
+measured, `sfpu_max(-NaN, 1.0) = 1.0` where `torch.maximum` propagates the NaN. A probe that only ever
+drives a positive NaN certifies a wrong golden as correct. Both signs are now driven, and pinned by
+`test_binary_comparison_family_splits_on_the_kernel_nan_guard`.
+
+**The rule this establishes, stated so it is not re-derived wrongly a third time:** *read the kernel to
+learn which instruction sequence an op uses, then read the ISA to learn what that sequence does.* The ISA
+was never wrong here — `SFPSWAP.md` is accurate and still does not settle these six, because what
+decides them is a guard the ISA page has no reason to mention. Revision 11 was caught by reading the ISA
+*after* measuring; this one needed reading the kernel after that.
+
+**Where the same question is still unanswered:** `sfpu_clamp` and `sfpu_relu_max` model the order for
+`Clamp`, `Hardsigmoid`, `Hardtanh` and `ReluMax`, and those were confirmed against `_relu_max_body_` and
+`_calculate_clamp_` as two-vector compares in revision 12 — but **that confirmation checked the compare
+shape, not the presence of a NaN guard**, which is exactly the distinction this section is about. They
+pass 8/8 on both arches, so there is no failure to chase; the gap is that the *reason* they pass has not
+been re-read against the guard question. Worth one pass over those two kernels before the next op is
+enrolled on the order.
+
 ### 5.6 What to raise with kernel owners
 
 Written up in full, with measured tables and a reproduce command, in `KERNEL_OWNER_QUESTIONS.md`.
 **Two remain**, plus one narrow one the ISA raised rather than settled:
 
-1. **Approximation kernels do not propagate non-finite inputs** (§5.5, §5.9) — 23 ops. Is the input
-   clamp intended, and should it be documented? The ISA cannot settle this and it is worth knowing
-   why: it specifies the *primitives* only within stated ranges — `SFPARECIP` gives accuracy bounds
-   for `0 ≤ x < 2` and suggests following up with Newton-Raphson, `SFPLUTFP32` documents no handling
-   for `NaN`/`±inf` — so the out-of-range behaviour of a composition built on them is an LLK/API
-   decision by construction.
+1. **Approximation kernels do not propagate non-finite inputs** (§5.5, §5.9) — **29 ops as of revision
+   17: the original 23 unary, plus 6 binary compositions** (`SfpuElwdiv`, `SfpuXlogy`, `SfpuElwpow`,
+   `SfpuBinaryFmod`, `SfpuBinaryRemainder`, `SfpuAtan2`). Is the input clamp intended, and should it be
+   documented? The ISA cannot settle this and it is worth knowing why: it specifies the *primitives*
+   only within stated ranges — `SFPARECIP` gives accuracy bounds for `0 ≤ x < 2` and suggests following
+   up with Newton-Raphson, `SFPLUTFP32` documents no handling for `NaN`/`±inf` — so the out-of-range
+   behaviour of a composition built on them is an LLK/API decision by construction.
+   **This one answer now decides 29 ops rather than 23**, which raises its value and does not change
+   its shape. Note what it is *no longer* about: the `0/0` and `x%0` items that used to be filed here
+   for these same four ops are retracted (§5.3) — the question is about a non-finite **input**, not
+   about an indeterminate form over finite operands.
 2. **`RsqrtCompat(0)` saturates to `1.7014118e38`** where plain `Rsqrt` does not — 1 op. The ISA
    narrows it: `SFPARECIP` saturates to `0x7f800000` (`+inf`) for an input below `2^-126`, so
    `0x7F000000` (`2^127`) is not a value the instruction produces. The constant is a software clamp
@@ -1336,6 +1579,9 @@ golden work rather than a question, and are now enrolled. Two remain for an owne
    at `NaN` by an unspecified route, even though it is consistent with an `int32` test on a positive
    NaN's bit pattern. **Both arches, one question:** Wormhole has since been measured and returns the
    same `1.0`, so this is a contract question rather than a per-arch measurement.
+   **Revision 17 adds a third op to it: `SfpuMask`.** `calculate_mask` is `v_if(mask == 0)`, the same
+   compare-against-zero lowering to the same instruction, so the mask operand hits the same excluded
+   case. Three ops on one sentence of contract.
 4. ~~**What is the intended `NaN` comparison behaviour on Wormhole?**~~ **Withdrawn — measured, and the
    premise was wrong twice over.** `SFPSWAP` specifies the same total order on Wormhole, and all seven
    goldens pass there 8/8 with `0 xpassed`. Nothing for an owner.
@@ -1422,15 +1668,20 @@ cd tt_metal/tt-llk/tests/python_tests
 python3 -c "
 import sys; sys.path.insert(0,'.')
 from helpers.sfpu_domains import (_OP_SINGULARITIES, _OP_EDGE_POINTS, _OP_DOMAIN_REGISTRY,
-                                  sfpu_unary_ops, edge_spec, SPECIALS_READY_OPS)
+                                  sfpu_unary_ops, edge_spec, SPECIALS_READY_OPS,
+                                  BINARY_SPECIALS_READY_OPS, _BINARY_SPECIALS_NOT_READY)
 from helpers.llk_params import MathOperation, DataFormat as F
 u = sorted(sfpu_unary_ops(), key=lambda o: o.name)
 e = [o for o in u if edge_spec(o, F.Float32, F.Float32) is not None]
 print('singularities', len(_OP_SINGULARITIES), '| edge points', len(_OP_EDGE_POINTS))
 print('unary', len(u), '| with an edge', len(e), '| smooth', len(u) - len(e))
 print('specials-ready', len(SPECIALS_READY_OPS))
+print('binary cat B ready', len(BINARY_SPECIALS_READY_OPS),
+      '| deferred', len(_BINARY_SPECIALS_NOT_READY))
 "
-# expect: 21 / 43 / 97 / 50 / 47 / 72
+# expect: 22 / 43 / 97 / 50 / 47 / 72 / 12 / 9
+# (Revision 16 expected 21 for the first figure; SfpuAtan2's B = 0 branch point is the 22nd.
+#  Revisions before 12 said 19 / ... / 0. Re-run this rather than trusting any of them.)
 # The last number is len(SPECIALS_READY_OPS), which counts the 5 scalar binops as well
 # as the 67 enrolled *unary* ops -- the scalar family is not in sfpu_unary_ops(), so it
 # does not appear in any of the other five figures. Do not read 72 as a unary count.
