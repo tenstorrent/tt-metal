@@ -10,7 +10,7 @@ others cost us time.
     - Fix: have it write a real check that the model works, and prove the check can fail by breaking
       the model on purpose. Otherwise you get a test that passes whatever happens. It already did
       exactly this for our model, in a comment: it drove the speech path and found that a wrong RoPE
-      gives a buzz that never stops. Make that run.
+      gives a buzz that never stops. That should be a test, not a comment.
 
 2. Fix bring-up from a local folder
     - A folder on disk takes a different path than a name downloaded from HuggingFace, and that path
