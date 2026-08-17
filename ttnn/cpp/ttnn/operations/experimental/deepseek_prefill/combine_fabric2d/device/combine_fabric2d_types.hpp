@@ -15,13 +15,10 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// See the combine_fabric2d nanobind docstring for what each tensor carries.
-//
-// `device` is FIRST so the framework's get_first_object_of_type<MeshDevice*>() over attribute_values()
-// finds the mesh.
+// See the combine_fabric2d nanobind docstring for what each tensor carries. The framework reflects over
+// these members for the program-cache hash and to find the mesh, so every field is part of the cache key.
 struct CombineFabric2dParams {
     ttnn::MeshDevice* device = nullptr;
-    uint32_t dispatch_group_size = 8;
     uint32_t experts_per_chip = 2;
     uint32_t num_experts_per_tok = 2;
     uint32_t seq_len_per_chip = 640;
@@ -33,31 +30,6 @@ struct CombineFabric2dParams {
     // Accepted only as false: unrouted output slots are left as-allocated, as production leaves them
     // when asked not to zero.
     bool init_zeros = false;
-
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "device",
-        "dispatch_group_size",
-        "experts_per_chip",
-        "num_experts_per_tok",
-        "seq_len_per_chip",
-        "axis",
-        "num_links",
-        "topology",
-        "output_mem_config",
-        "init_zeros");
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            device,
-            dispatch_group_size,
-            experts_per_chip,
-            num_experts_per_tok,
-            seq_len_per_chip,
-            axis,
-            num_links,
-            topology,
-            output_mem_config,
-            init_zeros);
-    }
 };
 
 struct CombineFabric2dInputs {

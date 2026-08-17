@@ -73,9 +73,11 @@ std::vector<EthEntry> fabric_eth_cores(
         const auto nbr = coord.get_neighbor(
             mesh->shape(), delta, static_cast<int32_t>(axis), ttnn::MeshCoordinate::BoundaryMode::WRAP);
         TT_FATAL(nbr.has_value(), "combine_fabric2d: no axis-{} neighbor of {} at delta {}", axis, coord, delta);
-        if (*nbr == coord) {
-            continue;  // degenerate axis; nothing to talk to
-        }
+        TT_FATAL(
+            *nbr != coord,
+            "combine_fabric2d: axis {} wraps {} onto itself, so there is no neighbour to send to",
+            axis,
+            coord);
         const auto nbr_node = mesh->get_fabric_node_id(*nbr);
         const auto links = tt::tt_fabric::get_forwarding_link_indices(self_node, nbr_node);
         TT_FATAL(

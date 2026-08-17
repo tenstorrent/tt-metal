@@ -76,13 +76,6 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.device->shape());
     const uint32_t extent = args.device->shape()[static_cast<int32_t>(args.axis)];
     TT_FATAL(
-        args.dispatch_group_size == extent,
-        "combine_fabric2d: dispatch_group_size {} must equal the mesh extent {} along axis {} — the op rings "
-        "the dispatch group over that axis's cables",
-        args.dispatch_group_size,
-        extent,
-        args.axis);
-    TT_FATAL(
         extent >= 3,
         "combine_fabric2d: axis {} extent {} needs 3+ chips for two distinct neighbours",
         args.axis,
@@ -107,16 +100,25 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_dram_row_major(buf, "dispatched_buffer");
     // A token is one page — the op does not take a token size, it reads it off the tensor the caller staged.
     const uint32_t token_page = static_cast<uint32_t>(buf.buffer()->aligned_page_size());
+    // A token is the payload of a NoC transfer, which needs 16-byte alignment.
     TT_FATAL(
-        token_page % sizeof(uint32_t) == 0, "combine_fabric2d: token page {} B must be a multiple of 4", token_page);
+        token_page % 16 == 0,
+        "combine_fabric2d: token page {} B must be 16-byte aligned for NoC transfers",
+        token_page);
+    // Token + metadata is a DRAM page of the forwarding buffer, which needs DRAM alignment.
+    TT_FATAL(
+        (token_page + cmbf2d::FORWARDING_METADATA_SIZE) % 64 == 0,
+        "combine_fabric2d: token page {} B + {} B of forwarding metadata must be 64-byte aligned for DRAM",
+        token_page,
+        cmbf2d::FORWARDING_METADATA_SIZE);
     // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric must accept is
     // token + tail, not just token.
     TT_FATAL(
-        token_page + cmbf2d::SLOT_TAIL_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        token_page + cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
         "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
         "max_payload_size in the device's fabric_router_config.",
         token_page,
-        cmbf2d::SLOT_TAIL_BYTES,
+        cmbf2d::FORWARDING_METADATA_SIZE,
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(
         buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
@@ -152,22 +154,22 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "combine_fabric2d: num_routed_experts {} must be divisible by experts_per_chip {}",
         num_routed_experts,
         args.experts_per_chip);
-    const uint32_t experts_per_group = args.experts_per_chip * args.dispatch_group_size;
+    const uint32_t experts_per_group = args.experts_per_chip * extent;
     TT_FATAL(
         num_routed_experts >= experts_per_group,
-        "combine_fabric2d: num_routed_experts {} is fewer than experts_per_chip x dispatch_group_size = {}, so "
+        "combine_fabric2d: num_routed_experts {} is fewer than experts_per_chip x ring extent = {}, so "
         "there is not even one dispatch group",
         num_routed_experts,
         experts_per_group);
     TT_FATAL(
         num_routed_experts % experts_per_group == 0,
-        "combine_fabric2d: num_routed_experts {} must be divisible by experts_per_chip x dispatch_group_size "
+        "combine_fabric2d: num_routed_experts {} must be divisible by experts_per_chip x ring extent "
         "= {}",
         num_routed_experts,
         experts_per_group);
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
-    validate_control_tensor(tensor_args.expert_offsets, args.dispatch_group_size, num_routed_experts, "expert_offsets");
+    validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
 }
 
 void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
@@ -201,7 +203,6 @@ ttnn::Tensor combine_fabric2d(
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
     const ttnn::Tensor& expert_offsets,
-    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
@@ -215,7 +216,6 @@ ttnn::Tensor combine_fabric2d(
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .device = device,
-            .dispatch_group_size = dispatch_group_size,
             .experts_per_chip = experts_per_chip,
             .num_experts_per_tok = num_experts_per_tok,
             .seq_len_per_chip = seq_len_per_chip,

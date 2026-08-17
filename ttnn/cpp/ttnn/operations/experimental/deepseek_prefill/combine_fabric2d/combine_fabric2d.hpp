@@ -21,7 +21,6 @@ ttnn::Tensor combine_fabric2d(
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
     const ttnn::Tensor& expert_offsets,
-    uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
