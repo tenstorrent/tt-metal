@@ -14,33 +14,34 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
 
-void validate_dram_row_major(const ttnn::Tensor& t, const char* what) {
-    TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "combine_fabric2d: {} must be on device", what);
+void validate_dram_row_major(const ttnn::Tensor& t, const char* tensor_name) {
+    TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "combine_fabric2d: {} must be on device", tensor_name);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
             t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "combine_fabric2d: {} must be an interleaved DRAM tensor",
-        what);
+        tensor_name);
     TT_FATAL(
         t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "combine_fabric2d: {} must be ROW_MAJOR so one row is exactly one page",
-        what);
+        tensor_name);
 }
 
 // The 32-bit control tensors carry page indices and counts, so either signedness is fine — the values are
 // non-negative by construction and the kernels read them as uint32.
-void validate_control_tensor(const ttnn::Tensor& t, uint32_t rows, uint32_t num_routed_experts, const char* what) {
-    validate_dram_row_major(t, what);
+void validate_control_tensor(
+    const ttnn::Tensor& t, uint32_t rows, uint32_t num_routed_experts, const char* tensor_name) {
+    validate_dram_row_major(t, tensor_name);
     TT_FATAL(
         t.dtype() == tt::tt_metal::DataType::INT32 || t.dtype() == tt::tt_metal::DataType::UINT32,
         "combine_fabric2d: {} must be INT32 or UINT32, got {}",
-        what,
+        tensor_name,
         t.dtype());
     const auto shape = t.logical_shape();
     TT_FATAL(
         shape[-1] == static_cast<int32_t>(num_routed_experts),
         "combine_fabric2d: {} last dim is {} but num_routed_experts is {}",
-        what,
+        tensor_name,
         shape[-1],
         num_routed_experts);
     TT_FATAL(
@@ -49,7 +50,7 @@ void validate_control_tensor(const ttnn::Tensor& t, uint32_t rows, uint32_t num_
         "along the dispatch-group axis (each chip needs every origin chip's run boundaries, not just its "
         "own); the counts and region offsets are already identical across that axis, so they arrive with a "
         "single row.",
-        what,
+        tensor_name,
         shape[-2],
         rows);
 }
@@ -174,7 +175,6 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
 
 CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Same shape the production op produces, so the same test can read it back the same way:
     // one page per (token, top-k slot), the embedding along the last dim.
     const uint32_t emb_dim = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
     const ttnn::Shape output_shape({1, 1, args.seq_len_per_chip, args.num_experts_per_tok, emb_dim});
