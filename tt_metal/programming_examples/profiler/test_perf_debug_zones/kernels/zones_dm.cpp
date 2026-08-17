@@ -71,18 +71,64 @@
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #endif
 
-void kernel_main() {
-    // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
-    for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
-        ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
-        ZONE(ZTAG "_Zone2", 7500u);    // ~3 us
-        ZONE(ZTAG "_Zone3", 12500u);   // ~5 us
-        ZONE(ZTAG "_Zone4", 20000u);   // ~8 us
-        ZONE(ZTAG "_Zone5", 30000u);   // ~12 us
-        ZONE(ZTAG "_Zone6", 50000u);   // ~20 us
-        ZONE(ZTAG "_Zone7", 100000u);  // ~40 us
-        ZONE(ZTAG "_Zone8", 175000u);  // ~70 us
-        ZONE(ZTAG "_Zone9", 250000u);  // ~100 us
+// ZONE_SCALE stretches every graduated duration (host --scale): more wall time per zone WITHOUT more
+// zones, which is what a live-GUI viewing session needs (connect time) and a knee sweep must not have.
+#ifndef ZONE_SCALE
+#define ZONE_SCALE 1u
+#endif
+
+// Bare graduated spin (no zone): a parent's own work before/after its children, so parent spans are
+// not merely the sum of their children.
+#define ZONE_BODY(CYC)                                                                                          \
+    {                                                                                                           \
+        volatile tt_reg_ptr uint32_t* _zwb =                                                                    \
+            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);                      \
+        uint32_t _zb0 = _zwb[kernel_profiler::WALL_CLOCK_LOW_INDEX];                                            \
+        while ((uint32_t)(_zwb[kernel_profiler::WALL_CLOCK_LOW_INDEX] - _zb0) < (uint32_t)(CYC) * ZONE_SCALE) { \
+            asm volatile("nop");                                                                                \
+        }                                                                                                       \
     }
+
+void kernel_main() {
+#if ZONE_MODE
+    // KNEE: 10 FLAT sequential zones. This shape is load-bearing: the marker-wire GB/s numbers and the
+    // knee sweeps were all measured against a pure adjacent START/END train -- do not nest it.
+    for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
+        ZONE(ZTAG "_Zone0", 2500u);
+        ZONE(ZTAG "_Zone1", 5000u);
+        ZONE(ZTAG "_Zone2", 7500u);
+        ZONE(ZTAG "_Zone3", 12500u);
+        ZONE(ZTAG "_Zone4", 20000u);
+        ZONE(ZTAG "_Zone5", 30000u);
+        ZONE(ZTAG "_Zone6", 50000u);
+        ZONE(ZTAG "_Zone7", 100000u);
+        ZONE(ZTAG "_Zone8", 175000u);
+        ZONE(ZTAG "_Zone9", 250000u);
+    }
+#else
+    // GRADUATED: the representative capture, so it nests the way real kernels do. Still exactly 10
+    // zones per iteration (the host prints that). Under the KERNEL wrapper:
+    //   Outer { Prep, Pipe { Load, Math { Inner }, Store }, Post }, Solo, Tail
+    // -- 4 nesting levels, siblings at several depths, parents with their own trailing work, and two
+    // flat zones between nests. Durations ~1..20 us x ZONE_SCALE.
+    for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
+        {
+            DeviceZoneScopedN(ZTAG "_Outer");
+            ZONE(ZTAG "_Prep", 5000u * ZONE_SCALE);
+            {
+                DeviceZoneScopedN(ZTAG "_Pipe");
+                ZONE(ZTAG "_Load", 12500u * ZONE_SCALE);
+                {
+                    DeviceZoneScopedN(ZTAG "_Math");
+                    ZONE(ZTAG "_Inner", 20000u * ZONE_SCALE);
+                    ZONE_BODY(12500u);
+                }
+                ZONE(ZTAG "_Store", 7500u * ZONE_SCALE);
+            }
+            ZONE(ZTAG "_Post", 2500u * ZONE_SCALE);
+        }
+        ZONE(ZTAG "_Solo", 30000u * ZONE_SCALE);
+        ZONE(ZTAG "_Tail", 50000u * ZONE_SCALE);
+    }
+#endif
 }

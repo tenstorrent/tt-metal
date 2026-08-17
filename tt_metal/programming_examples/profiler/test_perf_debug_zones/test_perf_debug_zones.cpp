@@ -7,11 +7,13 @@
 // itself -- run it with TT_METAL_PERF_DEBUG_PROFILER=1 so the PerfDebugProfiler boots at MeshDevice bring-up
 // and captures these zones (verify with a connected tracy-capture). TT_METAL_DEVICE_PROFILER=1 enables the
 // device profiler so the kernels actually emit markers. Grid + iteration count are overridable via argv.
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <thread>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -28,8 +30,11 @@ int main(int argc, char** argv) {
     // --proddelay, so 0 means MAX RATE (no spin) exactly as it does there. Smaller = higher marker rate.
     // Omitting --delay entirely selects the graduated ~1..100 us wall-clock durations, which is the right
     // default for a representative capture -- graduated is a separate MODE, not a magic --delay value.
+    // --scale multiplies every graduated duration: wall time per zone grows, zone COUNT does not --
+    // the knob a live-GUI session needs (time to connect) that a knee sweep must never have.
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
-    bool knee_mode = false;                               // set by --delay, including --delay 0
+    uint32_t zone_scale = 1;
+    bool knee_mode = false;  // set by --delay, including --delay 0
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -42,6 +47,8 @@ int main(int argc, char** argv) {
         } else if (a == "--delay") {
             zone_cyc = v;
             knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
+        } else if (a == "--scale") {
+            zone_scale = v == 0 ? 1u : v;
         }
     }
 
@@ -59,8 +66,8 @@ int main(int argc, char** argv) {
     const size_t num_cqs = (nq != nullptr && *nq != '\0') ? (size_t)std::strtoul(nq, nullptr, 10) : 1;
 
     int device_id = 0;
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(
-        device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    std::shared_ptr<distributed::MeshDevice> mesh_device =
+        distributed::MeshDevice::create_unit_mesh(device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
     Program program = CreateProgram();
 
     // Clamp the requested grid to the device's compute grid; --gx 0 / --gy 0 (or an over-large value)
@@ -76,7 +83,8 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
         {"ZONE_MODE", knee_mode ? "1" : "0"},
-        {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
+        {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
+        {"ZONE_SCALE", std::to_string(zone_scale) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
     // BRISC (RISCV_0) + NCRISC (RISCV_1): the data-movement zone kernel (tags BR_/NC_).
@@ -130,6 +138,10 @@ int main(int argc, char** argv) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
         distributed::Finish(cq);
     }
+    // Let the RESIDENT drainer ship the stream tail (FW wrapper ENDs land in L1 microseconds before
+    // close) before the stop path races it: stopping immediately loses the last few markers on some
+    // lanes -- all 20 lanes at 2x2, ~10 of 600 at full grid (measured 2026-08-17).
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
     printf("[perf-debug zones] workload done; closing device.\n");
     mesh_device->close();
     return 0;
