@@ -395,12 +395,34 @@ class Qwen36MLP:
                 )
             if _kpass1:
                 ckc = _CKC_MLP_KPASS1
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            # MODEL-GATED (27B on Wormhole, M <= PREFILL_FULL_GRID_MAX_M via _mlp_full_grid).
+            # gate/up outputs -- and therefore the SwiGLU product below -- stay in L1.
+            #
+            # The note further down says L1 for `hidden` is a verified dead end. That verdict was
+            # measured at 9B/N300 shapes and does NOT carry to the 27B at TP=8, because the tensor is
+            # 5x smaller per core: [1,1,2048,hidden/tp] is 6144 cols of bf16 = 25.2MB = 393KB/core on
+            # the 9B, but 2176 cols of bf8 = 4.7MB = 74KB/core here (TP=8 narrows it, and the bf8
+            # gather above already halved the dtype). Peak L1 is the 3 live tensors across the
+            # multiply -- gate + up + product = ~222KB/core -- which leaves the down-proj room for
+            # its CBs where the 9B had none.
+            #
+            # MEASURED (T3K TP=8, 27B, seq 2048, device kernel duration, 2 runs each, DRAM -> L1):
+            #     up    2048x5120x2176   302/301us -> 250/250us   -17%  (FLOPs 65.1% -> 78.5%)
+            #     mul   [1,1,2048,2176]   80/80us  ->  42/42us    -47%  (pure bandwidth op)
+            #     gate  2048x5120x2176   352/352us -> 350/350us   unchanged
+            #     down  2048x2176x5120   392/393us -> 392/391us   unchanged (reads in0 from L1)
+            #                                                     = -89us/layer
+            # The two collectives move +10/-6us and +31/+4us across the same runs, i.e. CCL noise;
+            # they are not affected by this.
+            #
+            # Why only `up` gains: gate carries the fused SILU, which costs ~100us at this shape
+            # (visible in the DRAM baseline too, 352 vs 301 for an identical matmul), and that is
+            # what it stays pinned by. `down` is unchanged because at 19-23% DRAM utilisation none of
+            # these matmuls is bandwidth-bound -- the win is the elementwise multiply, which is, plus
+            # up no longer contending with it for DRAM.
+            _gu_mc = ttnn.L1_MEMORY_CONFIG if _mlp_full_grid else ttnn.DRAM_MEMORY_CONFIG
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_gu_mc)
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
@@ -414,6 +436,8 @@ class Qwen36MLP:
         # gate * up (skipped when _fused_gu already produced `hidden` with SwiGLU in-kernel).
         if not _fused_gu:
             mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
+            if _mlp_full_grid:
+                mc_out = ttnn.L1_MEMORY_CONFIG  # see _gu_mc above for why this is safe on the 27B
             # MEASURED (N300, 2026-08): putting `hidden` in L1 on WH prefill does NOT work, and the
             # reason is not the one the note above gives. On WH the two are never both L1 anyway --
             # prefill_out_memory_config's 8MB budget already sends the [2048,4096] down-proj OUTPUT to
