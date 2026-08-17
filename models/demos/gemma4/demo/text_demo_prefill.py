@@ -2473,3 +2473,463 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
         f"[layer_perf] {layer_type} x{share} layers = {share * measured_s * 1000:.0f}ms of a 60-layer chunk "
         f"(excludes embedding/head and inter-layer CCL not in this graph)"
     )
+
+
+# ── Test 13: one decoder layer at a given chunk depth, perf only ──────────────
+
+# Depth sweep geometry. The chunk index only means something relative to a context
+# length, so both come from the canonical traced test's shape: 256k in 4096-token
+# chunks is 64 chunks, indices 0..63.
+PERF_CONTEXT_LEN = int(os.environ.get("GEMMA4_PERF_CONTEXT_LEN", 262144))
+PERF_N_CHUNKS = PERF_CONTEXT_LEN // LONG_CONTEXT_CHUNK
+# Every index is its own param, so `-k chunk37` addresses chunk 37 directly with no env
+# var. "all" runs the whole depth sweep in one process, which is the only way to pay the
+# model load once — see the docstring on cache warmth for why that ordering also makes
+# the numbers better rather than merely faster.
+_PERF_CHUNK_PARAMS = list(range(PERF_N_CHUNKS)) + ["all"]
+_PERF_CHUNK_IDS = [f"chunk{i}" for i in range(PERF_N_CHUNKS)] + ["chunkall"]
+# global before sliding within a chunk: global is the one whose cost grows with depth,
+# so it is the number being watched.
+_PERF_TYPE_PARAMS = ["full_attention", "sliding_attention", "both"]
+_PERF_TYPE_IDS = ["global", "sliding", "both"]
+
+
+def _perf_layer_tag(layer_type):
+    return "sliding" if layer_type == "sliding_attention" else "global"
+
+
+def _perf_signposts(layer_type, chunk_idx):
+    """The signpost pair bracketing one measured replay.
+
+    Named per (type, chunk) so a single profiler CSV holding the whole sweep can be
+    sliced to exactly one cell::
+
+        tt-perf-report --start-signpost gemma4-layer-global-chunk7-start \\
+                       --end-signpost   gemma4-layer-global-chunk7-stop  REPORT.csv
+    """
+    base = f"gemma4-layer-{_perf_layer_tag(layer_type)}-chunk{chunk_idx}"
+    return f"{base}-start", f"{base}-stop"
+
+
+@torch.no_grad()
+# pytest.ini caps tests at 300s, which a single cell clears easily but a 64-chunk sweep
+# does not: the model load alone is minutes, and `chunkall-both` then measures 128 cells.
+# Same override test_batched_prefill_perf uses for the same reason.
+@pytest.mark.timeout(7200)
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("layer_type", _PERF_TYPE_PARAMS, ids=_PERF_TYPE_IDS)
+@pytest.mark.parametrize("chunk_idx", _PERF_CHUNK_PARAMS, ids=_PERF_CHUNK_IDS)
+def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, reset_seeds, request):
+    """Time ONE decoder layer at a chosen chunk depth, traced, with per-chunk signposts.
+
+    ``test_prefill_layer_perf`` answers "what does a layer cost" at chunk 0 — no history,
+    no KV cache, no ring. That is the fast iteration loop, and it is also the only depth
+    it can measure. This test answers the question that actually sizes a 256k prefill:
+    what does a layer cost at chunk N, with N*4096 tokens of history behind it. The two
+    types diverge hard with depth, which is the whole point of measuring them separately:
+
+      global:  attends the full prefix, so the ring gather grows with N
+      sliding: attends a 1024-token window, so it should stay roughly flat past chunk 0
+
+    **Geometry is the canonical traced test's, not a reconstruction of it.** The model is
+    built by ``_build_prefill_model(..., context_len=PERF_CONTEXT_LEN)`` — the same call
+    ``test_prefill_long_context_traced`` makes — and the per-chunk staging is the same
+    four steps its ``_stage`` does: tokens, ring metadata, ring semaphore reset, absolute
+    CP-sharded RoPE positions. Only one layer out of the 60 is then driven. Rebuilding a
+    standalone layer would have meant re-deriving the paged block pool, the CP block
+    override, the identity page table and the RoPE offset by hand, and every one of those
+    is a chance to measure a geometry the real run never uses.
+
+    Input is the real 256k token sequence from ``cpu_prefill_reference.build_token_sequence``,
+    sliced at this chunk's offset and embedded by the model's own ``embed_tokens`` — the
+    same tokens at the same positions the canonical run consumes.
+
+    **Cache warmth.** Every chunk from 0 up to the highest requested one is replayed; only
+    the requested ones are measured. A replay writes its own K/V, so this is what gives a
+    measured chunk the prefix a real run would have — ``chunk37`` on its own would otherwise
+    attend over a cache that is zero everywhere except chunk 37. Timing would survive that
+    (the ring gather extent comes from the ``kv_actual_global`` scalar, which the kernels
+    turn into ``kv_actual_isl`` on-device) but the values would be meaningless, and the
+    difference is invisible in a timing. Nothing here asserts on values beyond finiteness
+    regardless, since the layer's true input is 7 layers deep and cannot be reproduced
+    standalone.
+
+    Warms ``GEMMA4_PERF_WARMUP_ITERS`` replays (default 5) per cell and measures EXACTLY
+    ONE, so the profiled region holds one invocation of each op and the report reads
+    directly as per-layer.
+
+    Usage::
+
+        # one cell — the chunk index is a param, so no env var is involved
+        TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
+          python -m tracy -p -r -v -m pytest \\
+          'models/demos/gemma4/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunk7-global-4x8]' -sv
+        tt-perf-report --start-signpost gemma4-layer-global-chunk7-start \\
+                       --end-signpost   gemma4-layer-global-chunk7-stop  REPORT.csv
+
+        # the whole depth sweep, one model load, chunk-major
+        ... 'test_prefill_layer_perf_chunk_n[blackhole-chunkall-both-4x8]' -sv
+
+    ``models/demos/gemma4/tests/sweep_layer_perf.py`` drives the sweep and files the
+    per-cell tt-perf-report output.
+    """
+    from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
+    from models.demos.gemma4.tt.attention import ring_prefill
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    context_len = PERF_CONTEXT_LEN
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    assert context_len % chunk == 0
+
+    if chunk_idx == "all":
+        # GEMMA4_PERF_CHUNKS narrows the "all" sweep to an explicit list, which is how
+        # sweep_layer_perf.py runs the depth sweep in batches: the model load is paid once
+        # per batch instead of once per cell, and a crash costs one batch. A per-range param
+        # would have meant a param per possible range.
+        requested = os.environ.get("GEMMA4_PERF_CHUNKS", "").strip()
+        chunk_idxs = [int(c) for c in requested.split(",") if c.strip()] if requested else list(range(PERF_N_CHUNKS))
+        out_of_range = [c for c in chunk_idxs if not 0 <= c < PERF_N_CHUNKS]
+        assert not out_of_range, (
+            f"GEMMA4_PERF_CHUNKS={requested} has indices outside 0..{PERF_N_CHUNKS - 1} "
+            f"for a {context_len}-token context: {out_of_range}"
+        )
+        assert chunk_idxs, "GEMMA4_PERF_CHUNKS is set but empty"
+    else:
+        chunk_idxs = [int(chunk_idx)]
+    layer_types = ["full_attention", "sliding_attention"] if layer_type == "both" else [layer_type]
+    warm_iters = int(os.environ.get("GEMMA4_PERF_WARMUP_ITERS", "5"))
+
+    model_path = _model_path()
+    text_config = _hf_text_config(model_path)
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len
+    )
+    tokens_all, _tok, _plen = cpu_ref.build_token_sequence(model_path, chunk, context_len, model_args.vocab_size)
+
+    layer_idxs = {lt: find_layer_idx(text_config, lt) for lt in layer_types}
+    type_desc = ", ".join(f"{_perf_layer_tag(lt)}=layer{layer_idxs[lt]}" for lt in layer_types)
+    logger.info(
+        f"[layer_perf_chunk] ctx={context_len} chunk={chunk} n_chunks={PERF_N_CHUNKS} cp={cp} | "
+        f"cells={len(chunk_idxs) * len(layer_types)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
+        f"types=({type_desc}) warmup_replays={warm_iters}"
+    )
+
+    # ── Pinned per-chunk inputs. A trace records addresses, not values, so everything
+    # that varies per chunk has to live at a fixed address and be refreshed on the host
+    # between replays. Same three buffers the canonical traced test pins.
+    host_input = _host_tensor(
+        mesh_device,
+        tokens_all[:, :chunk].contiguous(),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_config=mesh_config,
+        seq_dim=-1,
+    )
+    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_positions = ttnn.to_device(
+        _host_tensor(
+            mesh_device,
+            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        ),
+        device=mesh_device,
+    )
+    model.set_prefill_rope_positions(device_positions)
+    # This test owns the ring metadata writes (they must happen outside any traced region).
+    model._ring_metadata_external = True
+
+    def _stage(idx):
+        """Host-side refresh of everything that varies per chunk. Never inside a trace.
+
+        Lifted from ``test_prefill_long_context_traced._stage`` — same four steps in the
+        same order, because a divergence here is a divergence in what is being measured.
+        """
+        chunk_start = idx * chunk
+        staged = _host_tensor(
+            mesh_device,
+            tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(staged, device_input)
+        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        # REQUIRED for liveness, not an optimization: ring attention's global semaphores
+        # persist across replays and back-to-back replays deadlock without this. See the
+        # long note in test_prefill_long_context_traced.
+        for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+            ttnn.reset_global_semaphore_value(_sem, 0)
+        pos_host = _host_tensor(
+            mesh_device,
+            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
+        return chunk_start
+
+    def _make_forward(lt):
+        """One layer's forward, assembled the way ``Gemma4Model.__call__`` assembles it.
+
+        Six lines mirroring the model's layer loop for a single index: embed, gather this
+        layer type's RoPE on-device, call the layer. The RoPE gather has to be INSIDE the
+        traced region — it reads the pinned positions tensor, which is what lets one
+        capture serve every chunk depth.
+        """
+        idx = layer_idxs[lt]
+        layer = model.layers[idx]
+        cache = model.tt_kv_cache[idx]
+        # A KV-sharing layer skips its own K/V projection and cache write, and needs the
+        # source layer's K/V passed in. find_layer_idx returns the FIRST layer of a type,
+        # which sharing maps *from* rather than *to*, so this should never fire — but
+        # measuring a shared layer as if it were standalone would quietly under-report it.
+        assert idx not in model.kv_shared_layer_map, (
+            f"layer {idx} ({lt}) shares KV from layer {model.kv_shared_layer_map[idx]}; "
+            f"timing it standalone would omit the K/V projection and cache write"
+        )
+        # The 2D caches are what the on-device gather indexes; they only exist when the
+        # model was built with a real HF text config (create_tt_model sets it). Without
+        # them there is no per-chunk RoPE and every depth would silently use chunk 0's.
+        assert lt in model.rope_caches_2d, (
+            f"model has no 2D RoPE cache for {lt} (built without _hf_text_config?) — "
+            f"per-chunk RoPE would be wrong, refusing to measure"
+        )
+        cos_2d, sin_2d = model.rope_caches_2d[lt]
+
+        def forward(chunk_start):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
+            sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
+            return layer(
+                embeds,
+                rope_mats=(cos, sin),
+                position_idx=None,
+                page_table=page_table,
+                kv_cache=cache,
+                is_decode=False,
+                batch_size=1,
+                user_id=0,
+                chunk_start_idx=chunk_start,
+                chunk_page_table=chunk_page_table,
+            )
+
+        return forward
+
+    # ── Compile and capture one trace per layer type. Captured at the first chunk index
+    # being measured; the per-chunk scalars all live in metadata tensors the kernels read
+    # on-device, so one capture serves every depth.
+    traces, outs = {}, {}
+    capture_at = chunk_idxs[0]
+    for lt in layer_types:
+        fwd = _make_forward(lt)
+        t0 = time.time()
+        compile_out = fwd(_stage(capture_at))
+        ttnn.synchronize_device(mesh_device)
+        compile_out.deallocate(True)
+        compile_s = time.time() - t0
+
+        t0 = time.time()
+        ring_prefill.reset_ring_attention_calls()
+        cap_start = _stage(capture_at)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        outs[lt] = fwd(cap_start)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        traces[lt] = tid
+        capture_s = time.time() - t0
+        # A replay runs no Python, so this counter can only be read at capture. It confirms
+        # the ring graph really is inside the recorded trace rather than a mask-path
+        # fallback that would make every depth cost the same.
+        assert ring_prefill.ring_attention_calls() >= 1, (
+            f"no ring attention call recorded while capturing the {_perf_layer_tag(lt)} layer — "
+            f"the ring path is not in the captured trace, so depth would not be measured"
+        )
+        logger.info(
+            f"[layer_perf_chunk] {_perf_layer_tag(lt)} layer_idx={layer_idxs[lt]} "
+            f"compile={compile_s:.1f}s capture={capture_s:.1f}s"
+        )
+
+    # A layer at chunk N attends over everything before it, and that prefix lives in the KV
+    # cache. A fresh process starts with the cache zeroed, so the prefix has to be put there
+    # somehow before a measured chunk means anything: measured at chunk 32, a zeroed cache
+    # reads 17.95ms against 21.01ms once the prefix is present, with non-overlapping warm
+    # spreads. Ring cost depends on the cache holding real data, so this is not optional.
+    measured_set = set(chunk_idxs)
+    fill_upto = max(chunk_idxs)
+    n_fill = (fill_upto + 1) - len(measured_set)
+
+    # GEMMA4_PERF_KV_FILL picks how the prefix gets into the cache before a measured chunk:
+    #
+    #   random (default) — write random values straight into the cache tensors, once. Cost is
+    #                      flat in N, which is the whole point: replay fill made chunk 63 cost
+    #                      126 extra replays, and under the profiler every one is recorded.
+    #   replay           — replay chunks 0..N-1 once each so they write their own K/V. Exact,
+    #                      and the reference this mode is calibrated against.
+    #   none             — leave the cache zeroed.
+    #
+    # Random is the default on the argument that ring cost depends on the cache holding
+    # *something* rather than on what specifically. That argument is checkable rather than
+    # assumed: summary.csv puts the replay-filled timing (timings_measured_ms) beside the
+    # profiled one for the same chunk, so every profiled cell is its own A/B. At chunk 32 the
+    # two reference points are 21.01ms replay-filled and 17.95ms zeroed; random landing near
+    # 17.95 would mean the difference was never the data at all — back-to-back replay heating
+    # being the other candidate — and that this mode measures the wrong thing.
+    kv_fill = os.environ.get("GEMMA4_PERF_KV_FILL", "random").strip().lower()
+    assert kv_fill in ("replay", "random", "none"), f"GEMMA4_PERF_KV_FILL must be replay|random|none, got {kv_fill!r}"
+
+    def _randomize_kv_cache():
+        """Fill each measured layer's K/V cache with random values, in place.
+
+        In place because a captured trace holds the addresses it saw; allocating a fresh
+        cache tensor here would leave the trace reading the old one.
+        """
+        for lt in layer_types:
+            cache = model.tt_kv_cache[layer_idxs[lt]]
+            for tensor in cache:
+                host = ttnn.from_torch(
+                    # Small values, not unit-scale: the cache holds post-projection K/V, and a
+                    # wildly out-of-range prefix could push SDPA into saturation and change what
+                    # is being measured for a second, unrelated reason.
+                    0.1 * torch.randn(list(tensor.shape), dtype=torch.float32),
+                    dtype=tensor.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                ttnn.copy_host_to_device_tensor(host, tensor)
+        ttnn.synchronize_device(mesh_device)
+
+    if kv_fill == "random":
+        t0 = time.time()
+        _randomize_kv_cache()
+        logger.info(
+            f"[layer_perf_chunk] GEMMA4_PERF_KV_FILL=random — wrote random K/V into "
+            f"{len(layer_types)} layer cache(s) in {time.time() - t0:.1f}s, no fill replays"
+        )
+    elif kv_fill == "none":
+        logger.info("[layer_perf_chunk] GEMMA4_PERF_KV_FILL=none — cache stays zeroed")
+    elif n_fill:
+        logger.info(
+            f"[layer_perf_chunk] GEMMA4_PERF_KV_FILL=replay — replaying {n_fill} unmeasured "
+            f"chunk(s) below/between the requested ones so each measured chunk sees a real prefix"
+        )
+
+    # replay mode walks every chunk from 0; the other modes visit only what is measured.
+    replay_order = range(fill_upto + 1) if kv_fill == "replay" else sorted(measured_set)
+
+    results = []
+    try:
+        for idx in replay_order:
+            for lt in layer_types:
+                if idx not in measured_set:
+                    # Fill only: one unsignposted replay to write this chunk's K/V.
+                    _stage(idx)
+                    ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    continue
+
+                tag = _perf_layer_tag(lt)
+                sp_start, sp_stop = _perf_signposts(lt, idx)
+
+                # Warm replays, deliberately outside the signposts: the first replay after a
+                # capture still pays one-off dispatch setup.
+                warm = []
+                for _ in range(warm_iters):
+                    _stage(idx)
+                    t_i = time.time()
+                    ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    warm.append(time.time() - t_i)
+
+                # THE measured run: exactly one replay between the signposts.
+                chunk_start = _stage(idx)
+                signpost(sp_start)
+                t_i = time.time()
+                ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                measured_s = time.time() - t_i
+                signpost(sp_stop)
+
+                best_warm = min(warm) if warm else measured_s
+                noisy = bool(warm) and not (min(warm) * 0.8 <= measured_s <= max(warm) * 1.25)
+                results.append(
+                    {
+                        "chunk_idx": idx,
+                        "layer_type": lt,
+                        "tag": tag,
+                        "layer_idx": layer_idxs[lt],
+                        "chunk_start": chunk_start,
+                        "measured_ms": measured_s * 1000,
+                        "warm_best_ms": best_warm * 1000,
+                        "warm_worst_ms": (max(warm) if warm else measured_s) * 1000,
+                        "noisy": noisy,
+                        "start_signpost": sp_start,
+                        "stop_signpost": sp_stop,
+                    }
+                )
+                # One machine-readable line per cell, so the sweep script can report timings
+                # without waiting on tt-perf-report.
+                logger.info(
+                    f"[layer_perf_chunk] RESULT type={tag} chunk={idx} ring_depth={idx} "
+                    f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
+                    f"tok_s={chunk / measured_s:.0f} warm_best_ms={best_warm * 1000:.2f} "
+                    f"warm_worst_ms={(max(warm) if warm else measured_s) * 1000:.2f} "
+                    f"noisy={int(noisy)} signposts={sp_start},{sp_stop}"
+                )
+                if noisy:
+                    logger.warning(
+                        f"[layer_perf_chunk] {tag} chunk={idx} measured {measured_s * 1000:.2f}ms is outside "
+                        f"the warm spread [{min(warm) * 1000:.2f}, {max(warm) * 1000:.2f}]ms — treat as noisy"
+                    )
+
+        # Finiteness on the last cell only. Reading back every cell would add an eager
+        # all-gather between replays, which is real host work in the middle of a perf sweep
+        # (and, per the canonical test's notes, incidentally masks the ring deadlock this
+        # ordering is meant to exercise honestly).
+        hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_device, mesh_config)
+    finally:
+        for tid in traces.values():
+            ttnn.release_trace(mesh_device, tid)
+
+    assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
+    assert float(hidden.std()) > 0.001, f"{layer_types[-1]} layer output is degenerate"
+
+    # Depth curve, and the whole-model extrapolation that makes it actionable. 31B is
+    # 50 sliding + 10 global.
+    n_sliding, n_global = 50, 10
+    by_type = {}
+    for r in results:
+        by_type.setdefault(r["tag"], []).append(r)
+    for tag, rows in by_type.items():
+        span = (
+            f"{rows[0]['measured_ms']:.2f}ms @chunk{rows[0]['chunk_idx']} -> "
+            f"{rows[-1]['measured_ms']:.2f}ms @chunk{rows[-1]['chunk_idx']} "
+            f"({rows[-1]['measured_ms'] / rows[0]['measured_ms']:.2f}x)"
+            if len(rows) > 1
+            else f"{rows[0]['measured_ms']:.2f}ms @chunk{rows[0]['chunk_idx']}"
+        )
+        logger.info(f"[layer_perf_chunk] {tag} depth curve: {span}")
+    if len(by_type) == 2:
+        for idx in chunk_idxs:
+            g = next((r for r in results if r["chunk_idx"] == idx and r["tag"] == "global"), None)
+            s = next((r for r in results if r["chunk_idx"] == idx and r["tag"] == "sliding"), None)
+            if g and s:
+                est = n_global * g["measured_ms"] + n_sliding * s["measured_ms"]
+                logger.info(
+                    f"[layer_perf_chunk] ESTIMATE chunk={idx} "
+                    f"{n_global}x global({g['measured_ms']:.2f}ms) + {n_sliding}x sliding({s['measured_ms']:.2f}ms) "
+                    f"= {est:.0f}ms of a 60-layer chunk (excludes embedding/head and the "
+                    f"inter-layer CCL not in a single-layer graph)"
+                )
