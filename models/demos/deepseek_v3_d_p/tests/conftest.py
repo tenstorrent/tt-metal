@@ -47,7 +47,10 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapt
 TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    _extract_routed_experts_flat,
+    download_infinitebench_subset,
+)
 
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
 # Minimum CI-gated coverage: (4,2) on BH LoudBox, (8,4) on BH Galaxy. (2,4) included
@@ -708,7 +711,18 @@ def _unwrap_multimodal_config(cfg):
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
+        outer = cfg
         cfg = cfg.text_config
+        # `quantization_config` is a property of the CHECKPOINT, so HF puts it on the outer wrapper
+        # only -- the inner text_config has it as None. Unwrapping therefore silently discards the
+        # dequantization metadata, and the first float8 tensor then raises "checkpoint whose config
+        # has no `quantization_config`" out of convert_state_dict (utils/test_utils.py:450).
+        # Mistral Small 4 is the first resident that is BOTH multimodal-wrapped
+        # (Mistral3ForConditionalGeneration) and quantized, which is why this went unnoticed.
+        # Carry it across rather than special-casing the variant.
+        if getattr(cfg, "quantization_config", None) is None and getattr(outer, "quantization_config", None):
+            logger.info("Carrying `quantization_config` from the wrapper config onto the inner text_config")
+            cfg.quantization_config = outer.quantization_config
     return cfg
 
 
@@ -731,7 +745,17 @@ def _resolve_hf_config(model_path_str: str):
     try:
         cfg = AutoConfig.from_pretrained(str(p), trust_remote_code=True)
         logger.info(f"Loaded HF config from {p}")
-        return _unwrap_multimodal_config(cfg)
+        cfg = _unwrap_multimodal_config(cfg)
+        # The `config_only` path applies per-variant normalizations that this path historically did
+        # not, so the same checkpoint yielded two different configs depending on which fixture a test
+        # used. For Mistral that meant a missing `rope_theta` (an AttributeError) and, worse, a
+        # missing `mla_disable_yarn_mscale`, which does not raise -- it just applies DeepSeek's
+        # mscale^2 = 2.2058x to the attention logits and quietly wrecks the numbers.
+        if getattr(cfg, "model_type", None) == "mistral4":
+            from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import normalize_mistral4_config
+
+            cfg = normalize_mistral4_config(cfg)
+        return cfg
     except Exception as e:
         logger.warning(f"Failed to load HF config from {p}: {e}")
         return None
@@ -1058,18 +1082,27 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
                 "down_proj": layer_dequant["mlp.down_proj.weight"],
             }
         else:
+            # Two Mistral-shaped differences that `transformer_helpers` already solves for the
+            # transformer path; this fixture (which the chunked MLA test reaches via
+            # `pretrained_transformer_weights`) had its own copy of the extraction and did not.
+            # Reuse the helpers rather than growing a second implementation that can drift.
+            #
+            # 1. No router correction bias. Mistral's gate has no `e_score_correction_bias`; the TT
+            #    gate always carries one, and zero is its identity in every path that reads it
+            #    (top-k on logits+bias, and the sigmoid/noaux_tc affinity), so zeros are exact here
+            #    rather than a placeholder. DeepSeek/Kimi/GLM are unaffected -- theirs is present.
+            # 2. Stacked + fused experts. Mistral stores one 3-D tensor per projection
+            #    (`mlp.experts.gate_up_proj`, `mlp.experts.down_proj`) instead of per-expert
+            #    `mlp.experts.{j}.*` keys, so the indexed lookup raised KeyError.
+            gate_weight = layer_dequant["mlp.gate.weight"]
             layer_dict["gate_weights"] = {
-                "weight": layer_dequant["mlp.gate.weight"],
-                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
+                "weight": gate_weight,
+                "e_score_correction_bias": layer_dequant.get(
+                    "mlp.gate.e_score_correction_bias",
+                    torch.zeros(gate_weight.shape[0], dtype=torch.float32),
+                ),
             }
-            layer_dict["routed_expert_weights"] = [
-                {
-                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
-                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
-                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
-                }
-                for j in range(n_routed)
-            ]
+            layer_dict["routed_expert_weights"] = _extract_routed_experts_flat(layer_dequant, n_routed)
             layer_dict["shared_expert_weights"] = {
                 "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
                 "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
