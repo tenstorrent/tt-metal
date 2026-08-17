@@ -108,8 +108,14 @@ SolveInputs make_inputs(uint32_t seed, float strict_lower_scale, bool identity_o
     return {std::move(l_neg), std::move(rhs_bf), std::move(x)};
 }
 
-// Run one solve on device and compare against the golden. Returns true on PCC >= 0.99.
-bool run_triangle_solve(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SolveInputs& in) {
+// Run one solve on device and compare against the golden. Combines two checks so a systematic
+// magnitude error cannot slip through (PCC is invariant to affine scaling, e.g. 2*golden):
+//   - check_pcc  : structural-correctness backstop (PCC >= 0.99).
+//   - value check: an elementwise magnitude check. For identity L the solve is exact, so X must
+//                  equal RHS bit-for-bit (require_exact); otherwise a bf16-appropriate is_close
+//                  with tolerance scaled by the forward-substitution accumulation depth.
+bool run_triangle_solve(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SolveInputs& in, bool require_exact) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -202,9 +208,31 @@ bool run_triangle_solve(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         x_dev[i] = static_cast<float>(x_bf[i]);
     }
 
+    // Structural backstop.
     bool pass = check_pcc(in.x_golden_rm, x_dev, /*min_pcc=*/0.99);
     if (!pass) {
         log_error(tt::LogTest, "triangle_solve PCC check failed");
+    }
+
+    // Magnitude check — pins the scale that PCC alone cannot.
+    if (require_exact) {
+        // Identity L => X == RHS exactly; both sides are bf16 values, so require bit-exact equality.
+        bool exact = is_close_vectors<float>(
+            in.x_golden_rm, x_dev, [](float a, float b) { return a == b; });
+        if (!exact) {
+            log_error(tt::LogTest, "triangle_solve identity case is not bit-exact (X != RHS)");
+        }
+        pass &= exact;
+    } else {
+        // bf16 forward substitution accumulates up to N terms per element; scale atol with that depth.
+        const float rtol = 0.05f;
+        const float atol = 0.05f + 0.02f * static_cast<float>(N);
+        bool close = is_close_vectors<float>(
+            in.x_golden_rm, x_dev, [&](float a, float b) { return is_close(a, b, rtol, atol); });
+        if (!close) {
+            log_error(tt::LogTest, "triangle_solve value check (is_close) failed");
+        }
+        pass &= close;
     }
     return pass;
 }
@@ -216,7 +244,7 @@ bool run_triangle_solve(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
 TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveIdentity) {
     namespace ts = unit_tests::compute::sfpu::triangle_solve;
     auto in = ts::make_inputs(/*seed=*/1, /*strict_lower_scale=*/0.0f, /*identity_only=*/true);
-    EXPECT_TRUE(ts::run_triangle_solve(this->devices_.at(0), in));
+    EXPECT_TRUE(ts::run_triangle_solve(this->devices_.at(0), in, /*require_exact=*/true));
 }
 
 // Well-conditioned random unit lower-triangular L (small strict-lower entries). Main correctness
@@ -224,14 +252,14 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveIdentity) {
 TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveWellConditioned) {
     namespace ts = unit_tests::compute::sfpu::triangle_solve;
     auto in = ts::make_inputs(/*seed=*/0, /*strict_lower_scale=*/0.1f, /*identity_only=*/false);
-    EXPECT_TRUE(ts::run_triangle_solve(this->devices_.at(0), in));
+    EXPECT_TRUE(ts::run_triangle_solve(this->devices_.at(0), in, /*require_exact=*/false));
 }
 
 // Larger strict-lower magnitude: exercises real accumulation across many columns.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveLargeStrictLower) {
     namespace ts = unit_tests::compute::sfpu::triangle_solve;
     auto in = ts::make_inputs(/*seed=*/7, /*strict_lower_scale=*/0.5f, /*identity_only=*/false);
-    EXPECT_TRUE(ts::run_triangle_solve(this->devices_.at(0), in));
+    EXPECT_TRUE(ts::run_triangle_solve(this->devices_.at(0), in, /*require_exact=*/false));
 }
 
 }  // namespace tt::tt_metal

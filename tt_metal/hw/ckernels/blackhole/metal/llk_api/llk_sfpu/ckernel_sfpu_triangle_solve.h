@@ -127,6 +127,12 @@ inline void triangle_solve(const uint dst_in, const uint dst_out, const uint32_t
                 broadcast_tile_value_bf16(l1_tri_base, row, col, p_sfpu::LREG7);
                 // X[col] -> LREG4 from dst_out (single load == inverse of the store, so it comes back
                 // row-oriented regardless of the block scramble).
+                //
+                // NOP #1 (SFPLOADI -> SFPLOAD sequencing): broadcast_tile_value_bf16 ends in a
+                // runtime-emitted TT_SFPLOADI, and the very next instruction is another SFPU load-class
+                // op (SFPLOAD). On the Blackhole SFPU these back-to-back load-class ops must not issue in
+                // adjacent slots; a single SFPNOP separates them. Established during HW bring-up
+                // (the end-to-end solve validates at PCC 0.9999 with these NOPs in place).
                 TTI_SFPNOP;
                 TT_SFPLOAD(
                     p_sfpu::LREG4,
@@ -135,6 +141,11 @@ inline void triangle_solve(const uint dst_in, const uint dst_out, const uint32_t
                     dst_out * dst_tile_size + triangle_solve_row_offset(col));
                 // out_lreg = LREG7 * LREG4 + out_lreg   (dest == src_c == the row's accumulator).
                 // Runtime LREG index, so this is TT_SFPMAD (not TTI_).
+                //
+                // NOP #2 (SFPLOAD -> SFPMAD load-use hazard): LREG4 is written by the SFPLOAD above and
+                // read as an operand by this SFPMAD. The load result is not available to an immediately
+                // following dependent op, so one SFPNOP covers the load-to-use latency on Blackhole.
+                // Removing it lets the MAD read a stale LREG4 and silently corrupts the accumulation.
                 TTI_SFPNOP;
                 TT_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, out_lreg, out_lreg, 0);
             }
