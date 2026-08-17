@@ -11,7 +11,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -19,9 +21,123 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+// --clkprobe only: reads a tile debug register straight over NoC, which is not a public-API operation.
+#include <chrono>
+#include <thread>
+#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "llrt/tt_cluster.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+namespace {
+
+// RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L atomically LATCHES H, so read L then H.
+constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
+constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
+
+std::string fmt_label(const std::string& what, const CoreCoord& virt) {
+    return what + " v(" + std::to_string(virt.x) + "," + std::to_string(virt.y) + ")";
+}
+
+uint64_t read_wall_clock(tt::Cluster& cluster, const tt_cxy_pair& target) {
+    uint32_t lo = 0, hi = 0;
+    cluster.read_reg(&lo, target, kWallClockL);  // latches H
+    cluster.read_reg(&hi, target, kWallClockH);
+    return (static_cast<uint64_t>(hi) << 32) | lo;
+}
+
+// STEP 1 of the DRAM-core clock-anchor fix: prove RISCV_DEBUG_REG_WALL_CLOCK is readable on a DRAM tile.
+// It is documented as a TENSIX debug register, and nothing had confirmed a DRAM tile answers at all. Prints,
+// per core: the raw counter, whether it ADVANCES over a known wall-clock interval, the implied MHz (should be
+// ~aiclk), and -- the number the fix actually needs -- the DRAM-core-minus-worker offset at a common instant.
+//
+// Deliberately does NOT boot a drainer: the point is to isolate the register read from everything else, so a
+// hang here indicts the read and nothing more.
+void clock_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const auto context_id = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id).get_cluster();
+    IDevice* device = mesh_device->get_devices().front();
+    const uint32_t chip = static_cast<uint32_t>(device->id());
+    const auto& soc = cluster.get_soc_desc(chip);
+    const double aiclk = cluster.get_device_aiclk(chip);
+
+    struct Target {
+        std::string label;
+        tt_cxy_pair core;
+    };
+    std::vector<Target> targets;
+
+    // Worker (Tensix) reference: the core sync_device_clock() actually uses today, core_virt[0].
+    const CoreCoord w = device->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER);
+    targets.push_back(Target{fmt_label("WORKER", w), tt_cxy_pair(chip, w)});
+
+    const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
+    for (uint32_t bank = 0; bank < nbanks; bank++) {
+        const CoreCoord lg = mesh_device->impl().pick_unused_dram_logical_core(bank);
+        const CoreCoord dv = device->virtual_core_from_logical_core(lg, CoreType::DRAM);
+        targets.push_back(Target{fmt_label("DRAM bank " + std::to_string(bank), dv), tt_cxy_pair(chip, dv)});
+    }
+
+    printf("[clkprobe] chip %u  aiclk %.1f MHz  %u DRAM views\n", chip, aiclk, nbanks);
+    printf(
+        "[clkprobe] reading RISCV_DEBUG_REG_WALL_CLOCK (0x%llx) on %zu cores\n",
+        (unsigned long long)kWallClockL,
+        targets.size());
+    fflush(stdout);
+
+    // Pass 1: paired reads, worker first then each DRAM core, so the offset is measured against a nearby
+    // worker sample rather than one taken seconds earlier.
+    std::vector<uint64_t> t0(targets.size()), t1(targets.size());
+    for (size_t i = 0; i < targets.size(); i++) {
+        printf("[clkprobe]   reading %s ...\n", targets[i].label.c_str());
+        fflush(stdout);  // unbuffered: if the read HANGS, the log still names the core it hung on
+        t0[i] = read_wall_clock(cluster, targets[i].core);
+        printf(
+            "[clkprobe]   %s -> 0x%016llx (%llu)\n",
+            targets[i].label.c_str(),
+            (unsigned long long)t0[i],
+            (unsigned long long)t0[i]);
+        fflush(stdout);
+    }
+
+    constexpr int kSleepMs = 500;
+    const auto h0 = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::milliseconds(kSleepMs));
+    for (size_t i = 0; i < targets.size(); i++) {
+        t1[i] = read_wall_clock(cluster, targets[i].core);
+    }
+    const auto h1 = std::chrono::steady_clock::now();
+    const double host_ns = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(h1 - h0).count();
+
+    printf("\n[clkprobe] %-22s %20s %20s %14s %12s\n", "core", "t0 (cycles)", "t1 (cycles)", "delta", "implied MHz");
+    for (size_t i = 0; i < targets.size(); i++) {
+        const uint64_t d = t1[i] - t0[i];
+        printf(
+            "[clkprobe] %-22s %20llu %20llu %14llu %12.1f\n",
+            targets[i].label.c_str(),
+            (unsigned long long)t0[i],
+            (unsigned long long)t1[i],
+            (unsigned long long)d,
+            (double)d / host_ns * 1000.0);
+    }
+    // THE quantity the host never measured: drisc_wall - tensix_wall at a common instant.
+    printf("\n[clkprobe] offset vs WORKER at a common instant (cycles, and ns at aiclk):\n");
+    for (size_t i = 1; i < targets.size(); i++) {
+        const int64_t off = (int64_t)t0[i] - (int64_t)t0[0];
+        printf(
+            "[clkprobe]   %-22s %+20lld cycles  %+15.3f ms\n",
+            targets[i].label.c_str(),
+            (long long)off,
+            (double)off / aiclk / 1000.0);
+    }
+    fflush(stdout);
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     // --delay is the KNEE knob: uniform nop-iterations per zone, the SAME unit as the standalone drain harness
@@ -30,10 +146,13 @@ int main(int argc, char** argv) {
     // default for a representative capture -- graduated is a separate MODE, not a magic --delay value.
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
     bool knee_mode = false;                               // set by --delay, including --delay 0
+    bool clkprobe = false;                                // --clkprobe 1: read wall clocks and exit, no workload
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
-        if (a == "--gx") {
+        if (a == "--clkprobe") {
+            clkprobe = v != 0;
+        } else if (a == "--gx") {
             gx = v;
         } else if (a == "--gy") {
             gy = v;
@@ -61,6 +180,11 @@ int main(int argc, char** argv) {
     int device_id = 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(
         device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    if (clkprobe) {
+        clock_probe(mesh_device);
+        mesh_device->close();
+        return 0;
+    }
     Program program = CreateProgram();
 
     // Clamp the requested grid to the device's compute grid; --gx 0 / --gy 0 (or an over-large value)

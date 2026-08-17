@@ -462,6 +462,33 @@ uint32_t drisc_zone_frames() {
     return v;
 }
 
+// ---- COMMON-TRIGGER SYNC EVENT ----------------------------------------------------------------------------
+//
+// TT_METAL_PERF_DEBUG_SYNC_EVENT = how many triggers to fire (0 = off, the default). Each one releases every
+// drainer from a rendezvous barrier at the same instant, so the spread in the resulting DRISC-SYNC zones'
+// RENDERED timestamps is anchor + render error with no genuine timing difference in it.
+//
+// FIRE MORE THAN ONE, and space them: a frequency error is a RATE error, so it shows up as the residual
+// DRIFTING across triggers rather than as a constant offset. N triggers G ms apart turn that slope into
+// something directly readable -- at ~40 ppm, 1 s of separation is ~40 us of drift, far above the floor.
+uint32_t sync_event_count() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_SYNC_EVENT");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+    }();
+    return v;
+}
+
+// Gap between triggers, ms. Default 250: five triggers then span 1 s, which is the same order as the
+// anchor-to-workload distance the rate error is multiplied by.
+uint32_t sync_event_gap_ms() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_SYNC_EVENT_GAP_MS");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 250u;
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_NSTAGE: cap on staging slots. A DRISC's L1 fits 7; a Tensix's fits ~130, which would
 // make the two drainers incomparable, so the Tensix path clamps to the DRISC count by default.
 uint32_t nstage_cap(uint32_t computed) {
@@ -666,9 +693,29 @@ struct PerfDebugSync {
     bool valid = false;
 };
 
-PerfDebugSync sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
+// spacing_us spreads the samples in time to lengthen the REGRESSION BASELINE. It exists because the slope this
+// function fits is baseline-limited, and at the default (0 = back-to-back) the baseline is only ~360 us -- 100
+// samples x ~3.6 us of MMIO round trip -- so with ~us of host-timestamp jitter the fitted frequency carries
+// ~1e-4 of error. MEASURED consequence (FINDINGS N+47): the six DRISC fits scattered over 99 ppm while the two
+// clocks' TRUE rates agree to ~5 ppm, i.e. the fit noise was 20x the physical difference, and multiplied by the
+// ~1.3 s between the anchor and the workload it displaced each DRISC row by 46-70 us with the sign tracking its
+// own fit error (correlation 0.985). Frequency error is a RATE error: it grows with time since the anchor, which
+// is why it shows up as rows drifting apart rather than as a constant skew.
+PerfDebugSync sync_device_clock(
+    tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker, uint32_t spacing_us = 0) {
     // RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L atomically LATCHES H, so read L then H (H's own latency is
-    // irrelevant). Same registers the drainer firmware co-samples in calibrate().
+    // irrelevant).
+    //
+    // CORRECTED: an earlier version of this comment said "the same registers the drainer firmware co-samples in
+    // calibrate()". THERE IS NO SUCH FUNCTION -- `calibrate` appears nowhere in drisc_profiler_drain.cpp, in
+    // tt_metal/hw, or anywhere else on the device side. The drainer does NOT co-sample two clocks; the whole
+    // reason §N+46 needed a per-core HOST anchor is that no device-side rebase exists to lean on.
+    //
+    // Valid on a DRAM tile as well as a Tensix one, which is what makes the per-core anchor possible. That is
+    // not documented anywhere -- these are Tensix-tile debug registers by spec -- so it was measured first, in
+    // isolation, before this function was ever pointed at a DRAM core: see `test_perf_debug_zones --clkprobe 1`,
+    // which reads all 7 DRAM views plus a worker and reports the rate and the pairwise offset. Result: readable,
+    // non-zero, advancing at aiclk to 0.1 MHz on every view.
     constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
     constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
     constexpr uint32_t kSamples = 100;
@@ -687,6 +734,9 @@ PerfDebugSync sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const Co
         cluster.read_reg(&hi, target, kWallClockH);
         const int64_t t1 = tracy::Profiler::GetTime();
         samples.push_back(S{(t0 + t1) / 2, (static_cast<uint64_t>(hi) << 32) | lo, t1 - t0});
+        if (spacing_us != 0 && i + 1 < kSamples) {
+            std::this_thread::sleep_for(std::chrono::microseconds(spacing_us));
+        }
     }
     // Drop NoC/PCIe-contended outliers: keep samples whose round-trip is within 1.5x the median.
     std::vector<int64_t> rts;
@@ -806,7 +856,10 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         PerfDebugSync sync;
         if (!ctx.core_virt.empty()) {
             const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
-            sync = sync_device_clock(cluster, ctx.chip_id, w);
+            // LONG BASELINE, deliberately: 100 samples x 500 us spans ~50 ms instead of ~360 us, cutting the
+            // fitted-frequency error by the baseline ratio (~140x). This is the ONE frequency every context on
+            // this chip will use (see below), so it is worth 50 ms of a 9-12 s device open to measure it well.
+            sync = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/500);
         }
         if (sync.valid) {
             ctx.synced = true;
@@ -827,6 +880,85 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 "(device zones will lag the host zones by the drain latency)",
                 ctx.chip_id);
             tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
+        }
+        // ---- PER-DRAM-CORE ANCHOR (the ORIGIN): drainers do NOT share the worker's clock origin -------------
+        //
+        // The sync above is measured on a TENSIX worker and registered per CHIP, so DRISC rows inherited it and
+        // came out shifted right by the whole difference in banked counter totals -- measured 18.5 to 42.4 MINUTES
+        // on bh-05. Spans agreed to 0.15-0.17% throughout, so only the ORIGIN was ever wrong.
+        //
+        // Cause is CLOCK GATING, not a different zero point: both counters zero at chip reset and neither
+        // re-zeroes at device open, but the Tensix domain is clocked only while out of reset (1.8 s per 32 s of
+        // wall) against the DRAM core's 19.8 s -- ~11x duty ratio, unpredictable by the host, so it must be
+        // MEASURED per core. Reset discipline cannot fix it: device open (9-12 s) exceeds the workload window
+        // (~753 ms). BOARD-DEPENDENT -- on bh-26 it is +0.003 ms, so do not judge this on a part where it no-ops.
+        // Prerequisite verified separately (--clkprobe): a DRAM tile DOES answer RISCV_DEBUG_REG_WALL_CLOCK.
+        if (sync.valid && tracy_ != nullptr) {
+            for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+                // Keyed on NOC0, like every other context lookup; drisc_virtual is the VIRTUAL space, and the
+                // register read needs the virtual pair. Absent mapping means self-profiling is off, so this
+                // core has no Tracy row to anchor -- see the identical guard in the role loop below.
+                const auto nit = ctx.virt_to_noc0.find(
+                    (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
+                    static_cast<uint64_t>(ctx.drisc_virtual[d].y));
+                if (nit == ctx.virt_to_noc0.end()) {
+                    continue;
+                }
+                const PerfDebugSync ds = sync_device_clock(cluster, ctx.chip_id, ctx.drisc_virtual[d]);
+                if (!ds.valid) {
+                    // Degrade to the worker anchor rather than dropping the rows: a misplaced row is still
+                    // readable, an absent one is not. Loud, because it silently reinstates the whole bug.
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] Device {} DRISC {} at NOC0 ({},{}): DRAM-core clock sync FAILED; "
+                        "its zones and plots fall back to the WORKER anchor and will be shifted by the "
+                        "reset->open gap",
+                        ctx.chip_id,
+                        d,
+                        nit->second.first,
+                        nit->second.second);
+                    continue;
+                }
+                // ONE FREQUENCY (slope) for every context; each core keeps its own ANCHOR (origin). Alignment is
+                // RELATIVE, so a shared rate makes differential drift zero BY CONSTRUCTION and any error in it is
+                // common-mode -- invisible on a timeline. Measured: the true rates agree to ~5 ppm while the
+                // per-core fits scattered over ~99 ppm, so this trades a 99 ppm noise term for a 5 ppm physical
+                // one (N+47; the per-core alternative costs 48-119 us and grows at 29-72 ppm, N+48).
+                // Not selectable: the per-core alternative is strictly worse, so no knob chooses it. To reproduce
+                // that comparison, pass `ds.frequency` here instead.
+                tracy_->AddCore(
+                    ctx.chip_id,
+                    nit->second.first,
+                    nit->second.second,
+                    ds.host_anchor,
+                    static_cast<double>(ds.device_at_anchor),
+                    sync.frequency);
+                // Log the OFFSET, not just the anchor: it is the board-dependence tell. Microseconds means the
+                // part shares an origin and this changed nothing; minutes means it just fixed the capture.
+                // Divided by the SHARED slope -- the one this row is actually rendered with, so the reported
+                // offset cannot disagree with the mapping in force.
+                const double off_ms =
+                    (static_cast<double>(ds.device_at_anchor) - static_cast<double>(sync.device_at_anchor)) /
+                    (sync.frequency > 0.0 ? sync.frequency : 1.0) / 1e6;
+                // The core's own fit is REPORTED but never applied: its spread is the diagnostic that identified
+                // this error term (measured -79.6 to +71.7 ppm across 9 runs on 2 parts).
+                const double fit_ppm =
+                    sync.frequency > 0.0 ? (ds.frequency - sync.frequency) / sync.frequency * 1e6 : 0.0;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] Device {} DRISC {} NOC0 ({},{}) clock sync: frequency={:.6f} GHz "
+                    "(SHARED across all contexts); this core's own fit {:.6f} = {:+.1f} ppm, NOT APPLIED, "
+                    "device_time_at_anchor={} cycles, offset vs worker anchor {:+.3f} ms",
+                    ctx.chip_id,
+                    d,
+                    nit->second.first,
+                    nit->second.second,
+                    sync.frequency,
+                    ds.frequency,
+                    fit_ppm,
+                    ds.device_at_anchor,
+                    off_ms);
+            }
         }
         // NOTE: per-core Tracy contexts are created LAZILY on each core's first zone (HandleWorkerZone ->
         // GetOrCreateContext). We deliberately do NOT pre-create the full worker grid here: only ~16 of
@@ -1812,10 +1944,14 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // is `while (... && *stop == 0 ...)`, so a stale value would make the next kernel exit after ONE
             // sweep while the host reports FAILED TO START. (Not the cause of the slow-dispatch wedge below --
             // that reproduces with stop=0 -- but the same class of stale-state bug as the hb/phase words.)
-            uint32_t zero1 = 0;
+            // FOUR words, not one: stop plus the sync-event rendezvous triple (req | ack | go) that shares its
+            // 64 B pad. A stale `req` from a previous run would make every drainer park at a barrier nobody is
+            // going to release, and it would present as the workload wedging at the first sweep -- the same
+            // signature as the stale-stop bug this write already existed to prevent.
+            uint32_t zero4[4] = {};
             cluster.write_core(
-                &zero1,
-                sizeof(zero1),
+                zero4,
+                sizeof(zero4),
                 tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
                 ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
             // Same reason, for the results block: it is published only on kernel exit, so a drainer that is
@@ -1944,7 +2080,10 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 // both roles together.
                 is_mover ? self_frames_base * 16u : self_frames_base,
                 drisc_zone_detail(),
-                noc_footprint()};
+                noc_footprint(),
+                // arg 38: the sync event. Gated on zones being on as well, because it rides the self-zone ring
+                // and the kernel static_asserts that pairing -- passing 1 with zones off would not build.
+                (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -2724,6 +2863,7 @@ void PerfDebugProfiler::consumer_thread() {
             zone_names_[kernel_profiler::DRISC_ZONE_WRITE] = "DRISC-WRITE";
             zone_names_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = "DRISC-WR-BARRIER";
             zone_names_[kernel_profiler::DRISC_ZONE_PACE] = "DRISC-PACE";
+            zone_names_[kernel_profiler::DRISC_ZONE_SYNC] = "DRISC-SYNC";
             // Explicit colours for the drainer zones. The pair that matters is SWEEP vs PACE: they alternate
             // continuously on a filler row, so "the drainer is working" vs "the controller is holding it off"
             // has to be readable without reading labels. SWEEP is a saturated blue; PACE is a recessive grey,
@@ -2736,6 +2876,10 @@ void PerfDebugProfiler::consumer_thread() {
             zone_colors_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xC0392B;  // red: the phase that sets the knee
             zone_colors_[kernel_profiler::DRISC_ZONE_WRITE] = 0xD35400;        // orange: egress
             zone_colors_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF1C40F;   // yellow: waiting for write acks
+            // White, and the same on both roles: the sync marker is a fiducial, not a phase. It should be
+            // findable at a glance on any row and should not read as belonging to the work palette.
+            zone_colors_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
+            zone_colors_mover_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
             // MOVER palette. Same zone ids, different hues, because the two roles are different machines: a
             // filler scans worker L1 and stages to DRAM, a mover reads DRAM and pushes PCIe. Reading a mover row
             // with a filler's colour scale in your head is the mistake this prevents.
@@ -3023,10 +3167,105 @@ void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const cha
     }
 }
 
+// COMMON-TRIGGER SYNC EVENT: release every drainer from a rendezvous barrier (req | ack | go in the pad behind
+// `stop`) so all six mark the SAME instant, leaving anchor + render error as the only thing the spread contains.
+// Waiting for every `ack` is load-bearing -- it guarantees no core is still mid-sweep (~157 us of phase error).
+// The release is 6 sequential writes (scattered DRAM cores are not a multicast rectangle), so the ORDER IS
+// ROTATED per generation: that turns the write skew from an unknown into a measurable, separable term (N+48).
+void PerfDebugProfiler::fire_sync_events() {
+    const uint32_t n = sync_event_count();
+    if (n == 0 || devices_.empty()) {
+        return;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    for (auto& ctx : devices_) {
+        // Collect the participants once: a drainer with no program never parks, and waiting on its ack would
+        // time out every trigger.
+        std::vector<uint32_t> live;
+        for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+            if (ctx.drain_program[d] != nullptr) {
+                live.push_back(d);
+            }
+        }
+        if (live.empty()) {
+            continue;
+        }
+        auto word = [&](uint32_t d, uint32_t off) {
+            return ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]) + off;
+        };
+        for (uint32_t gen = 1; gen <= n; gen++) {
+            // 1. ask everyone to park.
+            for (uint32_t d : live) {
+                cluster.write_core(&gen, sizeof(gen), tt_cxy_pair(ctx.chip_id, ctx.drisc_virtual[d]), word(d, 4));
+            }
+            // 2. wait for every ack. A drainer notices `req` at the top of its next sweep, so the wait is one
+            // sweep at worst (~157 us on a filler, ~1.3 us on a mover); 2 s is 4 orders of magnitude of slack
+            // and only expires if a drainer is genuinely not looping.
+            bool all_parked = true;
+            const auto dl = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            for (uint32_t d : live) {
+                uint32_t ack = 0;
+                while (std::chrono::steady_clock::now() < dl) {
+                    cluster.read_core(&ack, sizeof(ack), tt_cxy_pair(ctx.chip_id, ctx.drisc_virtual[d]), word(d, 8));
+                    if (ack == gen) {
+                        break;
+                    }
+                }
+                if (ack != gen) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] sync event gen {}: DRISC {} never parked (ack={}); this trigger is "
+                        "INCOMPLETE and its spread must not be quoted -- a missing participant makes the spread "
+                        "over the cores that did answer look artificially tight",
+                        gen,
+                        d,
+                        ack);
+                    all_parked = false;
+                }
+            }
+            // 3. release. Rotated start, and the host clock is read either side so the skew is BOUNDED BY
+            // MEASUREMENT rather than by the 170 ns estimate.
+            const size_t rot = (gen - 1) % live.size();
+            const int64_t h0 = tracy::Profiler::GetTime();
+            for (size_t i = 0; i < live.size(); i++) {
+                const uint32_t d = live[(rot + i) % live.size()];
+                cluster.write_core(&gen, sizeof(gen), tt_cxy_pair(ctx.chip_id, ctx.drisc_virtual[d]), word(d, 12));
+            }
+            const int64_t h1 = tracy::Profiler::GetTime();
+            std::string order;
+            for (size_t i = 0; i < live.size(); i++) {
+                order += fmt::format("{}{}", i ? "," : "", live[(rot + i) % live.size()]);
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] SYNC EVENT gen {} fired on device {}: release order [{}], host-measured "
+                "write span {} ns over {} drainers ({:.0f} ns/write){}",
+                gen,
+                ctx.chip_id,
+                order,
+                h1 - h0,
+                live.size(),
+                live.empty() ? 0.0 : static_cast<double>(h1 - h0) / static_cast<double>(live.size()),
+                all_parked ? "" : " -- INCOMPLETE, see warning above");
+            if (gen < n) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(sync_event_gap_ms()));
+            }
+        }
+    }
+    // The frames carrying these zones are already in flight; give the reader/decoder/consumer chain a moment
+    // to pull them through before stop() starts quiescing, so a sync marker cannot be lost to teardown.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
+
 void PerfDebugProfiler::stop() {
     if (stopped_.exchange(true)) {
         return;
     }
+
+    // BEFORE any quiesce: the drainers must still be looping to answer a rendezvous, and firing here rather
+    // than at bring-up keeps the measurement out of the workload's way (a parked drainer is not draining) and
+    // lets the zone-name harvest run against already-compiled kernels.
+    fire_sync_events();
 
     // ---- ROLE SPLIT: quiesce in the right ORDER, before the per-DRISC teardown loop below ----
     //
@@ -3394,6 +3633,29 @@ void PerfDebugProfiler::stop() {
                                  : std::string(),
                     res[70] != 0 ? fmt::format(" | {} markers LOST (a publish could not free the ring)", res[70])
                                  : std::string());
+                // COMMON-TRIGGER SYNC EVENT. Reported per drainer because the measurement is only valid if
+                // EVERY participant answered EVERY trigger: a drainer that timed out at the barrier contributed
+                // no marker, and the spread over the cores that did answer would then read artificially tight.
+                // So state the counts and warn on any timeout rather than leaving it to be inferred from a
+                // missing row in the CSV.
+                if (res[130] != 0 || res[131] != 0) {
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {} SYNC EVENTS: {} marked, {} timed out | last barrier park "
+                        "{:.1f} us",
+                        d,
+                        res[130],
+                        res[131],
+                        res[132] / kCycPerUs);
+                }
+                if (res[131] != 0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {} SYNC EVENTS: {} barrier(s) were NEVER RELEASED. Those "
+                        "triggers are incomplete and their spread is not a valid alignment measurement.",
+                        d,
+                        res[131]);
+                }
                 // Trace COMPLETENESS: every word written into the self ring must have been shipped. A shortfall
                 // is trace stranded in the ring at teardown, which no other counter reveals -- it just makes the
                 // Tracy row end early, indistinguishable from the drainer going quiet.

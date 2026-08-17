@@ -469,6 +469,12 @@ void kernel_main() {
     // none is ever written as a literal: test_cluster_bh.cpp carries a misnamed 0xffb202e0 and copying a
     // literal from there would propagate the error into a number nobody could check.
     constexpr uint32_t kNocFootprint = get_compile_time_arg_val(37);
+    // COMMON-TRIGGER SYNC EVENT (compile arg 38; 0 = off, nothing emitted). A rendezvous at the top of the sweep
+    // loop: the host parks every drainer in a TIGHT SPIN and one release makes all of them stamp the same instant.
+    // The spin is essential -- a per-sweep poll would report sweep PHASE (up to ~157 us) instead of the residual.
+    // Observe-to-stamp is ~5 instructions (fence, load, branch, 2 latching register reads) = O(10 ns).
+    // DEFAULT OFF: a parked drainer is not draining, so the host only ever fires this after the workload.
+    constexpr uint32_t kSyncEvent = get_compile_time_arg_val(38);
     // PER-SWEEP SERIES (the plot source), separate from the out[] totals above and currently FORCED OFF.
     //
     // 1 = also ship a per-sweep PP_DATA sample (the plot source) on top of the out[] totals. It FITS, but only
@@ -525,6 +531,10 @@ void kernel_main() {
     static_assert(kSelfZones == 0 || kSelfHoldCycles >= 1, "a 0-cycle window hold would trace nothing");
     static_assert(kSelfDetail <= 1, "detail is 0 (SWEEP + PACE) or 1 (full per-batch phases)");
     static_assert(kSelfZones == 0 || kSelfMaxFrames >= 1, "self-profiling with a 0 frame budget captures nothing");
+    // The sync event's only carrier is the self-zone marker ring: it emits a DRISC_ZONE_SYNC pair through
+    // self_zone() and ships it with self_publish(). With zones off there is no ring, no framed prefix and no
+    // control vector, so the event would have nowhere to go and would silently measure nothing.
+    static_assert(kSyncEvent == 0 || kSelfZones != 0, "the sync event rides the self-zone ring; enable zones");
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
@@ -586,6 +596,17 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
     *stop = 0;
+
+    // Rendezvous words in the 64 B pad behind `stop` (only word 0 was used before; the `done` pad is full):
+    //   +4 req (host asks) | +8 ack (kernel: parked in the spin) | +12 go (release = the measured instant)
+    // The ack is what makes it a barrier -- without it the host would release a core still mid-sweep.
+    volatile tt_l1_ptr uint32_t* sync_req = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr + 4);
+    volatile tt_l1_ptr uint32_t* sync_ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr + 8);
+    volatile tt_l1_ptr uint32_t* sync_go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr + 12);
+    uint32_t sync_seen = 0;      // last generation this kernel has already served
+    uint32_t sync_events = 0;    // releases observed and marked
+    uint32_t sync_timeouts = 0;  // barriers abandoned because the release never came -- MUST stay 0
+    uint32_t sync_spin_cyc = 0;  // cycles spent parked in the last barrier (host reports it as a sanity read)
 
     // ---- live liveness window, readable by the host WHILE the loop runs ----
     //
@@ -1320,6 +1341,47 @@ void kernel_main() {
 
     const uint64_t t_start = get_timestamp();
     while (sweeps < kMaxSweeps && *stop == 0 && !egress_dead) {
+        // ---- COMMON-TRIGGER SYNC EVENT: the rendezvous ----
+        //
+        // FIRST thing in the loop body, before `sweeps++` and before t_sweep0 is taken, so a barrier wait is
+        // not billed to any sweep's duration and cannot perturb the phase accounting the zones are checked
+        // against.
+        if constexpr (kSyncEvent != 0) {
+            invalidate_l1_cache();
+            const uint32_t req = *sync_req;
+            if (req != sync_seen) {
+                sync_seen = req;
+                const uint64_t t_park = get_timestamp();
+                *sync_ack = req;  // parked; the host may release once every drainer has done this
+                uint64_t t_go = 0;
+                // Bounded, so a host that never releases DEGRADES instead of wedging the workload. An
+                // unbounded spin here would be indistinguishable from the resident-drainer failure mode that
+                // hangs a run with a perfectly healthy card.
+                uint32_t guard = 0xFFFFFFFFu;
+                for (;;) {
+                    invalidate_l1_cache();
+                    if (*sync_go == req) {
+                        t_go = get_timestamp();  // THE MEASURED INSTANT -- ~5 instructions after the release
+                        break;
+                    }
+                    if (*stop != 0 || --guard == 0) {
+                        break;
+                    }
+                }
+                if (t_go != 0) {
+                    // Force emission: the sync zone is NOT part of the work-armed window and must land whether
+                    // or not this sweep would have been instrumented. The arming block immediately below
+                    // rewrites self_on/self_from_start for this sweep, so nothing has to be restored here.
+                    self_on = true;
+                    self_zone(kernel_profiler::DRISC_ZONE_SYNC, t_go, get_timestamp());
+                    self_publish();  // ship it now; do not let it wait on the ring filling
+                    sync_events++;
+                    sync_spin_cyc = static_cast<uint32_t>(t_go - t_park);
+                } else {
+                    sync_timeouts++;
+                }
+            }
+        }
         sweeps++;
         *hb = sweeps;
         *phase = kPhasePoll;
@@ -2078,6 +2140,15 @@ void kernel_main() {
     // MUST equal out[73] (self_tail). Anything less is trace LOST IN THE RING at teardown -- the defect the
     // tail flush above exists to prevent, and one that no other counter shows.
     out[87] = self_words_shipped;
+    // ---- COMMON-TRIGGER SYNC EVENT counters (0 on the default path) --------------------------------------
+    //
+    // sync_timeouts MUST be 0. A timeout means this drainer parked at the barrier and was never released, so
+    // it contributed no marker to that trigger -- and a trigger with a missing participant would otherwise be
+    // read as a tight spread over the drainers that DID answer, which is the most flattering possible way for
+    // this measurement to be wrong.
+    out[130] = sync_events;
+    out[131] = sync_timeouts;
+    out[132] = sync_spin_cyc;
     // ---- NoC FOOTPRINT counters (0 on the default path) --------------------------------------------------
     //
     // TWO BLOCKS, NEVER BLENDED. `life` covers every sweep this drain loop ran; `win` covers the workload

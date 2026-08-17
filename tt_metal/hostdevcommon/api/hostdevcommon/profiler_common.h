@@ -213,7 +213,7 @@ static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 144;
 // FIXED ids in the same reserved band PROFILER_STALL_ZONE_ID (0x7FFF) already uses, and the host registers
 // their names explicitly next to PRODUCER-STALL.
 //
-// 0x7FF0..0x7FF6, i.e. immediately below the stall zone: a 16-bit hash landing here is possible in principle
+// 0x7FF0..0x7FF8, i.e. immediately below the stall zone: a 16-bit hash landing here is possible in principle
 // but has the same (accepted) probability the stall id has carried since it was introduced.
 static constexpr std::uint32_t PROFILER_DRISC_ZONE_BASE = 0x7FF0;
 enum DriscSelfZone : std::uint32_t {
@@ -230,7 +230,11 @@ enum DriscSelfZone : std::uint32_t {
     // the instrument. A MOVER is excluded from the controller (see drisc_profiler_drain.cpp) so its gap is 0
     // and this zone simply never appears there -- which is itself the answer to "is the mover being paced".
     DRISC_ZONE_PACE = PROFILER_DRISC_ZONE_BASE + 7,
-    DRISC_ZONE_COUNT = 8,
+    // COMMON-TRIGGER SYNC EVENT: every drainer marks the SAME physical instant (released together from a
+    // rendezvous barrier), so the spread in these zones' rendered timestamps is anchor + render error only.
+    // Replaces comparing zone-window OPENs, which are two independent events and cannot validate an anchor.
+    DRISC_ZONE_SYNC = PROFILER_DRISC_ZONE_BASE + 8,
+    DRISC_ZONE_COUNT = 9,
 };
 
 // STICKY_META (SPSC/drainer backend): an 8B context packet emitted once per RISC per launch at the main

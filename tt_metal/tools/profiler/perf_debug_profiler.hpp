@@ -329,6 +329,11 @@ private:
     // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
     // states the end-of-run results block cannot tell apart because it is only published on exit.
     void dump_drainer_state(DeviceCtx& ctx, uint32_t d, const char* why);
+    // COMMON-TRIGGER SYNC EVENT: park every drainer in a tight spin, release them together, and let each stamp
+    // its own clock -- so the spread in the DRISC-SYNC zones is anchor + render error only. Called from stop(),
+    // i.e. after the workload: a parked drainer is not draining, and the lazy zone-name harvest needs the
+    // workload's kernels already compiled.
+    void fire_sync_events();
     void writer_thread(uint32_t sock_idx);   // one reader per socket: poll -> read -> ack -> enqueue
     // One decoder per socket -- decode state is sequential per stream. Owns decode+publish; see
     // decode_and_publish for why that work is off the reader thread.

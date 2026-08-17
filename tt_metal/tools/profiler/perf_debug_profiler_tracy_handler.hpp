@@ -33,6 +33,25 @@ public:
     // Record a device's host<->device anchor. Per-core contexts are Populated with it when created.
     void AddDevice(uint32_t chip_id, int64_t host_start, double first_timestamp, double frequency);
 
+    // Record a PER-CORE anchor, overriding the chip's for that one core. Exists because the chip anchor is
+    // measured on a TENSIX WORKER while these rows come off a DRAM tile, and on this part the two wall clocks
+    // have banked very different totals: they share a zero point (chip reset) and neither is re-zeroed at device
+    // open, but the Tensix domain is clocked only while out of reset and the DRAM one keeps running at a reduced
+    // clock while idle -- ~11x duty ratio, so the gap grows with card activity. Sharing one anchor therefore
+    // shifted every DRAM-core (DRISC drainer) row right by that whole gap -- 18 min on a card up half an hour,
+    // 42 min an hour later -- while zone DURATIONS stayed correct to 0.15%, which is why it read as a mysterious
+    // constant skew rather than a broken clock. Board-dependent: on parts whose two counters track each other
+    // the offset is microseconds and this call changes nothing. See FINDINGS N+46.
+    // MUST be called before PreCreateContexts/the first zone for that core: a context bakes its anchor in at
+    // creation.
+    void AddCore(
+        uint32_t chip_id,
+        uint32_t noc0_x,
+        uint32_t noc0_y,
+        int64_t host_start,
+        double first_timestamp,
+        double frequency);
+
     // Eagerly create the per-core contexts up front (context creation is ~ms; keep it off the drain
     // hot path). worker_noc0 = the chip's worker-core NOC0 coords.
     void PreCreateContexts(uint32_t chip_id, const std::vector<std::pair<uint32_t, uint32_t>>& worker_noc0);
@@ -68,8 +87,17 @@ private:
         double frequency = 0.0;
     };
 
+    // Resolve the anchor for one core: its own per-core entry if it has one, else its chip's. Returns false
+    // when neither exists (the device was never AddDevice'd). Two flavours because GetOrCreateContext already
+    // holds mutex_ across its whole body and mutex_ is not recursive -- taking it again would self-deadlock.
+    bool LookupAnchorLocked(uint32_t chip_id, uint32_t core_x, uint32_t core_y, ChipAnchor& out);  // lock HELD
+    bool LookupAnchor(uint32_t chip_id, uint32_t core_x, uint32_t core_y, ChipAnchor& out);        // takes lock
+
     std::mutex mutex_;
     std::unordered_map<uint32_t, ChipAnchor> chip_anchors_;
+    // ContextKey -> anchor, for cores whose clock does NOT share the chip anchor's origin (DRAM tiles). Empty
+    // on parts where the two counters agree, in which case every lookup falls through to chip_anchors_.
+    std::unordered_map<uint64_t, ChipAnchor> core_anchors_;
     std::unordered_map<uint64_t, TracyTTCtx> tracy_contexts_;
     // Shadow of Tracy's per-(context,risc) GPU zone stack depth, so an unmatched ZONE_END (which would
     // pop an empty stack and SEGV tracy-capture) is dropped here. Key: (ContextKey<<3)|risc.
