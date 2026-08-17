@@ -55,7 +55,7 @@ class McastFamily:
         self.grid = grid
         self._config = config
         self._mcast = ttnn.Mcast1D(device, grid, shape, sender_index, placement, config)
-        self._rt_base = None
+        self._added_semaphores = False
 
     @property
     def data_ready_name(self) -> str:
@@ -116,7 +116,14 @@ class McastFamily:
         cores = self._grid_cores() if cores is None else list(cores)
 
         existing = {str(s.unique_id) for s in spec.semaphores}
+        if not self._added_semaphores and existing & {self.data_ready_name, self.consumer_ready_name}:
+            raise ValueError(
+                f"attach: the spec already declares a semaphore named {self.data_ready_name!r} or "
+                f"{self.consumer_ready_name!r}. Two families sharing a prefix would silently share "
+                "semaphores; give this family a different prefix."
+            )
         spec.semaphores = list(spec.semaphores) + [s for s in self.semaphores() if str(s.unique_id) not in existing]
+        self._added_semaphores = True
 
         # Read the containers out, mutate, write back: correct whether the bindings hand back
         # aliases or copies.
@@ -133,21 +140,21 @@ class McastFamily:
             if kernel_run_args is None:
                 raise KeyError(f"attach: kernel {name!r} has no KernelRunArgs in the ProgramRunArgs")
 
+            # Per-kernel: compile_time_args live on the KernelSpec, so each kernel reads its own
+            # <prefix>_rt_base and two kernels sharing a family may sit at different bases.
             rt_base = kernel.advanced_options.num_runtime_varargs
-            if self._rt_base is None:
-                self._rt_base = rt_base
-            elif self._rt_base != rt_base:
+            new_ct = self.compile_time_args(rt_base, pre_handshake=pre_handshake)
+            existing_ct = dict(kernel.compile_time_args)
+            clashes = sorted(set(existing_ct) & set(new_ct))
+            if clashes:
                 raise ValueError(
-                    f"attach: family {self.prefix!r} would sit at vararg base {rt_base} on kernel "
-                    f"{name!r} but {self._rt_base} on an earlier one; the kernel-side MCAST_ARGS "
-                    "reads one base, so every kernel sharing a family must agree"
+                    f"attach: kernel {name!r} already declares compile-time args {clashes}; "
+                    f"overwriting them would silently repoint the {self.prefix!r} family. Use a "
+                    "different prefix."
                 )
 
             kernel.semaphore_bindings = list(kernel.semaphore_bindings) + self.semaphore_bindings()
-            kernel.compile_time_args = {
-                **dict(kernel.compile_time_args),
-                **self.compile_time_args(rt_base, pre_handshake=pre_handshake),
-            }
+            kernel.compile_time_args = {**existing_ct, **new_ct}
 
             advanced = kernel.advanced_options
             advanced.num_runtime_varargs = rt_base + self.num_runtime_varargs()
