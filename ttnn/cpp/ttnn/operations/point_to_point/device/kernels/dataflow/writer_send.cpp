@@ -16,25 +16,28 @@ void kernel_main() {
     constexpr uint32_t alignment = get_compile_time_arg_val(2);
     constexpr auto dst_buffer_args = TensorAccessorArgs<3>();
 
-    const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
-    const auto page_idx_start = get_arg_val<uint32_t>(1);
-    const auto page_idx_end = get_arg_val<uint32_t>(2);
-    const uint8_t dst_num_hops = get_arg_val<uint32_t>(3);
-    const auto page_size_bytes = get_arg_val<uint32_t>(4);
-    const auto payload_size_bytes = get_arg_val<uint32_t>(5);
-    const auto max_pages_per_packet = get_arg_val<uint32_t>(6);
-    const auto page_segments = get_arg_val<uint32_t>(7);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(8);
+    // The fabric-connection block (built by ttnn::ccl::dataflow::build_ccl_fabric_rt_args) comes
+    // FIRST: consume it with a cursor from 0 (the FabricStreamSender ctor advances the cursor past
+    // it), then read the op's own args from the cursor — no hardcoded offset on either side. The
+    // block's leading has_forward flag also encodes the send direction, so peek arg 0.
+    size_t arg_idx = 0;
+    const bool dst_is_forward = get_arg_val<uint32_t>(arg_idx);
+    FabricStreamSender<> sender(arg_idx, dst_is_forward, alignment);
+
+    const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_idx_start = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_idx_end = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t dst_num_hops = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+    const auto payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+    const auto max_pages_per_packet = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_segments = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     Noc noc;
 
-    // The fabric arg block (appended by ttnn::ccl::dataflow::append_ccl_fabric_rt_args)
-    // begins at index 9; its leading has_forward flag also encodes the send direction.
-    size_t conn_arg_idx = 9;
-    const bool dst_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
-    FabricStreamSender<> sender(conn_arg_idx, dst_is_forward, alignment);
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
