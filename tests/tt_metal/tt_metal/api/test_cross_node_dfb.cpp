@@ -1741,7 +1741,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     // Second enqueue of the same CrossNode program inside the capture: the
     // allocator must stall_first on the prior launch before rewriting credits.
@@ -1764,7 +1764,7 @@ TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
 
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     mesh_device->end_mesh_trace(cq.id(), tid);
 
@@ -1844,7 +1844,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
 
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     mesh_device->end_mesh_trace(cq.id(), tid);
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -56,7 +57,6 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
-
 using std::vector;
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
@@ -1664,7 +1664,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    mesh_cq.enqueue_write_mesh_buffer(input_buffer, activations.data(), true);
 
     return input_buffer;
 }
@@ -1695,7 +1695,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    mesh_cq.enqueue_write_mesh_buffer(input_buffer, activations.data(), true);
 
     return input_buffer;
 }

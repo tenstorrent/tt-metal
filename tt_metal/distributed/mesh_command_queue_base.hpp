@@ -4,8 +4,10 @@
 
 #pragma once
 
-#include "mesh_command_queue.hpp"
+#include <tt-metalium/mesh_command_queue.hpp>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
@@ -14,10 +16,26 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <mutex>
+#include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace tt {
+enum class TargetDevice : std::uint8_t;
+}  // namespace tt
+
+namespace tt::tt_metal {
+class IDevice;
+class ThreadPool;
+class WorkerConfigBufferMgr;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
+
+class MeshTraceDescriptor;
 
 // Identifies one L1 location on one device of the mesh: (mesh coord, virtual
 // core, device address). Used by per-core enqueue APIs.
@@ -105,24 +123,25 @@ public:
         dispatch_thread_pool_(std::move(dispatch_thread_pool)),
         lock_api_function_(std::move(lock_api_function)) {}
 
+    virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
+
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,
         const void* host_data,
         const MeshCoordinateRange& device_range,
         bool blocking,
-        std::optional<BufferRegion> region = std::nullopt) override;
+        std::optional<BufferRegion> region = std::nullopt);
     void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
-    void enqueue_write_shards(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
-        bool blocking) override;
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
         bool blocking) override;
+    void enqueue_write_shards(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        bool blocking) override;
 
-    // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;
     void enqueue_read_shards(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
@@ -133,6 +152,10 @@ public:
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) override;
+
+    virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
+    virtual void record_end() = 0;
+    virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
 
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
@@ -162,5 +185,9 @@ public:
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
 };
+
+inline MeshCommandQueueBase& as_mesh_command_queue_base(MeshCommandQueue& cq) {
+    return static_cast<MeshCommandQueueBase&>(cq);
+}
 
 }  // namespace tt::tt_metal::distributed

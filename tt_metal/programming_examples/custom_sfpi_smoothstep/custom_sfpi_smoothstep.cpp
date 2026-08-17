@@ -13,7 +13,6 @@
 #include <memory>
 #include <random>
 #include <vector>
-
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -70,7 +69,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
 
         // Upload the data from host to the device.
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+        cq.enqueue_write_mesh_buffer(src0_dram_buffer, a_data.data(), false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -142,8 +141,8 @@ int main(int /*argc*/, char** /*argv*/) {
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
         // Read the output buffer and compare it with the expected output.
-        std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
+        std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
+        cq.enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");

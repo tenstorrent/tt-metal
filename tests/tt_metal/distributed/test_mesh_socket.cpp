@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+#include <type_traits>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -23,7 +24,6 @@
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include <distributed/mesh_device_impl.hpp>
-
 namespace tt::tt_metal::distributed {
 
 using MeshSocketTest = MeshDevice2x4Fixture;
@@ -173,7 +173,8 @@ void test_single_connection_single_device_socket(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
+    md0->mesh_command_queue().enqueue_write_shards(
+        sender_data_buffer, {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(src_vec.data())}, false);
 
     auto send_recv_program = CreateProgram();
     CreateKernel(
@@ -365,7 +366,8 @@ void test_single_device_socket_with_workers(
     std::vector<uint32_t> src_vec(sender_buffer_config.size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
+    md0->mesh_command_queue().enqueue_write_shards(
+        sender_data_buffer, {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(src_vec.data())}, false);
 
     auto send_recv_program = CreateProgram();
 
@@ -631,7 +633,8 @@ void test_single_connection_multi_device_socket(
 
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
+    md0->mesh_command_queue().enqueue_write_shards(
+        sender_data_buffer, {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(src_vec.data())}, false);
 
     auto sender_program = CreateProgram();
     auto sender_kernel = CreateKernel(
@@ -803,7 +806,8 @@ void test_single_connection_multi_device_socket_with_workers(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), std::chrono::system_clock::now().time_since_epoch().count());
 
-    WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
+    md0->mesh_command_queue().enqueue_write_shards(
+        sender_data_buffer, {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(src_vec.data())}, false);
 
     auto sender_program = CreateProgram();
     auto sender_kernel = CreateKernel(
@@ -1432,8 +1436,10 @@ void test_multi_sender_single_recv(
         std::vector<uint32_t> src_vec =
             tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT16_MAX, data_size / sizeof(uint32_t));
         // Write data to both senders
-        WriteShard(sender_0->mesh_command_queue(), sender_data_buffer_0, src_vec, MeshCoordinate(0, 0));
-        WriteShard(sender_1->mesh_command_queue(), sender_data_buffer_1, src_vec, MeshCoordinate(0, 0));
+        sender_0->mesh_command_queue().enqueue_write_shards(
+            sender_data_buffer_0, {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(src_vec.data())}, false);
+        sender_1->mesh_command_queue().enqueue_write_shards(
+            sender_data_buffer_1, {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(src_vec.data())}, false);
 
         EnqueueMeshWorkload(sender_0->mesh_command_queue(), sender_0_mesh_workload, false);
         EnqueueMeshWorkload(sender_1->mesh_command_queue(), sender_1_mesh_workload, false);
@@ -1507,7 +1513,7 @@ void test_multi_connection_multi_device_data_copy(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    EnqueueWriteMeshBuffer(sender_mesh->mesh_command_queue(), sender_data_buffer, src_vec);
+    sender_mesh->mesh_command_queue().enqueue_write_mesh_buffer(sender_data_buffer, src_vec.data(), false);
 
     auto sender_mesh_workload = MeshWorkload();
     auto recv_mesh_workload = MeshWorkload();

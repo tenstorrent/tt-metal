@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/command_queue_fixture.hpp"
+#include <type_traits>
 
 #include <chrono>
 #include <cerrno>
@@ -30,7 +31,6 @@
 #include "test_common.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -68,7 +68,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(
 
         auto sticks_buffer = distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 
-        distributed::EnqueueWriteMeshBuffer(cq, sticks_buffer, src_vec, false);
+        cq.enqueue_write_mesh_buffer(sticks_buffer, src_vec.data(), false);
 
         vector<uint32_t> dst_vec;
         distributed::ReadShard(cq, dst_vec, sticks_buffer, distributed::MeshCoordinate(0, 0));
@@ -185,7 +185,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
 
-        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+        cq.enqueue_write_mesh_buffer(src_dram_buffer, src_vec.data(), false);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -331,7 +331,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
 
-        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+        cq.enqueue_write_mesh_buffer(src_dram_buffer, src_vec.data(), false);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -434,7 +434,7 @@ bool test_interleaved_l1_datacopy(
             num_l1_banks);
 
         src = distributed::MeshBuffer::create(buffer_config, l1_local_config, mesh_device.get());
-        distributed::EnqueueWriteMeshBuffer(cq, src, host_buffer, false);
+        cq.enqueue_write_mesh_buffer(src, host_buffer.data(), false);
 
     } else {
         TT_FATAL(
@@ -444,7 +444,7 @@ bool test_interleaved_l1_datacopy(
             num_dram_banks);
 
         src = distributed::MeshBuffer::create(buffer_config, dram_local_config, mesh_device.get());
-        distributed::EnqueueWriteMeshBuffer(cq, src, host_buffer, false);
+        cq.enqueue_write_mesh_buffer(src, host_buffer.data(), false);
     }
 
     // Create destination buffer prior to kernels to build compile-time args

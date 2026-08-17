@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
@@ -29,7 +30,6 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -37,8 +37,8 @@ using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the bandwidth of host-to-device data transfer and
-// device-to-host data transfer. It uses EnqueueReadMeshBuffer and
-// EnqueueWriteMeshBuffer APIs to transfer the data. The device memory object
+// device-to-host data transfer. It uses enqueue_read_mesh_buffer and
+// enqueue_write_mesh_buffer APIs to transfer the data. The device memory object
 // (buffer) can be resident in DRAM or L1.
 //
 // Usage example:
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
             // Execute application
             if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
-                tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer, src_vec, false);
+                device->mesh_command_queue().enqueue_write_mesh_buffer(buffer, src_vec.data(), false);
                 tt_metal::distributed::Finish(device->mesh_command_queue());
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
                 best_write_bw = std::fmax(best_write_bw, write_bw);
                 log_info(
                     LogTest,
-                    "EnqueueWriteMeshBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
+                    "enqueue_write_mesh_buffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
                     buffer_type == 0 ? "DRAM" : "L1",
                     elapsed_us / 1000.0,
                     h2d_bandwidth[i]);
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
                 best_read_bw = std::fmax(best_read_bw, read_bw);
                 log_info(
                     LogTest,
-                    "EnqueueReadMeshBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
+                    "enqueue_read_mesh_buffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
                     buffer_type == 0 ? "DRAM" : "L1",
                     elapsed_us / 1000.0,
                     d2h_bandwidth[i]);

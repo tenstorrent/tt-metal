@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 
 #include <cstdint>
 #include <memory>
@@ -27,7 +28,6 @@
 #include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 #include <umd/device/types/arch.hpp>
-
 namespace tt::tt_metal::distributed::test {
 
 class DispatchContextFixture : public ::testing::Test {
@@ -71,7 +71,10 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
 
     for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
-            WriteShard(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec, MeshCoordinate(logical_y, logical_x));
+            mesh_device_->mesh_command_queue().enqueue_write_shards(
+                mesh_buffer,
+                {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(src_vec.data())},
+                false);
         }
     }
     Finish(mesh_device_->mesh_command_queue());
@@ -207,7 +210,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), base + 100);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(fd_buf, fd_src_vec.data(), false);
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
@@ -228,11 +231,11 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         }
 
         // Write and verify interleaved L1 buffer in SD mode. Validated shard-by-shard because
-        // EnqueueReadMeshBuffer is only defined for sharded global layouts on multi-device meshes.
+        // enqueue_read_mesh_buffer is only defined for sharded global layouts on multi-device meshes.
         auto sd_buf = MeshBuffer::create(sd_l1_global, sd_l1_config, mesh_device_.get());
         std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(sd_src_vec.begin(), sd_src_vec.end(), base + 200);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(sd_buf, sd_src_vec.data(), false);
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
@@ -270,7 +273,8 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         std::iota(fd2_src_vec.begin(), fd2_src_vec.end(), base + 300);
         for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
             for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
-                WriteShard(mesh_device_->mesh_command_queue(), fd2_buf, fd2_src_vec, MeshCoordinate(y, x));
+                mesh_device_->mesh_command_queue().enqueue_write_shards(
+                    fd2_buf, {ShardDataTransfer{MeshCoordinate(y, x)}.host_data(fd2_src_vec.data())}, false);
             }
         }
         Finish(mesh_device_->mesh_command_queue());

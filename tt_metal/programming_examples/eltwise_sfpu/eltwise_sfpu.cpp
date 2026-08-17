@@ -9,7 +9,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -116,7 +115,7 @@ int main() {
         // Write the data on host to the input buffer on the device.
         // setting blocking to false allows us to overlap the data movement and following host operations (
         // setting kerenel args) in this case
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+        cq.enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
 
         // Set up the runtime arguments for the kernels.
         SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
@@ -137,8 +136,8 @@ int main() {
         distributed::Finish(cq);
 
         // Read the result (from shard at mesh coordinate {0,0} on a unit mesh) and compare to our expected result.
-        std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+        std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
+        cq.enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
         // Compute the same thing on CPU for comparison
 

@@ -13,7 +13,6 @@
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <fmt/core.h>
-
 using namespace tt::constants;
 using namespace std;
 using namespace tt;
@@ -254,14 +253,15 @@ void matmul_multi_core(
     // 1. Upload input data to DRAM buffers
     // 2. Execute the program (all kernels run in parallel across cores)
     // 3. Read back the result from DRAM to host memory
-    // The 'true' parameter in EnqueueReadMeshBuffer ensures we wait for completion (so when the function
+    // The blocking read ensures we wait for completion (so when the function
     // returns, the output vector is fully populated).
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    cq.enqueue_write_mesh_buffer(src0_dram_buffer, a.data(), false);
+    cq.enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    // Blocking read waits for completion before returning and resizes 'output' as needed
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    // Blocking read waits for completion before returning
+    output.resize(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
+    cq.enqueue_read_mesh_buffer((output).data(), dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

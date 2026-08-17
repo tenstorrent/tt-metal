@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cctype>
 #include <cerrno>
 #include <fmt/base.h>
@@ -42,7 +43,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -194,8 +194,11 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         std::vector<uint32_t> src_vec = sfpu_op_to_init_func.at(sfpu_name)(
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
-        tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0), src_dram_buffer, src_vec, tt::tt_metal::distributed::MeshCoordinate(0, 0));
+        device->mesh_command_queue(0).enqueue_write_shards(
+            src_dram_buffer,
+            {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                src_vec.data())},
+            false);
 
         tt_metal::SetRuntimeArgs(
             program,

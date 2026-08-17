@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
@@ -38,7 +39,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
@@ -221,11 +221,10 @@ int main(int argc, char** argv) {
                     .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::L1};
                 l1_buffers.push_back(
                     tt_metal::distributed::MeshBuffer::create(replicated_config, local_config, device.get()));
-                tt_metal::distributed::WriteShard(
-                    device->mesh_command_queue(0),
+                device->mesh_command_queue(0).enqueue_write_shards(
                     l1_buffers[(r * num_cores_c) + c],
-                    packed_tensors[(r * num_cores_c) + c],
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
+                    {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                         .host_data(packed_tensors[(r * num_cores_c) + c].data())},
                     true);
 
                 if (single_read || one_buffer_share) {

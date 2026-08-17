@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -51,8 +53,8 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include <tt-metalium/experimental/dispatch_context.hpp>
-
 namespace tt::tt_metal::distributed::test {
 namespace {
 
@@ -136,7 +138,7 @@ void verify_cb_config(
                     ::tt::tt_metal::detail::ReadFromDeviceL1(
                         device,
                         core_coord,
-                        workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
+                        workload.impl().get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
                         cb_config_buffer_size,
                         cb_config_vector);
 
@@ -166,8 +168,8 @@ void validate_sems(
     MeshWorkload& mesh_workload,
     std::vector<uint32_t>& expected_semaphore_values) {
     for (const auto& core : crs) {
-        const uint32_t sem_buffer_size = mesh_workload.get_sem_size(mesh_device, core, CoreType::WORKER);
-        const uint32_t sem_buffer_base = mesh_workload.get_sem_base_addr(mesh_device, core, CoreType::WORKER);
+        const uint32_t sem_buffer_size = mesh_workload.impl().get_sem_size(mesh_device, core, CoreType::WORKER);
+        const uint32_t sem_buffer_base = mesh_workload.impl().get_sem_base_addr(mesh_device, core, CoreType::WORKER);
         std::vector<uint32_t> readback_sem_vals;
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
@@ -574,10 +576,10 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(
+                src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec.data(), false);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(
+                src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec.data(), false);
         }
     }
 
@@ -683,8 +685,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(
+                input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec.data(), false);
         }
     }
 

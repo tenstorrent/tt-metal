@@ -30,7 +30,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/api/tt-metalium/math.hpp"
 #include <enchantum/enchantum.hpp>
-
 namespace tt::tt_metal::distributed::test {
 namespace {
 

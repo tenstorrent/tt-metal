@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <fmt/ranges.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -31,7 +32,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -134,8 +134,10 @@ void RunDelayTestOnCore(
     std::vector<uint32_t> expected_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, 0.0f);
     inc_populate(expected_vec, start_from + constant);
 
-    distributed::WriteShard(cq, src0_dram_buffer, src0_vec, zero_coord);
-    distributed::WriteShard(cq, src1_dram_buffer, src1_vec, zero_coord);
+    cq.enqueue_write_shards(
+        src0_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src0_vec.data())}, false);
+    cq.enqueue_write_shards(
+        src1_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src1_vec.data())}, false);
 
     vector<uint32_t> reader_args = {
         dram_buffer_src0_addr, (std::uint32_t)0, NUM_TILES, dram_buffer_src1_addr, (std::uint32_t)0, NUM_TILES, 0};

@@ -54,6 +54,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -247,22 +248,6 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
 
-TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
-    constexpr size_t buffer_size = 16;
-
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = buffer_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
-    const ReplicatedBufferConfig buffer_config{.size = buffer_size};
-    auto mesh_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-    std::vector<uint8_t> small_src_vec(buffer_size / 2, 0);
-    std::vector<uint8_t> exact_src_vec(buffer_size, 0);
-    std::vector<uint8_t> large_src_vec(buffer_size * 2, 0);
-
-    EXPECT_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
-    EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, exact_src_vec, true));
-    EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, large_src_vec, true));
-}
-
 TEST_F(MeshBufferTest2x4, Deallocation) {
     // Verify that a buffer is deallocated on the MeshDevice when it goes
     // out of scope on host. Create a buffer with a certain config in limited
@@ -376,7 +361,8 @@ TEST_F(MeshBufferTestSuite, MoveConstructor) {
     EXPECT_EQ(moved_buffer.size(), original_size);
     EXPECT_EQ(moved_buffer.device_local_size(), original_device_local_size);
 
-    EXPECT_FALSE(original_buffer->is_allocated());
+    // The moved-from MeshBuffer no longer owns an implementation.
+    EXPECT_ANY_THROW(original_buffer->impl());
 }
 
 TEST_F(MeshBufferTestSuite, MoveAssignment) {
@@ -406,7 +392,8 @@ TEST_F(MeshBufferTestSuite, MoveAssignment) {
     EXPECT_EQ(target_buffer->size(), source_size);
     EXPECT_EQ(target_buffer->device_local_size(), source_device_local_size);
 
-    EXPECT_FALSE(source_buffer->is_allocated());
+    // The moved-from MeshBuffer no longer owns an implementation.
+    EXPECT_ANY_THROW(source_buffer->impl());
 
     auto new_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
     EXPECT_EQ(new_buffer->address(), target_original_address);
@@ -443,7 +430,8 @@ TEST_P(DeviceLocalMeshBufferShardingTest, ShardingTest) {
 
     for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-            WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, MeshCoordinate(logical_y, logical_x));
+            mesh_device_->mesh_command_queue().enqueue_write_shards(
+                buf, {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(src_vec.data())}, false);
         }
     }
 
@@ -504,9 +492,10 @@ TEST_F(MeshBufferTest2x4, SweepShardAndConcat) {
             std::vector<uint32_t> src_vec =
                 std::vector<uint32_t>(global_buffer_shape.height() * global_buffer_shape.width(), 0);
             std::iota(src_vec.begin(), src_vec.end(), 0);
-            EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
             std::vector<uint32_t> dst_vec = {};
-            EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer);
+            (dst_vec).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
 
             EXPECT_EQ(dst_vec, src_vec);
         }
@@ -563,7 +552,10 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
             std::iota(src_vec.begin(), src_vec.end(), i);
             for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
                 for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-                    WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, MeshCoordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue().enqueue_write_shards(
+                        buf,
+                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(src_vec.data())},
+                        false);
                 }
             }
 
@@ -620,10 +612,12 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
 
         auto mesh_buffer_read_view = MeshBuffer::create(
             sharded_read_view_config, per_device_buffer_config, mesh_device_.get(), mesh_buffer->address());
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
-        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
+        (dst_vec).resize(
+            (mesh_buffer_read_view)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer_read_view, true);
 
         for (int i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(dst_vec[i], i % (src_vec.size()));
@@ -670,10 +664,12 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
         auto mesh_buffer_read_view = MeshBuffer::create(
             sharded_read_view_config, per_device_buffer_config, mesh_device_.get(), mesh_buffer->address());
 
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
-        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
+        (dst_vec).resize(
+            (mesh_buffer_read_view)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer_read_view, true);
         for (int i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(
                 (i / global_buffer_read_shape.width()) * global_buffer_shape.width() + i % global_buffer_shape.width(),
@@ -1445,7 +1441,7 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
     auto output_buffer = MeshBuffer::create(tile_mesh_config, tile_buffer_config, mesh_device_.get());
 
     std::vector<uint16_t> input(single_tile_size / sizeof(uint16_t), 1);
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buffer, input, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(input_buffer, input.data(), /*blocking=*/true);
 
     Program program = CreateProgram();
     auto kernel = CreateKernel(
@@ -1700,7 +1696,10 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
     constexpr uint32_t k_new = 0x44444444u;
     const uint32_t num_u32 = buf_size / sizeof(uint32_t);
     std::vector<uint32_t> sentinel_vec(num_u32, k_sentinel);
-    WriteShard(mesh_device_->mesh_command_queue(), buf, sentinel_vec, coord, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(
+        buf,
+        {ShardDataTransfer{coord}.host_data(sentinel_vec.data())},
+        /*blocking=*/true);
 
     std::vector<uint32_t> newest(num_u32, k_new);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
@@ -1806,10 +1805,11 @@ TEST_F(SDMeshBufferFixture, ShardedBufferWriteReadRoundtrip) {
     std::vector<uint32_t> src(global_buffer_shape.height() * global_buffer_shape.width());
     std::iota(src.begin(), src.end(), 0);
 
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src);
+    mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src.data(), false);
 
     std::vector<uint32_t> dst;
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, mesh_buffer);
+    (dst).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+    mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst).data(), mesh_buffer, true);
 
     EXPECT_EQ(dst, src);
 }

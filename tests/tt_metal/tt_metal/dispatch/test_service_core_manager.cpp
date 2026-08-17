@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 
 #include <chrono>
 #include <cstdint>
@@ -31,7 +32,6 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
-
 namespace tt::tt_metal::distributed::test {
 
 static void assert_counter_incrementing(const std::function<uint32_t()>& read_fn, const std::string& label) {
@@ -254,7 +254,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), fd_buf, fd_src_vec);
+        mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(fd_buf, fd_src_vec.data(), false);
         Finish(mesh_device->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {

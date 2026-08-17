@@ -14,7 +14,6 @@
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -179,7 +178,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     // LAUNCH PROGRAM - Use mesh workload approach
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, packed_input);
+    cq.enqueue_write_mesh_buffer(mesh_buffer, packed_input.data(), false);
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};

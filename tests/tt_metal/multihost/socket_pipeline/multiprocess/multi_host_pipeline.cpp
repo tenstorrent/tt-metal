@@ -22,7 +22,6 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
-
 namespace tt::tt_metal {
 
 // Pipeline config structs.
@@ -846,8 +845,8 @@ void run_single_galaxy_pipeline(
         mesh_device.get());
     // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
     std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
-    distributed::EnqueueWriteMeshBuffer(
-        mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+    mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(
+        latency_measurement_buffer, latency_init_data.data(), true);
 
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
@@ -896,7 +895,7 @@ void run_single_galaxy_pipeline(
         std::iota(host_data.begin(), host_data.end(), 0u);
 
         // Write data to device buffer
-        distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+        mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(input_mesh_buffer, host_data.data(), true);
 
         // Extract buffer pointer for metal-level operations
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
@@ -1098,7 +1097,7 @@ void run_single_galaxy_rate_pipeline(
             distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
         std::vector<uint32_t> host_data(num_elems);
         std::iota(host_data.begin(), host_data.end(), 0u);
-        distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+        mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(input_mesh_buffer, host_data.data(), true);
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
         // Warmup: run a small number of iterations to trigger kernel compilation and caching.

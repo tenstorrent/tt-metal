@@ -21,7 +21,6 @@
 #include <umd/device/types/arch.hpp>
 
 #include "impl/device/mock_device_util.hpp"
-
 namespace tt::tt_metal {
 
 // ============================================================================

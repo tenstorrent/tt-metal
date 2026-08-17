@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cstdint>
 #include <cmath>
 #include <cstddef>
@@ -19,7 +20,6 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
-
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 std::string get_system_config_name(SystemConfig system_config) {
@@ -157,11 +157,10 @@ bool test_socket_send_recv(
                 }
                 mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
-                WriteShard(
-                    mesh_device_->mesh_command_queue(),
+                mesh_device_->mesh_command_queue().enqueue_write_shards(
                     sender_data_buffer,
-                    src_vec,
-                    connection.sender_core.device_coord);
+                    {ShardDataTransfer{connection.sender_core.device_coord}.host_data(src_vec.data())},
+                    false);
 
                 auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(connection.sender_core.device_coord);
                 auto recv_fabric_node_id =

@@ -18,6 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -190,7 +191,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     this->RunProgram(mesh_device, sparse_workload);
 
     const uint32_t remote_config_address =
-        sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
+        sparse_workload.impl().get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
         sparse_program_in_workload.impl().get_program_config(programmable_core_index).local_cb_size;
     std::vector<uint32_t> remote_config;
     detail::ReadFromDeviceL1(

@@ -25,6 +25,7 @@
 #include "shape2d.hpp"
 #include "shape_base.hpp"
 #include <tt-metalium/maybe_remote.hpp>
+#include "maybe_remote_utils.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -481,10 +482,6 @@ std::vector<IDevice*> MeshDeviceView::get_devices(const MeshCoordinateRange& ran
 
 std::vector<IDevice*> MeshDeviceView::get_devices() const { return pimpl_->get_devices(); }
 
-std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids(const MeshCoordinateRange& range) const {
-    return pimpl_->get_fabric_node_ids(range);
-}
-
 std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids() const {
     return pimpl_->get_fabric_node_ids();
 }
@@ -503,21 +500,11 @@ std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids_on_
     return pimpl_->get_fabric_node_ids_on_column(col);
 }
 
-bool MeshDeviceView::empty() const noexcept { return pimpl_->empty(); }
-
-size_t MeshDeviceView::size() const noexcept { return pimpl_->size(); }
-
 const MeshShape& MeshDeviceView::shape() const noexcept { return pimpl_->shape(); }
-
-tt::tt_fabric::MeshId MeshDeviceView::mesh_id() const noexcept { return pimpl_->mesh_id(); }
 
 bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept { return pimpl_->contains(coord); }
 
 IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const { return pimpl_->get_device(coord); }
-
-tt::tt_fabric::FabricNodeId MeshDeviceView::get_fabric_node_id(const MeshCoordinate& coord) const {
-    return pimpl_->get_fabric_node_id(coord);
-}
 
 size_t MeshDeviceView::num_rows() const { return pimpl_->num_rows(); }
 
@@ -529,37 +516,12 @@ MeshCoordinate MeshDeviceView::find_device(ChipId device_id) const { return pimp
 
 bool MeshDeviceView::is_mesh_2d() const { return pimpl_->is_mesh_2d(); }
 
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
-    size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
-    return MeshDeviceViewImpl::get_line_coordinates(length, mesh_shape, mesh_offset);
-}
-
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates() const { return pimpl_->get_line_coordinates(); }
-
-std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& ring_shape, const Shape2D& mesh_shape) {
-    return MeshDeviceViewImpl::get_ring_coordinates(ring_shape, mesh_shape);
-}
-
-std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates() const { return pimpl_->get_ring_coordinates(); }
-
-std::vector<IDevice*> MeshDeviceView::get_line_devices() const { return pimpl_->get_line_devices(); }
-
 std::vector<IDevice*> MeshDeviceView::get_ring_devices() const { return pimpl_->get_ring_devices(); }
-
-std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_line_fabric_node_ids() const {
-    return pimpl_->get_line_fabric_node_ids();
-}
 
 std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_ring_fabric_node_ids() const {
     return pimpl_->get_ring_fabric_node_ids();
 }
 
 bool MeshDeviceView::is_local(const MeshCoordinate& coord) const { return pimpl_->is_local(coord); }
-
-MeshCoordinateRange MeshDeviceView::get_local_mesh_coord_range() const { return pimpl_->get_local_mesh_coord_range(); }
-
-std::vector<MaybeRemote<IDevice*>>::const_iterator MeshDeviceView::begin() const { return pimpl_->begin(); }
-
-std::vector<MaybeRemote<IDevice*>>::const_iterator MeshDeviceView::end() const { return pimpl_->end(); }
 
 }  // namespace tt::tt_metal::distributed

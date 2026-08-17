@@ -12,7 +12,6 @@
 #include <random>
 #include <cstdint>
 #include <vector>
-
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
@@ -142,7 +141,7 @@ int main() {
         distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Output buffer
 
     // DRAM transfer
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+    cq.enqueue_write_mesh_buffer(src_dram_buffer, src_vec.data(), false);
 
     // L1 circular buffer setup
     constexpr uint32_t src_cb_index = CBIndex::c_0;
@@ -198,8 +197,8 @@ int main() {
     distributed::Finish(cq);
 
     // Data transfer back to host machine
-    std::vector<bfloat16> result_vec(constants::TILE_HW, 0);
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
+    cq.enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     // Reverse the tilization to get the result in the row-major format that the CPU expects
     result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);

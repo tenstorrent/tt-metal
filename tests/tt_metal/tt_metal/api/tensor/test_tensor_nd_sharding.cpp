@@ -14,6 +14,7 @@
 // MeshTensor/HostTensor API on a single-device mesh via MeshDevice1x1Fixture.
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <gmock/gmock.h>
 
 #include <functional>
@@ -47,11 +48,9 @@
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
-
 #include "impl/tensor/mesh_tensor_impl.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
-
 namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

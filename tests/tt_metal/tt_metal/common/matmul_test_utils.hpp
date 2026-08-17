@@ -154,7 +154,8 @@ inline bool move_tiles_to_dram(
         }
     }
 
-    distributed::WriteShard(cq, buffer, tiles, distributed::MeshCoordinate(0, 0));
+    cq.enqueue_write_shards(
+        buffer, {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(tiles.data())}, false);
     return pass;
 }
 

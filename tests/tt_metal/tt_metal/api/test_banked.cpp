@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <cstdint>
 #include <sys/types.h>
@@ -31,7 +32,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-
 using std::vector;
 using namespace tt::tt_metal;
 
@@ -182,17 +182,16 @@ bool reader_cb_writer(
     ////////////////////////////////////////////////////////////////////////////
     auto input_packed =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
-    distributed::WriteShard(cq, input_buffer, input_packed, zero_coord, false);
+    cq.enqueue_write_shards(
+        input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_packed.data())}, false);
     SetRuntimeArgs(program_, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program_, writer_kernel, cfg.logical_core, writer_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     std::vector<uint32_t> reread_input_packed;
     distributed::ReadShard(cq, reread_input_packed, input_buffer, zero_coord, false);
-
     std::vector<uint32_t> output_packed;
     distributed::ReadShard(cq, output_packed, output_buffer, zero_coord, false);
-
     pass &= (output_packed == input_packed);
 
     return pass;
@@ -287,7 +286,8 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
     //                      Compile and Execute Appli   cation
     ////////////////////////////////////////////////////////////////////////////
 
-    distributed::WriteShard(cq, input_buffer, input_packed, zero_coord, false);
+    cq.enqueue_write_shards(
+        input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_packed.data())}, false);
 
     SetRuntimeArgs(
         program_,

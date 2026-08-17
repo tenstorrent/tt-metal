@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 #include <cstring>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -32,7 +33,6 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -481,7 +481,8 @@ static bool reader_datacopy_writer(
     auto input_data = generate_inputs(config);
 
     // Write input data to input DRAM buffer
-    distributed::WriteShard(cq, input_dram_buffer, input_data, zero_coord);
+    cq.enqueue_write_shards(
+        input_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_data.data())}, false);
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);

@@ -5,6 +5,7 @@
 #include <mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
@@ -44,7 +45,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 class Kernel;
@@ -163,7 +163,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             };
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
-            // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
+            // Iterate over the sub-grids and write to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
                 std::size_t kernel_bin_size =
                     program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
@@ -174,7 +174,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     mesh_device,
                     kernel_bin_buf_->address());
 
-                mesh_cq.enqueue_write_shard_to_sub_grid(
+                as_mesh_command_queue_base(mesh_cq).enqueue_write_shard_to_sub_grid(
                     *kernel_bin_buf_view,
                     program.impl().get_program_transfer_info().binary_data.data(),
                     device_range,
@@ -436,33 +436,6 @@ std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() {
 
 const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
     return pimpl_->get_programs();
-}
-
-// For testing purposes only
-void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
-    pimpl_->set_last_used_command_queue_for_testing(mesh_cq);
-}
-
-MeshCommandQueue* MeshWorkload::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
-
-uint32_t MeshWorkload::get_sem_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_base_addr(mesh_device, logical_core, core_type);
-}
-
-uint32_t MeshWorkload::get_sem_size(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_size(mesh_device, logical_core, core_type);
-}
-
-uint32_t MeshWorkload::get_cb_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_base_addr(mesh_device, logical_core, core_type);
-}
-
-uint32_t MeshWorkload::get_cb_size(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
 }  // namespace tt::tt_metal::distributed

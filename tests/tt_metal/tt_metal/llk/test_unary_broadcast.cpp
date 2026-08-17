@@ -48,7 +48,6 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -548,14 +547,14 @@ void run_single_core_unary_broadcast(
     std::vector<uint32_t> golden_packed_tilized_output;
     get_packed_tilized_input_output_pair(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
-    distributed::WriteShard(cq, src_dram_buffer, packed_tilized_input, zero_coord);
+    cq.enqueue_write_shards(
+        src_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(packed_tilized_input.data())}, false);
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
-
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }
 }  // namespace unit_tests::compute::unary_broadcast

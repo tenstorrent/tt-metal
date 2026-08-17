@@ -23,6 +23,7 @@
 #include <variant>
 #include <vector>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/event_query_impl.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>

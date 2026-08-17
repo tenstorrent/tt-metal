@@ -6,6 +6,7 @@
 // These tests require a real device (slow dispatch).
 
 #include <cstdlib>
+#include <type_traits>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -19,7 +20,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
-
 namespace tt::tt_metal {
 
 namespace per_core = experimental::per_core_allocation;

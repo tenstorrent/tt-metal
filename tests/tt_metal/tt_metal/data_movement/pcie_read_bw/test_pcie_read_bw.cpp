@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "multi_device_fixture.hpp"
+#include <type_traits>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -12,7 +13,6 @@
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <chrono>
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -193,7 +193,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
 
         // Seed device buffer
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);
-        distributed::WriteShard(cq, buffer, src, device_coord, false);
+        cq.enqueue_write_shards(buffer, {distributed::ShardDataTransfer{device_coord}.host_data(src.data())}, false);
         distributed::Finish(cq);
 
         vector<uint32_t> dst;

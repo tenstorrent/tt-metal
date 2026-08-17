@@ -7,7 +7,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
@@ -235,22 +234,24 @@ int main() {
     uint32_t workload_1_src0_val = 7;
     uint32_t workload_1_src1_val = 5;
     // Uniform values passed to the add operation
-    std::vector<uint32_t> add_src0_vec = create_constant_vector_of_bfloat16(add_src0_buf->size(), workload_0_src0_val);
-    std::vector<uint32_t> add_src1_vec = create_constant_vector_of_bfloat16(add_src1_buf->size(), workload_0_src1_val);
+    std::vector<uint32_t> add_src0_vec =
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_0_src0_val);
+    std::vector<uint32_t> add_src1_vec =
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_0_src1_val);
     // Uniform values passed to the multiply and subtract operations (the top row runs multiplication with subtraction
     // on the bottom row of the Virtual Mesh)
     std::vector<uint32_t> mul_sub_src0_vec =
-        create_constant_vector_of_bfloat16(mul_sub_src0_buf->size(), workload_1_src0_val);
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_1_src0_val);
     std::vector<uint32_t> mul_sub_src1_vec =
-        create_constant_vector_of_bfloat16(mul_sub_src1_buf->size(), workload_1_src1_val);
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_1_src1_val);
 
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
     // independent MeshCQs.
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src0_buf, add_src0_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src1_buf, add_src1_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src1_buf, add_src1_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src0_buf, mul_sub_src0_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src1_buf, mul_sub_src1_vec.data(), false);
     // Synchronize
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
@@ -260,10 +261,10 @@ int main() {
     MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
-    std::vector<bfloat16> add_dst_vec = {};
-    std::vector<bfloat16> mul_sub_dst_vec = {};
-    EnqueueReadMeshBuffer(data_movement_cq, add_dst_vec, add_output_buf);
-    EnqueueReadMeshBuffer(data_movement_cq, mul_sub_dst_vec, mul_sub_output_buf);
+    std::vector<bfloat16> add_dst_vec(global_buffer_config.global_size / sizeof(bfloat16));
+    std::vector<bfloat16> mul_sub_dst_vec(global_buffer_config.global_size / sizeof(bfloat16));
+    data_movement_cq.enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
+    data_movement_cq.enqueue_read_mesh_buffer((mul_sub_dst_vec).data(), mul_sub_output_buf, true);
 
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;

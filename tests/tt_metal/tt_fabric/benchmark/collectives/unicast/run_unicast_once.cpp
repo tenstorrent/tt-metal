@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <fmt/format.h>
 #include <algorithm>
 #include <chrono>
@@ -22,7 +23,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
-
 namespace tt::tt_fabric::bench {
 
 // ---------- helpers (validation / utilities) ----------
@@ -147,8 +147,14 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     // Mesh CQ (needed for shard I/O and later trace)
     auto& mcq = mesh->mesh_command_queue();
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
-    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
-    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        src_buf,
+        {Dist::ShardDataTransfer{src_coord}.host_data(tx.data())},
+        /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        dst_buf,
+        {Dist::ShardDataTransfer{dst_coord}.host_data(zeros.data())},
+        /*blocking=*/true);
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
