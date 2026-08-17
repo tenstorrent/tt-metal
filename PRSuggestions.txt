@@ -81,7 +81,7 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       is the one that wins. Bring-up then prints the next command to run without any threshold, so
       copying what it just gave you gets 0.95.
     - Fix: the component tests and the gate's own default already use 0.99, so the end to end value
-      passed on the command line is the only 0.95 and could simply match. That looser bar does not
+      passed on the command line is the only 0.95, and could be 0.99 as well. That looser bar does not
       only permit a worse model, it produces one: the same code scored 0.9586 at 0.95 and 0.9986 at
       0.99, because the repair loop stops as soon as it clears. Printing the target that was used
       would help too, and the docs could then settle on one number.
