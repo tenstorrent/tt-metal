@@ -211,6 +211,9 @@ class ChunkedPrefillPageTableGuardMixin:
       non-PLI async decode stays coherent without shared-generator changes.
     - Safe async-ahead token merge on ``decode_forward`` (bucket / OOB
       ``slot_remap`` host fallback) via :mod:`models.demos.gemma4.tt.async_decode`.
+    - Batch-keyed decode traces via ``_decode_forward_trace_text`` keyed by
+      ``(on_device_sampling, batch)`` so B=1 and B=max stay separate without
+      changing shared ``Generator`` used by all models.
     - Sequential multi-user prefill: slice hybrid per-layer page tables to the
       active 1-row (tt_transformers forces ``user_id=0`` with a sliced legacy
       ``page_table``; full-attn must not keep reading batch row 0).
@@ -1290,6 +1293,78 @@ class ChunkedPrefillPageTableGuardMixin:
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
         return tt_decode_output
 
+    def _decode_forward_trace_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        on_device_sampling=False,
+        reset_batch=False,
+        skip_precompile=False,
+    ):
+        """Gemma4 decode traces keyed by ``(on_device_sampling, batch)``.
+
+        Shared ``Generator`` keys traces by sampling mode only. Gemma4 warms
+        B=1 and B=max separately (vLLM nearest-bucket / P150x8), so the key
+        must include per-DP chunk batch or async-ahead keep and replay hit the
+        wrong Metal graph. Kept local to this mixin — no ``tt_transformers`` edits.
+        """
+        from models.tt_transformers.tt.common import copy_host_to_device
+        from models.tt_transformers.tt.generator import DECODE_PAGE_TABLE_INPUT_IDX
+
+        batch = int(tokens[0].shape[0]) if tokens else 1
+        decode_trace_key = (on_device_sampling, batch)
+        if not self.trace_ids_decode[decode_trace_key]:
+            trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+                skip_precompile=skip_precompile,
+            )
+            self.trace_ids_decode[decode_trace_key] = trace_ids
+            self.trace_inputs_decode[decode_trace_key] = device_inputs
+            self.trace_output_decode[decode_trace_key] = tt_out_trace
+
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = on_device_sampling
+        prev_decode_batch = getattr(self, "_prev_decode_batch", None)
+        self._prev_decode_batch = batch
+        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
+        batch_changed = prev_decode_batch is not None and prev_decode_batch != batch
+        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed or batch_changed
+        page_table_changed = page_table is not None and (
+            self.prev_page_table is None
+            or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
+        )
+
+        for i in range(self.data_parallel):
+            refresh_trace_inputs = reset_inputs or getattr(
+                self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
+            )
+            user_page_table = page_table[i] if page_table is not None else None
+
+            if refresh_trace_inputs:
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                copy_host_to_device(
+                    host_tensors=host_inputs_i,
+                    device_tensors=self.trace_inputs_decode[decode_trace_key][i],
+                )
+            elif page_table_changed:
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
+                device_page_table = self.trace_inputs_decode[decode_trace_key][i][DECODE_PAGE_TABLE_INPUT_IDX]
+                if host_page_table is not None:
+                    ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+
+        if page_table_changed:
+            self.prev_page_table = tuple(pt.clone() for pt in page_table)
+        for i, trace_id in self.trace_ids_decode[decode_trace_key].items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+        return self.trace_output_decode[decode_trace_key]
+
 
 class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     model_capabilities = {
@@ -1301,6 +1376,8 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         super().__init__(*args, **kwargs)
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
+        # Used by batch-keyed decode traces / async-ahead feedback (mixin).
+        self._prev_decode_batch = None
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         """Warmup tokens with *unique* per-user page-table rows.
