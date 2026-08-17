@@ -9,9 +9,15 @@
 # until a push is permitted.
 #
 # Usage:
-#   ./ci.sh                 # all tiers (overnight-class)
+#   ./ci.sh                 # DEFAULT: the top-k CI scope (tiers 1-3) — the
+#                           # contract suite, reduce/test_topk, the
+#                           # topk_large_indices nightly, the consumer suites,
+#                           # and the nightly groups that carry our tests
 #   ./ci.sh --quick         # tier 1 only (top-k core proof, ~10 min)
-#   ./ci.sh --tiers 1,2     # subset of tiers
+#   ./ci.sh --broad         # adds tier 4: the full unit_tests/operations
+#                           # long tail (eltwise/conv/pool/matmul/...) —
+#                           # opt-in only; hours of device time
+#   ./ci.sh --tiers 1,2     # explicit subset
 #   ./ci.sh --out DIR       # output dir (default generated/ci_local/<UTC timestamp>)
 #
 # Not covered here (documented gaps):
@@ -22,10 +28,11 @@
 set -u
 cd "$(dirname "$0")"
 
-TIERS="1,2,3,4"; OUT=""
+TIERS="1,2,3"; OUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick) TIERS="1";;
+    --broad) TIERS="1,2,3,4";;
     --tiers) TIERS="$2"; shift;;
     --out) OUT="$2"; shift;;
     *) echo "unknown arg: $1" >&2; exit 2;;
