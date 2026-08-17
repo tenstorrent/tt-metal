@@ -14,8 +14,8 @@ namespace ttnn::prim {
 // Each core owns a range of 32-row bands (tile-rows). Per band it: reads every input's tile-row,
 // untilizes it, byte-assembles the logical rows side by side (dropping each input's width padding
 // and zero-filling the output's), retilizes, and writes the output tile-row. Peak memory is
-// inputs + output + a few KB of CBs per core — no full-size intermediates and no DRAM staging,
-// unlike the untilize/transpose/retilize massaging pipeline this replaces.
+// inputs + output + a few KB of CBs per core -- no full-size intermediates and no DRAM staging,
+// unlike the untilize/transpose/retilize massaging pipeline this bypasses.
 struct ConcatTiledUnalignedProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value);

@@ -9,7 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 // Per band: untilize every input tile into its own row-major 32x32 block (width 1 keeps the
-// helper geometry independent of per-input widths — the writer's assembler does all the
+// helper geometry independent of per-input widths -- the writer's assembler does all the
 // column math), then retilize the assembled full-width band the writer built in cb_asm.
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);

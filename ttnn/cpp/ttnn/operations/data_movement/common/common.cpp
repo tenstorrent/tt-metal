@@ -459,9 +459,6 @@ uint32_t get_pending_l1_output_reservation(
         return 0;
     }
 
-    // Let TensorSpec do the sizing: it is exact for block-float formats (BFLOAT8_B/BFLOAT4_B
-    // pack a shared exponent per 16 datums, so a plain elements * datum_size is wrong) and
-    // accounts for tile/row alignment.
     size_t total_bytes = 0;
     try {
         const tt::tt_metal::TensorSpec output_spec(
@@ -470,11 +467,10 @@ uint32_t get_pending_l1_output_reservation(
         total_bytes = output_spec.compute_packed_buffer_size_bytes();
     } catch (...) {
         // If the spec cannot be constructed (unsupported dtype/layout combination), fall back
-        // to reserving nothing: this guard must never turn a working op into a failing one.
+        // to reserving nothing.
         return 0;
     }
 
-    // Interleaved: pages are distributed round-robin across the L1 banks.
     return static_cast<uint32_t>(tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(num_banks)));
 }
 
@@ -487,7 +483,6 @@ bool is_enough_space(
     const uint32_t fixed_staging_bytes,
     const uint32_t reserved_l1_bytes_per_core) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    // The output buffer is not allocated yet, but it will be before the CBs are placed.
     max_l1_space = max_l1_space > reserved_l1_bytes_per_core ? max_l1_space - reserved_l1_bytes_per_core : 0;
     uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(
         input_tensor_a,
