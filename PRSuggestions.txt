@@ -1,10 +1,13 @@
 1. Check the model implementation the tool writes when a model is not in HF format
     - It writes its own PyTorch version of the model, and every later test is scored against that
-      version, but the only check on it is a comment. Ours was correct, though we only know that
-      because we compared it against our own reference by hand. Nothing in the run would have caught a
-      wrong one.
-    - Fix: write that check as code and run it. It already worked out the right check for this model,
-      and even tried a wrong RoPE on purpose to show the check catches it, so keep that part.
+      version. What it checks in code only confirms the weights fit, not that the maths is right, and a
+      wrong RoPE or a wrong epsilon leaves every shape identical. Ours was correct, though we only know
+      that because we compared it against our own reference by hand. Nothing in the run would have
+      caught a wrong one.
+    - Fix: it already knows what the check should be, and wrote it down as a comment instead of code.
+      It says it drove the speech path and confirmed the model stops on its own, and that a wrong RoPE
+      gives a buzz that never stops. Make that run, keep the deliberately wrong version in it since a
+      check never seen to fail proves little, and add that cached and recomputed decode agree.
 
 2. Fix bring-up from a local folder
     - A folder on disk is not treated like a Hub name. It gets a shallower check and the run dies

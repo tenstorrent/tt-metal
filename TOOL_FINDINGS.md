@@ -5459,8 +5459,17 @@ which is what I first measured and wrongly began attributing to the codec.
 ### The actual defect
 
 **Run 2 emitted no executable `_selfcheck`** (`selfcheck=2` in run 1's file, `selfcheck=0` in run 2's).
-This file becomes the **ground truth every downstream PCC gate is measured against**, and nothing the
-pipeline runs re-verifies it.
+This file becomes the **ground truth every downstream PCC gate is measured against**.
+
+Be precise about what is and is not checked, because "it writes no checks" would be wrong:
+
+- **In code, running on every load:** the strict checkpoint bijection, per-tensor shape equality,
+  `load_state_dict(strict=True)` with an explicit missing/unexpected re-check, a `model_type`
+  assertion, and input-shape validation on the forward paths. This is a real layer and it works.
+- **What that layer can prove:** the weights fit the module tree. **What it cannot:** that the module
+  tree computes the right function. A wrong RoPE convention, a wrong norm epsilon or a swapped
+  activation order leaves every shape identical and passes all of the above.
+- **In prose only:** the behavioural verification that would close that gap.
 
 The nuance matters, and it is to the tool's credit: it *did* verify the implementation while writing
 it, and it found a genuinely discriminative test on its own — including a **negative control**, which
@@ -5478,8 +5487,10 @@ is more than most humans would do. From its docstring:
 > for `neutral_female`). Swapping in the `rotate_half` convention instead yields a 387 Hz buzz that
 > never terminates."*
 
-That is exactly the right check, and it correctly rules out the cheap one that would have passed
-regardless. **The defect is that all of it is prose.** It cannot be re-run, it is not evidence
+That is a genuinely discriminative check for the convention class, and it correctly rules out the
+cheap one that would have passed regardless. It is not a complete check — a subtly wrong epsilon or a
+small codec error would still produce speech and still pass it — and note that the negative control is
+*reported*, not demonstrated: we have only the docstring's word that `rotate_half` was tried. **The defect is that all of it is prose.** It cannot be re-run, it is not evidence
 anything downstream can act on, and the pipeline has no way to know whether it happened at all — for
 this model, or for the next one where the agent skips it and writes the same confident paragraph.
 
