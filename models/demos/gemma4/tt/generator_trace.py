@@ -686,18 +686,18 @@ def enable_single_chunk_demo_prefill_trace_bucket(
     max_seq_len: int,
     max_prefill_chunk_size: int,
     model_args_list,
+    batch_size: int = 1,
 ) -> bool:
-    """Trace the demo's single-chunk 4k bucket when the run actually uses it.
+    """Opt the demo's single-chunk 4k bucket into prefill Metal Trace.
 
-    12B long-4k keeps ``prefill_chunk=4096`` (= ``max_seq_len``), but default
-    ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` stops at 2048 so measured prefill stayed
-    eager. Opting 4096 in and capturing it cut warm TTFT ~1023→976 ms on WH 1x8
-    / 12B. No-ops for short demos (``max_seq_len < 4096``) and for multi-chunk
-    runs (``chunk < max_seq_len``), which already use the 2048 traced path.
+    Default lenses stop at 2048 (vLLM APC). Standalone 12B long-4k is
+    single-chunk @ 4096 and needs this bucket. No-ops when the run does not
+    use that path: short ``max_seq_len``, ``batch_size > 1`` (unused 4k B=1
+    traces bloat the region), or multi-chunk (``chunk < max_seq_len``).
     """
     chunk = int(max_prefill_chunk_size)
     msl = int(max_seq_len)
-    if chunk <= 0 or msl < 4096 or chunk < msl:
+    if int(batch_size) > 1 or chunk <= 0 or msl < 4096 or chunk < msl:
         return False
     bucket = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
     ensure_trace_prefill_seq_len(bucket)

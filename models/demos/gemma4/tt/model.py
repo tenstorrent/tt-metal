@@ -27,7 +27,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.attention.operations import prefill_tilize_memcfg
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
-from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.rms_norm import RMSNorm, maybe_interleave
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
@@ -1952,6 +1952,75 @@ class Gemma4Model:
         # Trace deferred lm_head: commit bounded ring fills after logits.
         self._flush_deferred_bounded_fills_if_needed()
         return logits
+
+    def extract_last_tokens_batched_prefill(
+        self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
+    ):
+        """Last-token hidden rows from batched prefill for on-device sampling.
+
+        Generator reshapes pre-norm hidden to ``[B, 1, S, H]`` then calls this
+        + ``_apply_norm_and_lm_head``. Concat TP column-shards when present and
+        replicate the full hidden — Gemma4 RMSNorm is not DistributedNorm.
+        """
+        del prefill_seq_len
+        hidden_states = maybe_interleave(hidden_states)
+        active_indices = [lt for lt in last_token_idx_list if lt > 0]
+        all_same = len(set(active_indices)) <= 1
+        tile = ttnn.TILE_SIZE
+
+        if all_same and active_indices:
+            common_last = active_indices[0]
+            get_last = (common_last // tile) * tile
+            row = common_last % tile
+            block = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last, 0),
+                (padded_batch, 1, get_last + tile, hidden_states.shape[-1]),
+            )
+        else:
+            block = hidden_states
+            row = None
+
+        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
+        per_dev = int(host_tensors[0].shape[-1])
+        if per_dev == self.hidden_size:
+            host_full = host_tensors[0]
+        elif per_dev * len(host_tensors) == self.hidden_size:
+            host_full = torch.cat(host_tensors, dim=-1)
+        else:
+            raise ValueError(
+                f"batched prefill hidden last dim {per_dev} x {len(host_tensors)} devices "
+                f"does not match hidden_size {self.hidden_size}"
+            )
+        if row is not None:
+            combined = host_full[:, :, row : row + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
+        else:
+            rows = [
+                host_full[slot : slot + 1, :, last_token_idx_list[slot] : last_token_idx_list[slot] + 1, :]
+                for slot in range(padded_batch)
+            ]
+            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        target_batch = padded_batch if target_batch is None else target_batch
+        if target_batch < padded_batch:
+            raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
+        if target_batch > padded_batch:
+            padded_combined = torch.zeros(1, 1, target_batch, combined.shape[-1], dtype=combined.dtype)
+            padded_combined[:, :, :padded_batch, :] = combined
+            combined = padded_combined
+
+        return ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
+
+    def _apply_norm_and_lm_head(self, x):
+        """Final RMSNorm + lm_head on last-token rows ``[1, 1, B, H]``."""
+        x = self.norm.forward(x)
+        return self._apply_lm_head(x, is_decode=False, allow_sharded=self.sampling is not None)
 
     def switch_mode(self, mode):
         """Generator compatibility — no prefetcher to reinitialize."""

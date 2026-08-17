@@ -406,6 +406,36 @@ def test_prefill_l1_gather_memcfg_matches_norm_layout(monkeypatch):
     assert norm._build_sharded_cfg(5376, 128)[0] == norm_cfg
 
 
+def test_batched_prefill_l1_gather_uses_physical_height(monkeypatch):
+    """Batched prefill is [B, 1, S, H]; shard height must be B*S, not S."""
+    from models.demos.gemma4.tt.ccl import _short_seq_l1_gather_memcfg
+    from models.demos.gemma4.tt.rms_norm import (
+        _SHARDED_NORM_MAX_HEIGHT,
+        activation_physical_height,
+        width_shard_input_memcfg,
+    )
+
+    monkeypatch.delenv("GEMMA4_CCL_L1_GATHER", raising=False)
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM", raising=False)
+    mesh = _FakeMeshDevice()
+    mgr = _FakeCclManager(mesh)
+
+    assert activation_physical_height([1, 1, 96, 3840]) == 96
+    assert activation_physical_height([2, 1, 96, 3840]) == 192
+    assert activation_physical_height([4, 1, 512, 3840]) == 2048
+
+    batched = _FakeTensor([2, 1, 96, 3840])
+    expected = width_shard_input_memcfg(mesh, 3840, 192)
+    assert expected is not None
+    assert _short_seq_l1_gather_memcfg(batched, mgr) == expected
+    # Must not emit the B=1 (height=96) spec — that is the TT_FATAL.
+    assert _short_seq_l1_gather_memcfg(batched, mgr) != width_shard_input_memcfg(mesh, 3840, 96)
+
+    # B*S above the sharded-norm cutoff stays DRAM (same as long B=1 prefill).
+    assert 4 * 512 > _SHARDED_NORM_MAX_HEIGHT
+    assert _short_seq_l1_gather_memcfg(_FakeTensor([4, 1, 512, 3840]), mgr) is None
+
+
 def test_gate_up_1d_progcfg_matches_ln_width_shard():
     """LN width-shard grid (max cores) must be usable as gate_up 1D mcast_in0 grid."""
     from models.demos.gemma4.tt.dram_sharded import (

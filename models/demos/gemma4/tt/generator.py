@@ -1151,6 +1151,40 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
 
+    def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
+        """Prefill sampling trace with dummy hidden *replicated* full-width.
+
+        Stock Generator column-shards ``[1,1,B,hidden]`` for DistributedNorm.
+        Gemma4 RMSNorm expects the full hidden on every device.
+        """
+        mesh_device = self.model_args[model_id].mesh_device
+        full_dim = self.model[model_id].hidden_size
+        mapper = self.model[model_id]._replicate_to_mesh_mapper()
+
+        def _zeros():
+            return ttnn.from_torch(
+                torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mapper,
+            )
+
+        dummy_input = _zeros()
+        logits = self.model[model_id]._apply_norm_and_lm_head(dummy_input)
+        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done compiling Gemma4 prefill sampling")
+
+        trace_input = _zeros()
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        logits = self.model[model_id]._apply_norm_and_lm_head(trace_input)
+        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done capturing Gemma4 prefill sampling trace")
+        return trace_id, (tt_tokens, tt_log_probs), trace_input
+
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         """Warmup tokens with *unique* per-user page-table rows.
 
