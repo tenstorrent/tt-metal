@@ -189,9 +189,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // The embeddings type also gates the weight cache's binding, so the kernel reaches it through the
-    // preprocessor: a dfb:: handle exists only where the host binds it, and the reader references the
-    // cache handle at a point the compiler parses on every build.
+    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // where the host binds it, so the reader's reference to it is compiled out under the same defines
+    // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},

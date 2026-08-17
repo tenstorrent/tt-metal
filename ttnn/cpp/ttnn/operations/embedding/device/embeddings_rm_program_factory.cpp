@@ -142,10 +142,18 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
 
     // -----------------------------------------------------------------------
     // Dataflow buffers
-    //
-    // num_entries is the number of pages the legacy circular buffer held: its total size divided by
-    // its page size.
     // -----------------------------------------------------------------------
+    // The staging buffer's total size has to divide evenly by its entry size. The two are derived from
+    // different alignments, the entry size from the index buffer's and the sharded total from the
+    // output shard's own, so they can disagree. Nothing downstream would catch a truncated entry
+    // count: when the output is sharded the reader stages one entry per output row and no kernel
+    // drains the buffer, so a short buffer stalls the reader partway through its rows.
+    TT_FATAL(
+        out_dfb_total_size % chunk_size == 0,
+        "Embedding output staging buffer size {} B must be divisible by its entry size {} B",
+        out_dfb_total_size,
+        chunk_size);
+
     DataflowBufferSpec out_dfb{
         .unique_id = OUTPUT,
         .entry_size = chunk_size,
@@ -244,9 +252,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // The embeddings type also gates the weight cache's binding, so the kernel reaches it through the
-    // preprocessor: a dfb:: handle exists only where the host binds it, and the reader references the
-    // cache handle at a point the compiler parses on every build.
+    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // where the host binds it, so the reader's reference to it is compiled out under the same defines
+    // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
