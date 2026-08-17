@@ -40,7 +40,7 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
 from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
 from .common import (
-    GALAXY_4X8_RING,
+    GALAXY_RING,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -280,7 +280,7 @@ def _prepare_tt_inputs(
     )
 
 
-@GALAXY_4X8_RING
+@GALAXY_RING
 @pytest.mark.parametrize(
     ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights"),
     [
@@ -484,7 +484,7 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
 
 
 @pytest.mark.timeout(5400)  # 62 GB checkpoint + full-depth forwards exceed the 300 s default
-@GALAXY_4X8_RING
+@GALAXY_RING
 @pytest.mark.parametrize(
     ("num_text", "num_audio", "num_video", "grid", "cond_spec"),
     [
@@ -613,7 +613,7 @@ def _packed_position_ids(T: int, H: int, W: int) -> torch.Tensor:
     return torch.stack([c.reshape(-1) for c in coords], dim=-1)
 
 
-@GALAXY_4X8_RING
+@GALAXY_RING
 @pytest.mark.parametrize(
     ("T", "H", "W"),
     [
@@ -838,7 +838,7 @@ def _block_setup(
     )
 
 
-@GALAXY_4X8_RING
+@GALAXY_RING
 @pytest.mark.parametrize(
     ("num_text", "num_audio", "num_video"),
     [
@@ -887,7 +887,7 @@ def test_minimax_h3_transformer_block(
 # ---- the token refiner ----
 
 
-@GALAXY_4X8_RING
+@GALAXY_RING
 @pytest.mark.parametrize(
     "prompt_seq_len",
     [
