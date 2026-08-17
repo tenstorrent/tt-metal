@@ -355,9 +355,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("windowed_q_token_offset_tensor") = nb::none(),
         nb::arg("neighborhood_3d") = nb::none(),
         nb::arg("neighborhood_w_shard") = nb::none(),
-        nb::arg("neighborhood_gather") = false,
-        nb::arg("neighborhood_mask") = nb::none(),
-        nb::arg("neighborhood_mask_offsets") = nb::none());
+        nb::arg("neighborhood_gather") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,

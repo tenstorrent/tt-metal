@@ -367,13 +367,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
-    // neighborhood_gather host-upload masks (nullptr when the writer generates instead).
-    auto* nbr_mask_buffer =
-        tensor_args.neighborhood_mask.has_value() ? tensor_args.neighborhood_mask.value().buffer() : nullptr;
-    auto* nbr_mask_off_buffer = tensor_args.neighborhood_mask_offsets.has_value()
-                                    ? tensor_args.neighborhood_mask_offsets.value().buffer()
-                                    : nullptr;
-    const uint32_t neighborhood_mask_provided = (nbr_mask_buffer != nullptr) ? 1u : 0u;
     // page_table and chunk_start_idx must be BufferBindings (not raw address writes);
     // otherwise their addresses go stale on descriptor cache hits.
     auto* page_table_buffer = is_chunked ? page_table.value().buffer() : nullptr;
@@ -600,15 +593,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         tensor_args.windowed_q_token_offset_tensor.has_value()
             ? tensor_args.windowed_q_token_offset_tensor.value().buffer()
             : nullptr)
-        .append_to(reader_compile_time_args);
-    // neighborhood_gather host-upload masks: the pool (TILE) and per-Q-chunk offset array (ROW_MAJOR).
-    // nullptr placeholders keep the accessor offset chain intact when the reader generates instead.
-    TensorAccessorArgs(
-        tensor_args.neighborhood_mask.has_value() ? tensor_args.neighborhood_mask.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    TensorAccessorArgs(
-        tensor_args.neighborhood_mask_offsets.has_value() ? tensor_args.neighborhood_mask_offsets.value().buffer()
-                                                          : nullptr)
         .append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
@@ -1547,10 +1531,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         for (uint32_t d : neighborhood) {
             reader_args.push_back(d);
         }
-        // neighborhood_gather host-upload masks: pool + per-Q-chunk offset array (nullptr => reader
-        // generates nothing; the writer path fills the mask). Slots 20, 21 of the neighborhood tail.
-        reader_args.push_back(nbr_mask_buffer);
-        reader_args.push_back(nbr_mask_off_buffer);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -1577,8 +1557,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              neighborhood[4],                                  // 18: kh
              neighborhood[5],                                  // 19: kw
              w_shard[0],                                       // 20: W_full (0 => not W-sharded)
-             w_shard[1],                                       // 21: w_origin (signed int32 bit-pattern)
-             neighborhood_mask_provided});                     // 22: 1 => reader DMAs mask, writer skips gen
+             w_shard[1]});                                     // 21: w_origin (signed int32 bit-pattern)
 
         compute_desc.emplace_runtime_args(
             core,

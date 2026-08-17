@@ -63,8 +63,6 @@ Tensor sdpa(
     const std::optional<std::array<uint32_t, 6>>& neighborhood_3d = std::nullopt,
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard = std::nullopt,
     bool neighborhood_gather = false,
-    const std::optional<Tensor>& neighborhood_mask = std::nullopt,
-    const std::optional<Tensor>& neighborhood_mask_offsets = std::nullopt,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
 
 }  // namespace ttnn::prim

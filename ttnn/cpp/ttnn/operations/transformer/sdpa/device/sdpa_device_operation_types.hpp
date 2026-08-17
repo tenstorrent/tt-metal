@@ -67,13 +67,6 @@ struct SDPAInputs {
     // read by the writer at runtime. Present only when the caller wants a per-device offset under one
     // shared program; otherwise the scalar windowed_q_token_offset is used.
     std::optional<Tensor> windowed_q_token_offset_tensor;
-    // neighborhood_gather host-upload masks: a POOL of precomputed Float16_b mask tiles (TILE layout,
-    // [1,1,N*32,32]) and a per-Q-chunk tile OFFSET array (ROW_MAJOR uint32) selecting where each Q chunk's
-    // packed mask starts in the pool. When present the reader DMAs mask tiles from the pool (keyed by
-    // offsets[q_chunk]) instead of the writer generating them on-device -- the ~9 distinct neighborhood
-    // masks are deduplicated, so this is a few MB and a DMA per chunk rather than a per-tile fill.
-    std::optional<Tensor> neighborhood_mask;
-    std::optional<Tensor> neighborhood_mask_offsets;
 };
 
 }  // namespace ttnn::prim

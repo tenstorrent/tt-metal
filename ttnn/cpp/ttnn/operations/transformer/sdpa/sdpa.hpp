@@ -44,16 +44,11 @@ ttnn::Tensor scaled_dot_product_attention(
     /// chip's LOCAL padded shard, and the mask computes each column's global w = w_origin + local_w,
     /// clamped in [0, W_full). w_origin is signed (int32 bit-pattern in a uint32).
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard = std::nullopt,
-    /// Fused-gather variant of neighborhood_3d (build-out in progress; off by default). When true the
-    /// reader densely gathers each Q chunk's window rows from a ROW_MAJOR K/V table into a contiguous
-    /// cb_k/cb_v so the compute runs dense flash over only real window tokens. Requires neighborhood_3d.
-    bool neighborhood_gather = false,
-    /// neighborhood_gather host-upload mask pool: precomputed Float16_b mask tiles (TILE, [1,1,N*32,32]).
-    /// When set (with neighborhood_mask_offsets), the reader DMAs each Q chunk's packed mask from here
-    /// instead of the writer generating it on-device. The ~9 distinct neighborhood masks are deduplicated.
-    const std::optional<ttnn::Tensor>& neighborhood_mask = std::nullopt,
-    /// Per-Q-chunk tile offset (ROW_MAJOR uint32) into neighborhood_mask selecting that chunk's mask.
-    const std::optional<ttnn::Tensor>& neighborhood_mask_offsets = std::nullopt);
+    /// Fused-gather variant of neighborhood_3d (off by default). When true the reader densely gathers
+    /// each Q chunk's window rows from a ROW_MAJOR K/V table into a contiguous cb_k/cb_v so the compute
+    /// runs dense flash over only real window tokens (the writer generates the neighborhood mask on
+    /// device). Requires neighborhood_3d.
+    bool neighborhood_gather = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

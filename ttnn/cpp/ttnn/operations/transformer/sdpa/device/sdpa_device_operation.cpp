@@ -600,23 +600,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     TT_FATAL(
         !attrs.neighborhood_gather || attrs.neighborhood_3d.has_value(),
         "neighborhood_gather requires neighborhood_3d to be set.");
-    // Host-upload masks: the pool (TILE Float16_b) and per-Q-chunk offsets (ROW_MAJOR uint32) come as a
-    // pair, only in gather mode. When present the reader DMAs them instead of the writer generating.
-    TT_FATAL(
-        tensors.neighborhood_mask.has_value() == tensors.neighborhood_mask_offsets.has_value(),
-        "neighborhood_mask and neighborhood_mask_offsets must be provided together.");
-    if (tensors.neighborhood_mask.has_value()) {
-        const auto& m = tensors.neighborhood_mask.value();
-        const auto& off = tensors.neighborhood_mask_offsets.value();
-        TT_FATAL(attrs.neighborhood_gather, "neighborhood_mask requires neighborhood_gather.");
-        TT_FATAL(
-            m.storage_type() == StorageType::DEVICE && off.storage_type() == StorageType::DEVICE,
-            "neighborhood_mask/offsets must be on device.");
-        TT_FATAL(m.layout() == Layout::TILE, "neighborhood_mask must be TILE layout.");
-        TT_FATAL(m.dtype() == DataType::BFLOAT16, "neighborhood_mask must be bfloat16 (Float16_b).");
-        TT_FATAL(off.layout() == Layout::ROW_MAJOR, "neighborhood_mask_offsets must be ROW_MAJOR.");
-        TT_FATAL(off.dtype() == DataType::UINT32, "neighborhood_mask_offsets must be uint32.");
-    }
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
     if (attrs.is_windowed) {
@@ -757,8 +740,6 @@ Tensor sdpa(
     const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
     bool neighborhood_gather,
-    const std::optional<Tensor>& neighborhood_mask,
-    const std::optional<Tensor>& neighborhood_mask_offsets,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -791,8 +772,6 @@ Tensor sdpa(
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
-            .neighborhood_mask = neighborhood_mask,
-            .neighborhood_mask_offsets = neighborhood_mask_offsets,
         });
 }
 }  // namespace ttnn::prim

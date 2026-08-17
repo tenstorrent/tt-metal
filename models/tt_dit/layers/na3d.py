@@ -26,7 +26,6 @@ import math
 import os
 from dataclasses import dataclass
 
-import numpy as np
 import torch
 
 import ttnn
@@ -586,141 +585,6 @@ def neighborhood_attention_3d_op(
     return ttnn.reshape(attended, (batch, t, h, w, heads * head_dim))
 
 
-# ---- Host-precomputed neighborhood masks for the fused (neighborhood_gather) SDPA path ----------
-# The device packs each Q chunk's window box densely (T-outer/H-mid/W-inner) and adds a per-tile
-# additive mask. The mask depends only on positions (not data or head), and because the box is defined
-# RELATIVE to the queries it is translation-invariant, so a whole grid collapses to a handful of distinct
-# masks (edge-clamp + tile-straddle cases). We precompute those distinct masks once, upload the pool +
-# a per-Q-chunk tile-offset index, and the SDPA reader DMAs the right mask instead of generating it.
-
-
-def _nbr_shift_start(q: int, ln: int, ker: int) -> int:
-    ker = min(ker, ln)
-    half = ker // 2
-    last = ln - ker
-    start = 0 if q < half else q - half
-    return min(start, last)
-
-
-def _nbr_axis(q: int, ln: int, ker: int) -> tuple[int, int]:
-    s = _nbr_shift_start(q, ln, ker)
-    return s, s + min(ker, ln)
-
-
-def _neighborhood_box(q_chunk, Sq, valid_Sqt, T, H, W, kt, kh, kw, TH=32):
-    """Exact port of windowed_loop_geometry.hpp::neighborhood_box (q_tok_offset = 0)."""
-    HW = H * W
-    sites = T * HW
-    q_row_start_tile = min(q_chunk * Sq, valid_Sqt)
-    q_lo = q_row_start_tile * TH
-    if q_lo >= sites:
-        return (0, 1, 0, H, 0, W)  # padded-tail chunk: degenerate box (rows never written)
-    q_hi = min(q_lo + Sq * TH, sites)
-    qt_min, qt_max = q_lo // HW, (q_hi - 1) // HW
-    ker_t = min(kt, T)
-    t0 = _nbr_shift_start(qt_min, T, kt)
-    t1 = _nbr_shift_start(qt_max, T, kt) + ker_t
-    if qt_min == qt_max:
-        qh_min, qh_max = (q_lo % HW) // W, ((q_hi - 1) % HW) // W
-    else:
-        qh_min, qh_max = 0, H - 1
-    ker_h = min(kh, H)
-    h_lo = _nbr_shift_start(qh_min, H, kh)
-    h_hi = _nbr_shift_start(qh_max, H, kh) + ker_h
-    w_lo, w_hi = 0, W
-    if q_lo // W == (q_hi - 1) // W:
-        qw_min, qw_max = q_lo % W, (q_hi - 1) % W
-        ker_w = min(kw, W)
-        w_lo = _nbr_shift_start(qw_min, W, kw)
-        w_hi = _nbr_shift_start(qw_max, W, kw) + ker_w
-    return (t0, t1, h_lo, h_hi, w_lo, w_hi)
-
-
-def _nbr_chunk_descriptor(q_chunk, Sq, valid_Sqt, T, H, W, kt, kh, kw, TH=32):
-    """Canonical (box dims + per-query-row relative window ranges) — equal descriptors => equal masks."""
-    HW = H * W
-    sites = T * HW
-    t0, t1, h_lo, h_hi, w_lo, w_hi = _neighborhood_box(q_chunk, Sq, valid_Sqt, T, H, W, kt, kh, kw, TH)
-    bt, bh, bw = t1 - t0, h_hi - h_lo, w_hi - w_lo
-    q_row_start_tile = min(q_chunk * Sq, valid_Sqt)
-    rows = []
-    for i in range(Sq * TH):
-        q = (q_row_start_tile + i // TH) * TH + (i % TH)
-        if q >= sites:
-            rows.append(None)
-            continue
-        qt, qrem = q // HW, q % HW
-        qh, qw = qrem // W, qrem % W
-        tt0, tt1 = _nbr_axis(qt, T, kt)
-        hh0, hh1 = _nbr_axis(qh, H, kh)
-        ww0, ww1 = _nbr_axis(qw, W, kw)
-        rows.append((tt0 - t0, tt1 - t0, hh0 - h_lo, hh1 - h_lo, ww0 - w_lo, ww1 - w_lo))
-    return (bt, bh, bw, tuple(rows))
-
-
-def _materialize_nbr_mask(desc, Sq, Sk, TH=32, TW=32):
-    """Build a distinct mask's tiles [n_pc*Sq*Sk, 32, 32] (0 in-window, -inf else), order [pc][rt][ct]."""
-    bt, bh, bw, rows = desc
-    hw = bh * bw
-    n_box = bt * hw
-    n_pc = max(1, (n_box + Sk * TH - 1) // (Sk * TH))
-    tiles = np.full((n_pc * Sq * Sk, TH, TW), -np.inf, dtype=np.float32)
-    for pc in range(n_pc):
-        for rt in range(Sq):
-            for ct in range(Sk):
-                tile = tiles[pc * (Sq * Sk) + rt * Sk + ct]
-                for r in range(TH):
-                    rr = rows[rt * TH + r]
-                    if rr is None:
-                        continue
-                    tlo, thi, hlo, hhi, wlo, whi = rr
-                    for c in range(TW):
-                        j = pc * Sk * TH + ct * TH + c
-                        if j >= n_box:
-                            continue
-                        jt = j // hw
-                        rem = j % hw
-                        jh, jw = rem // bw, rem % bw
-                        if tlo <= jt < thi and hlo <= jh < hhi and wlo <= jw < whi:
-                            tile[r, c] = 0.0
-    return tiles
-
-
-_NBR_MASK_CACHE: dict = {}
-
-
-def _neighborhood_gather_masks(T, H, W, kt, kh, kw, Sq, Sk, mesh_device, dtype):
-    """(pool, offsets) ttnn tensors for the fused mask DMA path, cached per (grid, kernel, chunk sizes)."""
-    key = (T, H, W, kt, kh, kw, Sq, Sk, id(mesh_device))
-    hit = _NBR_MASK_CACHE.get(key)
-    if hit is not None:
-        return hit
-    HW = H * W
-    sites = T * HW
-    TH = 32
-    valid_Sqt = (sites + TH - 1) // TH
-    q_num_chunks = (valid_Sqt + Sq - 1) // Sq
-    desc_to_off: dict = {}
-    pool_tiles: list = []
-    offsets = np.empty(q_num_chunks, dtype=np.uint32)
-    for qc in range(q_num_chunks):
-        d = _nbr_chunk_descriptor(qc, Sq, valid_Sqt, T, H, W, kt, kh, kw, TH)
-        off = desc_to_off.get(d)
-        if off is None:
-            off = sum(t.shape[0] for t in pool_tiles)
-            desc_to_off[d] = off
-            pool_tiles.append(_materialize_nbr_mask(d, Sq, Sk))
-        offsets[qc] = off
-    pool = np.concatenate(pool_tiles, axis=0)  # [N, 32, 32]
-    n_tiles = pool.shape[0]
-    pool_t = torch.from_numpy(pool).to(torch.bfloat16).reshape(1, 1, n_tiles * TH, TH)
-    pool_tt = ttnn.from_torch(pool_t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    off_t = torch.from_numpy(offsets.astype(np.uint32)).reshape(q_num_chunks, 1)
-    off_tt = ttnn.from_torch(off_t, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    _NBR_MASK_CACHE[key] = (pool_tt, off_tt)
-    return pool_tt, off_tt
-
-
 def neighborhood_attention_3d_op_fused(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -767,11 +631,6 @@ def neighborhood_attention_3d_op_fused(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
     )
-    # Host-precomputed neighborhood masks (dedup'd to a handful): the reader DMAs these instead of the
-    # writer generating a per-element mask on-device (the measured wall for both op and fused).
-    nbr_mask, nbr_mask_off = _neighborhood_gather_masks(
-        t, h, w, *kernels, q_chunk_size // 32, k_chunk_size // 32, q.device(), q.dtype
-    )
     attended = ttnn.transformer.scaled_dot_product_attention(
         tq,
         tk,
@@ -779,8 +638,6 @@ def neighborhood_attention_3d_op_fused(
         is_causal=False,
         neighborhood_3d=(t, h, w, *kernels),
         neighborhood_gather=True,
-        neighborhood_mask=nbr_mask,
-        neighborhood_mask_offsets=nbr_mask_off,
         scale=scale,
         program_config=prog_config,
     )

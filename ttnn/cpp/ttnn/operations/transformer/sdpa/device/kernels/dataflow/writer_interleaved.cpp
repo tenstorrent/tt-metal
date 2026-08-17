@@ -89,9 +89,6 @@ void kernel_main() {
     // W-sharded (mask uses local == global W).
     const uint32_t nb_W_full = get_arg_val<uint32_t>(20);
     const int32_t nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
-    // neighborhood_gather host-upload masks: when set the READER DMAs the mask from the uploaded pool,
-    // so the writer skips its on-device neighborhood mask generation entirely.
-    const uint32_t neighborhood_mask_provided = get_arg_val<uint32_t>(22);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -219,25 +216,22 @@ void kernel_main() {
             constexpr uint32_t windowed_valid_Skt =
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
             // Fused-gather: mask over the reader's DENSE packed keys (n_packed_chunks chunks). Only one
-            // of these two generates -- the streamed path is disabled in gather mode and vice versa. When
-            // the host uploaded the mask pool, the reader DMAs it instead and this is skipped at runtime.
-            if (!neighborhood_mask_provided) {
-                neighborhood_gather_generate_if_enabled<neighborhood_gather, cb_mask_in>(
-                    noc,
-                    q_chunk,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    valid_Sqt,
-                    q_tok_offset,
-                    nb_T,
-                    nb_H,
-                    nb_W,
-                    nb_kt,
-                    nb_kh,
-                    nb_kw,
-                    nb_W_full,
-                    nb_w_origin);
-            }
+            // of these two generates -- the streamed path is disabled in gather mode and vice versa.
+            neighborhood_gather_generate_if_enabled<neighborhood_gather, cb_mask_in>(
+                noc,
+                q_chunk,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                valid_Sqt,
+                q_tok_offset,
+                nb_T,
+                nb_H,
+                nb_W,
+                nb_kt,
+                nb_kh,
+                nb_kw,
+                nb_W_full,
+                nb_w_origin);
             windowed_generate_if_enabled<use_windowed_mask && !neighborhood_gather, cb_mask_in, cb_cu_window_in>(
                 noc,
                 q_chunk,

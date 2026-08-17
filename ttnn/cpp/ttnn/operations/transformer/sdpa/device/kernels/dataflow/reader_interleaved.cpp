@@ -113,9 +113,6 @@ void kernel_main() {
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
     constexpr auto cu_window_args = TensorAccessorArgs<chunk_start_idx_args.next_compile_time_args_offset()>();
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
-    // neighborhood_gather host-upload masks: TILE pool + ROW_MAJOR per-Q-chunk offset array.
-    constexpr auto nbr_mask_args = TensorAccessorArgs<q_offset_args.next_compile_time_args_offset()>();
-    constexpr auto nbr_mask_off_args = TensorAccessorArgs<nbr_mask_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -206,23 +203,17 @@ void kernel_main() {
     uint32_t nb_kt = 0;
     uint32_t nb_kh = 0;
     uint32_t nb_kw = 0;
-    // neighborhood_gather host-upload masks: pool base addr + per-Q-chunk offset array addr (0 => the
-    // reader generates no mask; the writer fills it instead).
-    uint32_t nbr_mask_addr = 0;
-    uint32_t nbr_mask_off_addr = 0;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
-        nb_T = get_arg_val<uint32_t>(argidx++);               // 14: T
-        nb_H = get_arg_val<uint32_t>(argidx++);               // 15: H
-        nb_W = get_arg_val<uint32_t>(argidx++);               // 16: W
-        nb_kt = get_arg_val<uint32_t>(argidx++);              // 17: kt
-        nb_kh = get_arg_val<uint32_t>(argidx++);              // 18: kh
-        nb_kw = get_arg_val<uint32_t>(argidx++);              // 19: kw
-        nbr_mask_addr = get_arg_val<uint32_t>(argidx++);      // 20: mask pool base addr
-        nbr_mask_off_addr = get_arg_val<uint32_t>(argidx++);  // 21: per-Q-chunk offset array addr
+        nb_T = get_arg_val<uint32_t>(argidx++);   // 14: T
+        nb_H = get_arg_val<uint32_t>(argidx++);   // 15: H
+        nb_W = get_arg_val<uint32_t>(argidx++);   // 16: W
+        nb_kt = get_arg_val<uint32_t>(argidx++);  // 17: kt
+        nb_kh = get_arg_val<uint32_t>(argidx++);  // 18: kh
+        nb_kw = get_arg_val<uint32_t>(argidx++);  // 19: kw
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -233,7 +224,7 @@ void kernel_main() {
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = nbr_mask_off_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -254,9 +245,6 @@ void kernel_main() {
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr uint32_t mask_tile_bytes = use_provided_mask ? get_tile_size(cb_mask_in) : 0;
-    // neighborhood_gather host-upload masks are Float16_b tiles in cb_mask_in (valid CB when windowed);
-    // guarded by the constexpr flag so non-gather builds never evaluate get_tile_size on an inactive id.
-    constexpr uint32_t nbr_mask_tile_bytes = neighborhood_gather ? get_tile_size(cb_mask_in) : 0;
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
     constexpr uint32_t q_heads_per_k = NQH / NKH;
@@ -272,9 +260,6 @@ void kernel_main() {
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
     const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
     const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr);
-    // neighborhood_gather host-upload masks (addrs are 0 / accessors unused when the reader generates none).
-    const auto nbr_mask_reader = TensorAccessor(nbr_mask_args, nbr_mask_addr);
-    const auto nbr_mask_off_reader = TensorAccessor(nbr_mask_off_args, nbr_mask_off_addr);
 
     constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
 
@@ -618,18 +603,6 @@ void kernel_main() {
                 cb_stage.reserve_back(1);
                 const uint32_t stage_addr = cb_stage.get_write_ptr();
 
-                // Host-upload mask: this Q chunk's base tile offset into the pool (read once into the
-                // staging scratch, then reused per packed chunk below). nbr_mask_addr == 0 => the writer
-                // generates the mask on-device instead, and the reader pushes no cb_mask.
-                constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-                uint32_t mask_base_tile = 0;
-                if (nbr_mask_addr != 0) {
-                    noc.async_read(
-                        nbr_mask_off_reader, CoreLocalMem<uint32_t>(stage_addr), 4, {.page_id = q_chunk}, {});
-                    noc.async_read_barrier();
-                    mask_base_tile = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_addr);
-                }
-
                 for (uint32_t pc = 0; pc < n_packed_chunks; ++pc) {
                     const uint32_t j0 = pc * seqtile_toks;
                     uint32_t j1 = j0 + seqtile_toks;
@@ -660,24 +633,6 @@ void kernel_main() {
                         Sk_chunk_t,
                         k_tile_bytes);
                     cb_k.push_back(k_chunk_tiles);
-                    // Mask: DMA this packed chunk's mask tiles from the uploaded pool. Push order
-                    // (K, mask, V) matches the compute's QK -> mask-add -> AV consumption per chunk.
-                    if (nbr_mask_addr != 0) {
-                        cb_mask.reserve_back(mask_chunk_tiles);
-                        uint32_t mask_wr = cb_mask.get_write_ptr();
-                        const uint32_t mbase = mask_base_tile + pc * mask_chunk_tiles;
-                        for (uint32_t mt = 0; mt < mask_chunk_tiles; ++mt) {
-                            noc.async_read(
-                                nbr_mask_reader,
-                                CoreLocalMem<uint32_t>(mask_wr),
-                                nbr_mask_tile_bytes,
-                                {.page_id = mbase + mt},
-                                {});
-                            mask_wr += nbr_mask_tile_bytes;
-                        }
-                        noc.async_read_barrier();
-                        cb_mask.push_back(mask_chunk_tiles);
-                    }
                     // V: natural grid (seqtile-outer, dtile-inner).
                     cb_v.reserve_back(v_chunk_tiles);
                     const uint32_t v_base = cb_v.get_write_ptr();
