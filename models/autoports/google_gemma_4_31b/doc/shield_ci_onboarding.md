@@ -12,7 +12,32 @@ to make that possible, and what is verified versus still open.
 | [31801765378](https://github.com/tenstorrent/tt-shield/actions/runs/31801765378) | `spec_tests` | build succeeded; tests failed, no applicable suites |
 | [31807380436](https://github.com/tenstorrent/tt-shield/actions/runs/31807380436) | `benchmarks` | image reused; **server came up in the container**, failed on the missing chat template |
 | [31824560569](https://github.com/tenstorrent/tt-shield/actions/runs/31824560569) | `benchmarks` | chat template resolved; died on the 5s metal op watchdog |
-| [31832502684](https://github.com/tenstorrent/tt-shield/actions/runs/31832502684) | `benchmarks` | rebuild with `DISABLE_METAL_OP_TIMEOUT=1` |
+| [31832502684](https://github.com/tenstorrent/tt-shield/actions/runs/31832502684) | `benchmarks` | rebuild with `DISABLE_METAL_OP_TIMEOUT=1`; aborted by the runner itself — host disk at 81%, `631G /data/mgiermakowski`. Not our failure |
+| [31858340006](https://github.com/tenstorrent/tt-shield/actions/runs/31858340006) | `benchmarks` | **success** — 17 sweep points, 0 failed requests, but every block `NA (ungraded)`. See `shield_ci_results_audit.md` |
+| [32006778390](https://github.com/tenstorrent/tt-shield/actions/runs/32006778390) | `release` | **queued 3h+, not started.** Runner contention, not a fault — see below |
+
+### The `release` lane is queued behind other tenants, not broken
+
+As of 2026-08-17 10:45 UTC, run 32006778390's `run-release-gemma-4-31B-bh-qb-ge-p300x2`
+job is still `queued` with no steps started, three hours after dispatch.
+`bh-qb-ge` is a **single** p300x2 host and three release jobs are contending for
+it:
+
+| Dispatch | State |
+| --- | --- |
+| `gemma-4-31B-it \| release` (vvukoman/add-8-models-to-release-flow) | in progress — and one earlier attempt already **failed** |
+| `gemma-4-31B \| release` (ours) | queued |
+| `diffusiongemma-26B-A4B-it \| release` (zni) | queued |
+
+Two things follow. First, nothing here needs fixing on our side; the job will
+start when the runner frees. Second, the stock **instruct** model's `release` lane
+is failing on that same runner right now, so if ours fails too, the shared-lane
+explanation must be ruled out before it is attributed to the autoport.
+
+Worth noting the PR these dispatches run under is *"switching from vllm-fork to
+vllm-tt-plugin (main branch and new repo)"* — the platform is moving to exactly
+the plugin mechanism this onboarding used, which is independent support for having
+avoided a `tenstorrent/vllm` patch.
 
 ### Run 31807380436 proved the container path end to end
 
