@@ -96,6 +96,18 @@ bool single_dim_ok(const Tensor& input, uint32_t d, uint32_t reps) {
     return false;
 }
 
+// The host-side page map that feeds the codegen prim derives Ht/Wt from the 32x32
+// constants, so an off-default tile gives the kernels both a page count and a page
+// size the buffer does not have. A ROW_MAJOR page is a whole stick and never
+// consults the tile, so this constrains TILE only.
+bool tile_geometry_ok(const Tensor& input) {
+    if (input.layout() != ttnn::TILE_LAYOUT) {
+        return true;
+    }
+    const auto tile = input.tensor_spec().tile();
+    return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+}
+
 }  // namespace
 
 bool supported_by_codegen(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats) {
@@ -103,6 +115,9 @@ bool supported_by_codegen(const Tensor& input, uint32_t rep_dim, uint32_t num_re
     // an unshard-to-interleaved-DRAM hop it does not implement, so those stay
     // on native.
     if (input.memory_config().is_sharded()) {
+        return false;
+    }
+    if (!tile_geometry_ok(input)) {
         return false;
     }
     const auto& shape = input.logical_shape();
@@ -114,6 +129,9 @@ bool supported_by_codegen(const Tensor& input, uint32_t rep_dim, uint32_t num_re
 
 bool supported_by_codegen(const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims) {
     if (input.memory_config().is_sharded()) {
+        return false;
+    }
+    if (!tile_geometry_ok(input)) {
         return false;
     }
     const auto& shape = input.logical_shape();

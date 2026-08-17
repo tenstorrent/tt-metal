@@ -374,3 +374,31 @@ def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+# Hand-added: tile-geometry routing. The codegen plan is built from 32x32 constants, so a tensor
+# carrying any other tile has to reach native. The shape is deliberately in scope on every other
+# axis (bfloat16, interleaved, tile-aligned at 32), so only the tile geometry can drive the route.
+#
+# Route only, no value assertion: native does not serve a non-default tile correctly either -- two
+# native calls on the same input disagree with each other, and both differ from torch. What this
+# port owes is that it declines the case instead of answering it wrongly in its own way. Native's
+# answer is not a reference here.
+def test_untilize_non_default_tile_routes_to_native(device):
+    shape = [64, 128]
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([16, 16]))
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    # Primes the cache with the native program, so an unchanged count means native served the call.
+    _force_native(xt, **kwargs)
+    entries_before = device.num_program_cache_entries()
+    ttnn.untilize(xt, **kwargs)
+    msg = "auto routed a non-default tile to codegen (program cache grew); expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+def test_forced_codegen_refuses_non_default_tile(device, expect_error):
+    x = torch.rand([64, 128], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([16, 16]))
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, memory_config=ttnn.DRAM_MEMORY_CONFIG)

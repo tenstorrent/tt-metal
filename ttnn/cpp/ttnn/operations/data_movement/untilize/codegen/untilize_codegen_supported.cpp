@@ -31,6 +31,15 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     if (input.layout() != Layout::TILE) {
         return false;
     }
+    // Every page-geometry term here and in the program factory is a hardcoded 32x32 quantity --
+    // kTileSize below, and the wt / total_tile_rows divisions. An off-default tile changes both the
+    // buffer's page size and its page count, so that plan mis-addresses it in both directions.
+    // Declining is not a correctness guarantee for the case: native reads the tile but does not
+    // serve an off-default one reliably either. This only stops codegen claiming support it lacks.
+    const auto tile = input.tensor_spec().tile();
+    if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
     if (input.dtype() != DataType::BFLOAT16 && input.dtype() != DataType::BFLOAT8_B) {
         return false;
     }

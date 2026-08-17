@@ -417,3 +417,31 @@ def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, ttnn.Shape([1, 1, 3, 1]))
+
+
+# Hand-added: tile-geometry routing. The host-side page map feeding the codegen prim derives Ht/Wt
+# from the 32x32 constants, so a tensor carrying any other tile has to reach native. H is
+# tile-aligned and the dtype/layout are in scope, so only the tile geometry can drive the route.
+#
+# Route only, no value assertion: native does not serve a non-default tile correctly either -- two
+# native calls on the same input disagree with each other, and both differ from torch. What this
+# port owes is that it declines the case instead of answering it wrongly in its own way. Native's
+# answer is not a reference here.
+def test_repeat_non_default_tile_routes_to_native(device):
+    shape = [1, 1, 32, 64]
+    x = _make_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([16, 16]))
+    repeat_dims = ttnn.Shape([1, 1, 3, 1])
+    # Primes the cache with the native program, so an unchanged count means native served the call.
+    _force_native(xt, repeat_dims)
+    entries_before = device.num_program_cache_entries()
+    ttnn.repeat(xt, repeat_dims)
+    msg = "auto routed a non-default tile to codegen (program cache grew); expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+def test_forced_codegen_refuses_non_default_tile(device, expect_error):
+    x = _make_input([1, 1, 32, 64], ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([16, 16]))
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, ttnn.Shape([1, 1, 3, 1]))
