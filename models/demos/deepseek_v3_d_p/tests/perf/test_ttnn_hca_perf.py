@@ -35,8 +35,8 @@ _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05
 
 _BASELINES = [
-    pytest.param("flash", DeepSeekV4FlashConfig, 10_910_000, id="flash"),
-    pytest.param("pro", DeepSeekV4ProConfig, 18_420_000, id="pro"),
+    pytest.param("flash", DeepSeekV4FlashConfig, 10_910_000, id="flash"),  # both chunks -> 5.46 ms a chunk
+    pytest.param("pro", DeepSeekV4ProConfig, 18_420_000, id="pro"),  # both chunks -> 9.21 ms a chunk
 ]
 
 # The team gates perf on the 14kW hosts. Set this to run anywhere for bring-up, where the baselines
