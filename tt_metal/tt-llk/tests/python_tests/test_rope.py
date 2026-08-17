@@ -21,7 +21,6 @@ from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
-    ROPE_VECTOR_ROWS,
     RopeGolden,
     get_golden_generator,
     rope_bands,
@@ -106,7 +105,7 @@ def _stimuli(geometry, tiles, seed):
     )
 
     for _, cos_row, sin_row in rope_bands(**geometry):
-        for i in range(ROPE_VECTOR_ROWS):
+        for i in range(4):
             for pair in range(ROW_DATUMS // 2):
                 angle = 0.11 * i + 0.29 * pair + 0.037 * cos_row
                 for slot in (2 * pair, 2 * pair + 1):
@@ -243,8 +242,8 @@ def test_rope_quarter_turn():
         -1.0, 1.0, generator=generator
     )
     for _, cos_row, sin_row in rope_bands(**geometry):
-        dest[cos_row : cos_row + ROPE_VECTOR_ROWS, :] = 0.0
-        dest[sin_row : sin_row + ROPE_VECTOR_ROWS, :] = 1.0
+        dest[cos_row : cos_row + 4, :] = 0.0
+        dest[sin_row : sin_row + 4, :] = 1.0
     dest = dest.to(torch.bfloat16)
 
     device = _run(geometry, tiles, dest)
