@@ -47,7 +47,7 @@ import torch
 import ttnn
 
 from .dflash_accept import accept_block
-from .dflash_drafter import DFlashDrafter, DFlashDrafterCache, build_noise_ids
+from .dflash_drafter import DFlashDrafter, DFlashDrafterCache, build_noise_ids, context_bucket
 
 #: The LM head and the tile-padded prefill path both work in 32-row M tiles.
 TILE_ROWS = 32
@@ -105,12 +105,55 @@ class DFlashRunner:
     #: Cap on the verify forward's width; see the comment at the verify forward.
     DEFAULT_MAX_VERIFY_ROWS = 2048
 
-    def __init__(self, generator, drafter: DFlashDrafter, *, max_verify_rows: int | None = None) -> None:
+    def __init__(
+        self,
+        generator,
+        drafter: DFlashDrafter,
+        *,
+        max_verify_rows: int | None = None,
+        padded_drafting: bool = True,
+        pad_context: bool = True,
+    ) -> None:
         self.generator = generator
         self.model = generator.model
         self.drafter = drafter
         self.config = drafter.config
         self.max_verify_rows = int(max_verify_rows or self.DEFAULT_MAX_VERIFY_ROWS)
+        #: Drive the drafter at a bucketed, constant context width instead of feeding it
+        #: the per-iteration delta against a growing K/V cache.
+        #:
+        #: Every distinct shape a ttnn op sees costs a program compilation, and the
+        #: incremental path produces a **new cache length every iteration**, so it
+        #: recompiles for as long as generation continues.  Bucketing bounds the whole
+        #: generation to seven shapes.  Measured over 128 tokens / 41 blocks, ISL 67:
+        #:
+        #: | path        | ms/drafter call | accepted/forward | mean matches | t/s/u |
+        #: |-------------|-----------------|------------------|--------------|-------|
+        #: | incremental | 671             | 3.05             | 2.10         | 3.93  |
+        #: | padded      | 120             | 3.05             | 2.10         | 12.91 |
+        #:
+        #: **Acceptance is identical**, so bucketing is free accuracy-wise: the wider
+        #: attention reduction does perturb the drafter at the 1e-3 level, but it does
+        #: not cost acceptance.  A 48-token run suggested otherwise (4.00 vs 2.82) and
+        #: was wrong -- over 11 blocks acceptance on one prompt spans 2.8-4.0 across
+        #: mathematically equivalent configurations, so it takes ~40 blocks before the
+        #: metric discriminates anything.  ``padded-exact`` remains as the control.
+        #:
+        #: The incremental path's cost is also easy to under-measure: it timed 44.5 ms
+        #: per call over 48 tokens purely because earlier runs had left ttnn's **on-disk**
+        #: kernel cache warm for that exact shape sequence. Extending to 128 tokens
+        #: introduces unseen shapes and it returns to 671 ms. Any drafter measurement
+        #: must therefore state its generation length and cache state.
+        self.padded_drafting = bool(padded_drafting)
+        #: Whether the accumulated-context path also pads to a bucket.
+        #:
+        #: Setting this False keeps the whole-prefix path but sizes the tensor to the
+        #: exact context length, which is the control that separates two very
+        #: different explanations for the acceptance drop padding causes: a bug in the
+        #: accumulation/positions (would persist without padding) versus padding
+        #: changing the attention reduction width and flipping near-tied argmaxes
+        #: (would vanish without padding).
+        self.pad_context = bool(pad_context)
 
     # ------------------------------------------------------------------ helpers
 
@@ -136,9 +179,23 @@ class DFlashRunner:
             pieces.append(host.float())
         return torch.cat(pieces, dim=-1)
 
-    def _upload_context(self, context: torch.Tensor) -> ttnn.Tensor:
+    def _upload_context(self, context: torch.Tensor, *, pad_to: int | None = None) -> ttnn.Tensor:
+        """Upload context hidden states, optionally zero-padded to a fixed width.
+
+        Padding is what keeps every drafter op at a constant shape across
+        iterations; the pad rows are removed by the drafter's mask, never by a
+        slice, because a slice would reintroduce a varying shape.
+        """
+        host = context.reshape(1, 1, *context.shape[-2:])
+        if pad_to is not None:
+            rows = int(host.shape[2])
+            if rows > pad_to:
+                raise ValueError(f"context has {rows} rows, more than the {pad_to}-row bucket")
+            if rows < pad_to:
+                padding = torch.zeros(1, 1, pad_to - rows, int(host.shape[3]), dtype=host.dtype)
+                host = torch.cat([host, padding], dim=2)
         return ttnn.from_torch(
-            context.reshape(1, 1, *context.shape[-2:]).to(torch.bfloat16),
+            host.to(torch.bfloat16),
             device=self.model.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -245,6 +302,12 @@ class DFlashRunner:
         # Absolute position of the first context row we are about to pass.
         context_start = 0
         drafter_cache = DFlashDrafterCache(self.config.num_hidden_layers)
+        # The padded path is stateless on device, so the accumulated context lives
+        # here instead of in a device K/V cache.  ``context_host`` stays the
+        # per-iteration delta the incremental path wants; this is the running
+        # concatenation of those deltas, i.e. the whole accepted prefix, whose rows
+        # are at absolute positions 0..n-1 by construction.
+        accumulated_context = context_host
 
         # ------------------------------------------------------------- loop
         while len(produced) < max_new_tokens:
@@ -268,15 +331,37 @@ class DFlashRunner:
             noise_positions = torch.arange(anchor_pos, anchor_pos + block)
 
             t0 = time.perf_counter()
-            tt_context = self._upload_context(context_host)
             noise = self._noise_embeds(produced[-1])
-            drafter_out = self.drafter.forward_cached(
-                noise,
-                tt_context,
-                context_positions=context_positions,
-                noise_positions=noise_positions,
-                cache=drafter_cache,
-            )
+            if self.padded_drafting:
+                # The accumulated prefix, padded up to a bucket so the shape is constant.
+                valid = int(accumulated_context.shape[1])
+                # Row i must be at absolute position i, so the prefix must end exactly
+                # where the noise window begins.  Passing the whole prefix uncached is
+                # equivalent to the incremental cache because encoder.fc, output_norm_enc
+                # and k_proj are all per-row, so a row's K/V does not depend on how many
+                # rows accompanied it -- that linearity is what the cache exploits too.
+                if valid != anchor_pos:
+                    raise AssertionError(
+                        f"accumulated context has {valid} rows but the anchor is at {anchor_pos}; "
+                        "context rows and absolute positions have drifted apart"
+                    )
+                width = context_bucket(valid) if self.pad_context else valid
+                tt_context = self._upload_context(accumulated_context, pad_to=width)
+                drafter_out = self.drafter.forward_padded(
+                    noise,
+                    tt_context,
+                    context_valid=valid,
+                    noise_start=anchor_pos,
+                )
+            else:
+                tt_context = self._upload_context(context_host)
+                drafter_out = self.drafter.forward_cached(
+                    noise,
+                    tt_context,
+                    context_positions=context_positions,
+                    noise_positions=noise_positions,
+                    cache=drafter_cache,
+                )
             ttnn.deallocate(tt_context)
             candidates = self._candidate_ids(drafter_out)
             ttnn.deallocate(drafter_out)
@@ -348,6 +433,10 @@ class DFlashRunner:
             # anchor plus the accepted candidates, at positions anchor_pos..+n_matches.
             num = result.n_matches + 1
             context_host = self._taps_to_host(num, offset=lead)
+            # Positions anchor_pos..anchor_pos+n_matches follow the rows already
+            # accumulated, so a plain append keeps row i at absolute position i --
+            # the invariant forward_padded relies on.
+            accumulated_context = torch.cat([accumulated_context, context_host], dim=1)
             ttnn.deallocate(hidden)
             context_start = anchor_pos
             # The new anchor is the last committed token.

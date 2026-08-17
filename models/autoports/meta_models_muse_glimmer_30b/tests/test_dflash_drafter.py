@@ -15,8 +15,6 @@ window and would pass even with the mask disabled.
 
 from __future__ import annotations
 
-import gc
-
 import pytest
 import torch
 from loguru import logger
@@ -32,18 +30,6 @@ from models.common.utility_functions import comp_pcc
 
 PCC_THRESHOLD = 0.99
 CONTEXT_LENS = (1, 16, 128, 2048, 4096)
-
-
-@pytest.fixture(scope="session")
-def mesh_device():
-    if ttnn.get_num_devices() < 1:  # pragma: no cover - no hardware
-        pytest.skip("no Tenstorrent device available")
-    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), trace_region_size=0)
-    try:
-        yield mesh
-    finally:
-        ttnn.close_mesh_device(mesh)
-        gc.collect()
 
 
 @pytest.fixture(scope="session")

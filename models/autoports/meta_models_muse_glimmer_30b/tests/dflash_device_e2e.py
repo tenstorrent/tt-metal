@@ -45,6 +45,26 @@ def main() -> None:
     parser.add_argument("--max-seq-len", type=int, default=4096)
     parser.add_argument("--drafter-dtype", default="bfloat8_b", choices=["bfloat8_b", "bfloat16"])
     parser.add_argument("--skip-baseline", action="store_true")
+    parser.add_argument(
+        "--baseline-trials",
+        type=int,
+        default=2,
+        help="baseline repetitions; the fastest is used, so a cold first decode does not inflate the speedup",
+    )
+    parser.add_argument(
+        "--drafting",
+        default="padded",
+        choices=["padded", "padded-exact", "incremental"],
+        help=(
+            "How the drafter is fed its context. padded (default): accumulated prefix "
+            "zero-padded to one of seven buckets, so drafter ops hit the ttnn program "
+            "cache. incremental: per-iteration delta against a growing K/V cache, which "
+            "produces a new shape every iteration and recompiles indefinitely. Over 128 "
+            "tokens padded is 120 vs 671 ms per drafter call at IDENTICAL acceptance "
+            "(3.05/forward): 12.91 vs 3.93 t/s/u. padded-exact: accumulated path without "
+            "padding, kept as the control isolating padding from the rewrite."
+        ),
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -68,7 +88,12 @@ def main() -> None:
             weight_dtype=getattr(ttnn, args.drafter_dtype),
             activation_dtype=ttnn.bfloat16,
         )
-        runner = DFlashRunner(gen, drafter)
+        runner = DFlashRunner(
+            gen,
+            drafter,
+            padded_drafting=args.drafting in ("padded", "padded-exact"),
+            pad_context=args.drafting == "padded",
+        )
 
         # ---------------------------------------------------------- DFlash
         logger.info("=== DFlash ===")
@@ -78,12 +103,21 @@ def main() -> None:
         # -------------------------------------------------------- baseline
         baseline_tokens: list[int] = []
         baseline_seconds = 0.0
+        baseline_trials: list[float] = []
         if not args.skip_baseline:
             logger.info("=== baseline greedy (no speculation) ===")
-            gen.reset()
-            started = time.perf_counter()
-            baseline_tokens = gen.generate(prompt_ids, args.max_new_tokens)
-            baseline_seconds = time.perf_counter() - started
+            # Run it more than once and keep the FASTEST.  A single trial here measured
+            # 32.5 t/s/u against 42.9 measured directly, because the first decode of a
+            # fresh generator pays trace capture and program-cache population. Comparing
+            # a warm DFlash number against a cold baseline would flatter DFlash by ~30 %.
+            for trial in range(max(1, args.baseline_trials)):
+                gen.reset()
+                started = time.perf_counter()
+                baseline_tokens = gen.generate(prompt_ids, args.max_new_tokens)
+                elapsed = time.perf_counter() - started
+                baseline_trials.append(elapsed)
+                logger.info(f"baseline trial {trial}: {elapsed:.3f}s " f"({len(baseline_tokens) / elapsed:.2f} t/s/u)")
+            baseline_seconds = min(baseline_trials)
 
         n = min(len(baseline_tokens), len(dflash_tokens)) if baseline_tokens else 0
         mismatches = [i for i in range(n) if baseline_tokens[i] != dflash_tokens[i]]
@@ -112,10 +146,12 @@ def main() -> None:
             "prompt": args.prompt,
             "prompt_tokens": len(prompt_ids),
             "drafter_weight_dtype": args.drafter_dtype,
+            "drafting": args.drafting,
             "dflash": stats.as_dict(),
             "dflash_token_ids": dflash_tokens,
             "baseline_token_ids": baseline_tokens,
             "baseline_seconds": baseline_seconds,
+            "baseline_trial_seconds": baseline_trials,
             "baseline_tokens_per_second": baseline_tps,
             "speedup": speedup,
             "token_mismatch_count": len(mismatches),

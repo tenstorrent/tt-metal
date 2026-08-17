@@ -47,6 +47,37 @@ from models.common.lightweightmodule import LightweightModule
 
 DEFAULT_BLOCK_SIZE = 16
 
+#: Context widths the padded drafting path rounds up to.
+#:
+#: Every distinct shape a ttnn op sees costs a **program compilation**, and the
+#: drafter is entirely dominated by that cost rather than by arithmetic: replaying
+#: one real generation's context lengths (67, 3, 14, 4, 11, ...) took **1201.7 ms**
+#: per call, while the identical work at a constant shape took **14.3 ms** once the
+#: program cache was warm -- 82x, measured on a 1x4 mesh with BFP8 weights.
+#:
+#: So the context is padded up to one of a handful of widths.  Buckets rather than a
+#: single maximum because attention and the encoder projection are both O(width):
+#: a short generation should not pay 2048 rows of work, and a long one must not
+#: recompile once per token.  Powers of two from one tile to the sliding window give
+#: at most seven programs for the whole context range.
+CONTEXT_BUCKETS = (32, 64, 128, 256, 512, 1024, 2048)
+
+
+def context_bucket(rows: int, buckets: tuple[int, ...] = CONTEXT_BUCKETS) -> int:
+    """Smallest bucket that holds ``rows``.
+
+    Raises past the last bucket rather than silently truncating context, which
+    would drop the oldest accepted tokens and read as a mysterious acceptance-rate
+    collapse.
+    """
+    for bucket in buckets:
+        if rows <= bucket:
+            return bucket
+    raise ValueError(
+        f"context of {rows} rows exceeds the largest bucket {buckets[-1]}; "
+        "add a larger bucket or switch to an incremental K/V cache"
+    )
+
 
 @dataclass(frozen=True)
 class DFlashConfig:
@@ -131,7 +162,12 @@ def rope_tables(position_ids: torch.Tensor, head_dim: int, theta: float) -> tupl
 
 
 def bidirectional_sliding_mask(
-    q_positions: torch.Tensor, kv_positions: torch.Tensor, sliding_window: int, dtype: torch.dtype
+    q_positions: torch.Tensor,
+    kv_positions: torch.Tensor,
+    sliding_window: int,
+    dtype: torch.dtype,
+    *,
+    kv_valid: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Additive mask for ``create_bidirectional_sliding_window_mask``.
 
@@ -140,8 +176,20 @@ def bidirectional_sliding_mask(
     condition collapses to ``kv_idx > q_idx - sliding_window`` - a lower bound
     only.  There is deliberately no ``kv <= q`` term: that is what makes the
     diffusion window bidirectional.
+
+    ``kv_valid`` blocks K/V rows that exist only as padding.  It is **required**
+    whenever the context is padded to a fixed width, and the window's lower bound
+    will not do that job for you: a pad row parked at position 0 satisfies
+    ``0 > q - 2048`` for every query below position 2033, so it would be attended
+    to as an ordinary key.  Because drafter attention is bidirectional, that
+    corrupts the real slots rather than being harmlessly ignored the way padding is
+    on the target's causal path.
     """
     allowed = kv_positions[None, :] > (q_positions[:, None] - sliding_window)
+    if kv_valid is not None:
+        if kv_valid.shape != kv_positions.shape:
+            raise ValueError(f"kv_valid has shape {tuple(kv_valid.shape)}, expected {tuple(kv_positions.shape)}")
+        allowed = allowed & kv_valid.to(torch.bool)[None, :]
     mask = torch.zeros(allowed.shape, dtype=dtype)
     mask.masked_fill_(~allowed, torch.finfo(dtype).min)
     return mask.reshape(1, 1, *allowed.shape)
@@ -241,25 +289,81 @@ class _PlainNorm(LightweightModule):
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def drafter_compute_kernel_config(
+    mesh_device: ttnn.MeshDevice,
+    *,
+    math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
+    fp32_dest_acc_en: bool = True,
+) -> ttnn.DeviceComputeKernelConfig:
+    """Compute-kernel config for the drafter's matmuls.
+
+    Defaults deliberately differ from the target decoder's ``LoFi`` /
+    ``fp32_dest_acc_en=False``, because the two are judged on different things.
+    The target is graded on output quality, where LoFi is measurably fine and much
+    faster.  The drafter is graded on **argmax agreement with the target** -- a
+    candidate is only accepted when the two pick the same token out of a 202k
+    vocabulary -- so its error budget is set by how often a near-tie flips, not by
+    how close its hidden states look.  The drafter is also ~8.5 % of the target's
+    parameters, so buying fidelity here is cheap in absolute terms.
+
+    Passing no config at all (as the first implementation did) takes the ttnn
+    default rather than a considered choice, which is worth stating explicitly since
+    the resulting fidelity is invisible at the call site.
+    """
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+
+
 class _DFlashMLP(LightweightModule):
     """SwiGLU: ``down(silu(gate(x)) * up(x))``."""
 
-    def __init__(self, gate: ttnn.Tensor, up: ttnn.Tensor, down: ttnn.Tensor, activation_dtype: ttnn.DataType) -> None:
+    def __init__(
+        self,
+        gate: ttnn.Tensor,
+        up: ttnn.Tensor,
+        down: ttnn.Tensor,
+        activation_dtype: ttnn.DataType,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    ) -> None:
         super().__init__()
         self.gate = gate
         self.up = up
         self.down = down
         self.activation_dtype = activation_dtype
+        self.compute_kernel_config = compute_kernel_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.linear(x, self.gate, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        up = ttnn.linear(x, self.up, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.linear(
+            x,
+            self.gate,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        up = ttnn.linear(
+            x,
+            self.up,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         activated = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         hidden = ttnn.mul(activated, up, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(activated)
         ttnn.deallocate(up)
-        out = ttnn.linear(hidden, self.down, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            hidden,
+            self.down,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(hidden)
         return out
 
@@ -281,8 +385,10 @@ class _DFlashLayer(LightweightModule):
         k_norm_weight: ttnn.Tensor,
         mlp: _DFlashMLP,
         activation_dtype: ttnn.DataType,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         super().__init__()
+        self.compute_kernel_config = compute_kernel_config
         self.config = config
         self.input_layernorm = input_layernorm
         self.post_attention_layernorm = post_attention_layernorm
@@ -343,8 +449,20 @@ class _DFlashLayer(LightweightModule):
         normed - only Q and K carry QK-norm.
         """
         config = self.config
-        key = ttnn.linear(source, self.wk, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        value = ttnn.linear(source, self.wv, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        key = ttnn.linear(
+            source,
+            self.wk,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        value = ttnn.linear(
+            source,
+            self.wv,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         key = self._split_heads(key, seq_len, config.num_key_value_heads)
         value = self._split_heads(value, seq_len, config.num_key_value_heads)
         key = self._per_head_norm(key, self.k_norm_weight)
@@ -357,19 +475,35 @@ class _DFlashLayer(LightweightModule):
         value = ttnn.repeat_interleave(value, config.num_kv_groups, dim=1)
         key_t = ttnn.permute(key, (0, 1, 3, 2))
         ttnn.deallocate(key)
-        scores = ttnn.matmul(query, key_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.matmul(
+            query,
+            key_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(key_t)
         scores = ttnn.mul(scores, config.sdpa_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.add(scores, mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         probs = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(scores)
-        attn = ttnn.matmul(probs, value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.matmul(
+            probs,
+            value,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(probs)
         ttnn.deallocate(value)
         merged = ttnn.permute(attn, (0, 2, 1, 3))
         ttnn.deallocate(attn)
         merged = ttnn.reshape(merged, (1, 1, block, config.num_attention_heads * config.head_dim))
-        out = ttnn.linear(merged, self.wo, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            merged,
+            self.wo,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(merged)
         return out
 
@@ -407,7 +541,13 @@ class _DFlashLayer(LightweightModule):
         else:
             cached_k, cached_v = cache.k[layer_idx], cache.v[layer_idx]
 
-        query = ttnn.linear(normed, self.wq, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        query = ttnn.linear(
+            normed,
+            self.wq,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         query = self._split_heads(query, block, config.num_attention_heads)
         query = self._per_head_norm(query, self.q_norm_weight)
         query = self._apply_rope(query, *rope_win)
@@ -445,9 +585,27 @@ class _DFlashLayer(LightweightModule):
         # The context half is NOT re-normalised here - it is the encoder output, shared by every layer.
         kv_input = ttnn.concat([context, normed], dim=2)
 
-        query = ttnn.linear(normed, self.wq, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        key = ttnn.linear(kv_input, self.wk, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        value = ttnn.linear(kv_input, self.wv, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        query = ttnn.linear(
+            normed,
+            self.wq,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        key = ttnn.linear(
+            kv_input,
+            self.wk,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        value = ttnn.linear(
+            kv_input,
+            self.wv,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(kv_input)
         ttnn.deallocate(normed)
 
@@ -467,7 +625,12 @@ class _DFlashLayer(LightweightModule):
 
         key_t = ttnn.permute(key, (0, 1, 3, 2))
         ttnn.deallocate(key)
-        scores = ttnn.matmul(query, key_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.matmul(
+            query,
+            key_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(query)
         ttnn.deallocate(key_t)
         scores = ttnn.mul(scores, config.sdpa_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -475,14 +638,25 @@ class _DFlashLayer(LightweightModule):
         probs = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(scores)
 
-        attn = ttnn.matmul(probs, value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.matmul(
+            probs,
+            value,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(probs)
         ttnn.deallocate(value)
 
         merged = ttnn.permute(attn, (0, 2, 1, 3))
         ttnn.deallocate(attn)
         merged = ttnn.reshape(merged, (1, 1, block, config.num_attention_heads * config.head_dim))
-        attn_out = ttnn.linear(merged, self.wo, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_out = ttnn.linear(
+            merged,
+            self.wo,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         ttnn.deallocate(merged)
 
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -510,8 +684,10 @@ class DFlashDrafter(LightweightModule):
         layers: list[_DFlashLayer],
         final_norm: _PlainNorm,
         activation_dtype: ttnn.DataType,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         super().__init__()
+        self.compute_kernel_config = compute_kernel_config
         self.config = config
         self.mesh_device = mesh_device
         self.encoder_fc = encoder_fc
@@ -529,8 +705,14 @@ class DFlashDrafter(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         activation_dtype: ttnn.DataType = ttnn.bfloat16,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> "DFlashDrafter":
         config = config_from_hf(hf_config)
+        # Chosen rather than inherited from the ttnn default: acceptance depends on
+        # matching the target's argmax, so the drafter's error budget is tighter than
+        # its size suggests. See drafter_compute_kernel_config.
+        if compute_kernel_config is None:
+            compute_kernel_config = drafter_compute_kernel_config(mesh_device)
 
         def linear_weight(name: str) -> torch.Tensor:
             # HF stores nn.Linear as [out, in]; ttnn.linear wants [in, out].
@@ -572,6 +754,7 @@ class DFlashDrafter(LightweightModule):
                     ),
                     q_norm_weight=head_norm_weight(f"{prefix}.self_attn.q_norm.weight"),
                     k_norm_weight=head_norm_weight(f"{prefix}.self_attn.k_norm.weight"),
+                    compute_kernel_config=compute_kernel_config,
                     mlp=_DFlashMLP(
                         gate=_to_device(
                             linear_weight(f"{prefix}.mlp.gate_proj.weight"), mesh_device=mesh_device, dtype=weight_dtype
@@ -583,6 +766,7 @@ class DFlashDrafter(LightweightModule):
                             linear_weight(f"{prefix}.mlp.down_proj.weight"), mesh_device=mesh_device, dtype=weight_dtype
                         ),
                         activation_dtype=activation_dtype,
+                        compute_kernel_config=compute_kernel_config,
                     ),
                     activation_dtype=activation_dtype,
                 )
@@ -596,12 +780,17 @@ class DFlashDrafter(LightweightModule):
             layers=layers,
             final_norm=plain_norm("norm.weight", config.hidden_size),
             activation_dtype=activation_dtype,
+            compute_kernel_config=compute_kernel_config,
         )
 
     def project_context(self, context_hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """``fc`` then ``output_norm_enc``: [1,1,T,5*H] -> [1,1,T,H]. Runs once per forward."""
         projected = ttnn.linear(
-            context_hidden_states, self.encoder_fc, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            context_hidden_states,
+            self.encoder_fc,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
         )
         out = self.encoder_norm(projected)
         ttnn.deallocate(projected)
@@ -682,6 +871,57 @@ class DFlashDrafter(LightweightModule):
             ttnn.deallocate(tensor)
         return self.final_norm(hidden)
 
+    def forward_padded(
+        self,
+        noise_embeds: ttnn.Tensor,
+        context_hidden_states: ttnn.Tensor,
+        *,
+        context_valid: int,
+        noise_start: int,
+    ) -> ttnn.Tensor:
+        """Drafting step at a **fixed** context width, for program-cache reuse.
+
+        This is the same maths as :meth:`forward` -- the PCC-validated path -- with
+        two differences that exist only to keep every ttnn op at a constant shape:
+
+        * ``context_hidden_states`` is ``[1, 1, bucket, 5*H]`` with only the first
+          ``context_valid`` rows real, and
+        * the pad rows are removed by the mask rather than by slicing.
+
+        Why not the incremental :meth:`forward_cached`: its context argument is the
+        per-iteration *delta* (1..16 rows) and its cache grows by that delta, so
+        both change every iteration and every op recompiles.  That cost 1201.7 ms
+        per call against 19 ms here, measured on the same 1x4 mesh and weights.
+        Paying O(bucket) arithmetic to stop recompiling is worth roughly 60x.
+
+        Args:
+            noise_embeds: ``[1, 1, block_size, hidden]``.
+            context_hidden_states: ``[1, 1, bucket, 5 * hidden]``, zero-padded past
+                ``context_valid``.
+            context_valid: how many leading context rows are real.  Their absolute
+                positions are ``0 .. context_valid - 1``; context always starts at 0
+                because it is the accumulated prompt-plus-accepted prefix.
+            noise_start: absolute position of noise slot 0 (the anchor).
+        """
+        block = int(noise_embeds.shape[2])
+        bucket = int(context_hidden_states.shape[2])
+        if not 0 < context_valid <= bucket:
+            raise ValueError(f"context_valid {context_valid} outside (0, {bucket}]")
+
+        # Pad rows are parked at position 0 and masked out.  Their position value is
+        # irrelevant *because* kv_valid blocks them; it must not be relied on to do
+        # the blocking itself (see bidirectional_sliding_mask).
+        context_positions = torch.zeros(bucket, dtype=torch.long)
+        context_positions[:context_valid] = torch.arange(context_valid)
+        noise_positions = torch.arange(noise_start, noise_start + block)
+        position_ids = torch.cat([context_positions, noise_positions])
+
+        kv_valid = torch.zeros(bucket + block, dtype=torch.bool)
+        kv_valid[:context_valid] = True
+        kv_valid[bucket:] = True  # the window's own rows are always real
+
+        return self._forward_with_positions(noise_embeds, context_hidden_states, position_ids, kv_valid=kv_valid)
+
     def forward(
         self,
         noise_embeds: ttnn.Tensor,
@@ -704,6 +944,21 @@ class DFlashDrafter(LightweightModule):
         Returns:
             ``[1, 1, block_size, hidden]`` - feed to the target's ``lm_head``,
             then drop position 0 to get ``block_size - 1`` candidate tokens.
+        """
+        return self._forward_with_positions(noise_embeds, context_hidden_states, position_ids)
+
+    def _forward_with_positions(
+        self,
+        noise_embeds: ttnn.Tensor,
+        context_hidden_states: ttnn.Tensor,
+        position_ids: torch.Tensor,
+        *,
+        kv_valid: torch.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Shared body of :meth:`forward` and :meth:`forward_padded`.
+
+        Kept as one function so the padded path cannot drift from the maths the
+        13/13 device PCC actually graded; ``kv_valid`` is the only difference.
         """
         config = self.config
         block = int(noise_embeds.shape[2])
@@ -728,7 +983,7 @@ class DFlashDrafter(LightweightModule):
         rope_kv = (upload(cos_kv, context_len + block), upload(sin_kv, context_len + block))
 
         mask_torch = bidirectional_sliding_mask(
-            position_ids[-block:], position_ids, config.sliding_window, torch.bfloat16
+            position_ids[-block:], position_ids, config.sliding_window, torch.bfloat16, kv_valid=kv_valid
         )
         mask = _to_device(mask_torch, mesh_device=self.mesh_device, dtype=ttnn.bfloat16)
 
