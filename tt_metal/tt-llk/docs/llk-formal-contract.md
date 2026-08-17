@@ -1,14 +1,14 @@
 # LLK Formal Contract — glossary & semantics
 
-Status: **draft, converging with the Sanitizer.** This is the math statement of the LLK
+This is the math statement of the LLK
 contract the **Sanitizer** enforces. It tracks the code on branch `llk/san/state-refactor`
 (`tools/include/sanitizer/{types,operation,api,impl}.h`).
 
 Neither side is frozen. Where the math and the code disagree today, §7 lists it as a
-convergence item. The target: every symbol here maps to one place in the code, and the
+convergence item. The target is that every symbol here maps to one place in the code, and the
 checker tool reads its rules from §5–§6.
 
-Notation: `≜` is "defined as", `⊕` joins named fields into a record, `⊥` is unset (as in not
+Notation: `≜` is "defined as", `∈` is "is an element of", `⨁` joins named fields into a record, `⊥` is unset (as in not
 touched by the Sanitizer, not a HW reset value).
 
 ---
@@ -41,7 +41,7 @@ S ≜ ⟨ s_U, s_F, s_S, s_P ; Γ ⟩           // struct State [operation.h]
 ```
 
 `Γ` is the global `UnwindContext unwind`. It holds source locations, not contract state.
-Your `S = Σᵢ sᵢ` is this, plus `Γ`.
+We can restate this as `S = Σᵢ sᵢ + Γ`, where `i ∈ I`.
 
 ### 2.2 Per-EXU state `sᵢ`  (`ExuState<i>`, types.h)
 
@@ -60,15 +60,16 @@ Live operation record:
 ```
 ωᵢ  ∈  { ∅ } ∪ { x̂ⱼ : j ∈ Ωᵢ }          // std::variant<monostate, OperationExtended<Ops>...>
 ```
-
-Your `sᵢ = Σⱼ (x̂ⱼ + yᵢ)` maps to this if `Σ` is a tagged union, not a sum, and `yᵢ` is
-pulled out of it:
+Therefore:
 
 ```
-sᵢ  =  ρᵢ  ⊕  yᵢ  ⊕  ⨁̇_{j∈Ωᵢ} x̂ⱼ
+sᵢ  =  ρᵢ  +  yᵢ  +  Σ_{j∈Ωᵢ} x̂ⱼ
 ```
 
-`⨁̇` (your `Σ`) is a tagged union: at runtime one term is live. That live term is `ωᵢ`, or
+
+An important distinction here is that `ρᵢ` is needed for FSM check, while the other terms are required for the operand check. If we're only interested in operand check, we can simplify the previous expression to `sᵢ = Σⱼ x̂ⱼ + yᵢ`, where `Σ` is a tagged union, not a sum, and `yᵢ`.
+
+`⨁` (your `Σ`) is a tagged union: at runtime one term is live. That live term is `ωᵢ`, or
 `∅` before the first `init`. `yᵢ` is shared by all operations of the EXU, so it sits once in
 `sᵢ` and once as the snapshot `y'ⱼ` inside each `x̂ⱼ`. This is the `std::variant` (one live
 alternative) plus the single `Operand<i>::Struct` in `ExuState`.
