@@ -20,20 +20,17 @@ What you see below highlights the expectations for all our models that successfu
 
 3. What are the device performance metrics and have you integrated this on our CI pipeline?
     - Document the expected device performance metrics, including but not limited to inference time and memory usage, under a variety of conditions and configurations.
-    - Include scripts or instructions to measure these metrics in the ``README.md``. Ensure these scripts are also part of the CI pipeline to automatically validate the device performance.
+    - Include scripts or instructions to measure these metrics in the ``README.md``. Ensure these scripts are also part of the CI pipeline to automatically validate the device performance. — see ``models/MIGRATING_TO_TIERED_CI.md``.
     - Update the documentation with any special hardware requirements or configurations needed to achieve these performance metrics.
-    - Please add your test to the function ``run_device_perf_models()`` within ``run_performance.sh`` to collect and report on device metrics. Only tests that have been marked with the annotation ``@pytest.mark.models_device_performance_bare_metal`` will be scheduled to run.
 
 4. What are the end-to-end performance metrics and have you integrated this on our CI pipeline?
     - End-to-end performance metrics should include the time from input preparation to output readiness and any other relevant metrics that apply to the model's use case.
-    - Provide clear instructions or scripts to measure these end-to-end metrics within the ``README.md``. These should also be incorporated into the CI pipeline for automated testing.
+    - Provide clear instructions or scripts to measure these end-to-end metrics within the ``README.md``. These should also be incorporated into the CI pipeline for automated testing. — see ``models/MIGRATING_TO_TIERED_CI.md``.
     - Discuss any external dependencies or services required for the full operation of your model and how they impact the end-to-end performance.
-    - Please add your single-card performance tests to `.github/workflows/perf-models-impl.yaml`. Only tests marked with ``@pytest.mark.models_performance_bare_metal`` will be included.
 
 5. Does your model have an end-to-end demo test demonstrating working output generation on real inputs and has this been integrated on our CI pipeline?
     - Include a test that demonstrates the model's functionality and performance on real inputs, such as images or text, to ensure the model is producing the expected output.
-    - This test should be integrated into the CI pipeline to ensure the model's functionality is automatically validated.
+    - This test should be integrated into the CI pipeline to ensure the model's functionality is automatically validated — see ``models/MIGRATING_TO_TIERED_CI.md``.
     - Provide instructions on how to run this test locally in the ``README.md``.
-    - Please add your test within ``run_demos_single_card_n150_tests.sh``, ``run_demos_single_card_n300_tests.sh``, and/or ``run_t3000_demo_tests.sh`` depending on the hardware you are targeting.
 
 For the purpose of organizing your tests to be managed for collecting both device and end-to-end performance, please take a look at ``test_ttnn_functional_resnet50.py`` and how the ``ResNet50TestInfra`` class was setup.
