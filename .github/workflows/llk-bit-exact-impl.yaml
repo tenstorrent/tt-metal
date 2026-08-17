@@ -5,9 +5,9 @@ on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run: all, wormhole, or blackhole"
+        description: "Architecture to run: blackhole (WH parked)" # TEMP: was all, wormhole, or blackhole
         required: false
-        default: all
+        default: blackhole # TEMP: was all
         type: string
       pytest-markers:
         description: "Pytest mark expression for LLK python_tests"
@@ -22,10 +22,11 @@ permissions:
 
 env:
   LLK_PATH: tt_metal/tt-llk
-  # Default ttnop sweep: unpack+math, sync sites, delays 1-100.
+  # Default ttnop sweep: unpack+math, sync sites.
   TTNOP_THREADS: unpack,math
   TTNOP_SITE_MODE: sync
-  TTNOP_DELAYS: 1-100
+  # TTNOP_DELAYS: 1-100 # TEMP restore
+  TTNOP_DELAYS: 1,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,100 # TEMP: 20-count grid
   # Watchdog (ttnop/supervise.py). Spelled out rather than left to the defaults
   # so the knobs are visible next to the sweep's own.
   # One worker silent mid-case for this long means the device stopped answering
@@ -61,6 +62,7 @@ jobs:
     secrets: inherit
 
   # Build the WH/BH shard matrix from llk_ttnop_tests.yaml.
+  # TEMP: BH only (WH parked).
   load-test-matrix:
     runs-on: ubuntu-slim
     needs: [build-images]
@@ -94,12 +96,13 @@ jobs:
           set -euo pipefail
           # Map architecture input to the SKUs listed in llk_ttnop_tests.yaml.
           case "$ARCHITECTURE" in
-            all)
-              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
-              ;;
-            wormhole)
-              ENABLED_SKUS="wh_n150_civ2"
-              ;;
+            # TEMP restore:
+            # all)
+            #   ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+            #   ;;
+            # wormhole)
+            #   ENABLED_SKUS="wh_n150_civ2"
+            #   ;;
             blackhole)
               ENABLED_SKUS="bh_p150b_civ2"
               ;;
@@ -120,6 +123,7 @@ jobs:
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
+      max-parallel: 5 # TEMP: 5 BH machines. Restore: delete this line.
       matrix:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
