@@ -277,7 +277,10 @@ def get_value_tiles_from_topk_tensor(
         [256, 128],
         [32, 1024],
     ],
-    K=[32],  # TODO: Add more K values (like 16, 64).
+    # Wider dims (W >= 256) and K=64 are blocked on the wide-width harness
+    # discrepancies tracked in tt-llk#1344; sub-tile K and K=64 coverage lives
+    # in the ttnn-level topk tests.
+    K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
     stable_sort=[False, True],
 )
@@ -293,11 +296,6 @@ def test_topk_sfpu(
         # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
         # TODO: Fix issue #1344 on tt-llk.
         pytest.skip("Skipping test for 32x1024 input due to observed discrepancies.")
-
-    if stable_sort:
-        pytest.skip(
-            "Stable sort is currently not broken in LLK API."
-        )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
