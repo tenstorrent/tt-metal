@@ -142,15 +142,60 @@ struct DramBuffers {
     tt::tt_metal::Buffer* expert_offsets = nullptr;
 };
 
-// Everything a kernel needs that is the same for every stream on one chip, plus the stream itself.
+// Derived geometry. One-liners off the two structs the framework passes everywhere, named because
+// `aligned_page_size()` as "the token size" is not self-evident.
+uint32_t ring_extent(const CombineFabric2dParams& args) {
+    return args.device->shape()[static_cast<int32_t>(args.axis)];
+}
+
+uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
+}
+
+uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
+    return static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
+}
+
+uint32_t num_dispatch_groups(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    return num_routed_experts(tensor_args) / (args.experts_per_chip * args.dispatch_group_size);
+}
+
+uint32_t my_row(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
+    return coord[static_cast<int32_t>(args.axis)];
+}
+
+// The buffers the kernels will address must exist, and the output this op allocated must match the token
+// geometry it was derived from. Not caller validation: the output comes from our own compute_output_specs,
+// and validate_on_program_cache_miss cannot see it.
+void validate_allocations(
+    const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args, const ttnn::Tensor& output) {
+    for (const auto& [tensor, name] :
+         {std::pair{&tensor_args.dispatched_buffer, "dispatched_buffer"},
+          std::pair{&tensor_args.dispatched_metadata, "dispatched_metadata"},
+          std::pair{&tensor_args.expert_token_counts, "expert_token_counts"},
+          std::pair{&tensor_args.expert_region_offsets, "expert_region_offsets"},
+          std::pair{&tensor_args.expert_offsets, "expert_offsets"},
+          std::pair{&output, "output"}}) {
+        TT_FATAL(tensor->buffer() != nullptr, "combine_fabric2d: {} has no device buffer", name);
+    }
+    TT_FATAL(
+        output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
+        "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
+        "between the two",
+        output.buffer()->aligned_page_size(),
+        token_size_bytes(tensor_args));
+    TT_FATAL(
+        output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
+        "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
+        output.buffer()->num_pages(),
+        args.seq_len_per_chip * args.num_experts_per_tok);
+}
+
+// The per-chip values that had to be worked out rather than read off the arguments, plus the stream.
 struct KernelPlan {
     StreamId stream = 0;
-    uint32_t my_row = 0;
     uint32_t my_expert_base = 0;
-    uint32_t num_routed_experts = 0;
-    uint32_t token_size_bytes = 0;
     uint32_t pages_per_chunk = 0;
-    uint32_t ring_extent = 0;
     uint32_t ring_filled_addr = 0;
     uint32_t ring_freed_addr = 0;
     uint32_t fwd_arrived_addr = 0;
@@ -168,10 +213,14 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 }
 
 std::vector<uint32_t> pack_producer_args(
-    const StreamPlacement& self, const StreamPlacement& downstream, const L1Layout& l1, const KernelPlan& plan) {
+    const CombineFabric2dInputs& tensor_args,
+    const StreamPlacement& self,
+    const StreamPlacement& downstream,
+    const L1Layout& l1,
+    const KernelPlan& plan) {
     cmbf2d::ProducerCtArgPacker a;
     a[cmbf2d::ProducerCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
-    a[cmbf2d::ProducerCtArg::TokenSizeBytes] = plan.token_size_bytes;
+    a[cmbf2d::ProducerCtArg::TokenSizeBytes] = token_size_bytes(tensor_args);
     a[cmbf2d::ProducerCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
     a[cmbf2d::ProducerCtArg::PeerChipId] = static_cast<uint32_t>(self.downstream_node.chip_id);
     a[cmbf2d::ProducerCtArg::PeerMeshId] = *self.downstream_node.mesh_id;
@@ -195,6 +244,8 @@ std::vector<uint32_t> pack_producer_args(
 
 std::vector<uint32_t> pack_reader_args(
     const CombineFabric2dParams& args,
+    const CombineFabric2dInputs& tensor_args,
+    const ttnn::MeshCoordinate& coord,
     const StreamPlacement& self,
     const std::vector<Assignment>& work,
     const L1Layout& l1,
@@ -202,7 +253,7 @@ std::vector<uint32_t> pack_reader_args(
     const DramBuffers& dram) {
     cmbf2d::ReaderCtArgPacker a;
     a[cmbf2d::ReaderCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
-    a[cmbf2d::ReaderCtArg::TokenSizeBytes] = plan.token_size_bytes;
+    a[cmbf2d::ReaderCtArg::TokenSizeBytes] = token_size_bytes(tensor_args);
     a[cmbf2d::ReaderCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
     a[cmbf2d::ReaderCtArg::Batch] = CMBF2D_BATCH;
     a[cmbf2d::ReaderCtArg::RingAddr] = l1.ring;
@@ -211,11 +262,11 @@ std::vector<uint32_t> pack_reader_args(
     a[cmbf2d::ReaderCtArg::DramInBaseAddr] = static_cast<uint32_t>(dram.in->address());
     a[cmbf2d::ReaderCtArg::DramOutBaseAddr] = static_cast<uint32_t>(dram.out->address());
     a[cmbf2d::ReaderCtArg::DramFwdBaseAddr] = static_cast<uint32_t>(dram.fwd->address());
-    a[cmbf2d::ReaderCtArg::FwdChunksPerQuarter] = relay_chunks_per_stream(plan.ring_extent);
+    a[cmbf2d::ReaderCtArg::FwdChunksPerQuarter] = relay_chunks_per_stream(ring_extent(args));
     a[cmbf2d::ReaderCtArg::FwdPagesPerChunk] = plan.pages_per_chunk;
     // Doubles as this stream's share of the same-chip run, which it copies after the fabric work.
     a[cmbf2d::ReaderCtArg::MyQuarter] = plan.stream;
-    a[cmbf2d::ReaderCtArg::NumIncomingChunks] = relay_chunks_per_stream(plan.ring_extent);
+    a[cmbf2d::ReaderCtArg::NumIncomingChunks] = relay_chunks_per_stream(ring_extent(args));
     a[cmbf2d::ReaderCtArg::FwdSemAddr] = plan.fwd_arrived_addr;
     a[cmbf2d::ReaderCtArg::NbrChipId] = static_cast<uint32_t>(self.downstream_node.chip_id);
     a[cmbf2d::ReaderCtArg::ScheduleLen] = static_cast<uint32_t>(work.size());
@@ -223,13 +274,13 @@ std::vector<uint32_t> pack_reader_args(
     a[cmbf2d::ReaderCtArg::DramCountsBaseAddr] = static_cast<uint32_t>(dram.counts->address());
     a[cmbf2d::ReaderCtArg::DramRegionBaseAddr] = static_cast<uint32_t>(dram.region->address());
     a[cmbf2d::ReaderCtArg::DramExpertOffsetsBaseAddr] = static_cast<uint32_t>(dram.expert_offsets->address());
-    a[cmbf2d::ReaderCtArg::NumRoutedExperts] = plan.num_routed_experts;
+    a[cmbf2d::ReaderCtArg::NumRoutedExperts] = num_routed_experts(tensor_args);
     a[cmbf2d::ReaderCtArg::ExpertsPerChip] = args.experts_per_chip;
     a[cmbf2d::ReaderCtArg::MyExpertBase] = plan.my_expert_base;
     a[cmbf2d::ReaderCtArg::NumExpertsPerTok] = args.num_experts_per_tok;
     a[cmbf2d::ReaderCtArg::DispatchGroupSize] = args.dispatch_group_size;
     a[cmbf2d::ReaderCtArg::LocalSplitCount] = stream_count(args.num_links);
-    a[cmbf2d::ReaderCtArg::MyRow] = plan.my_row;
+    a[cmbf2d::ReaderCtArg::MyRow] = my_row(args, coord);
     a[cmbf2d::ReaderCtArg::ControlAddr] = l1.control;
     a[cmbf2d::ReaderCtArg::MetaPrefetchCap] = CMBF2D_META_PREFETCH;
 
@@ -256,93 +307,6 @@ std::vector<uint32_t> pack_reader_args(
         ct.push_back(w.split_count);
     }
     return ct;
-}
-
-// Facts about this call, established while checking it.
-struct OpShape {
-    uint32_t ring_extent = 0;
-    uint32_t token_size_bytes = 0;
-    uint32_t num_routed_experts = 0;
-    uint32_t num_dispatch_groups = 0;
-};
-
-OpShape validate_and_derive(
-    const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args, const ttnn::Tensor& output) {
-    const auto mesh_shape = args.device->shape();
-    TT_FATAL(
-        args.axis < mesh_shape.dims(),
-        "combine_fabric2d: axis {} out of range for mesh shape {}",
-        args.axis,
-        mesh_shape);
-
-    OpShape shape;
-    shape.ring_extent = mesh_shape[static_cast<int32_t>(args.axis)];
-    TT_FATAL(
-        shape.ring_extent > 1,
-        "combine_fabric2d: mesh axis {} has extent {}; need at least 2 chips to send anywhere",
-        args.axis,
-        shape.ring_extent);
-    TT_FATAL(
-        shape.ring_extent % 2 == 0,
-        "combine_fabric2d: axis {} extent {} must be even — the all-destinations pattern relies on a "
-        "diametrically-opposite chip at ring offset extent/2",
-        args.axis,
-        shape.ring_extent);
-
-    auto* in_buf = tensor_args.dispatched_buffer.buffer();
-    auto* out_buf = output.buffer();
-    auto* meta_buf = tensor_args.dispatched_metadata.buffer();
-    TT_FATAL(in_buf != nullptr, "combine_fabric2d: dispatched_buffer has no device buffer");
-    TT_FATAL(out_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
-    TT_FATAL(meta_buf != nullptr, "combine_fabric2d: dispatched_metadata has no device buffer");
-    TT_FATAL(
-        tensor_args.expert_token_counts.buffer() != nullptr,
-        "combine_fabric2d: expert_token_counts has no device buffer");
-    TT_FATAL(
-        tensor_args.expert_region_offsets.buffer() != nullptr,
-        "combine_fabric2d: expert_region_offsets has no device buffer");
-    TT_FATAL(tensor_args.expert_offsets.buffer() != nullptr, "combine_fabric2d: expert_offsets has no device buffer");
-
-    // A token is one page of the dispatched buffer — the op does not take a token size, it reads it off the
-    // tensor the caller staged, exactly as the production op does.
-    shape.token_size_bytes = static_cast<uint32_t>(in_buf->aligned_page_size());
-    TT_FATAL(
-        shape.token_size_bytes % sizeof(uint32_t) == 0,
-        "combine_fabric2d: token page {} B must be a multiple of 4",
-        shape.token_size_bytes);
-    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric must accept is
-    // token + tail, not just token.
-    TT_FATAL(
-        shape.token_size_bytes + cmbf2d::SLOT_TAIL_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
-        "max_payload_size in the device's fabric_router_config.",
-        shape.token_size_bytes,
-        cmbf2d::SLOT_TAIL_BYTES,
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
-    TT_FATAL(
-        out_buf->aligned_page_size() == shape.token_size_bytes,
-        "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
-        "between the two",
-        out_buf->aligned_page_size(),
-        shape.token_size_bytes);
-    // The output holds one page per (token, top-k slot). Checked against the real buffer because only it
-    // knows the per-device page count.
-    TT_FATAL(
-        out_buf->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
-        "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
-        out_buf->num_pages(),
-        args.seq_len_per_chip * args.num_experts_per_tok);
-    TT_FATAL(
-        meta_buf->num_pages() == in_buf->num_pages(),
-        "combine_fabric2d: metadata has {} pages but the dispatched buffer has {}; they index the same flat "
-        "buffer",
-        meta_buf->num_pages(),
-        in_buf->num_pages());
-
-    shape.num_routed_experts = static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
-    shape.num_dispatch_groups = shape.num_routed_experts / (args.experts_per_chip * args.dispatch_group_size);
-    TT_FATAL(shape.num_dispatch_groups >= 1, "combine_fabric2d: derived num_dispatch_groups is 0");
-    return shape;
 }
 
 // The reader/producer ring handshake is two monotonic single-writer counters, plus one counter the upstream
@@ -392,20 +356,20 @@ struct ForwardingBuffer {
 // (workload_descriptor.hpp:19-36). Being a mesh tensor, its device-local address is uniform across the mesh
 // by construction, which is what lets a producer address the NEXT chip's buffer.
 ForwardingBuffer allocate_forwarding_buffer(
-    ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const OpShape& shape) {
+    ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
     fwd.pages_per_chunk = fwd_pages_per_chunk(
         args.seq_len_per_chip,
         args.num_experts_per_tok,
-        shape.num_dispatch_groups,
+        num_dispatch_groups(args, tensor_args),
         args.dispatch_group_size,
         args.num_links);
-    const uint32_t page_bytes = shape.token_size_bytes + cmbf2d::SLOT_TAIL_BYTES;
+    const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::SLOT_TAIL_BYTES;
     TT_FATAL(
         page_bytes % sizeof(uint32_t) == 0,
         "combine_fabric2d: forwarding page {} B must be a multiple of 4",
         page_bytes);
-    const uint32_t pages = relay_chunks_per_mesh(shape.ring_extent, args.num_links) * fwd.pages_per_chunk;
+    const uint32_t pages = relay_chunks_per_mesh(ring_extent(args), args.num_links) * fwd.pages_per_chunk;
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
         tt::tt_metal::TensorLayout(
@@ -428,16 +392,12 @@ ForwardingBuffer allocate_forwarding_buffer(
 
 KernelPlan make_kernel_plan(
     const CombineFabric2dParams& args,
+    const CombineFabric2dInputs& tensor_args,
     const ttnn::MeshCoordinate& coord,
-    const OpShape& shape,
     const RingSemaphores& sems,
     uint32_t pages_per_chunk) {
     KernelPlan plan;
-    plan.my_row = coord[static_cast<int32_t>(args.axis)];
-    plan.num_routed_experts = shape.num_routed_experts;
-    plan.token_size_bytes = shape.token_size_bytes;
     plan.pages_per_chunk = pages_per_chunk;
-    plan.ring_extent = shape.ring_extent;
     plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
     plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
@@ -445,10 +405,10 @@ KernelPlan make_kernel_plan(
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
     const uint32_t experts_per_group = args.experts_per_chip * args.dispatch_group_size;
-    const uint32_t my_group = args.device->shape().dims() > 1
-                                  ? coord[static_cast<int32_t>(args.axis == 0 ? 1 : 0)] % shape.num_dispatch_groups
-                                  : 0u;
-    plan.my_expert_base = my_group * experts_per_group + plan.my_row * args.experts_per_chip;
+    const uint32_t my_group = args.device->shape().dims() > 1 ? coord[static_cast<int32_t>(args.axis == 0 ? 1 : 0)] %
+                                                                    num_dispatch_groups(args, tensor_args)
+                                                              : 0u;
+    plan.my_expert_base = my_group * experts_per_group + my_row(args, coord) * args.experts_per_chip;
     return plan;
 }
 
@@ -457,13 +417,14 @@ KernelPlan make_kernel_plan(
 // metadata prefetch pads at the front, 64-byte aligned each: a DRAM read needs a 64-byte-aligned L1
 // destination on Blackhole, which no offset inside a ring slot's tail can give (the tail starts at
 // token_size, and its free half is only 32-byte aligned).
-uint32_t control_region_bytes(const CombineFabric2dParams& args, const OpShape& shape) {
+uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     return CMBF2D_META_PREFETCH * CMBF2D_META_PAD_STRIDE +
-           static_cast<uint32_t>(sizeof(uint32_t)) * shape.num_routed_experts * (args.dispatch_group_size + 2);
+           static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (args.dispatch_group_size + 2);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const CombineFabric2dParams& args,
+    const CombineFabric2dInputs& tensor_args,
     const ttnn::MeshCoordinate& coord,
     const MeshPlacement& placement,
     const L1Layout& l1,
@@ -471,7 +432,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const DramBuffers& dram) {
     tt::tt_metal::ProgramDescriptor desc;
     const auto work_by_stream =
-        generate_assignments(ring_chip_ids(args.device, coord, args.axis), chip_plan.my_row, args.num_links);
+        generate_assignments(ring_chip_ids(args.device, coord, args.axis), my_row(args, coord), args.num_links);
 
     for (const auto& [stream, self] : placement.at(coord)) {
         KernelPlan plan = chip_plan;
@@ -485,7 +446,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "producer_combine_fabric2d.cpp";
         prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         prod.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        prod.compile_time_args = pack_producer_args(self, downstream, l1, plan);
+        prod.compile_time_args = pack_producer_args(tensor_args, self, downstream, l1, plan);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -500,7 +461,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "reader_combine_fabric2d.cpp";
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        rdr.compile_time_args = pack_reader_args(args, self, work, l1, plan, dram);
+        rdr.compile_time_args = pack_reader_args(args, tensor_args, coord, self, work, l1, plan, dram);
         for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
         }
@@ -534,17 +495,17 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     ttnn::Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     auto* mesh_device = operation_attributes.device;
-    const auto shape = validate_and_derive(operation_attributes, tensor_args, tensor_return_value);
+    validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
     const auto sems = allocate_ring_semaphores(mesh_device);
     const auto l1 = compute_l1_layout(
         mesh_device,
         CMBF2D_NUM_L1_SLOTS,
-        shape.token_size_bytes,
-        control_region_bytes(operation_attributes, shape),
+        token_size_bytes(tensor_args),
+        control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address());
     const auto placement = decide_placement(mesh_device, operation_attributes.axis, operation_attributes.num_links);
-    const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, shape);
+    const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args);
 
     // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a producer can
     // address the same buffer on any chip by page index. That is what lets a token carry a final destination
@@ -569,10 +530,11 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             {ttnn::MeshCoordinateRange(coord),
              build_program_for_coord(
                  operation_attributes,
+                 tensor_args,
                  coord,
                  placement,
                  l1,
-                 make_kernel_plan(operation_attributes, coord, shape, sems, fwd.pages_per_chunk),
+                 make_kernel_plan(operation_attributes, tensor_args, coord, sems, fwd.pages_per_chunk),
                  dram)});
     }
     return workload_descriptor;

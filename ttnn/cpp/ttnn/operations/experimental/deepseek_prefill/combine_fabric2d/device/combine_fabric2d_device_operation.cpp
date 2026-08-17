@@ -7,6 +7,7 @@
 #include <string>
 
 #include "combine_fabric2d_device_operation.hpp"
+#include "kernels/dataflow/combine_fabric2d_kernel_protocol.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
@@ -103,6 +104,19 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     // index. BFLOAT16 only: the fp8 and TILE paths both need the untilize stage this op does not have.
     const auto& buf = tensor_args.dispatched_buffer;
     validate_dram_row_major(buf, "dispatched_buffer");
+    // A token is one page — the op does not take a token size, it reads it off the tensor the caller staged.
+    const uint32_t token_page = static_cast<uint32_t>(buf.buffer()->aligned_page_size());
+    TT_FATAL(
+        token_page % sizeof(uint32_t) == 0, "combine_fabric2d: token page {} B must be a multiple of 4", token_page);
+    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric must accept is
+    // token + tail, not just token.
+    TT_FATAL(
+        token_page + cmbf2d::SLOT_TAIL_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
+        "max_payload_size in the device's fabric_router_config.",
+        token_page,
+        cmbf2d::SLOT_TAIL_BYTES,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(
         buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. The BFLOAT8_B/TILE path needs an "
@@ -138,6 +152,12 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         num_routed_experts,
         args.experts_per_chip);
     const uint32_t experts_per_group = args.experts_per_chip * args.dispatch_group_size;
+    TT_FATAL(
+        num_routed_experts >= experts_per_group,
+        "combine_fabric2d: num_routed_experts {} is fewer than experts_per_chip x dispatch_group_size = {}, so "
+        "there is not even one dispatch group",
+        num_routed_experts,
+        experts_per_group);
     TT_FATAL(
         num_routed_experts % experts_per_group == 0,
         "combine_fabric2d: num_routed_experts {} must be divisible by experts_per_chip x dispatch_group_size "
