@@ -417,10 +417,14 @@ MODEL_SCENARIOS = [
         "dtype": "bf16",
         "engines": ["op", "routed"],
         "today_engine": "op",
+        # Pre-campaign cost of this exact cell (as-shipped op, scenarios7 pinning) -- feeds the
+        # before->after speedup column so a landed win is never masked by today==best (1.0x).
+        "pre_branch_us": 712.3,
         "calls_note": "per sparse-MLA layer per prefill chunk (61 layers DS-v3.2)",
-        "notes": "model already calls topk_large_indices by name -- today IS the op; rows=160 "
-        "exercises the row-parallel path with the chunk skip live; stocknow omitted (no call "
-        "site, ~100 s/iter at k=2048)",
+        "notes": "model already calls topk_large_indices by name -- today IS the op, which now runs "
+        "the hybrid (row-parallel full waves + multi-rect remainder + concat, 26abf46feee): "
+        "pre-hybrid this cell measured 712.3 us (1.53x); stocknow omitted (no call site, "
+        "~100 s/iter at k=2048)",
     },
     {
         "name": "dsa_indexer_v4_k512",
@@ -432,8 +436,10 @@ MODEL_SCENARIOS = [
         "dtype": "bf16",
         "engines": ["op", "routed"],
         "today_engine": "op",
+        "pre_branch_us": 559.5,  # as-shipped op at this cell (scenarios7 pinning)
         "calls_note": "per sparse-MLA layer per prefill chunk",
-        "notes": "today IS the op (row-parallel, chunk skip live); stock ttnn.topk column omitted (no such call site exists)",
+        "notes": "today IS the op, now on the hybrid (26abf46feee): pre-hybrid 559.5 us (1.56x); "
+        "stock ttnn.topk column omitted (no such call site exists)",
     },
     {
         "name": "msa_blocks_k16",
@@ -459,6 +465,9 @@ MODEL_SCENARIOS = [
         "dtype": "bf16",
         "engines": ["routed", "stocknow"],
         "today_engine": "routed",
+        # pre-carve-out cost (stock single-core, I3 landing A/B) -- today_engine is already
+        # the routed carve-out, so without this the landed 2.95x would render as 1.0x.
+        "pre_branch_us": 24.22,
         "calls_note": "per MoE layer per forward (36 layers)",
         "notes": "MoE-gate route arm (topk.cpp gate_route_*: k<=16, padded W 128..512, <=32 "
         "rows) fires here: k=4 rounds to the op's 16 floor and the shared slice trims back. "
@@ -475,6 +484,7 @@ MODEL_SCENARIOS = [
         "dtype": "bf16",
         "engines": ["routed", "stocknow"],
         "today_engine": "routed",
+        "pre_branch_us": 77.49,  # pre-carve-out stock single-core (I3 landing A/B)
         "calls_note": "per MoE layer per forward",
         "notes": "MoE-gate route arm (topk.cpp gate_route_*: k<=16, padded W 128..512, <=32 "
         "rows) fires here: k=10 rounds to the op's 16 floor and the shared slice trims back. "
@@ -1160,14 +1170,23 @@ def parse_tracy_composite(csv_path, cell, iters):
     if anchor is None:
         return None
     anchor_occ = sorted(per_op[anchor], key=lambda m: m["call"])
-    n_anchor = len(anchor_occ)
-    used_iters = min(iters, n_anchor)
+    # Iteration count must NOT be inferred from the anchor's row count: the
+    # op's hybrid row split dispatches the anchor TWICE per call (plus a
+    # Concat), which halved every multiplicity here (measured: the 160-row
+    # hybrid cell parsed as 203 us vs the true 467). Instead take the smallest
+    # per-opcode count among opcodes that ran at least `iters` times — every
+    # steady-state opcode appears an integer multiple of the iteration count,
+    # so the minimum qualifying count IS the iteration count (setup-only ops
+    # appear once and are excluded by the >= iters filter).
+    qualifying = [len(o) for o in per_op.values() if len(o) >= iters]
+    n_iterations = min(qualifying) if qualifying else len(anchor_occ)
+    used_iters = min(iters, n_iterations)
 
     total_ns = 0.0
     parts = []
     for opcode, occ in sorted(per_op.items()):
         occ = sorted(occ, key=lambda m: m["call"])
-        mult = len(occ) // n_anchor  # per-iteration multiplicity; 0 = setup-only
+        mult = len(occ) // n_iterations  # per-iteration multiplicity; 0 = setup-only
         if mult == 0:
             continue
         kept = occ[-mult * used_iters :]
@@ -1303,7 +1322,13 @@ def run_cell(cell, arm, trial, args):
         return result
 
     csv_path = _newest_report_after(t0)
-    if cell.get("composite"):
+    # topk_large_indices cells use the composite (sum-over-all-device-ops)
+    # parser too: the op's hybrid row split (rows > worker grid) dispatches
+    # TWO topk programs + a concat per call, so single-row anchoring silently
+    # undercounts (measured: the 160-row hybrid cell parsed as 99.0 us — just
+    # its remainder program — vs the true 467.0). For single-program cells the
+    # multiplicity logic reduces to the old answer (one opcode, one row/iter).
+    if cell.get("composite") or cell.get("op") == "topk_large_indices":
         parsed = parse_tracy_composite(csv_path, cell, effective_iters) if csv_path else None
     else:
         parsed = parse_tracy_for_cell(csv_path, cell, effective_iters) if csv_path else None
@@ -2234,6 +2259,12 @@ def build_scenario_table(specs, cells, outdir):
         row["today_us"] = round(today, 2) if today is not None else ""
         row["speedup_today_over_routed"] = f"{today / us['routed']:.2f}x" if today and us.get("routed") else ""
         row["speedup_today_over_op"] = f"{today / us['op']:.2f}x" if today and us.get("op") else ""
+        # before->after: when production already calls our op, today==best masks the landed
+        # win, so the speedup baseline is the spec's pinned pre-campaign cost when present.
+        pre = s.get("pre_branch_us") or today
+        row["pre_branch_us"] = round(pre, 2) if pre is not None else ""
+        best = min((v for v in (us.get("op"), us.get("routed")) if v is not None), default=None)
+        row["speedup_pre_over_best"] = f"{pre / best:.2f}x" if pre and best else ""
         rows.append(row)
 
     drift = ""
@@ -2254,7 +2285,8 @@ def build_scenario_table(specs, cells, outdir):
 SCENARIO_CSV_COLUMNS = (
     ["scenario", "model", "callsite", "rows", "n", "k", "dtype", "today_engine", "calls_note"]
     + [f"{e}_{c}" for e in SCENARIO_ENGINE_ORDER for c in ("us", "cores", "iters", "status")]
-    + ["today_us", "speedup_today_over_routed", "speedup_today_over_op", "notes", "provenance"]
+    + ["today_us", "pre_branch_us", "speedup_today_over_routed", "speedup_today_over_op"]
+    + ["speedup_pre_over_best", "notes", "provenance"]
 )
 
 

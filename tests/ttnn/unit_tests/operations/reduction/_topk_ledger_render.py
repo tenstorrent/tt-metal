@@ -153,9 +153,11 @@ ROUTED_FORM_LANDED = {
 
 def render_model_scenarios(rows):
     """MODEL_SCENARIOS region. One speedup semantics, stated in the header:
-    speedup = today / best-ours, always. 'best ours' names which variant won
-    (routed ttnn.topk or the direct op); 'to capture it' says in plain words
-    what adopting the best number costs. Numbers only from MEASURED cells."""
+    speedup = BEFORE / best-ours, where BEFORE is what the shape cost before
+    this work (the stock engine, or -- when production already calls our op --
+    the spec's pinned pre-campaign cost, pre_branch_us). today==best can
+    therefore never mask a landed win as 1.0x. 'to capture it' says in plain
+    words what adopting the best number costs. Numbers only from MEASURED cells."""
     import html as _html
 
     body = []
@@ -189,8 +191,10 @@ def render_model_scenarios(rows):
         else:
             best, best_name, best_td = None, None, '<td class="n flat">not run</td>'
 
-        if today is not None and best is not None:
-            ratio = today / best
+        pre = fnum(r.get("pre_branch_us"))
+        base = pre if pre is not None else today
+        if base is not None and best is not None:
+            ratio = base / best
             rs = f"{ratio:,.0f}\u00d7" if ratio >= 100 else f"{ratio:,.1f}\u00d7"
             sp = f'<td class="n win">{rs}</td>' if ratio >= 1.05 else f'<td class="n flat">{rs}</td>'
         else:
@@ -249,7 +253,7 @@ def render_model_scenarios(rows):
         '    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows\u00d7N, k)</th>'
         '<th>calls today</th><th class="n">today \u00b5s</th>'
         '<th class="n ours">best ours \u00b5s</th>'
-        '<th class="n">speedup (today \u00f7 best ours)</th>'
+        '<th class="n">speedup (before \u00f7 best ours)</th>'
         "<th>to capture it</th><th>note</th></tr></thead>"
     )
     return head + "\n    <tbody>\n" + "\n".join(body) + "\n    </tbody>\n  </table></div>"
