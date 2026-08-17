@@ -5,17 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_fpu import Fpu
-from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import MatmulGolden, get_golden_generator
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopBlock, TileLoop
 
 
 class MatmulFpu(Fpu):
-    loop: FusedLoop = LoopBlock()
+    loop: TileLoop = LoopBlock()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -29,38 +28,24 @@ class MatmulFpu(Fpu):
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
         tensor_dst: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_math_format
-        math_fidelity = compute_unit.math_fidelity
-
-        generate_golden = get_golden_generator(MatmulGolden)
-        golden = generate_golden(
-            tensor_a,
-            tensor_b,
-            output_format,
-            math_fidelity,
-            input_A_dimensions=compute_unit.src_a.dimensions,
-            input_B_dimensions=compute_unit.src_b.dimensions,
-            tilize=False,
-            input_A_format=compute_unit.src_a.data_format,
-            input_B_format=compute_unit.src_b.data_format,
+        return self.matmul_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
         )
-
-        return (tensor_a, tensor_b, golden)
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        transpose = compute_unit.unpack_transpose_faces.cpp_enum_value
+        transpose = compute_unit.transpose_within_face.cpp_enum_value
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 
@@ -79,7 +64,7 @@ class MatmulFpu(Fpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -99,7 +84,7 @@ class MatmulFpu(Fpu):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

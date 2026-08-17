@@ -158,7 +158,8 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     });
 
     // client interface
-    constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
+    // [0] data unicast; [1]/[2] bidirectional completion atomic-inc (pos/neg arcs); [1] reused for init send.
+    constexpr auto num_headers = 3;
     constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_headers * CLIENT_INTERFACE_SIZE,
@@ -348,7 +349,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllCombineDeviceOperation::AllToAllCombine
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

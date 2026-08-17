@@ -117,13 +117,13 @@ def make_recv_contig_weight(
 
 
 @contextlib.contextmanager
-def tensor_prefetcher_session(device, dual_senders_per_bank: bool = False):
+def tensor_prefetcher_session(device):
     """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)
     runs even on test failure so the next test sees a clean device, replacing the
     explicit ``start -> ... -> stop -> synchronize`` callers used to spell out at
     every test site.
     """
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders_per_bank)
+    ttnn.experimental.start_tensor_prefetcher(device)
     try:
         yield
     finally:

@@ -19,6 +19,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"  // DramConfig
@@ -31,6 +32,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -49,11 +51,9 @@ protected:
             GTEST_SKIP() << "DRAM programmable cores not enabled";
         }
         mesh_device_ = devices_[0].get();
-        device_ = mesh_device_->get_devices()[0];
     }
 
     distributed::MeshDevice* mesh_device_{};
-    IDevice* device_{};
 };
 
 TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
@@ -71,8 +71,8 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
 
     // Size: per-receiver fifo. Use 1KB.
     constexpr uint32_t kGcbSize = 1024;
-    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1, /*support_multi_receiver_shards=*/true);
     // Use the sender coord the factory resolved; recomputing via pick_unused_dram_logical_core
     // would couple this test to the picker's current strategy.
     const CoreCoord sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
@@ -110,7 +110,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
             pattern[r * kPageSize / sizeof(uint32_t) + w] = 0xABCD0000u + r * 0x100u + w;
         }
     }
-    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t data_noc_addr = drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved);
@@ -173,8 +173,8 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     auto receivers_vec = corerange_to_cores(receiver_cores);
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xABCD0000u + r * 0x100u + w;
             EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w << " mismatch (expected 0x" << std::hex
@@ -215,8 +215,8 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     const uint32_t bank_id = 0;
     CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
-    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1, /*support_multi_receiver_shards=*/true);
     const CoreCoord sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
 
     const auto& hal = MetalContext::instance().hal();
@@ -243,7 +243,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
             pattern[r * kPageSize / sizeof(uint32_t) + w] = 0x55AA0000u + r * 0x100u + w;
         }
     }
-    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     MetalContext::instance().get_cluster().write_core(
@@ -311,8 +311,8 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     auto receivers_vec = corerange_to_cores(receiver_cores);
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0x55AA0000u + r * 0x100u + w;
             EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w;
@@ -343,10 +343,10 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     // GCB A: receiver at worker (0, 0). GCB B: receiver at worker (1, 0). Same bank.
     CoreRangeSet recv_a(CoreRange({0, 0}, {0, 0}));
     CoreRangeSet recv_b(CoreRange({1, 0}, {1, 0}));
-    auto gcb_a = experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device_, {{bank_id, recv_a}}, kGcbSize, BufferType::L1);
-    auto gcb_b = experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device_, {{bank_id, recv_b}}, kGcbSize, BufferType::L1);
+    auto gcb_a = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_, {{bank_id, recv_a}}, kGcbSize, BufferType::L1, /*support_multi_receiver_shards=*/true);
+    auto gcb_b = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_, {{bank_id, recv_b}}, kGcbSize, BufferType::L1, /*support_multi_receiver_shards=*/true);
 
     const DeviceAddr pa = experimental::pages_sent_drisc_l1_base(gcb_a);
     const DeviceAddr pb = experimental::pages_sent_drisc_l1_base(gcb_b);
@@ -363,7 +363,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     auto align_up = [&](uint32_t a) { return (a + l1_alignment - 1) & ~(l1_alignment - 1); };
 
     // Run one GCB's data flow end-to-end. The pages_sent address comes from the GCB
@@ -453,8 +453,8 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     // Verify receiver A got pattern A.
     {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, CoreCoord{0, 0}, gcb_a.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, CoreCoord{0, 0}, gcb_a.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xAAAA0000u + w;
             EXPECT_EQ(result[w], expected) << "Receiver A word " << w;
@@ -463,8 +463,8 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     // Verify receiver B got pattern B.
     {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, CoreCoord{1, 0}, gcb_b.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, CoreCoord{1, 0}, gcb_b.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xBBBB0000u + w;
             EXPECT_EQ(result[w], expected) << "Receiver B word " << w;
@@ -498,8 +498,8 @@ TEST_F(DramSenderGCBFixture, RejectsDuplicateSender) {
     CoreRangeSet recv0(CoreRange({0, 0}, {0, 0}));
     CoreRangeSet recv1(CoreRange({1, 0}, {1, 0}));
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{0, recv0}, {0, recv1}};
-    EXPECT_ANY_THROW(experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device_, bank_to_receivers, 1024, BufferType::L1));
+    EXPECT_ANY_THROW(experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_, bank_to_receivers, 1024, BufferType::L1, /*support_multi_receiver_shards=*/true));
 }
 
 }  // namespace tt::tt_metal

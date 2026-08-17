@@ -3,11 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <numeric>
 #include <optional>
+#include <string>
+#include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 
@@ -29,6 +35,9 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync.hpp"
+#include "ttnn/services/layer_ack_service.hpp"
+#include <internal/disaggregation/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_queue.hpp>
 
 namespace ttnn::distributed::test {
 namespace {
@@ -38,11 +47,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
+using ttnn::Tensor;
 
 enum class OutputPath {
     Tensor,
@@ -106,7 +114,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
     const tt::tt_metal::D2HStreamService& service,
     const tt::tt_metal::CoreRange& worker_cores,
     uint32_t fill_seed) {
-    const tt::tt_metal::Tensor& backing = service.get_backing_tensor();
+    const ttnn::Tensor& backing = service.get_backing_tensor();
     auto* backing_buf = backing.buffer();
     TT_FATAL(backing_buf != nullptr, "build_d2h_worker_workload: backing tensor has no buffer");
 
@@ -206,7 +214,7 @@ void run_d2h_worker_sync_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
@@ -266,7 +274,7 @@ void run_d2h_worker_sync_case_per_shard(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
@@ -338,7 +346,7 @@ void run_d2h_stream_service_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     tt::tt_metal::D2HStreamService::Config cfg{
         .global_spec = global_spec,
@@ -392,7 +400,7 @@ void run_d2h_stream_service_case(
         auto mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
         auto host_src = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *mapper);
         auto& backing = const_cast<Tensor&>(service.get_backing_tensor());
-        tt::tt_metal::copy_to_device(host_src, backing);
+        ttnn::copy_to_device(host_src, backing);
         tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 
         if (output_path == OutputPath::Tensor) {
@@ -439,7 +447,7 @@ void run_d2h_metadata_only_case(
 
     // Record: [1,1,1,N] uint32, replicated across the mesh, allocated once and refilled per iter.
     const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,
@@ -457,7 +465,7 @@ void run_d2h_metadata_only_case(
         std::memcpy(words.data(), expected.data(), metadata_size_bytes);
         // Stage the record on device (same CQ as the op -> ordered), then drive the worker op.
         auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
-        tt::tt_metal::copy_to_device(host_record, record_dev);
+        ttnn::copy_to_device(host_record, record_dev);
 
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
 
@@ -471,6 +479,102 @@ void run_d2h_metadata_only_case(
         std::memcpy(got.data(), out.data(), metadata_size_bytes);
         EXPECT_EQ(got, expected) << "metadata-only readback mismatch";
     }
+}
+
+// Drives `num_records` metadata-only sends with NO synchronize between them and asserts
+// the LayerAckService reader thread pushed exactly one completion per record into the
+// router-owned LayerCompletionQueue ring, each with a globally-dense seq (0,1,2,...) — then
+// that stop() joins the reader promptly even though no final record arrives to unblock it
+// (bounded teardown). The full round-trip: device op -> D2H socket -> read_metadata() ->
+// derive seq -> ring push -> this test (standing in for the router) pops + verifies.
+void run_layer_ack_service_case(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const tt::tt_metal::CoreRange& worker_cores,  // single core -> num_workers == 1
+    uint32_t metadata_size_bytes,
+    uint32_t fifo_size_bytes,
+    uint32_t num_records) {
+    TT_FATAL(metadata_size_bytes % sizeof(uint32_t) == 0, "metadata must be uint32-aligned");
+
+    // Metadata-only service (mirrors run_d2h_metadata_only_case).
+    tt::tt_metal::D2HStreamService::Config cfg{
+        .global_spec = std::nullopt,
+        .fifo_size_bytes = fifo_size_bytes,
+        .worker_cores = worker_cores,
+        .metadata_size_bytes = metadata_size_bytes,
+    };
+    tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
+
+    // Unique shm name per invocation: the owner (create) uses O_CREAT|O_EXCL and throws on a
+    // stale segment, so a fixed name would collide across the sweep's cases and reruns.
+    static std::atomic<uint32_t> seq{0};
+    const std::string shm = "/tt_test_layer_ack_" + std::to_string(::getpid()) + "_" + std::to_string(seq.fetch_add(1));
+
+    // This test stands in for the LayerCompletionRouter: it OWNS the ring (create) and pops
+    // completions off it. LayerAckService connects to the same ring by name in start(), so the
+    // ring must exist first (mirrors the router-before-service construction ordering).
+    auto ring = tt::tt_metal::internal::LayerCompletionQueue::create(shm);
+
+    // seq-derivation inputs: treat this rank as owning all `num_records` layers of a single
+    // chunk (first_layer_idx=0, local_layers=num_layers=num_records), so the k-th record maps
+    // to chunk=0, layer=k, seq=k — a dense 0,1,2,... sequence this test verifies exactly.
+    const uint32_t source_rank = 0;
+    tt::tt_metal::LayerAckService layer_ack(
+        service, shm, source_rank, /*num_layers=*/num_records, /*first_layer_idx=*/0, /*local_layers=*/num_records);
+    layer_ack.start();
+
+    // Record: [1,1,1,n] uint32 replicated DRAM. Content is irrelevant to the ack count
+    // (LayerAckService reads then discards it), so build once and resend each iteration.
+    const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
+    const auto record_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1, 1, 1, n}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
+    auto rep = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = replicate_all(*mesh_device)});
+    Tensor record_dev = distribute_tensor(Tensor::from_vector<uint32_t>(std::vector<uint32_t>(n, 0), record_spec), *rep)
+                            .to_device(mesh_device.get());
+
+    // Simulate num_records layer completions: back-to-back device ops, no synchronize
+    // between them (that non-stalling cadence is the whole point of the LayerAck path).
+    for (uint32_t i = 0; i < num_records; ++i) {
+        ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
+    }
+    // Ensure every device op has executed and pushed its record to the socket.
+    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+
+    // The reader pushes asynchronously; poll the ring until we pop all records (bounded, so a
+    // stuck reader fails the test instead of hanging it). Records arrive in FIFO order from the
+    // single producer, so collect the seqs and verify they are exactly 0,1,...,N-1.
+    std::vector<uint64_t> seqs;
+    tt::tt_metal::internal::LayerCompletionMessage msg{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (seqs.size() < num_records && std::chrono::steady_clock::now() < deadline) {
+        if (ring->try_pop(msg)) {
+            EXPECT_EQ(msg.source_rank, source_rank);
+            EXPECT_EQ(msg.request_id, 0u) << "all records here belong to chunk 0";
+            EXPECT_EQ(msg.layer_idx, msg.seq) << "single-chunk, first_layer_idx=0: global layer == seq";
+            EXPECT_EQ(msg.reserved, 0u) << "real completions must not set the sentinel field";
+            seqs.push_back(msg.seq);
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    ASSERT_EQ(seqs.size(), static_cast<size_t>(num_records))
+        << "LayerAckService must push exactly one completion per record";
+    for (uint32_t i = 0; i < num_records; ++i) {
+        EXPECT_EQ(seqs[i], static_cast<uint64_t>(i)) << "seq must be globally dense (0..N-1) in FIFO order";
+    }
+
+    // Let any stray extra push (there should be none) settle, then confirm the ring is empty.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(ring->try_pop(msg)) << "LayerAckService pushed spurious completions";
+
+    // Bounded teardown: no record is in flight, yet stop() must still join the reader
+    // promptly (the poll-based loop sees running_==false within a poll tick).
+    layer_ack.stop();
+
+    ring->shutdown();
 }
 
 // Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
@@ -837,6 +941,22 @@ TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp_Sizes) {
     }
 }
 
+// LayerAckService in isolation: N metadata sends -> exactly N acks on the counter
+// channel, across a range of N, and stop() joins the reader without hanging even though
+// no final record unblocks it. Validates the full device-op -> read_metadata -> inject
+// round-trip before it is wired into the model.
+TEST_F(D2HStreamServiceTest, LayerAckService_CountsAndCleanStop) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});  // single designated worker
+    for (uint32_t n : {1u, 61u, 200u}) {
+        SCOPED_TRACE(::testing::Message() << "num_records=" << n);
+        run_layer_ack_service_case(
+            this->mesh_device_, worker_cores, /*metadata_size_bytes=*/12, /*fifo_size_bytes=*/4096, /*num_records=*/n);
+    }
+}
+
 // Perf check (disabled by default; needs hardware): confirms the device-issued completion
 // path (worker op -> read_metadata) is cheaper per record than the old full-device
 // Synchronize barrier it replaces. Path A times the new path, Path B the old one.
@@ -852,7 +972,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
 
     // Build the record device tensor (same shape/layout the unit helper uses).
     const uint32_t n = md / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,
@@ -878,7 +998,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
         std::vector<uint32_t> words(n);
         std::memcpy(words.data(), expected.data(), md);
         auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
-        tt::tt_metal::copy_to_device(host_record, record_dev);
+        ttnn::copy_to_device(host_record, record_dev);
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
 
         // Timed: just the metadata completion.
@@ -901,13 +1021,13 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
         std::vector<uint32_t> words(n);
         std::memcpy(words.data(), expected.data(), md);
         auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
-        tt::tt_metal::copy_to_device(host_record, record_dev);
+        ttnn::copy_to_device(host_record, record_dev);
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
 
         // Timed: full mesh barrier + the same metadata read.
         std::vector<std::byte> out(md);
         auto t2 = std::chrono::high_resolution_clock::now();
-        tt::tt_metal::distributed::Synchronize(this->mesh_device_.get(), /*cq_id=*/std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*this->mesh_device_, /*mesh_cq=*/std::nullopt);
         service.read_metadata(out);
         auto t3 = std::chrono::high_resolution_clock::now();
         b_ns += std::chrono::duration<double, std::nano>(t3 - t2).count();

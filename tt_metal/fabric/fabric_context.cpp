@@ -296,7 +296,7 @@ bool FabricContext::has_z_router_on_device(
     // Check if this fabric node has Z router ethernet channels
     // Query control plane for active channels and check if any have Z direction
 
-    // Try to get active channels - if node doesn't exist, the map lookup will return empty
+    // Every configured fabric node has channel metadata; an absent entry is a topology error.
     auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
     // If no channels, node doesn't have Z router (or isn't configured yet)

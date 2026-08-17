@@ -152,6 +152,25 @@ class MeshConfig:
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
 
+    def reduce_scatter(self, tensor, ccl_manager, dim=3, axis=0, memory_config=None):
+        """Reduce-scatter along mesh `axis`: sum across the devices on that axis, scattering the result
+        on tensor `dim`. (allreduce = reduce_scatter + all_gather; this exposes the scatter half alone.)
+
+        Note: Caller should check if communication is needed before calling
+        """
+        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            dim=dim,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=ccl_manager.num_links,
+            memory_config=memory_config,
+            topology=ccl_manager.topology,
+            cluster_axis=axis,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
+
     def __repr__(self):
         sp = self.mesh_shape[self.sp_axis]
         return f"MeshConfig({self.mesh_shape}, tp={self.tp}, sp={sp}, tp_axis={self.tp_axis})"

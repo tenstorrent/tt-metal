@@ -138,12 +138,13 @@ class RMSNorm(LightweightModule):
         sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+        # Optional L1 placement for the distributed 3-op outputs (pre/gather/post); None -> DRAM default.
+        distributed_out_mc = norm_config.get("distributed_output_mem_config") if norm_config else None
 
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
         memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
-        norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
         weight = self.weight_distributed if distributed else self.weight
 
         if in_sharded:
@@ -151,14 +152,23 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
-        x = norm(
-            x,
-            epsilon=self.eps,
-            weight=weight,
-            program_config=program_config,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+        if distributed:
+            x = self._distributed_rmsnorm(
+                x,
+                epsilon=self.eps,
+                weight=weight,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                output_memory_config=distributed_out_mc,
+            )
+        else:
+            x = ttnn.rms_norm(
+                x,
+                epsilon=self.eps,
+                weight=weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
 
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
@@ -168,14 +178,26 @@ class RMSNorm(LightweightModule):
             return x
 
     def _distributed_rmsnorm(
-        self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
+        self,
+        inp,
+        epsilon=None,
+        weight=None,
+        program_config=None,
+        memory_config=None,
+        compute_kernel_config=None,
+        output_memory_config=None,
     ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
         assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
+        # Interleaved output placement for the 3 ops; default DRAM (matches the prior hardcoded behavior).
+        mc = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, memory_config=mc
+        )
         # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
@@ -184,7 +206,7 @@ class RMSNorm(LightweightModule):
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             topology=self.ccl_topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,
             num_workers_per_link=2,
@@ -197,6 +219,7 @@ class RMSNorm(LightweightModule):
             epsilon=epsilon,
             weight=weight,
             compute_kernel_config=compute_kernel_config,
+            memory_config=mc,
         )
         tt_stats.deallocate(True)
 

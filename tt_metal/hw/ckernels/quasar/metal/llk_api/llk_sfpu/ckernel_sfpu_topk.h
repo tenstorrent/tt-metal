@@ -36,7 +36,7 @@ enum SortDir : bool {
 // need to program that TRISC's section base instead.
 inline void set_dst_write_addr(std::uint32_t addr) {
     std::uint32_t dst_index = addr + ckernel::trisc::_get_dest_buffer_base_();
-    ckernel::trisc::_set_dest_section_base_<ckernel::math::TRISC_ID>(dst_index);
+    ckernel::trisc::_set_dest_section_base_<ckernel::TRISC_ID>(dst_index);
 }
 
 // Advance the dest RWC counter by `inc` rows in groups of 8.
@@ -82,7 +82,7 @@ inline void init_topk_addr_mod() {
         .srcb = {.incr = 0},
         .dest = {.incr = 32},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**
@@ -703,6 +703,10 @@ inline void calculate_bitonic_topk_rebuild(
         set_dst_write_addr(dst_addr_offset);
     }
 }
+
+// UInt16-in-32b-DEST prepare helper: no-op on Quasar (workaround only required for WH/BH).
+// Defined so compute_kernel_api.h resolves the symbol on all architectures.
+inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t /*tile_index*/) {}
 
 }  // namespace sfpu
 }  // namespace ckernel

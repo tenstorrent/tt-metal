@@ -13,6 +13,7 @@
 #include <host_api.hpp>
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_state_block.hpp"
+#include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
@@ -538,21 +539,21 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
             continue;
         }
 
-        // Dual mode launches two senders per *every* bank (the prefetcher's enumerate_dram_senders
-        // does the same unconditionally), so a single-receiver bank can't be supported — splitting
-        // one receiver across two senders is impossible, and silently collapsing it to one sender
-        // would desync the GCB's sender count from the prefetcher's. Reject it with a clear message.
-        TT_FATAL(
-            n >= 2,
-            "DRAM bank {} has a single receiver, but dual_senders_per_bank requires at least 2 receivers per "
-            "bank. Use dual_senders_per_bank=false for this topology.",
-            bank_id);
+        // A single receiver cannot be split across two senders. Since the prefetcher always
+        // provisions both senders per bank and routes PREFETCH only to the senders this GCB
+        // actually maps, we can map just the primary sender for such a bank and leave the
+        // secondary parked — same as the single-sender path. Dual- and single-sender banks may
+        // therefore coexist in one dual-mode GCB.
+        const std::vector<CoreCoord> sender_cores = mesh_device->impl().dram_sender_logical_cores(bank_id);
+        if (n == 1) {
+            mapping.emplace_back(sender_cores.at(0), receivers);
+            continue;
+        }
 
         // Two sender cores per bank: split the bank's ordered receivers ceil/floor.
         // select_from_corerangeset indices are inclusive and traverse row-wise (matching
         // corerange_to_cores used elsewhere), so the receiver-table / bank-local slab
         // order is preserved.
-        const std::vector<CoreCoord> sender_cores = mesh_device->impl().dram_sender_logical_cores(bank_id);
         const uint32_t first_count = (n + 1) / 2;
         mapping.emplace_back(sender_cores.at(0), select_from_corerangeset(receivers, 0, first_count - 1, true));
         mapping.emplace_back(sender_cores.at(1), select_from_corerangeset(receivers, first_count, n - 1, true));
@@ -562,13 +563,16 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 
 }  // namespace
 
-GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
+GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
-    auto mapping = build_dram_sender_mapping(&mesh_device, bank_to_receivers, dual_senders_per_bank);
+    bool support_multi_receiver_shards) {
+    // Multi-receiver shards (legacy interleaved layout) force one sender per bank; the
+    // receiver-contiguous layout that disallows them is what lets a bank use two senders.
+    auto mapping = build_dram_sender_mapping(
+        &mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
         &mesh_device, mapping, size, buffer_type);
 }

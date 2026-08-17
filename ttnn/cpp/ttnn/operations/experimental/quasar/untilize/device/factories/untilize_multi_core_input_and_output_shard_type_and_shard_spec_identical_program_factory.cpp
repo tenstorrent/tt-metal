@@ -88,7 +88,8 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -97,7 +98,8 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec::CompilerOptions::Defines compute_defines;
@@ -109,8 +111,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
         std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+            [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,

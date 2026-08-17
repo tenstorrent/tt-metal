@@ -42,7 +42,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -317,10 +317,10 @@ void run_single_core_reduce_program(
                                           : dims.single_tile_bytes;
     const uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
     const uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages), TensorTopology{});
+    auto in_tensor =
+        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages), TensorTopology{});
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
@@ -427,16 +427,16 @@ void run_single_core_reduce_program(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .math_fidelity = test_config.math_fidelity,
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .enable_2x_src_format = test_config.enable_2x_src_format,
+            .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .enable_2x_src_register = test_config.enable_2x_src_format,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .math_fidelity = test_config.math_fidelity,
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{

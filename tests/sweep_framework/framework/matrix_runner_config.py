@@ -15,6 +15,9 @@ parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
 already-parsed routing hints to logical test groups and runner profiles.
 """
 
+import functools
+import os
+
 # ── Run type detection (workflow inputs vs cron schedule) ────────────────────
 # ``compute_sweep_matrix.main`` sets batching and which matrix builder to call
 # from these maps. Workflow ``SWEEP_NAME`` wins; else ``GITHUB_EVENT_SCHEDULE``
@@ -30,7 +33,6 @@ SWEEP_TYPES = {
 SCHEDULE_TYPES = {
     "0 2 * * *": "lead_models",
     "0 3 * * *": "model_traced",
-    "0 4 * * 3,6": "comprehensive",
 }
 
 
@@ -63,75 +65,309 @@ VECTOR_LOAD_FILTER_POLICIES = {
 
 MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy")
 
+# Each profile references an ``sku`` by name; the actual ``runs_on`` runner-label
+# set lives in the shared .github/sku_config.yaml (single source of truth for HW
+# representation — the pipeline-reorg convention). ``get_runner_config`` resolves
+# ``runs_on`` from there via ``_resolve_runs_on(profile["sku"])``. ``arch``,
+# ``runner_label``, ``tt_smi_cmd``, and ``matrix_output_key`` stay here as they are
+# sweep-routing concerns, not general SKU attributes.
+#
+# SKUs are the EXISTING logical SKUs already defined in .github/sku_config.yaml
+# (infra's abstraction layer); sweeps does not add its own SKU entries. Sweeps
+# runs on the shared civ2/viommu runner pools.
 RUNNER_PROFILES = {
     "n150": {
         "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n150-stable",
+        "sku": "wh_n150_civ2",
         "runner_label": "N150",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n150",
     },
     "n300": {
         "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n300-stable",
+        "sku": "wh_n300_civ2",
         "runner_label": "N300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n300",
     },
     "n300-llmbox": {
         "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+        "sku": "wh_llmbox_civ2_viommu",
         "runner_label": "n300-llmbox",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n300",
     },
     "p150b": {
         "arch": "blackhole",
-        "runs_on": "tt-ubuntu-2204-p150b-viommu-stable",
+        "sku": "bh_p150b_civ2_viommu",
         "runner_label": "p150b",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p150b",
     },
     "p100a": {
         "arch": "blackhole",
-        "runs_on": "tt-ubuntu-2204-p100a-viommu-stable",
+        "sku": "bh_p100a_civ2_viommu",
         "runner_label": "p100a",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p100a",
     },
     "p300a": {
         "arch": "blackhole",
-        # A bare "P300-viommu" label does not match a schedulable runner (no
-        # in-service qualifier), so jobs sit queued forever. Mirror the proven
-        # runs-on used by tm-fabric-tests-impl.yaml's P300 job (and our own
-        # t3k/galaxy profiles): the in-service + arch-blackhole + label triple.
-        "runs_on": ["in-service", "arch-blackhole", "P300-viommu"],
+        "sku": "bh_p300_viommu",
         "runner_label": "P300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p300a",
     },
     "t3k": {
         "arch": "wormhole_b0",
-        "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+        "sku": "wh_llmbox",
         "runner_label": "config-t3000",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "t3k",
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "bare-metal"],
+        "sku": "wh_galaxy",
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
     },
-    "galaxy-g04glx03": {
-        "arch": "wormhole_b0",
-        "runs_on": "g04glx03",
-        "runner_label": "g04glx03",
-        "tt_smi_cmd": "tt-smi -r",
-        "matrix_output_key": "galaxy",
+}
+
+
+# ── Runner-label resolution from the shared SKU config ───────────────────────
+# runs_on lives in .github/sku_config.yaml keyed by SKU name; RUNNER_PROFILES
+# only names the SKU. This centralizes HW representation (pipeline-reorg).
+def _sku_config_path():
+    """Locate .github/sku_config.yaml. Prefer $TT_METAL_HOME; else walk up from
+    this file (tests/sweep_framework/framework/ -> repo root)."""
+    home = os.environ.get("TT_METAL_HOME")
+    if home:
+        candidate = os.path.join(home, ".github", "sku_config.yaml")
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".github", "sku_config.yaml"))
+
+
+@functools.lru_cache(maxsize=1)
+def _sku_runs_on_map():
+    import yaml
+
+    with open(_sku_config_path()) as f:
+        cfg = yaml.safe_load(f) or {}
+    return {name: (entry or {}).get("runs_on", []) for name, entry in (cfg.get("skus") or {}).items()}
+
+
+def _resolve_runs_on(sku_name):
+    """Resolve a profile's SKU name to its runs_on labels from sku_config.yaml.
+
+    Preserves the historical single-label-as-string form (a 1-element list is
+    returned as the bare string) so the emitted matrix stays byte-identical to the
+    pre-migration output — GitHub treats a string and a 1-element array the same."""
+    labels = _sku_runs_on_map().get(sku_name)
+    if labels is None:
+        raise KeyError(
+            f"Sweep SKU '{sku_name}' not found in {_sku_config_path()}. "
+            "Every RUNNER_PROFILES[*]['sku'] must have a matching skus entry."
+        )
+    if isinstance(labels, list) and len(labels) == 1:
+        return labels[0]
+    return labels
+
+
+# ── Timeouts + budget from the pipeline-reorg test yaml ───────────────────────
+# The single source of truth is tests/pipeline_reorg/ttnn_sweep_tests.yaml, keyed
+# by (target, sku). It carries two independent numbers (see that file's header):
+#
+#   skus.<sku>.timeout   — the TOTAL budget (minutes) for that target's jobs on
+#                          that SKU for ONE run (sum of every batch's timeout).
+#                          verify_time_budget.py sums it per (team, sku) against
+#                          .github/time_budget.yaml -> ttnn.sweep.
+#   batch.overhead/default/overrides — the PER-BATCH (per-op) timeout policy used
+#                          to size each GH job's timeout-minutes.
+#
+# The batch count is dynamic (modules are discovered from the generated vector
+# files at runtime), so a job's timeout is built up from its ops rather than by
+# dividing the SKU total by the batch count — dividing would shrink every long
+# batch's ceiling as soon as the run produced more (shorter) batches.
+DEFAULT_JOB_TIMEOUT_MIN = 60
+DEFAULT_PER_OP_TIMEOUT_MIN = 8
+
+# Fixed per-job cost charged once per batch on top of its ops: container start,
+# artifact download, tt-metal cache warm, device reset. The cheapest sweep job in
+# run 30553811243 took 3.1 min without running any meaningful op work, and a
+# single download-artifact step in that run took 6.5 min. Billing 100% of a
+# batch's ceiling to op work is what put the passing jobs right up against their
+# wall (3.1 -> 11.6 min against a 12 min ceiling) and killed 42 of 119 jobs.
+DEFAULT_BATCH_OVERHEAD_MIN = 6
+
+# Modules per batch never exceed this, even when a group's `parallel_jobs` policy
+# would produce a larger chunk. Without it a big module set collapses into a few
+# very wide jobs — run 30553811243 put 17 modules in one t3k batch, giving a
+# 90-minute single-job ceiling that then expired and took all 17 ops down with
+# it. Capping trades more (shorter, independently retryable) jobs for a bounded
+# blast radius per timeout.
+MAX_BATCH_MODULES = 8
+
+# Fallback per-op policy for (target, sku) pairs not tracked in the yaml (e.g.
+# nightly / comprehensive runs). Mirrors the model_traced block in that file (the
+# more conservative of the two targets) so an untracked lane still right-sizes
+# heavy ops instead of one flat ceiling.
+DEFAULT_BATCH_POLICY = {
+    "overhead": DEFAULT_BATCH_OVERHEAD_MIN,
+    "default": DEFAULT_PER_OP_TIMEOUT_MIN,
+    "overrides": {
+        "all_gather_async": 45,
+        "conv2d": 40,
+        "reduce_scatter": 36,
+        "all_reduce": 36,
+        "matmul": 24,
+        "linear": 24,
+        "reshape": 18,
+        "split": 18,
     },
 }
+
+
+def _sweep_tests_yaml_path():
+    """Locate tests/pipeline_reorg/ttnn_sweep_tests.yaml. Prefer $TT_METAL_HOME;
+    else walk up from this file (tests/sweep_framework/framework/ -> repo root)."""
+    rel = os.path.join("tests", "pipeline_reorg", "ttnn_sweep_tests.yaml")
+    home = os.environ.get("TT_METAL_HOME")
+    if home:
+        candidate = os.path.join(home, rel)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", rel))
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_tests_entries():
+    """Parse ttnn_sweep_tests.yaml into a list of entries.
+
+    Missing/unreadable file → empty list, so matrix generation never hard-fails
+    on a timeout/budget lookup (callers fall back to the defaults above)."""
+    import yaml
+
+    try:
+        with open(_sweep_tests_yaml_path()) as f:
+            entries = yaml.safe_load(f) or []
+    except (OSError, yaml.YAMLError):
+        return []
+    return entries if isinstance(entries, list) else []
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_total_budget_map():
+    """Return {(target, sku): total_budget_min} from skus.<sku>.timeout."""
+    out = {}
+    for entry in _sweep_tests_entries():
+        target = entry.get("target")
+        for sku_name, sku_cfg in (entry.get("skus") or {}).items():
+            if isinstance(sku_cfg, dict) and "timeout" in sku_cfg:
+                out[(target, sku_name)] = sku_cfg["timeout"]
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_batch_policy_map():
+    """Return {(target, sku): {"default": int, "overrides": {op: int}}}.
+
+    A per-SKU ``batch`` block wins over the target-level ``batch`` block; either
+    may be absent, in which case callers fall back to DEFAULT_BATCH_POLICY."""
+    out = {}
+    for entry in _sweep_tests_entries():
+        target = entry.get("target")
+        entry_policy = entry.get("batch") if isinstance(entry.get("batch"), dict) else None
+        for sku_name, sku_cfg in (entry.get("skus") or {}).items():
+            sku_policy = sku_cfg.get("batch") if isinstance(sku_cfg, dict) else None
+            policy = sku_policy if isinstance(sku_policy, dict) else entry_policy
+            if isinstance(policy, dict):
+                out[(target, sku_name)] = policy
+    return out
+
+
+def _op_timeout_min(module_token, policy):
+    """Per-op ceiling (minutes) for one module token under a batch policy.
+
+    ``overrides`` keys are matched as substrings of the module token (vector-file
+    stems carry a grouping suffix, e.g. ``model_traced.all_gather_async_model_traced``),
+    so ``all_gather_async`` matches that token. If several keys match, the largest
+    ceiling wins; otherwise the policy default applies."""
+    default = policy.get("default", DEFAULT_PER_OP_TIMEOUT_MIN)
+    overrides = policy.get("overrides") or {}
+    matched = [minutes for op_key, minutes in overrides.items() if op_key in module_token]
+    return max(matched) if matched else default
+
+
+def get_batch_timeout(target, sku, module_selector, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Per-batch (per-GH-job) timeout in minutes for one matrix entry.
+
+    ``module_selector`` is the comma-joined set of module tokens in the batch.
+    Ops in a batch run sequentially, so the batch ceiling is the SUM of its ops'
+    per-op ceilings, plus the policy's fixed per-batch ``overhead`` for the job
+    setup that is not op work. An empty selector falls back to the hard job
+    ceiling."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    tokens = [t for t in (module_selector or "").split(",") if t]
+    if not tokens:
+        return default
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(t, policy) for t in tokens)
+    return max(1, int(round(total)))
+
+
+# Floor for a device-key batch's timeout. The weighted model below charges each op a FRACTION
+# of its ceiling, so a batch holding a couple of vectors of one op lands near `overhead` alone
+# -- but `overhead` (6 min for lead_models) was calibrated when batches were large and fixed
+# cost was amortised across many ops. A 1-module device-key batch pays the full fixed cost:
+# container start (cheapest job observed 3.1 min), artifact download (one step observed
+# 6.5 min), kernel-cache clear, then a Galaxy mesh open (~4 min). Lead-models run 30702184301
+# stamped mesh4x8_col_2d_rms_norm_pre_all_gather at 7 min; it was killed at 7.1 min wall clock
+# having executed ZERO vectors. The floor covers fixed cost so a small batch gets a chance to
+# run; op time above it still comes from the weighted share.
+MIN_DEVICE_KEY_BATCH_TIMEOUT_MIN = 18
+
+
+def get_weighted_batch_timeout(target, sku, module_shares, default=DEFAULT_JOB_TIMEOUT_MIN, sizing_minutes=0):
+    """Per-batch timeout for a batch holding a FRACTION of each of its ops' vectors.
+
+    Device-key batches are sized by vector count, so one batch can touch 40 modules while
+    carrying only a slice of each. Charging every module its full per-op ceiling (what
+    get_batch_timeout does, correctly, for module-sized batches) would bill an op once per
+    batch it appears in and blow the SKU budget. Here each module is charged its ceiling
+    scaled by the share of that op's vectors present in this batch, so summed over a whole
+    run every op is still billed exactly once.
+
+    ``module_shares`` maps module token -> that op's share of its own vectors in this batch
+    (0..1, summing to 1 across the run).
+
+    ``sizing_minutes`` is what the SPLITTER's time model says this batch costs (its vector
+    count at SECONDS_PER_VECTOR, plus device open). A device-key batch is sized by that model
+    but timed by the per-op shares above, and the two can disagree: model_traced run
+    30702189957 stamped mesh1x2_row_1d at 29 min for 562 vectors (3.1 s/vector), and it was
+    killed at 29.2 min having passed 432 -- still executing, at ~4 s/vector. Taking the max
+    keeps the budget consistent with the model that chose the batch size in the first place."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    if not module_shares:
+        return default
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(token, policy) * share for token, share in module_shares.items())
+    return max(MIN_DEVICE_KEY_BATCH_TIMEOUT_MIN, int(round(max(total, overhead + sizing_minutes))))
+
+
+def get_sku_total_budget(target, sku):
+    """Total per-run budget (minutes) declared for a (target, sku), or None if the
+    pair is not budget-tracked in the yaml (e.g. nightly / comprehensive)."""
+    return _sweep_total_budget_map().get((target, sku))
+
+
+def get_timeout_for(target, sku, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Back-compat accessor for the (target, sku) TOTAL budget (minutes).
+
+    Prefer get_batch_timeout() for per-job stamping and get_sku_total_budget()
+    for the per-run budget; retained for any external callers."""
+    return _sweep_total_budget_map().get((target, sku), default)
 
 
 # ── Logical test groups ───────────────────────────────────────────────────────
@@ -298,7 +534,8 @@ def get_runner_config(test_group_name):
     return {
         "test_group_name": test_group_name,
         "arch": profile["arch"],
-        "runs_on": profile["runs_on"],
+        "sku": profile["sku"],
+        "runs_on": _resolve_runs_on(profile["sku"]),
         "runner_label": profile["runner_label"],
         "tt_smi_cmd": profile["tt_smi_cmd"],
     }

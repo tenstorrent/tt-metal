@@ -14,7 +14,7 @@ namespace ttnn::prim {
 
 // Program config types
 struct GroupNormMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::DataType im_data_format{tt::tt_metal::DataType::INVALID};
     tt::tt_metal::DataType out_data_format{tt::tt_metal::DataType::INVALID};
     bool inplace{};
@@ -29,7 +29,7 @@ struct GroupNormMultiCoreProgramConfig {
 };
 
 struct GroupNormShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::DataType im_data_format{tt::tt_metal::DataType::INVALID};
     tt::tt_metal::DataType out_data_format{tt::tt_metal::DataType::INVALID};
     bool inplace{};

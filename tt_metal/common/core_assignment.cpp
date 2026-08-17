@@ -199,6 +199,8 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     uint32_t min_worker_y_physical = std::numeric_limits<uint32_t>::max();
     // For WH, rows are harvested. Track non-worker rows and non-worker columns (e.g. dispatch columns).
     if (arch == ARCH::WORMHOLE_B0) {
+        non_worker_rows.reserve(full_grid_size_y);
+        non_worker_cols.reserve(full_grid_size_x);
         for (int y_coord = 0; y_coord < full_grid_size_y; ++y_coord) {
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
                 non_worker_rows.push_back(y_coord);
@@ -214,6 +216,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     }
     std::vector<CoreCoord> dram_interface_workers;
     uint32_t num_dram_banks = dram_phy_coords.size();
+    dram_interface_workers.reserve(num_dram_banks);
     // Get the optimal dram -> worker configuration here.
     // For WH and BH, worker cores are placed to the right of the DRAM Controller.
     // Need to shift down if the row is a non-tensix row (0 or 6 on WH and 0 or 1 on BH)
@@ -264,6 +267,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     if (arch == ARCH::BLACKHOLE) {
         // Reassign worker cores based on harvesting for BH.
         // Need to account for column harvesting here.
+        non_worker_cols.reserve(full_grid_size_x);
         for (int x_coord = 0; x_coord < full_grid_size_x; ++x_coord) {
             if (std::find(worker_phy_x.begin(), worker_phy_x.end(), x_coord) == worker_phy_x.end()) {
                 non_worker_cols.push_back(x_coord);

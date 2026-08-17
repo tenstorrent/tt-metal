@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
@@ -11,6 +12,7 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -36,8 +38,12 @@ namespace ckernel::sfpu {
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
-    constexpr int NUM_TERMS = 11;  // Exact terms (k=0..10)
+inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
+    // Exact terms (k=0..NUM_TERMS-1). The Euler-Maclaurin tail (with B2,B4,B6 corrections)
+    // is applied at z = x + NUM_TERMS. For the supported domain (x >= 0.5) this puts
+    // z >= 6.5, where the asymptotic remainder is far below bfloat16 precision, so 6 exact
+    // terms are sufficient. Reduced from 11 to save ~5 reciprocals (+power chains) per element.
+    constexpr int NUM_TERMS = 6;
 
     // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
     float n_float = Converter::as_float(n_packed);
@@ -130,6 +136,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void polygamma_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 

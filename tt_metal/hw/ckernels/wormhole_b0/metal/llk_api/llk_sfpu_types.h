@@ -169,4 +169,10 @@ enum class SfpuType {
     polygamma,
     mish,
     ne,
+    digamma,
+    identity,
+    sqrt_custom,
+    tanh_derivative_lut,
+    rsqrt_compat,
+    expm1_cw,
 };

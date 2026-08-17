@@ -12,9 +12,13 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
+from models.common.utility_functions import _nearest_y, divup, is_blackhole, is_quasar, is_wormhole_b0
 from models.demos.vision.classification.resnet50.quasar.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50 import is_blackhole_p100, resnet50
+from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50 import (
+    is_blackhole_p100,
+    resnet50,
+    set_golden_intermediates,
+)
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
@@ -147,8 +151,12 @@ class ResNet50TestInfra:
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
 
-        if batch_size <= 2:
-            pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+        # Batch 1-2 were only validated as unsupported on the Wormhole/Blackhole silicon targets. On the
+        # Quasar sim/emulator they run on BOTH the 2x3 grid AND the full 32-core grid (the latter is ~16x
+        # faster since per-core work = total/num_cores) — the small-grid bring-up path the LLK team uses.
+        # So skip only on WH/BH; let small batch through on Quasar.
+        if batch_size <= 2 and (is_wormhole_b0() or is_blackhole()):
+            pytest.skip("Batch size 1 and 2 are not supported with sharded data on Wormhole/Blackhole")
         elif batch_size == 8:
             pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
@@ -181,7 +189,51 @@ class ResNet50TestInfra:
 
         ## golden
 
+        # Per-op golden PCC (RESNET_PCC_LOG=1): capture block-level torch intermediates via forward
+        # hooks so _log_op can PCC each device op against the golden and print the FIRST op that
+        # diverges. Block outputs (layerX[Y], post add+relu) map 1:1 to the device's
+        # "layerX_moduleY.add"; stem maxpool + avgpool + fc round it out. NCHW -> [NHW, C] to match
+        # the device's flattened NHWC layout. Gated on the env so default runs stay zero-overhead.
+        _golden_cap = {}
+        _golden_handles = []
+        if os.environ.get("RESNET_PCC_LOG") == "1":
+
+            def _mk_golden_hook(name):
+                def _hook(_m, _inp, out):
+                    o = out.detach().float().cpu()
+                    if o.dim() == 4:  # NCHW -> [N*H*W, C]
+                        o = o.permute(0, 2, 3, 1).reshape(-1, o.shape[1])
+                    else:  # e.g. fc [N, 1000]
+                        o = o.reshape(-1, o.shape[-1])
+                    _golden_cap[name] = o
+
+                return _hook
+
+            # maxpool INPUT == the stem conv1+bn1+relu output, so a pre-hook captures the golden the
+            # device "stem_conv1" op targets directly (can't hook torch_model.relu -- it's reused by
+            # every bottleneck). maxpool OUTPUT == device "stem_maxpool".
+            def _mk_golden_pre_hook(name):
+                def _hook(_m, inp):
+                    o = inp[0].detach().float().cpu()
+                    _golden_cap[name] = o.permute(0, 2, 3, 1).reshape(-1, o.shape[1]) if o.dim() == 4 else o
+
+                return _hook
+
+            _golden_handles.append(torch_model.maxpool.register_forward_pre_hook(_mk_golden_pre_hook("stem_conv1")))
+            _golden_handles.append(torch_model.maxpool.register_forward_hook(_mk_golden_hook("stem_maxpool")))
+            for _li, _layer in enumerate(
+                [torch_model.layer1, torch_model.layer2, torch_model.layer3, torch_model.layer4], start=1
+            ):
+                for _mi, _block in enumerate(_layer, start=1):
+                    _golden_handles.append(_block.register_forward_hook(_mk_golden_hook(f"layer{_li}_module{_mi}.add")))
+            _golden_handles.append(torch_model.avgpool.register_forward_hook(_mk_golden_hook("avgpool")))
+            _golden_handles.append(torch_model.fc.register_forward_hook(_mk_golden_hook("fc")))
+
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
+
+        for _h in _golden_handles:
+            _h.remove()
+        set_golden_intermediates(_golden_cap)
 
         ## ttnn
 
@@ -210,6 +262,10 @@ class ResNet50TestInfra:
         return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        # Default grid; the device-cap clamp below (num_cores = min(..., max_num_cores, ...)) reduces it
+        # to the device's real core count, so batches not explicitly handled here (e.g. the small batches
+        # used on the 2x3 emulator / craq-sim grid) still get a valid grid instead of an undefined name.
+        core_grid = ttnn.CoreGrid(y=8, x=8)
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
@@ -227,6 +283,20 @@ class ResNet50TestInfra:
 
         n, c, h, w = torch_input_tensor.shape
         n = n // self.num_devices
+
+        if is_quasar():
+            # Quasar uses the direct data-movement fold (ttnn...fold(use_transpose_as_fold=False,
+            # input_is_nhwc=True)); it has no on-device NCHW->NHWC transpose kernel, so upload the image
+            # CHANNELS-LAST, host-padded to the 16B-aligned width (C -> nearest_y(c, 8)). Interleaved L1;
+            # the fold reshards onto its compute grid internally (see run()).
+            c_aligned = _nearest_y(c, 8)
+            nhwc = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
+            if c_aligned != c:
+                nhwc = torch.nn.functional.pad(nhwc, (0, c_aligned - c))
+            tt_inputs_host = ttnn.from_torch(
+                nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+            )
+            return tt_inputs_host, ttnn.L1_MEMORY_CONFIG
 
         # Tie the shard count to the device's real compute-core count. The per-batch `core_grid`
         # above targets a full silicon part; Quasar has at most 32 Tensix neo clusters and the

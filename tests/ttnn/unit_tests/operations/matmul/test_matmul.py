@@ -3391,6 +3391,359 @@ def test_matmul_height_sharded_input_with_padding(device):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
+# Shared-exponent (block-float) K-tile padding regression tests.
+#
+# pad_last_ktile()/pad_last_transposed_ktile() zero matmul's last K-tile padding when K is not a
+# multiple of 32; they previously no-op'd for every dtype but Float32/Float16_b, so block-float
+# inputs multiplied stale L1 garbage into the accumulator.
+#
+# Each test poisons the padding with -42 so a leak is an unmissable blowup rather than a silent
+# read of already-zeroed L1.
+_BLOCK_FLOAT_PAD_DTYPES = [
+    (ttnn.bfloat8_b, 0.99),
+    (ttnn.bfloat4_b, 0.94),
+]
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+@pytest.mark.parametrize(
+    "K",
+    [
+        80,  # last K-tile has 16 valid columns: padding starts on a face-row (16-col) boundary
+        96,  # multiple of 32: no padding at all (control)
+        100,  # last K-tile has 4 valid columns: padding starts on a byte boundary for bfloat4_b
+        99,  # 3 valid columns: for bfloat4_b the first padded element shares a byte with the
+        # last valid one, so masking must preserve the neighbouring nibble
+    ],
+    ids=["k_16_aligned", "k_no_padding", "k_byte_aligned", "k_shared_byte"],
+)
+def test_matmul_block_float_ktile_padding(device, dtype, pcc, K):
+    """Core regression: block-float matmul with a non-tile-aligned K must ignore tile padding."""
+    torch.manual_seed(0)
+    M, N = 64, 64
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+def test_matmul_block_float_ktile_padding_preserves_shared_byte(device, dtype, pcc):
+    """K=99 makes bfloat4_b's first padded element share a byte with the last valid one, so masking
+    must preserve that neighbour. All signal sits on that column to make a clobber unmissable;
+    bfloat8_b is a control (one element per byte, never masks)."""
+    torch.manual_seed(0)
+    M, K, N = 64, 99, 64
+
+    torch_input_a = torch.zeros(M, K, dtype=torch.float32)
+    torch_input_a[:, -1] = 1.0  # only the byte-sharing boundary column carries signal
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -1)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -1)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+def test_matmul_block_float_ktile_padding_transpose_a(device, dtype, pcc):
+    """transpose_a maps K to tile height, exercising pad_last_transposed_ktile's row path."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 64
+
+    torch_input_a = torch.randn(K, M, dtype=torch.float32)  # transposed: K is the outer dim
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a.T @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=True))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+@pytest.mark.parametrize("out_subblock_h", [1, 2], ids=["subblock_h1", "subblock_h2"])
+def test_matmul_2d_mcast_block_float_ktile_padding_subblock_h(device, out_subblock_h, dtype, pcc):
+    """The fill runs in the reader, before matmul_block's row striding, so out_subblock_h > 1 works too."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 32
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=1,
+        out_block_h=2,
+        out_block_w=1,
+        per_core_M=2,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b, program_config=program_config))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
+def test_matmul_block_float_ktile_padding_fp32_dest_acc(device, fp32_dest_acc_en, dtype, pcc):
+    """The padding fill is independent of DEST accumulation precision; both settings must be clean."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 64
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b, compute_kernel_config=compute_kernel_config))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_matmul_ktile_padding_non_block_float(device, dtype):
+    """Control: the Float32/Float16_b padding paths this change also touches must not regress."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 64
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "batch_size, m_size, k_size, n_size, num_cores_height, per_core_height, use_user_core_grid",
+    [
+        (1, 384, 32, 32, 1, 384, False),
+        (1, 384, 32, 32, 1, 384, True),
+        (2, 32, 32, 32, 1, 64, False),
+        (2, 2688, 288, 288, 10, 544, False),
+    ],
+    ids=["single_core", "single_core_user_grid", "single_core_batched", "multi_core"],
+)
+def test_matmul_default_height_sharded(
+    device, batch_size, m_size, k_size, n_size, num_cores_height, per_core_height, use_user_core_grid
+):
+    """Height-sharded A/output matmul with no explicit program_config."""
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+
+    input_a_shape = (batch_size, m_size, k_size)
+    input_b_shape = (k_size, n_size)
+
+    torch_input_tensor_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_a_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(num_cores_height, device_grid, row_wise=True),
+            (per_core_height, k_size),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        core_grid=ttnn.CoreGrid(x=device_grid.x, y=device_grid.y) if use_user_core_grid else None,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "batch_size, m_size, k_size, n_size, num_cores_width, per_core_width, use_user_core_grid",
+    [
+        (1, 32, 384, 32, 1, 384, False),
+        (1, 32, 384, 32, 1, 384, True),
+        (2, 32, 32, 32, 1, 32, False),
+        (1, 64, 320, 320, 5, 64, False),
+    ],
+    ids=["single_core", "single_core_user_grid", "single_core_batched", "multi_core"],
+)
+def test_matmul_default_width_sharded(
+    device, batch_size, m_size, k_size, n_size, num_cores_width, per_core_width, use_user_core_grid
+):
+    """Width-sharded A/output matmul with no explicit program_config."""
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+
+    input_a_shape = (batch_size, m_size, k_size)
+    input_b_shape = (k_size, n_size)
+    total_height = batch_size * m_size
+
+    torch_input_tensor_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_a_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(num_cores_width, device_grid, row_wise=True),
+            (total_height, per_core_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        core_grid=ttnn.CoreGrid(x=device_grid.x, y=device_grid.y) if use_user_core_grid else None,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "memory_layout, m_size, k_size, n_size",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 384, 32, 32),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 32, 384, 32),
+    ],
+    ids=["height", "width"],
+)
+def test_matmul_default_sharded_non_origin_single_core(device, memory_layout, m_size, k_size, n_size):
+    """Single-core shard on (1,0) must run on that core, not (0,0)."""
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x <= 1:
+        pytest.skip("Need at least 2 columns for non-origin shard")
+
+    input_a_shape = (1, m_size, k_size)
+    input_b_shape = (k_size, n_size)
+    shard_core = ttnn.CoreCoord(1, 0)
+
+    torch_input_tensor_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_a_memory_config = ttnn.MemoryConfig(
+        memory_layout,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(shard_core, shard_core)}),
+            (m_size, k_size),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # DRAM out: L1 sharded-out inference is still origin-anchored.
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
@@ -4010,3 +4363,199 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
 
     with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
         ttnn.matmul(in0, in1, program_config=program_config)
+
+
+def _offset_cancellation_inputs(m, k, n, offset, seed=0):
+    """Matrix A is a small random signal plus a large constant offset. Matrix B has each column that
+    sums to zero, so the constant offset from A contributes nothing to A @ B, and the correct result
+    is small. But the partial sums during the K reduction are large (~offset in magnitude), so any
+    loss of precision mid-reduction destroys the small true result."""
+    torch.manual_seed(seed)
+    a = (torch.randn(m, k) + offset).bfloat16()
+    b = torch.randn(k, n)
+    b = (b - b.mean(dim=0, keepdim=True)).bfloat16()  # each column sums to 0
+    ref = (a.to(torch.float64) @ b.to(torch.float64)).float()
+    return a, b, ref
+
+
+def _crossblock_reload_mcast_1d_config(mt, nt, in0_block_w):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=mt,
+        out_subblock_w=nt,
+        per_core_M=mt,
+        per_core_N=nt,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
+def _crossblock_reload_mcast_2d_config(mt, nt, in0_block_w):
+    # 2x2 grid, one output tile per core; small in0_block_w so K is split into many blocks.
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=mt // 2,
+        per_core_N=nt // 2,
+        transpose_mcast=False,
+    )
+
+
+# Each entry drives a distinct matmul program factory that performs the cross-block reload.
+_CROSSBLOCK_RELOAD_FACTORY_CONFIGS = {
+    "mcast_1d": _crossblock_reload_mcast_1d_config,  # MatmulMultiCoreReuseMultiCast1DProgramConfig
+    "mcast_2d": _crossblock_reload_mcast_2d_config,  # MatmulMultiCoreReuseMultiCastProgramConfig
+}
+
+
+@pytest.mark.parametrize("factory", list(_CROSSBLOCK_RELOAD_FACTORY_CONFIGS))
+@pytest.mark.parametrize("packer_l1_acc", [False, True])
+@pytest.mark.parametrize("has_bias", [False, True])
+def test_matmul_fp32_crossblock_reload_precision(device, factory, packer_l1_acc, has_bias):
+    """Precision of fp32 accumulation over a long K reduction in the multicast matmul factories.
+
+    Matrix A (M x K) holds a large constant offset plus a small random signal. Matrix B (K x N) has
+    every column summing to zero over K, causing the constant offset from A to contribute nothing to
+    A @ B once all the components are summed, so the correct result is small. However, partway through
+    the K reduction the running sum is dominated by the constant offset and is large. If the
+    accumulator silently loses precision mid-reduction, rounding those large partial sums destroys
+    the small true result and PCC collapses.
+
+    The matmul runs with fp32 accumulation enabled (see compute_kernel_config below) and a small
+    in0_block_w so K is split into many blocks. Cross-block accumulation takes one of two paths
+    depending on packer_l1_acc: the packer accumulates the partials in SRAM (packer_l1_acc=True), or
+    the fp32 partials are reloaded into DEST between blocks (packer_l1_acc=False). Both must keep the
+    partial sums at full fp32 precision to stay accurate. All combinations of the two accumulation
+    paths and the 1D/2D multicast program factories are exercised.
+    """
+    m, k, n = 64, 8192, 64
+    in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the K reduction spans many blocks
+    a, b, ref = _offset_cancellation_inputs(m, k, n, offset=1000.0)
+
+    # An optional fused bias is a second consumer of the intermediate partials CB, so it is exercised
+    # alongside the accumulation to guard against the fp32 handling corrupting the bias path.
+    bias = None
+    if has_bias:
+        torch.manual_seed(1)
+        bias = torch.randn(1, n).bfloat16()
+        ref = ref + bias.float()  # broadcast over M
+
+    program_config = _CROSSBLOCK_RELOAD_FACTORY_CONFIGS[factory](m // 32, n // 32, in0_block_w)
+    # fp32_dest_acc_en=True keeps the K-partials in fp32; packer_l1_acc selects the cross-block
+    # accumulation path (accumulate in SRAM via the packer, vs reload into DEST). Both must preserve
+    # fp32 precision.
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    a_t = ttnn.from_torch(
+        a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_t = ttnn.from_torch(
+        b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if has_bias:
+        # ttnn.linear fuses the bias add into the matmul kernel (a raw ttnn.matmul does not take bias).
+        bias_t = ttnn.from_torch(
+            bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        out = ttnn.linear(
+            a_t,
+            b_t,
+            bias=bias_t,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        out = ttnn.matmul(
+            a_t,
+            b_t,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    out = ttnn.to_torch(out).float()
+
+    # Correct fp32 accumulation gives PCC ~0.996 / rel-Frobenius ~0.09; a precision loss mid-reduction
+    # collapses it (e.g. PCC ~0.2 / rel-Frobenius ~8). allclose/ULP are not meaningful for a
+    # deliberately ill-conditioned bf16 matmul, so only PCC and Frobenius are checked.
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.99,
+        frobenius_threshold=0.2,
+        check_allclose=False,
+        check_pcc=True,
+        check_frobenius=True,
+        check_ulp=False,
+    )
+
+
+@pytest.mark.xfail(
+    reason=("Fused matmul untilize_out loses fp32 precision. Issue #49836"),
+    strict=True,
+)
+@pytest.mark.parametrize("packer_l1_acc", [False, True])
+def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc):
+    """fp32 accumulation precision with untilize_out=True, where the untilize/reblock stage is a
+    second reader of the intermediate partials CB alongside the cross-block accumulation.
+
+    Same offset-cancellation setup as test_matmul_fp32_crossblock_reload_precision above,
+    on the 1D multicast factory, no bias. Parameterized over the two accumulation paths so the reload
+    (packer_l1_acc=False) can be compared against the reload-free packer path (packer_l1_acc=True).
+    """
+    m, k, n = 64, 8192, 64
+    in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the K reduction spans many blocks
+    a, b, ref = _offset_cancellation_inputs(m, k, n, offset=1000.0)
+
+    # out_subblock == out_block (single subblock) as required for untilize_out.
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=m // 32,
+        out_subblock_w=n // 32,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        mcast_in0=True,
+        untilize_out=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    a_t = ttnn.from_torch(
+        a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_t = ttnn.from_torch(
+        b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out = ttnn.matmul(
+        a_t,
+        b_t,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out = ttnn.to_torch(out).float().reshape(m, n)
+
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.99,
+        frobenius_threshold=0.2,
+        check_allclose=False,
+        check_pcc=True,
+        check_frobenius=True,
+        check_ulp=False,
+    )

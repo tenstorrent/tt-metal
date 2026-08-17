@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
@@ -31,6 +32,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
+#include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "dispatch_core_manager.hpp"
 
@@ -148,6 +150,16 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
+};
+
+static const std::vector<DispatchKernelNode> quasar_single_chip_2cq = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
+
+    {3, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {4, 5, x, x}, k_quasar_noc},
+    {4, 0, 0, 1, DISPATCH_HD, {3, x, x, x}, {5, x, x, x}, k_quasar_noc},
+    {5, 0, 0, 1, DISPATCH_S, {3, x, x, x}, {4, x, x, x}, k_quasar_noc},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
@@ -419,22 +431,6 @@ DispatchTopology::DispatchTopology(
     get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
-    bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-    bool are_fd_kernels_on_same_core = descriptor_.cluster().arch() == tt::ARCH::QUASAR && descriptor_.num_cqs() == 1;
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER,
-        descriptor_.num_cqs(),
-        descriptor_.hal(),
-        is_galaxy_cluster,
-        are_fd_kernels_on_same_core,
-        descriptor_.rtoptions());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH,
-        descriptor_.num_cqs(),
-        descriptor_.hal(),
-        is_galaxy_cluster,
-        /*are_fd_kernels_on_same_core=*/false,
-        descriptor_.rtoptions());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -471,7 +467,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
         }
         if (is_quasar) {
-            TT_THROW("Quasar fast dispatch does not support 2 CQs yet");
+            return quasar_single_chip_2cq;
         }
         if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
             return single_chip_arch_2cq_dispatch_s;
@@ -482,6 +478,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     if (remote_devices.empty()) {
         // MMIO devices only, just replicate a single chip arch for each
         std::vector<DispatchKernelNode> nodes_for_one_mmio = populate_single_device();
+        nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
         uint32_t index_offset = 0;
         for (auto id : mmio_devices) {
             for (auto node : nodes_for_one_mmio) {
@@ -502,6 +499,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq_fabric : galaxy_nine_chip_arch_2cq_fabric;
+            nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
@@ -543,6 +541,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
+            nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -786,8 +785,8 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = this->dispatch_core_manager_.get_dispatch_core_type();
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
-    uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    const auto& mem_map = descriptor_.metal_context().dispatch_mem_map();
+    uint32_t cq_start = mem_map.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
 
@@ -800,14 +799,14 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                 tt_cxy_pair completion_q_writer_location =
                     this->dispatch_core_manager_.completion_queue_writer_core(serviced_device_id, channel, cq_id);
                 IDevice* mmio_device = device_manager_->get_active_device(completion_q_writer_location.chip);
-                uint32_t completion_q_wr_ptr =
-                    my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-                uint32_t completion_q_rd_ptr =
-                    my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-                uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(
-                    CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-                uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(
-                    CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+                const uint32_t completion_q_wr_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, cq_id);
+                const uint32_t completion_q_rd_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
+                const uint32_t completion_q0_last_event_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT, cq_id);
+                const uint32_t completion_q1_last_event_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
                 uint32_t completion_queue_start_addr;

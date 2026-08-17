@@ -13,15 +13,15 @@
 namespace ttnn::operations::ccl::common {
 
 struct MoEComputeCoreSelection {
-    std::vector<CoreCoord> tilize_cores;
-    std::vector<CoreCoord> matmul_cores;
+    std::vector<tt::tt_metal::CoreCoord> tilize_cores;
+    std::vector<tt::tt_metal::CoreCoord> matmul_cores;
     CoreRangeSet tilize_core_range_set;
     CoreRangeSet matmul_core_range_set;
     CoreRangeSet tilize_matmul_core_range_set;
     CoreRangeSet combine_core_range_set;
     CoreRangeSet combine_matmul_core_range_set;
     CoreRangeSet all_worker_cores_range_set;
-    std::vector<CoreCoord> combine_cores;
+    std::vector<tt::tt_metal::CoreCoord> combine_cores;
     CoreRange tilize_bounding_box;
     CoreRange matmul_bounding_box;
 };

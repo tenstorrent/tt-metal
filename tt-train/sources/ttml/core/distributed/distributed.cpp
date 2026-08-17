@@ -42,7 +42,7 @@ namespace {
 
 // Returns true if the parameter's current placement on the given mesh axis is a
 // Shard{...} rather than Replicate.
-bool is_sharded_on_axis(const tt::tt_metal::Tensor& value, uint32_t axis) {
+bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     const auto& topology = value.tensor_topology();
     const auto& placements = topology.placements();
     if (axis >= placements.size()) {

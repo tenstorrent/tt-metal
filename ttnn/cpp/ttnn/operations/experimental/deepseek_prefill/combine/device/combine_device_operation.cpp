@@ -124,7 +124,7 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     // with detail::create_tensor_cb(output_tensor, ...) will pick up the right dtype/page-size.
     auto output_dtype = operation_attributes.use_fp8_combine ? DataType::FP8_E4M3 : DataType::BFLOAT16;
 
-    auto output_spec = TensorSpec(
+    auto output_spec = tt::tt_metal::TensorSpec(
         Shape(output_shape), tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(layout), mem_config));
 
     return output_spec;

@@ -206,6 +206,25 @@ The script returns specific exit codes for automated workflows:
 
 For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
 
+**Automatic Ring Order from Descriptors:**
+
+Instead of manually figuring out the ring order, use `resolve_host_ring_order.py` to derive it from cabling + deployment descriptors (or an FSD):
+
+```bash
+# From cabling + deployment descriptors (same files used by physical validation):
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts host1,host2,host3,host4 \
+    --cabling /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+    --deployment /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+
+# Or from an FSD:
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts host1,host2,host3,host4 \
+    --fsd /data/scaleout_configs/merged_fsd.textproto
+```
+
+The tool outputs JSON with `ordered_hosts` — the hosts reordered so consecutive entries are physically connected. `run_fabric_tests.sh` can also call this automatically when `--cabling-descriptor-path` and `--deployment-descriptor-path` are provided.
+
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 **Exabox Physical Layout:**

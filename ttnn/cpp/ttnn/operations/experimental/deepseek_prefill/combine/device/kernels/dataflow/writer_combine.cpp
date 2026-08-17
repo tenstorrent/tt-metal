@@ -18,7 +18,7 @@
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
-// still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_dispatch.cpp.
+// still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_sender_dispatch.cpp.
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -126,11 +126,17 @@ void kernel_main() {
     // num_cores = effective_num_links = min(num_links, 4).
     constexpr uint32_t MAX_WORKER_CORES = 4;
     ASSERT(num_cores <= MAX_WORKER_CORES);
+#if INIT_ZEROS
     uint64_t all_core_barrier_noc_addrs[MAX_WORKER_CORES];
+#endif
     for (uint32_t c = 0; c < num_cores; c++) {
+#if INIT_ZEROS
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
         all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_barrier_l1_offset);
+#else
+        rt_args_idx += 2;
+#endif
     }
 
 #ifdef AXIS

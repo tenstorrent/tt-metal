@@ -127,7 +127,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -154,6 +155,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     uint32_t num_cols_per_output_block = output_page_width;
 
     std::vector<uint32_t> writer_common_runtime_args;
+    writer_common_runtime_args.reserve(output.padded_shape().size() + input.padded_shape().size());
     for (const auto dim : output.padded_shape()) {
         writer_common_runtime_args.push_back(dim);
     }
@@ -187,7 +189,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"output_tensor_height", output_tensor_height},
              {"tensor_rank", static_cast<uint32_t>(input.padded_shape().rank())}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         .advanced_options =
             KernelAdvancedOptions{
                 .num_common_runtime_varargs = static_cast<uint32_t>(writer_common_runtime_args.size())},
@@ -206,8 +209,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
         std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+            [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
 
     KernelSpec compute{

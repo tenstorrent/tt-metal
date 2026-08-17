@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -34,6 +35,13 @@ void kernel_main() {
     CircularBuffer cb_in1(cb_id_in1);
     CircularBuffer cb_in1_transposed_buf(cb_in1_transposed);
     CircularBuffer cb_in1_bcast_row_buf(cb_in1_bcast_row);
+
+#ifdef REPEAT_INTERLEAVE_IN1
+    // The transposed rows are copied L1->L1 via a NoC loopback to this core's own coordinates.
+    UnicastEndpoint local_src;
+    const uint32_t local_noc_x = my_x[noc.get_noc_id()];
+    const uint32_t local_noc_y = my_y[noc.get_noc_id()];
+#endif
 
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
@@ -67,14 +75,12 @@ void kernel_main() {
 
 #ifdef REPEAT_INTERLEAVE_IN1
             cb_in1_transposed_buf.wait_front(onetile);
-            // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-            uint64_t cb_in1_transposed_read_ptr = get_noc_addr(cb_in1_transposed_buf.get_read_ptr());
+            uint32_t cb_in1_transposed_read_addr = cb_in1_transposed_buf.get_read_ptr();
 
             // Manually unroll iterating across the tile to eliminate unnecessary conditional checking
             // First + second face
             for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_face; tile_row_id++) {
                 cb_in1_bcast_row_buf.reserve_back(onetile);
-                uint32_t cb_in1_bcast_row_write_ptr = cb_in1_bcast_row_buf.get_write_ptr();
 
 #ifndef REPEAT_IN0
                 cb_in0.reserve_back(onetile);
@@ -86,13 +92,20 @@ void kernel_main() {
                      .offset_bytes = 0},
                     {.offset_bytes = 0});
 #endif
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(
-                    cb_in1_transposed_read_ptr + bfloat16_one_face_bytes,
-                    cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes,
-                    bfloat16_one_row_in_face_bytes);
+                noc.async_read(
+                    local_src,
+                    cb_in1_bcast_row_buf,
+                    bfloat16_one_row_in_face_bytes,
+                    {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = cb_in1_transposed_read_addr},
+                    {.offset_bytes = 0});
+                noc.async_read(
+                    local_src,
+                    cb_in1_bcast_row_buf,
+                    bfloat16_one_row_in_face_bytes,
+                    {.noc_x = local_noc_x,
+                     .noc_y = local_noc_y,
+                     .addr = cb_in1_transposed_read_addr + bfloat16_one_face_bytes},
+                    {.offset_bytes = bfloat16_one_face_bytes});
                 noc.async_read_barrier();
 
 #ifndef REPEAT_IN0
@@ -100,14 +113,13 @@ void kernel_main() {
 #endif
                 cb_in1_bcast_row_buf.push_back(onetile);
 
-                cb_in1_transposed_read_ptr += bfloat16_one_row_in_face_bytes;
+                cb_in1_transposed_read_addr += bfloat16_one_row_in_face_bytes;
             }
 
-            cb_in1_transposed_read_ptr += bfloat16_one_face_bytes;
+            cb_in1_transposed_read_addr += bfloat16_one_face_bytes;
             // Third + fourth face
             for (uint32_t tile_row_id = num_rows_in_face; tile_row_id < 2 * num_rows_in_face; tile_row_id++) {
                 cb_in1_bcast_row_buf.reserve_back(onetile);
-                uint32_t cb_in1_bcast_row_write_ptr = cb_in1_bcast_row_buf.get_write_ptr();
 
 #ifndef REPEAT_IN0
                 cb_in0.reserve_back(onetile);
@@ -118,13 +130,20 @@ void kernel_main() {
                     {.page_id = block_h_id * 5120 + (i * in0_blocks_per_in1_block + tile_row_id), .offset_bytes = 0},
                     {.offset_bytes = 0});
 #endif
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                noc_async_read(
-                    cb_in1_transposed_read_ptr + bfloat16_one_face_bytes,
-                    cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes,
-                    bfloat16_one_row_in_face_bytes);
+                noc.async_read(
+                    local_src,
+                    cb_in1_bcast_row_buf,
+                    bfloat16_one_row_in_face_bytes,
+                    {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = cb_in1_transposed_read_addr},
+                    {.offset_bytes = 0});
+                noc.async_read(
+                    local_src,
+                    cb_in1_bcast_row_buf,
+                    bfloat16_one_row_in_face_bytes,
+                    {.noc_x = local_noc_x,
+                     .noc_y = local_noc_y,
+                     .addr = cb_in1_transposed_read_addr + bfloat16_one_face_bytes},
+                    {.offset_bytes = bfloat16_one_face_bytes});
                 noc.async_read_barrier();
 
 #ifndef REPEAT_IN0
@@ -132,7 +151,7 @@ void kernel_main() {
 #endif
                 cb_in1_bcast_row_buf.push_back(onetile);
 
-                cb_in1_transposed_read_ptr += bfloat16_one_row_in_face_bytes;
+                cb_in1_transposed_read_addr += bfloat16_one_row_in_face_bytes;
             }
             cb_in1_transposed_buf.pop_front(onetile);
 

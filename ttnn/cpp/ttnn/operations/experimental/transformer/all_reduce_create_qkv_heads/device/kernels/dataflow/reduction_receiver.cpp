@@ -4,7 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 #include "internal/risc_attribs.h"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/kernel_profiler.hpp"
@@ -60,24 +64,28 @@ void kernel_main() {
     const uint32_t signal_semaphore_id =
         get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * q_num_cores + 2 * q_num_cores);
 
+    Noc noc;
+    CircularBuffer cb_reduction_out(cb_id_reduction_out);
+
     uint32_t device_batch_offset = 0;
     if constexpr (PHASES_TO_READ == 2) {
+        CircularBuffer cb_batch_offset(cb_batch_offset_id);
         const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr);
-        cb_reserve_back(cb_batch_offset_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+        cb_batch_offset.reserve_back(1);
+        uint32_t index_cb_wr_ptr = cb_batch_offset.get_write_ptr();
         // Read the batch offset 1 page to read
-        uint64_t batch_offset_index_noc_addr = addrg.get_noc_addr(0);
-        noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_batch_offset_id, 1);
+        noc.async_read(addrg, cb_batch_offset, index_stick_size, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        cb_batch_offset.push_back(1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         // Always pick 1st value in tensor as batch offset
         device_batch_offset = index_ptr[0];
     }
 
     if constexpr (PHASES_TO_READ == 1) {
-        cb_wait_front(cb_batch_offset_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+        CircularBuffer cb_batch_offset(cb_batch_offset_id);
+        cb_batch_offset.wait_front(1);
+        uint32_t index_cb_wr_ptr = cb_batch_offset.get_write_ptr();
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         // Always pick 1st value in tensor as batch offset
         device_batch_offset = index_ptr[0];
@@ -92,7 +100,8 @@ void kernel_main() {
         signal_semaphore.set(0);
 
         // 2. Signal compute kernel to start processing
-        cb_push_back(cb_id, total_num_reduction_tiles);
+        CircularBuffer cb_reduction(cb_id);
+        cb_reduction.push_back(total_num_reduction_tiles);
     }
 
     // 3. QV/K read and write kernels start here:
@@ -100,7 +109,7 @@ void kernel_main() {
 
     // 3.2 start to process the reading side of data(half of the data processed in NCRISC kernel and half on BRISC
     // kernel)
-    cb_wait_front(cb_id_reduction_out, block_num_tiles);
+    cb_reduction_out.wait_front(block_num_tiles);
 
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
     constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
@@ -120,9 +129,8 @@ void kernel_main() {
                     ? device_batch_offset_per_output_core * SUBTILE_LINE_BYTES
                     : (device_batch_offset_per_output_core - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
 
-            uint32_t read_addr =
-                get_read_ptr(cb_id_reduction_out) + in_tile_offset_by_batch + i_tile_per_core * TILE_ELEMENTS * 2;
-            uint64_t write_addr = 0;
+            uint32_t src_offset_bytes = in_tile_offset_by_batch + i_tile_per_core * TILE_ELEMENTS * 2;
+            uint32_t write_noc_x = 0, write_noc_y = 0, write_addr = 0;
             uint32_t head_index = 0, tile_index = 0, wptr_offset = 0;
             if (tile_index_all_cores < num_q_heads * head_size_num_tiles) {
                 // read Q
@@ -131,9 +139,9 @@ void kernel_main() {
                 tile_index =
                     tile_index_all_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
                 wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
-                write_addr =
-                    get_noc_addr(q_in0_mcast_noc_x[i_output_core], q_in0_mcast_noc_y[i_output_core], q_start_addr) +
-                    wptr_offset;
+                write_noc_x = q_in0_mcast_noc_x[i_output_core];
+                write_noc_y = q_in0_mcast_noc_y[i_output_core];
+                write_addr = q_start_addr + wptr_offset;
             } else if (tile_index_all_cores < (num_q_heads + num_kv_heads) * head_size_num_tiles) {
                 // read K
                 head_index = 0;  // head index of current tile(sits in current core)
@@ -141,9 +149,9 @@ void kernel_main() {
                     tile_index_all_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
                 wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
                 uint32_t tile_index_in_output_core = tile_index_all_cores - num_q_heads * head_size_num_tiles;
-                write_addr =
-                    get_noc_addr(k_in0_mcast_noc_x[i_output_core], k_in0_mcast_noc_y[i_output_core], k_start_addr) +
-                    wptr_offset;
+                write_noc_x = k_in0_mcast_noc_x[i_output_core];
+                write_noc_y = k_in0_mcast_noc_y[i_output_core];
+                write_addr = k_start_addr + wptr_offset;
             } else {
                 // read V
                 head_index = 0;  // head index of current tile(sits in current core)
@@ -152,21 +160,30 @@ void kernel_main() {
                 wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
                 uint32_t tile_index_in_output_core =
                     tile_index_all_cores - (num_q_heads + num_kv_heads) * head_size_num_tiles;
-                write_addr =
-                    get_noc_addr(v_in0_mcast_noc_x[i_output_core], v_in0_mcast_noc_y[i_output_core], v_start_addr) +
-                    wptr_offset;
+                write_noc_x = v_in0_mcast_noc_x[i_output_core];
+                write_noc_y = v_in0_mcast_noc_y[i_output_core];
+                write_addr = v_start_addr + wptr_offset;
             }
 
             if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
 
-                noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
+                noc.async_write(
+                    cb_reduction_out,
+                    UnicastEndpoint{},
+                    SUBTILE_LINE_BYTES,
+                    {.offset_bytes = src_offset_bytes},
+                    {.noc_x = write_noc_x, .noc_y = write_noc_y, .addr = write_addr});
             }
             if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
 
-                noc_async_write(
-                    read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                noc.async_write(
+                    cb_reduction_out,
+                    UnicastEndpoint{},
+                    SUBTILE_LINE_BYTES,
+                    {.offset_bytes = src_offset_bytes + FACE_HW * ELEMENT_SIZE},
+                    {.noc_x = write_noc_x, .noc_y = write_noc_y, .addr = write_addr + FACE_HW * ELEMENT_SIZE});
             }
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

@@ -19,7 +19,8 @@
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/context_descriptor.hpp"
-// #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
@@ -92,6 +93,8 @@ uint32_t FDKernel::get_max_num_eth_cores() const {
     TT_ASSERT(static_cast<bool>(get_max_num_eth_cores_), "Max num eth cores accessor not set");
     return get_max_num_eth_cores_();
 }
+
+const DispatchMemMap& FDKernel::get_dispatch_mem_map() const { return descriptor_.metal_context().dispatch_mem_map(); }
 
 FDKernel* FDKernel::Generate(
     int node_id,
@@ -223,6 +226,7 @@ FDKernel* FDKernel::Generate(
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,
+                get_dispatch_query_manager,
                 get_reads_dispatch_cores);
         case RETURN_FABRIC_MUX:
             return new tt::tt_metal::RelayMux(
@@ -236,28 +240,10 @@ FDKernel* FDKernel::Generate(
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,
+                get_dispatch_query_manager,
                 get_reads_dispatch_cores);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
-}
-
-uint32_t FDKernel::get_programmable_core_type_index(
-    const ContextDescriptor& descriptor, CoreType dispatch_core_type, bool is_active_eth_core) {
-    // TODO(#22895): Too many core types. Consolidate programmable_core_type_index with ProgrammableCoreType and
-    // CoreType
-    uint32_t programmable_core_type_index;
-    if (dispatch_core_type == CoreType::WORKER) {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    } else if (is_active_eth_core) {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    } else {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
-    }
-
-    return programmable_core_type_index;
 }
 
 CoreCoord FDKernel::get_virtual_core_coord(
@@ -270,11 +256,8 @@ KernelHandle FDKernel::configure_kernel_variant(
     const std::vector<uint32_t>& compile_args,
     std::map<std::string, std::string> defines_in,
     KernelBuildOptLevel opt_level) {
-    uint32_t programmable_core_type_index = get_programmable_core_type_index(descriptor_, GetCoreType());
-
     std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline_) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline_)});
@@ -317,6 +300,20 @@ KernelHandle FDKernel::configure_kernel_variant(
                     .defines = defines,
                     .opt_level = opt_level});
         }
+    } else if (GetCoreType() == CoreType::DISPATCH) {
+        TT_FATAL(
+            device_->arch() == tt::ARCH::QUASAR,
+            "Dispatch-engine FD kernels are only supported on Quasar (device {})",
+            device_->id());
+        kernel_handle_ = detail::CreateDispatchEngineKernel(
+            *program_,
+            path,
+            CoreCoord(logical_core_.x, logical_core_.y),
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = compile_args,
+                .defines = defines,
+                .opt_level = opt_level});
     } else {
         kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,

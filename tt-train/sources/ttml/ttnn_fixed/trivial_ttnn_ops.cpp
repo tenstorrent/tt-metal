@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -27,16 +28,26 @@
 
 namespace ttml::ttnn_fixed {
 
-tt::tt_metal::Tensor sum_over_dim(const tt::tt_metal::Tensor& t, uint32_t dim) {
+namespace {
+
+// The inverse Gumbel CDF, -log(-log(u)), is finite only for u in (0, 1).
+// Half of the 31-bit RNG step is a natural strictly-positive lower endpoint;
+// ttnn::rand's half-open contract keeps the upper endpoint strictly below 1.
+constexpr float gumbel_uniform_lower_bound = 0x1p-32F;
+constexpr float gumbel_uniform_upper_bound = 1.0F;
+
+}  // namespace
+
+ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
     return sum_moreh(t, dim, /* keepdim */ true);
 }
 
-tt::tt_metal::Tensor sum_over_batch(const tt::tt_metal::Tensor& t) {
+ttnn::Tensor sum_over_batch(const ttnn::Tensor& t) {
     return sum_over_dim(t, /* dim */ 0);
 }
 
 // Stable log-softmax implementation
-tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
+ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim) {
     auto t_max = ttnn::max(t, dim, /* keepdim */ true);
     auto t_sub_max = ttnn::subtract(t, t_max);
 
@@ -49,7 +60,7 @@ tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
 
 // Stable softmax implementation
 // ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
-tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
+ttnn::Tensor softmax(const ttnn::Tensor& t, int dim) {
     return ttnn::softmax(
         t,
         /* dim */ dim,
@@ -58,12 +69,12 @@ tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
         /*stable*/ true);
 }
 
-tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b) {
+ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b) {
     auto inv_b = ttnn::reciprocal(b);
     return ttnn::multiply(a, inv_b);
 }
 
-tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+ttnn::Tensor mean_moreh(const ttnn::Tensor& t, int dim, bool keep_dim) {
     auto res = ttnn::moreh_mean(
         t,
         dim,
@@ -74,11 +85,11 @@ tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool kee
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
     return res;
 }
-tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+ttnn::Tensor mean_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim) {
     return ttnn::mean(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
-tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+ttnn::Tensor sum_moreh(const ttnn::Tensor& t, int dim, bool keep_dim) {
     return ttnn::moreh_sum(
         t,
         dim,
@@ -87,15 +98,15 @@ tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
 }
-tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+ttnn::Tensor sum_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim) {
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
-tt::tt_metal::Tensor sample(
-    const tt::tt_metal::Tensor& t,
+ttnn::Tensor sample(
+    const ttnn::Tensor& t,
     float temperature,
     uint32_t seed,
-    std::optional<tt::tt_metal::Tensor> logits_padding_mask,
+    std::optional<ttnn::Tensor> logits_padding_mask,
     std::optional<std::vector<uint32_t>> seed_axes) {
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -195,11 +206,11 @@ tt::tt_metal::Tensor sample(
             rand = ttnn::rand(
                 /* size */ global_shape,
                 /* device */ *device,
-                /* dtype */ out.dtype(),
-                /* layout */ out.layout(),
+                /* dtype */ ttnn::DataType::FLOAT32,
+                /* layout */ ttnn::Layout::TILE,
                 /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ 0.00001F,
-                /* to */ 0.99F,
+                /* from */ gumbel_uniform_lower_bound,
+                /* to */ gumbel_uniform_upper_bound,
                 /* seed */ seed,
                 /* mesh_mapper */ mapper);
         } else {
@@ -208,17 +219,23 @@ tt::tt_metal::Tensor sample(
             rand = ttnn::rand(
                 /* size */ local_shape,
                 /* device */ *device,
-                /* dtype */ out.dtype(),
-                /* layout */ out.layout(),
+                /* dtype */ ttnn::DataType::FLOAT32,
+                /* layout */ ttnn::Layout::TILE,
                 /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ 0.00001F,
-                /* to */ 0.99F,
+                /* from */ gumbel_uniform_lower_bound,
+                /* to */ gumbel_uniform_upper_bound,
                 /* seed */ seed);
         }
 
         // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
         // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
         rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
+        if (rand.dtype() != out.dtype()) {
+            rand = ttnn::typecast(rand, out.dtype());
+        }
+        if (rand.layout() != out.layout()) {
+            rand = ttnn::to_layout(rand, out.layout());
+        }
         out = ttnn::mul_sfpu(out, 1.0F / temperature);
         out = ttnn::add(out, rand);
     }
@@ -231,11 +248,11 @@ tt::tt_metal::Tensor sample(
     return ttnn::argmax(ttnn::untilize(out), 3, true);
 }
 
-tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t) {
+ttnn::Tensor to_l1_interleaved(const ttnn::Tensor& t) {
     return ttnn::to_memory_config(t, ttnn::L1_MEMORY_CONFIG);
 }
 
-tt::tt_metal::Tensor to_dram_interleaved(const tt::tt_metal::Tensor& t) {
+ttnn::Tensor to_dram_interleaved(const ttnn::Tensor& t) {
     return ttnn::to_memory_config(t, ttnn::DRAM_MEMORY_CONFIG);
 }
 

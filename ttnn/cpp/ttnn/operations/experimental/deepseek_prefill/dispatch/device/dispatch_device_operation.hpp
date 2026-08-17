@@ -23,7 +23,7 @@ std::pair<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_cb_sizes(
 struct DispatchDeviceOperation {
     using operation_attributes_t = DispatchParams;
     using tensor_args_t = DispatchInputs;
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::array<Tensor, 2>;
     using program_factory_t = std::variant<DispatchProgramFactory>;
@@ -52,12 +52,14 @@ prefill_dispatch(
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
     const std::optional<ttnn::Tensor>& padding_config,
+    const std::optional<ttnn::Tensor>& scales_tensor,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_dispatch = false,
-    uint32_t num_untilizers_per_sender = 2);
+    bool fp8_output = false,
+    bool fp8_scaled_input = false,
+    uint32_t num_workers_per_sender = 2);
 }  // namespace ttnn::prim
