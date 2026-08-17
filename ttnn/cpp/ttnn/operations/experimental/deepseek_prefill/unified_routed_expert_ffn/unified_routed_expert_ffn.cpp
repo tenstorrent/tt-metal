@@ -7,6 +7,7 @@
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
@@ -110,41 +111,65 @@ ttnn::Tensor unified_routed_expert_moe(
             down_biases->size());
     }
 
-    // Per-expert composite: run the unified FFN on each expert's slice of the
-    // dispatched buffer at that expert's region offset (read_x_at_offset for the
-    // reader, expert_region_offsets for the writer). This fuses the old
-    // ttnn::extract (input slice) + ttnn::insert (output placement) pair into the
-    // FFN's reader and writer — no per-expert temp buffer, no extra DRAM round
-    // trip. Same loop regardless of `num_routed_experts`.
+    // Per-expert composite: run the fused SwiGLU kernel on each expert's slice
+    // of the dispatched buffer at that expert's region offset. This fuses the
+    // old ttnn::extract (input slice) + ttnn::insert (output placement) pair
+    // into the reader and writer — no per-expert temporary buffer or extra DRAM
+    // round trip. SwiGluOai/bias variants retain the existing FFN path because
+    // their activation/bias semantics are not implemented by moe_fused_swiglu.
     //
     // x is the whole shared buffer, so pass this expert's row count
     // (max_dispatched_tokens_per_expert in tiles) as input_m_tiles — the op sizes
     // its grid/chunks to one expert, not the buffer.
     //
-    // The input layout selects the output strategy:
-    //   * TILE buffer -> write IN PLACE (output == dispatched_buffer). The reader
-    //     reads x in phase 1 and the writer drains cb_out only after compute
-    //     consumes it, so a row's write is ordered after its read via the CB
-    //     chain; chunks cover disjoint rows and experts touch disjoint regions,
-    //     so no expert can disturb another. No allocation, no up-front fill.
-    //   * ROW_MAJOR bf16 buffer -> the FFN tilizes x and packs bf8 internally, so
-    //     input and output differ in both layout and dtype and cannot alias. One
-    //     shared TILE bf8 output is allocated once for all experts; each writes
-    //     its own region. Left uninitialized (no fill): downstream `combine`
-    //     reads only written rows (bounded per expert to
-    //     [offset, offset + ceil_tile(count))).
+    const bool use_moe_fused_swiglu = activation == RoutedExpertActivation::Silu && !has_bias;
+
+    // moe_fused_swiglu readers prefetch the next M block, so its direct-write
+    // output may not alias the shared input. Allocate one output for all
+    // experts; combine reads only count-bounded rows, so inactive rows need not
+    // be initialized. The legacy fallback retains its TILE in-place behavior.
     const bool x_is_row_major = dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR;
     const ttnn::Tensor output =
-        x_is_row_major ? ttnn::empty(
-                             dispatched_buffer.logical_shape(),
-                             tt::tt_metal::DataType::BFLOAT8_B,
-                             tt::tt_metal::Layout::TILE,
-                             dispatched_buffer.device(),
-                             tt::tt_metal::MemoryConfig{
-                                 tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM})
-                       : dispatched_buffer;
+        (use_moe_fused_swiglu || x_is_row_major)
+            ? ttnn::empty(
+                  dispatched_buffer.logical_shape(),
+                  tt::tt_metal::DataType::BFLOAT8_B,
+                  tt::tt_metal::Layout::TILE,
+                  dispatched_buffer.device(),
+                  tt::tt_metal::MemoryConfig{
+                      tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM})
+            : dispatched_buffer;
     const uint32_t m_tiles = (max_dispatched_tokens_per_expert + 31) / 32;
+
+    // This kernel manages these flags itself. Preserve the numerical settings
+    // the caller chose while normalizing the implementation-only settings.
+    auto fused_compute_kernel_config = compute_kernel_config.value_or(ttnn::DeviceComputeKernelConfig{});
+    fused_compute_kernel_config.fp32_dest_acc_en = false;
+    fused_compute_kernel_config.packer_l1_acc = false;
+    fused_compute_kernel_config.dst_full_sync_en = false;
+    // This is the tuned rectangular launch shape for the routed-expert kernel;
+    // the complete worker grid has a different geometry and is not equivalent.
+    const auto fused_core_grid = tt::tt_metal::CoreCoord{11, 8};
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
+        if (use_moe_fused_swiglu) {
+            ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::moe_fused_swiglu(
+                dispatched_buffer,
+                gate_projs[local_expert],
+                up_projs[local_expert],
+                down_projs[local_expert],
+                expert_token_counts,
+                global_expert_idx_table,
+                local_expert,
+                m_tiles,
+                std::nullopt,
+                std::nullopt,
+                fused_compute_kernel_config,
+                fused_core_grid,
+                output,
+                expert_region_offsets,
+                /*read_x_at_offset=*/true);
+            continue;
+        }
         unified_routed_expert_ffn(
             dispatched_buffer,
             gate_projs[local_expert],

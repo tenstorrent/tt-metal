@@ -89,13 +89,13 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
-// weights and loops over local experts in C++, calling
-//   extract -> unified_routed_expert_ffn (direct-write)
-// per expert. The FFN writer places each expert's output directly into the
-// shared output buffer at its region offset (the old per-expert ttnn::insert
-// is fused into the FFN writer — no temp buffer, no second DRAM round-trip).
-// NOT a single fused device op across experts (per-expert FFN entries still
-// appear in tt-perf-report); Python sees one call, the device sees N.
+// weights and loops over local experts in C++. Bias-free SiLU experts use
+// moe_fused_swiglu in direct-write mode; activation/bias variants unsupported
+// by that kernel retain the unified_routed_expert_ffn fallback. Both writers
+// place each expert's output directly into the shared output buffer at its
+// region offset (the old per-expert ttnn::insert is fused — no temp buffer or
+// second DRAM round-trip). This is not one device program across experts:
+// Python sees one call, while the device sees one program per local expert.
 //
 // The unified FFN reads counts on-device so each expert's work scales to its
 // actual count. No host-side counts/idx read, no per-expert Python loop.
