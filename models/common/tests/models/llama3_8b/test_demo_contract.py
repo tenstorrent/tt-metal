@@ -115,6 +115,30 @@ def test_performance_target_preflight_runs_before_model_construction():
     assert "case_performance_expected" in ast.unparse(_function("test_llama3_8b"))
 
 
+def test_dp_smoke_loads_one_converted_state_dict_for_every_lane():
+    function = _function("_run_dp_smoke")
+    loads = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_load_dp_converted_state_dict"
+    ]
+    creates = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_llama3_for_causal_lm"
+    ]
+
+    assert len(loads) == 1
+    assert len(creates) == 1
+    assert loads[0].lineno < creates[0].lineno
+    converted = next(keyword for keyword in creates[0].keywords if keyword.arg == "converted_state_dict")
+    assert ast.unparse(converted.value) == "converted_state_dict"
+
+
 def test_supplied_performance_targets_fail_on_any_miss_and_accept_all_passes():
     namespace = {"PERF_TOLERANCE": 0.05}
     exec(

@@ -41,7 +41,7 @@ from models.common.device_utils import get_device_name
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.models.llama3_8b.executor import Llama3ExecutorConfig, build_llama3_executor
-from models.common.models.llama3_8b.hf_adaptor import from_pretrained
+from models.common.models.llama3_8b.hf_adaptor import from_pretrained, load_converted_state_dict
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
@@ -316,7 +316,14 @@ def log_teacher_forcing_text(prompt_tokens, predicted_tokens_per_user, reference
         )
 
 
-def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_batch_size=32, max_seq_len=1024):
+def create_llama3_for_causal_lm(
+    mesh_device,
+    optimizations="performance",
+    max_batch_size=32,
+    max_seq_len=1024,
+    *,
+    converted_state_dict=None,
+):
     """Create product-level Llama3ForCausalLM for testing."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     instruct = "Instruct" in hf_model
@@ -337,6 +344,23 @@ def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_ba
         optimizations=optimizations,
         dtype=ttnn.bfloat8_b,
         paged_attention_config=paged_attention_config,
+        converted_state_dict=converted_state_dict,
+    )
+
+
+def _load_dp_converted_state_dict():
+    """Load and convert one HF state dictionary for every data-parallel lane."""
+
+    hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+    n_layers = int(os.environ.get("LLAMA3_8B_TTTV2_NUM_LAYERS", "32"))
+    hf_config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true")
+    text_config = getattr(hf_config, "text_config", hf_config)
+    return load_converted_state_dict(
+        hf_model,
+        head_dim=int(text_config.hidden_size) // int(text_config.num_attention_heads),
+        n_heads=int(text_config.num_attention_heads),
+        n_kv_heads=int(text_config.num_key_value_heads),
+        n_layers=n_layers,
     )
 
 
@@ -1201,6 +1225,7 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
     assert per_lane_batch_size == 1, f"{case.name} expects one active user per DP lane"
     submeshes = list(create_submeshes(mesh_device, data_parallel))
     assert len(submeshes) == data_parallel, f"Expected {data_parallel} submeshes, got {len(submeshes)}"
+    converted_state_dict = _load_dp_converted_state_dict()
 
     llms = []
     lanes = []
@@ -1213,6 +1238,7 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
                 optimizations,
                 max_batch_size=per_lane_batch_size,
                 max_seq_len=case.max_seq_len,
+                converted_state_dict=converted_state_dict,
             )
             llms.append(llm)
 

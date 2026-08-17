@@ -4,6 +4,8 @@
 """Pure semantic snapshots for the Llama-3.1-8B architecture/SKU composition."""
 
 import inspect
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +13,7 @@ import torch
 
 import ttnn
 from models.common.models.llama3_8b.model import (
+    LazyWeight,
     Llama31DecoderPrecision,
     TransformerBlock1D,
     TransformerBlock1DConfig,
@@ -20,6 +23,51 @@ from models.common.models.llama3_8b.model import (
     build_llama3_transformer_1d_config,
 )
 from models.common.modules.rope.rope_1d import RotarySetup1D
+
+
+def _single_device(device_id, *, count=1):
+    return SimpleNamespace(id=lambda: device_id, get_num_devices=lambda: count)
+
+
+def _cache_weight(device):
+    return LazyWeight(
+        source=torch.zeros(1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def test_llama_single_device_lane_reuses_equivalent_legacy_cache(tmp_path):
+    lane = _cache_weight(_single_device(2))
+    exact_path = lane._get_cache_fill_path(tmp_path, "weight")
+    assert exact_path is not None
+    portable_path = Path(str(exact_path).replace("device_2", "device_1"))
+    portable_path.write_bytes(b"portable-host-tensor")
+
+    assert lane._get_cache_fill_path(tmp_path, "weight") == portable_path
+
+
+def test_llama_single_device_lane_prefers_its_exact_legacy_cache(tmp_path):
+    lane = _cache_weight(_single_device(2))
+    exact_path = lane._get_cache_fill_path(tmp_path, "weight")
+    assert exact_path is not None
+    portable_path = Path(str(exact_path).replace("device_2", "device_1"))
+    portable_path.write_bytes(b"portable-host-tensor")
+    exact_path.write_bytes(b"exact-host-tensor")
+
+    assert lane._get_cache_fill_path(tmp_path, "weight") == exact_path
+
+
+def test_llama_multi_device_cache_does_not_reuse_another_device_identity(tmp_path):
+    lane = _cache_weight(_single_device(2, count=4))
+    exact_path = lane._get_cache_fill_path(tmp_path, "weight")
+    assert exact_path is not None
+    portable_path = Path(str(exact_path).replace("device_2", "device_1"))
+    portable_path.write_bytes(b"different-mesh-tensor")
+
+    assert lane._get_cache_fill_path(tmp_path, "weight") == exact_path
 
 
 @pytest.mark.parametrize(

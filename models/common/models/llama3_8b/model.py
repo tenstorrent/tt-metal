@@ -38,7 +38,7 @@ from models.common.device_utils import get_device_name
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
-from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.lazy_weight import LazyWeight as CommonLazyWeight
 from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _compute_kernel_config_hifi2
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _create_dram_sharded_mem_config
 from models.common.modules.rmsnorm.rmsnorm_1d import SHARD_HEIGHT, RMSNorm1D, RMSNorm1DConfig
@@ -46,6 +46,37 @@ from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_out_subblock_w, nearest_32, num_to_core_range_set, pad_dim_to_size
+
+
+class LazyWeight(CommonLazyWeight):
+    """Let equivalent single-device Llama lanes share portable cache files.
+
+    The common cache fingerprint includes the concrete mesh-device id. That is
+    useful for device-bound layouts, but Llama DP lanes serialize host tensors
+    beneath an already product-qualified ``P150`` cache directory. Reusing an
+    otherwise identical single-device cache file avoids rebuilding the whole
+    model once per physical DP lane while retaining the legacy exact path for
+    writes and every multi-device lookup.
+    """
+
+    def _get_cache_fill_path(self, cache_dir, weight_name):
+        exact_path = super()._get_cache_fill_path(cache_dir, weight_name)
+        if exact_path is None or exact_path.exists() or self.device is None:
+            return exact_path
+        if not hasattr(self.device, "get_num_devices") or self.device.get_num_devices() != 1:
+            return exact_path
+        if not hasattr(self.device, "id"):
+            return exact_path
+
+        device_token = f"device_{self.device.id()}"
+        if device_token not in exact_path.name:
+            return exact_path
+        portable_pattern = exact_path.name.replace(device_token, "device_*", 1)
+        return next(
+            (candidate for candidate in sorted(exact_path.parent.glob(portable_pattern)) if candidate.is_file()),
+            exact_path,
+        )
+
 
 # =============================================================================
 # Runtime Config
