@@ -373,6 +373,42 @@ def test_repeat_codegen_routing_mixed_placement(device, shape, kwargs, layout):
     assert device.num_program_cache_entries() == entries_before, msg
 
 
+# Both RM factories size their CB as kRepeatCbDepth (8) slots of one stick, and a stick scales with
+# the tensor's width, so a wide enough input projects a CB no core's L1 can hold. Such a case is
+# otherwise fully in codegen scope; without the capacity gate it routes to codegen and then throws
+# out of circular-buffer allocation at program-compile time rather than falling back.
+#
+# 131072 bf16 elements is a 256 KiB stick, so the projected CB is 2 MiB -- past L1 on every arch
+# (1.5 MiB at most) with room to spare, so the case stays out of scope without tracking the exact
+# per-core budget, which moves with whatever else is allocated.
+_L1_OVERFLOW_WIDTH = 131072
+
+
+@pytest.mark.parametrize(
+    "repeat_dims",
+    [ttnn.Shape([1, 3, 1, 1]), ttnn.Shape([1, 1, 3, 1])],
+    ids=["repeat_dims=[1, 3, 1, 1]", "repeat_dims=[1, 1, 3, 1]"],
+)
+def test_repeat_codegen_routing_wide_rm_exceeds_l1(device, repeat_dims):
+    shape = [1, 2, 2, _L1_OVERFLOW_WIDTH]
+    x = _make_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    golden = ttnn.to_torch(_force_native(xt, repeat_dims))
+    # Same cache-growth route assertion as the generated matrix above.
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.repeat(xt, repeat_dims)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto routed an L1-overflowing case to codegen (program cache grew); expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+def test_forced_codegen_refuses_a_wide_rm_case_that_exceeds_l1(device, expect_error):
+    x = _make_input([1, 2, 2, _L1_OVERFLOW_WIDTH], ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, ttnn.Shape([1, 3, 1, 1]))
+
+
 def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
     # The forced leg exists to be compared against native, so it has to fail loudly outside its
     # support scope: if it fell back, every bit-exactness result gathered through it would really be
