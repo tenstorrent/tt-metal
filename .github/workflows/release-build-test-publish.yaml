@@ -32,13 +32,6 @@ on:
         required: false
         default: ""
         type: string
-      ld-library-path-multihost:
-        description: >-
-          Directory for LD_LIBRARY_PATH on exabox multihost models e2e legs.
-          Empty (default) uses /home/user/tt-metal/build/lib.
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: write
@@ -128,9 +121,6 @@ jobs:
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
-      # Manylinux wheel native libs live in the installed package, not the Ubuntu tarball.
-      # Multihost SKUs only run on Ubuntu 22.04 (Python 3.10).
-      ld-library-path-multihost: ${{ inputs.ld-library-path-multihost != '' && inputs.ld-library-path-multihost || '/opt/venv/lib/python3.10/site-packages/ttnn/build/lib' }}
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
