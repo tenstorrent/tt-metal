@@ -241,7 +241,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     //                            Validation
     ////////////////////////////////////////////////////////////////////////////
     // The fold alternates its srcA operand between the two full-width CBs, which one
-    // `init_bcast` configures for both.
+    // `bcast_init` configures for both.
     TT_FATAL(
         partial.dtype() == running_sum.dtype(),
         "partial ({}) and running_sum ({}) share one unpacker configuration and must share a dtype",
@@ -561,9 +561,9 @@ void AttnResGatherSoftmaxMeshWorkloadFactory::override_runtime_arguments(
 
         // The site is a page offset, so a new site is a common-arg patch rather than a
         // new program. That is what keeps one cached program serving every read site.
-        auto reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
+        auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
         reader_common[kReaderSiteArgIdx] = site_offsets.partial;
-        auto writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
+        auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
         writer_common[kWriterSiteArgIdx] = site_offsets.shift;
         writer_common[kWriterSiteArgIdx + 1] = site_offsets.mass;
 

@@ -238,6 +238,79 @@ def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params
 
 
 @pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
+def test_every_site_reads_its_own_plane_from_one_cached_program(mesh_device, device_params):
+    """A walk issues 186 reads and every one of them is a cache hit after the first, so
+    the site has to reach the kernels as a patched runtime arg. A site left at the value
+    the program was built with returns the wrong plane and still returns it silently —
+    the shapes match and nothing traps. Each site is checked against its own plane, and
+    the cache is checked to have grown once across the whole sweep."""
+    torch.manual_seed(2026)
+
+    mesh_shape = tuple(mesh_device.shape)
+    tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
+    num_tokens, sites = PER_CHIP_TOKENS * sp_factor, 3
+
+    stream_dims, vector_dims, scalar_dims = [None, None], [None, None], [None, None]
+    stream_dims[SP_AXIS], stream_dims[TP_AXIS] = 2, 3
+    vector_dims[TP_AXIS] = 3
+    scalar_dims[SP_AXIS] = 2
+
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_shape)
+    to_dev = lambda t, dims, dtype=ttnn.bfloat16: ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape),
+    )
+
+    # Every plane is drawn independently, so a read that returns a neighbour's plane
+    # misses by the full scale of the data rather than by a roundoff.
+    partial = torch.randn([sites, 1, num_tokens, HIDDEN_SIZE], dtype=torch.bfloat16)
+    shift = torch.randn([sites, 1, num_tokens, 1]) * 2.0
+    mass = torch.rand([sites, 1, num_tokens, 1]) * 7.0 + 1.0
+    running_sum = torch.randn([1, 1, num_tokens, HIDDEN_SIZE], dtype=torch.bfloat16)
+    query = torch.randn([1, 1, 1, HIDDEN_SIZE], dtype=torch.bfloat16) * 0.05
+
+    tt_partial = to_dev(partial, stream_dims)
+    tt_prefix = to_dev(running_sum, stream_dims)
+    tt_query = to_dev(query, vector_dims)
+    tt_shift = to_dev(shift, scalar_dims, ttnn.float32)
+    tt_mass = to_dev(mass, scalar_dims, ttnn.float32)
+    tt_stats = to_dev(torch.zeros([1, 2 * tp_factor, num_tokens, 1]), scalar_dims, ttnn.float32)
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    semaphore = ttnn.create_global_semaphore(
+        mesh_device,
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]),
+        0,
+    )
+
+    entries_before = mesh_device.num_program_cache_entries()
+    for site in range(sites):
+        fused = ttnn.experimental.deepseek_prefill.attn_res_gather_softmax(
+            tt_partial,
+            tt_prefix,
+            tt_shift,
+            tt_mass,
+            tt_query,
+            tt_stats,
+            semaphore,
+            cluster_axis=TP_AXIS,
+            inv_hidden_size=INV_HIDDEN_SIZE,
+            eps=EPS,
+            site=site,
+        )
+        got = ttnn.to_torch(fused[0], mesh_composer=composer)
+        want = _oracle(partial[site : site + 1], running_sum, shift[site : site + 1], mass[site : site + 1], query)
+        _, vs_torch = assert_with_pcc(want, got.float(), PCC)
+        logger.info(f"site {site} vs torch: {vs_torch}")
+
+    grew_by = mesh_device.num_program_cache_entries() - entries_before
+    assert grew_by == 1, f"{sites} sites built {grew_by} programs; the site must not key the cache"
+
+
+@pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 @pytest.mark.parametrize(
     "bad, message",
     [
