@@ -117,7 +117,8 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-lut-select "
     "-mtt-tensix-optimize-setexp-fold "
     "-mtt-tensix-macro-planner "
-    "-mtt-tensix-macro-planner-replay"
+    "-mtt-tensix-macro-planner-replay "
+    "-mtt-tensix-optimize-mop-form"
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -132,6 +133,7 @@ KNOBS = {
     "lut-select": "-mtt-tensix-optimize-lut-select",
     "setexp-fold": "-mtt-tensix-optimize-setexp-fold",
     "planner-replay": "-mtt-tensix-macro-planner-replay",
+    "mop-form": "-mtt-tensix-optimize-mop-form",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
