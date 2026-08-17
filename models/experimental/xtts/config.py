@@ -164,6 +164,9 @@ DEFAULT_LANGUAGE = "en"
 # tends to VERBALIZE it as "dot" at the tail. Internal commas (prosody) are kept.
 SENTENCE_FINAL_PUNCT_RE = r"[.!?]+\s*$"
 SENTENCE_SPLIT_RE = r"(?<=[.!?])\s+"
+# Internal prosodic boundaries. A sentence too long for one pass is broken here first, so the
+# seam lands where a speaker would pause anyway (upstream coqui hard-wraps such sentences).
+CLAUSE_SPLIT_RE = r"(?<=[,;:])\s+"
 COQUI_CLIP_RE = r"^LJ\d{3}-\d{4}\.wav$"  # coqui-ai/TTS tests/data/ljspeech/wavs clip names
 
 
@@ -202,13 +205,19 @@ class ChunkingConfig:
 
     max_text_ids: int = 352  # keep the padded text under MAX_TEXT_POS (404) with headroom
     max_single_pass_codes: int = 205  # above this, split into chunks
-    max_chunk_codes: int = 165  # per chunk once splitting; lower than single-pass on purpose
+    # Per chunk once splitting; lower than single-pass on purpose. codes_per_id is a linear fit,
+    # and a real take runs up to ~1.2x it (measured over a 37-chunk paragraph), so this must stay
+    # under chunk_max_tokens / 1.2 — a chunk that outgrows its budget never reaches STOP and its
+    # tail comes out as noise.
+    max_chunk_codes: int = 155
     codes_per_id: float = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
     # Chunked takes share one capture, so the vocoder always runs this many latent frames
     # (zero-padded). Tile-aligned, above max_chunk_codes, below the ~205 L1 clash.
     chunk_max_tokens: int = 192
-    # A sentence is never split. ~3.7 text ids per word.
-    ids_per_word: float = 3.7
+    # Redraws allowed for a chunk that reaches the code cap without emitting STOP (an unfinished,
+    # usually noisy tail). Sampling is stochastic, so a redraw is normally enough; each costs one
+    # trace replay.
+    chunk_retries: int = 2
 
 
 CHUNKING = ChunkingConfig()
@@ -264,8 +273,32 @@ class DemoConfig:
     """Defaults for the TTNN XTTS demo (demo/xtts_demo.py)."""
 
     text: str = (
-        "Voice synthesis has come a long way, and modern systems can already generate "
-        "natural sounding speech with remarkable accuracy. Hey how are you doing?."
+        "Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey, how are you doing? "
+        "Technology has become an essential part of modern life, influencing the way people communicate, work, learn, travel, and solve everyday problems. "
+        "From smartphones and computers to artificial intelligence and advanced medical equipment, technological development continues to transform society at an unprecedented pace. "
+        "While technology presents certain challenges, its benefits have significantly improved productivity, accessibility, and quality of life. "
+        "One of the most important contributions of technology is improved communication. In the past, communicating with someone living far away could take days or even weeks. "
+        "Today, people can exchange messages instantly, participate in video calls, and collaborate with others across different countries. "
+        "Social platforms and communication tools have made it easier for families, friends, businesses, and organizations to remain connected regardless of geographical distance. "
+        "Technology has also transformed education. Students now have access to a vast amount of information through digital libraries, online courses, educational videos, and interactive learning platforms. "
+        "Remote learning allows people to study from locations that may not have access to traditional educational institutions. "
+        "Teachers can use digital tools to create engaging lessons, track student progress, and provide personalized learning experiences. "
+        "As a result, education has become more flexible and accessible. In the workplace, technology has increased efficiency and created new opportunities. "
+        "Automation can perform repetitive tasks quickly and accurately, allowing employees to focus on more complex and creative work. "
+        "Cloud computing enables teams to collaborate on shared documents and projects from different locations. "
+        "Artificial intelligence is increasingly being used to analyze large amounts of data, identify patterns, and support decision-making. "
+        "At the same time, technological progress has created entirely new industries and career opportunities. "
+        "Healthcare is another area that has benefited greatly from technological innovation. "
+        "Advanced imaging systems, robotic surgery, wearable devices, and digital health records help medical professionals diagnose and treat patients more effectively. "
+        "Researchers can use powerful computers to analyze biological data and accelerate the development of new treatments. "
+        "Telemedicine also allows patients to consult healthcare professionals without always needing to travel to a hospital or clinic. "
+        "However, the rapid growth of technology also creates challenges. Privacy and cybersecurity have become major concerns because personal and organizational information is increasingly stored online. "
+        "Automation may change the nature of employment and require workers to develop new skills. "
+        "Excessive use of digital devices can also affect social interactions and personal well-being. "
+        "Therefore, technological development should be accompanied by responsible policies, education, and ethical considerations. "
+        "In conclusion, technology plays a central role in shaping the modern world. It has improved communication, expanded access to education, increased workplace productivity, and supported major advances in healthcare. "
+        "Although it introduces new risks and challenges, these can be addressed through responsible development and thoughtful use. "
+        "As technology continues to evolve, society must ensure that its benefits are shared widely and that innovation contributes to a more efficient, connected, and sustainable future."
     )
     # Four LJSpeech clips joined to ~32.6 s, clipped to gpt_cond_len (30 s) = 8 conditioning windows.
     ref_audio: str = "LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav"

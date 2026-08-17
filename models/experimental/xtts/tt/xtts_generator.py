@@ -106,10 +106,11 @@ class TtXttsGenerator:
         )
         try:
             codes, lat_host, decode_replay_s = dec.run()
+            stopped = dec.stopped
         finally:
             dec.release()
         lat_out = ttnn.from_torch(lat_host, device=self.model.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        return codes, lat_out, decode_replay_s
+        return codes, lat_out, decode_replay_s, stopped
 
 
 class TtTracedDecoder:
@@ -164,6 +165,9 @@ class TtTracedDecoder:
             self.bias_dev = f32(bias_all)
             self.stop_bias_buf = f32(torch.zeros(1, V))
 
+        # Set by run(): True if the take self-terminated at STOP, False if it ran out of budget
+        # (which leaves an unfinished — usually droning or noisy — tail).
+        self.stopped = False
         self.tid = None
         if capture:
             self.warmup()
@@ -233,6 +237,7 @@ class TtTracedDecoder:
         # Poll every step: less-frequent polls run extra decode past STOP.
         t_replay = time.perf_counter()
         steps_run = 0
+        self.stopped = False
         for i in range(N):
             ttnn.execute_trace(dev, self.tid, blocking=True)
             steps_run = i + 1
@@ -240,6 +245,7 @@ class TtTracedDecoder:
                 continue
             tok_id = int(ttnn.to_torch(self.tok_buf).reshape(-1)[0].item())
             if tok_id == STOP_AUDIO_TOKEN:
+                self.stopped = True
                 break
         decode_replay_s = time.perf_counter() - t_replay
 
