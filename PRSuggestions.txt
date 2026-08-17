@@ -5,23 +5,22 @@
       can load it.
     - You already have this and it works. We hid every PyTorch version of the model on the machine and
       ran it anyway: it wrote the architecture itself, about a thousand lines covering all three
-      stacks, and every stage matches our reference to rounding with the audio codes identical. It is a
-      published architecture though, so this does not show it could do the same for a new one.
-    - First problem, when it runs is inconsistent. Pointed at a checkpoint that is not in HF format the
-      default path writes the loader on its own, but two other places that use it need an environment
-      variable that is off by default, and one of those says the feature is off unless you set it,
-      which is not true. We missed the feature completely because we had already converted the model to
-      HF format by hand, which is the one thing that stops it running.
-    - Second problem, its own check is a comment rather than code. The reasoning is good: it worked out
-      that this model cannot be checked on text, because the text head is unused and every RoPE
+      stacks, and every stage matches our reference to rounding with the audio codes identical. It is
+      a published architecture though, so this does not show it could do the same for a new one.
+    - First problem, when it runs is inconsistent. Pointed at a checkpoint that is not in HF format
+      the default path writes the loader on its own, but two other places that use it need an
+      environment variable that is off by default, and one of those says the feature is off unless you
+      set it, which is not true. We missed the feature completely because we had already converted the
+      model to HF format by hand, which is the one thing that stops it running.
+    - Second problem, its own check is a comment rather than code. The reasoning is good: it worked
+      out that this model cannot be checked on text, because the text head is unused and every RoPE
       convention scores the same on it, so it drove the speech path instead and confirmed the model
       stops on its own at a length that tracks the text, then tried a wrong RoPE on purpose and got a
       buzz that never stops. Nothing can re-run any of that, and this file is what every later test is
       scored against, so a slightly wrong one would set every target wrong unnoticed.
-    - Fix: one rule for when it runs, described correctly. Have it write that check as code and run it,
-      keeping the deliberate wrong version, since a check never seen to fail proves little. And say in
-      the log whether it adapted an existing implementation or wrote one itself.
-
+    - Fix: one rule for when it runs, described correctly. Have it write that check as code and run
+      it, keeping the deliberate wrong version, since a check never seen to fail proves little. And
+      say in the log whether it adapted an existing implementation or wrote one itself.
 2. Fix the model bring up from local path
     - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
         - a local folder gets a shallower check, and the run dies three stages later pointing at the
