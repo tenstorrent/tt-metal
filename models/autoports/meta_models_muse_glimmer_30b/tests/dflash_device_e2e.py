@@ -42,6 +42,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-new-tokens", type=int, default=48)
     parser.add_argument("--prompt", default=PROMPT)
+    parser.add_argument(
+        "--prompts-file",
+        default=None,
+        help=(
+            "one prompt per line; each is run in the SAME process so the 30B target is "
+            "loaded once. Acceptance over a single prompt is not a usable statistic (it "
+            "spans 2.8-4.0 across equivalent configurations over 11 blocks), so ranking "
+            "anything by it needs several prompts at >=40 blocks each."
+        ),
+    )
     parser.add_argument("--max-seq-len", type=int, default=4096)
     parser.add_argument("--drafter-dtype", default="bfloat8_b", choices=["bfloat8_b", "bfloat16"])
     parser.add_argument("--skip-baseline", action="store_true")
@@ -87,11 +97,11 @@ def main() -> None:
         gen = build_generator(".", mesh, max_batch_size=1, max_seq_len=args.max_seq_len)
         tok = gen.tokenizer
 
-        text = tok.apply_chat_template(
-            [{"role": "user", "content": args.prompt}], tokenize=False, add_generation_prompt=True
-        )
-        prompt_ids = tok(text)["input_ids"]
-        logger.info(f"prompt_len={len(prompt_ids)}")
+        if args.prompts_file:
+            prompts = [line.strip() for line in open(args.prompts_file) if line.strip()]
+        else:
+            prompts = [args.prompt]
+        logger.info(f"{len(prompts)} prompt(s)")
 
         logger.info(f"building drafter (weights {args.drafter_dtype}) ...")
         drafter = DFlashDrafter.from_state_dict(
@@ -109,10 +119,24 @@ def main() -> None:
             aligned_verify=args.verify == "aligned",
         )
 
-        # ---------------------------------------------------------- DFlash
-        logger.info("=== DFlash ===")
-        dflash_tokens, stats = runner.generate(prompt_ids, args.max_new_tokens)
-        logger.info(json.dumps(stats.as_dict(), indent=2))
+        per_prompt = []
+        for index, prompt_text in enumerate(prompts):
+            text = tok.apply_chat_template(
+                [{"role": "user", "content": prompt_text}], tokenize=False, add_generation_prompt=True
+            )
+            prompt_ids = tok(text)["input_ids"]
+            logger.info(f"=== prompt {index}: {len(prompt_ids)} tokens ===")
+            gen.reset()
+            dflash_tokens, stats = runner.generate(prompt_ids, args.max_new_tokens)
+            logger.info(json.dumps(stats.as_dict(), indent=2))
+            per_prompt.append(
+                {
+                    "prompt": prompt_text,
+                    "prompt_tokens": len(prompt_ids),
+                    "dflash": stats.as_dict(),
+                    "dflash_token_ids": dflash_tokens,
+                }
+            )
 
         # -------------------------------------------------------- baseline
         baseline_tokens: list[int] = []
@@ -154,6 +178,25 @@ def main() -> None:
             print(f"SPEEDUP                  : {speedup:.2f}x")
             print(f"token mismatches vs greedy: {len(mismatches)} / {n}  at {mismatches[:8]}")
         print("=" * 72)
+        if len(per_prompt) > 1:
+            # Acceptance is the statistic that decides whether speculation can win at
+            # all, and it is far too noisy to read off one prompt -- so report the
+            # spread, not just a mean.
+            print("\nper-prompt acceptance (the metric that decides viability):")
+            print(f"  {'prompt':>6s} {'blocks':>7s} {'matches/block':>14s} {'accepted/fwd':>13s} {'t/s/u':>8s}")
+            for i, entry in enumerate(per_prompt):
+                d = entry["dflash"]
+                print(
+                    f"  {i:>6d} {d['iterations']:>7d} {d['mean_matches']:>14.2f} "
+                    f"{d['accepted_per_target_forward']:>13.2f} {d['tokens_per_second']:>8.2f}"
+                )
+            blocks = sum(d["dflash"]["iterations"] for d in per_prompt)
+            total_matches = sum(sum(d["dflash"]["matches"]) for d in per_prompt)
+            values = [d["dflash"]["mean_matches"] for d in per_prompt]
+            print(
+                f"  pooled over {blocks} blocks: {total_matches / blocks:.2f} matches/block of 15 "
+                f"(per-prompt range {min(values):.2f}-{max(values):.2f})"
+            )
         print("\nDFlash text:\n" + tok.decode(dflash_tokens, skip_special_tokens=True))
 
         payload = {
@@ -172,6 +215,7 @@ def main() -> None:
             "token_mismatch_count": len(mismatches),
             "token_mismatch_indices": mismatches,
             "tokens_compared": n,
+            "per_prompt": per_prompt,
         }
         out = Path(args.out) if args.out else Path(__file__).with_name("dflash_device_e2e.json")
         out.write_text(json.dumps(payload, indent=2))

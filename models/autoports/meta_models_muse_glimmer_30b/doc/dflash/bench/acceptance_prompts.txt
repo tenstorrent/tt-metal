@@ -1,0 +1,6 @@
+Write a Python function that merges two sorted lists.
+Explain why the sky appears blue, in two paragraphs.
+Write a SQL query that finds the second-highest salary per department.
+Summarise the tradeoffs between optimistic and pessimistic locking.
+def quicksort(arr):
+Translate to French: "The weather tomorrow will be cold and rainy, so bring a coat."

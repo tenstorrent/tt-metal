@@ -8,7 +8,8 @@ Status: **end to end on device and 5.5× faster than the first working run, but
 still 0.47× of non-speculative decode.**  19.95 t/s/u against a 42.88 t/s/u
 baseline at ISL 67 / OSL 128, warm program cache.  The drafter is no longer the
 bottleneck — the verify forward is 68 % of the iteration.  F9 has the arithmetic,
-and F11 records an attempt at the fix that is scaffolded but not yet working.
+F10 has the measured acceptance rate that bounds the whole feature, and F11 an
+attempt at the verify fix that is scaffolded but not yet working.
 
 ---
 
@@ -360,7 +361,50 @@ a 64-aligned restart plus sliding-tail threading, bounded by re-forwarding at mo
 both O(delta) and one program; (3) acceptance, which at 2.10 matches per block of 15
 is the largest untouched multiplier and is not explained by drafter fidelity (F8).
 
-### F10 — The aligned-restart verify: scaffolded, and failing two ways
+### F10 — Acceptance, measured properly: 2.26 matches per block of 15
+
+The number that decides whether speculation can win at all, pooled over **234 blocks
+across 6 prompts** at OSL 128 (`--prompts-file`, one model load):
+
+| prompt | blocks | matches/block | accepted/forward | t/s/u |
+|---|---|---|---|---|
+| merge two sorted lists | 41 | 2.10 | 3.05 | 19.92 |
+| why the sky is blue | 42 | 2.02 | 2.98 | 20.47 |
+| SQL second-highest salary | 29 | **3.38** | 4.27 | 30.21 |
+| optimistic vs pessimistic locking | 45 | 1.82 | 2.78 | 18.75 |
+| `def quicksort(arr):` | 46 | **1.76** | 2.72 | 15.01 |
+| translate to French | 31 | 3.10 | 4.00 | 27.85 |
+| **pooled** | **234** | **2.26** | **3.26** | |
+
+Two things follow.
+
+**F1's 5.33 accepted/forward should not be used as a planning number.**  It came from
+one CPU prompt over ~10 blocks; the device pools to 3.26 over 234.  The per-prompt
+range here is 2.72–4.27, which brackets 5.33 nowhere near its middle, and t/s/u tracks
+acceptance almost linearly (15.0 at 1.76 matches, 30.2 at 3.38) — so acceptance, not
+any single op, is the multiplier the whole feature rides on.
+
+**The viability budget.**  At 3.26 tokens per iteration, break-even against
+23.31 ms/token is `3.26 x 23.31 = 76.0 ms` per iteration, against 157.6 ms today
+(F9).  Every remaining item is needed to get there, and the optimistic floor is:
+
+```
+verify (aligned, ~48 rows, cannot go below one target forward)   ~30 ms
+drafter forward (sharded weights, fused SDPA, L1)                ~12
+candidates (device argmax instead of a 202k host gather)          ~4
+noise embed                                                       ~1
+taps -> host                                                      ~6
+                                                                 ----
+                                                                 ~53 ms  ->  16.4 ms/token  ->  ~61 t/s/u  ~1.4x
+```
+
+So DFlash *can* win here, but there is no single change that does it: the win needs
+the verify forward, the drafter forward, the candidate argmax and the tap readback all
+fixed, and it is worth ~1.4x rather than the card's 3.1x at this acceptance rate.
+Raising acceptance is worth more than any of them and is the least explored — and per
+F8 it is not explained by drafter numerical fidelity.
+
+### F11 — The aligned-restart verify: scaffolded, and failing two ways
 
 Attempted, behind `--verify aligned` / `DFlashRunner(aligned_verify=True)`, and left
 **off by default**.  Recorded in detail because the hard part turned out not to be
@@ -406,7 +450,7 @@ checked: whether `sliding_kv_tail_len` means `min(window, start_pos)` rows endin
 prompt prefill's own tile padding on the very first verify (prompt 67 → padded 96 →
 trimmed to 64).
 
-### F11 — Tooling traps that silently corrupt DFlash measurements
+### F12 — Tooling traps that silently corrupt DFlash measurements
 
 Four, each of which produced a plausible wrong number rather than an error:
 
@@ -466,10 +510,12 @@ In impact order, with the arithmetic in F9:
    the *incremental* cache made shape-stable through in-place writes at fixed
    capacity, so it is O(delta) *and* one program, rather than the bucketed
    whole-prefix recompute that trades O(bucket) work for shape stability.
-3. **Acceptance**, at 2.10 matches per block of 15 — the largest untouched
-   multiplier, and per F8 *not* explained by drafter numerical fidelity.  Measure
-   over ≥40 blocks and several prompts (F7); the CPU oracle's 5.33 is one prompt and
-   should not be treated as a target until reproduced.
+3. **Acceptance** — now measured at 2.26 matches per block of 15 pooled over 234
+   blocks (F10), so this is no longer an unknown but a bound: it is what limits the
+   whole feature to ~1.4x even with every op fixed, and t/s/u tracks it almost
+   linearly.  Per F8 it is *not* explained by drafter numerical fidelity, so the
+   candidates are conditioning (taps, context assembly, positions) and the drafter
+   itself.  Highest value, least explored.
 4. Cheaper follow-ons, all inside the 120 ms draft figure: device-side argmax instead
    of gathering a 202k-wide logits tile to host each iteration, and skipping the
    mask entirely below position 2033, where it is uniformly permissive.
