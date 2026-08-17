@@ -218,8 +218,11 @@ def test_sort_fp32_wide_index_correctness(descending, device):
     indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
 
     assert_equal(torch_sort_values, values)
-    assert indices.min() >= 0 and indices.max() < n
-    assert indices.unique().numel() == n
+    assert (
+        indices.min() >= 0 and indices.max() < n
+    ), f"indices out of range [0, {n}): min={int(indices.min())}, max={int(indices.max())}"
+    unique_count = indices.unique().numel()
+    assert unique_count == n, f"{n - unique_count} duplicated indices"
     assert_equal(input.reshape(-1)[indices], values.reshape(-1))
 
 
