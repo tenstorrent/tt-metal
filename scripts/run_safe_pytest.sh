@@ -104,6 +104,9 @@ TT_TIMING_TEST_PATH=""
 TT_TIMING_PRECOMPILE_MODE="off"
 TT_TIMING_PRECOMPILE_REASON="disabled"
 TT_TIMING_PRECOMPILE_S=0
+# How many programs the warm pass actually compiled. -1 = not attempted / no
+# collector RESULT line; 0 alongside a `cold` mode = warmed NOTHING.
+TT_TIMING_PRECOMPILE_PROGRAMS=-1
 
 _emit_device_timing() {
     local ec=$?
@@ -117,9 +120,10 @@ _emit_device_timing() {
         # JSON-escape test_path: backslash first, then double-quote.
         esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
         esc_path="${esc_path//\"/\\\"}"
-        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d}\n' \
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d}\n' \
             "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
             "$TT_TIMING_PRECOMPILE_MODE" "$TT_TIMING_PRECOMPILE_REASON" "$TT_TIMING_PRECOMPILE_S" \
+            "$TT_TIMING_PRECOMPILE_PROGRAMS" \
             >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
     fi
     return $ec
@@ -376,10 +380,32 @@ precompile_warm() {
     #
     # The RESULT line is parsed for ATTRIBUTION ONLY (which reason to record) and is best-effort:
     # if it is absent or malformed the reason degrades to a generic one, never the decision.
-    local rline rstatus="" rreason=""
+    local rline rstatus="" rreason="" rprogs="" rother="" rpyexit=""
     rline=$(grep '^UP_FRONT_COLLECT_RESULT:' "$clog" 2>/dev/null | tail -1 || true)
     [[ "$rline" =~ status=([^[:space:]]+) ]] && rstatus="${BASH_REMATCH[1]}"
     [[ "$rline" =~ reason=([^[:space:]]+) ]] && rreason="${BASH_REMATCH[1]}"
+    [[ "$rline" =~ programs=([0-9]+) ]] && rprogs="${BASH_REMATCH[1]}"
+    [[ "$rline" =~ other_failures=([0-9]+) ]] && rother="${BASH_REMATCH[1]}"
+    [[ "$rline" =~ pytest_exit=([0-9]+) ]] && rpyexit="${BASH_REMATCH[1]}"
+    TT_TIMING_PRECOMPILE_PROGRAMS="${rprogs:--1}"
+    # WARMED NOTHING while bodies were failing. The collector normalizes this to
+    # `status=ok reason=nothing_to_compile` (it cannot tell an empty suite from a
+    # suite whose every body exploded), so `nothing_to_compile` alone must never
+    # be read as "the cache was already warm". Caught here so the recorded reason
+    # names the real cause -- e.g. a JIT server whose sfpi toolchain mismatches
+    # the client's, refusing every compile (eval/GOLDEN_GATE_TIMING.md).
+    if [[ "${rprogs:-0}" -eq 0 && ( "${rother:-0}" -gt 0 || "${rpyexit:-0}" -ne 0 ) ]]; then
+        echo "PRECOMPILE: ✗ warmed NOTHING after $((t1-t0))s (programs=0, other_failures=${rother:-?}, pytest_exit=${rpyexit:-?}) -> the real run compiles everything inline." >&2
+        grep -aE "UP_FRONT_COLLECT_RESULT:|Remote JIT compile failed" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
+        echo "PRECOMPILE:   (full collect log: $clog)" >&2
+        TT_TIMING_PRECOMPILE_MODE="cold"
+        if [[ "$_pc_route" == "farm" ]]; then
+            TT_TIMING_PRECOMPILE_REASON="jit_refused"
+        else
+            TT_TIMING_PRECOMPILE_REASON="warmed_nothing"
+        fi
+        return 0
+    fi
 
     if [[ $cstatus -ne 0 ]]; then
         echo "PRECOMPILE: ✗ warmup unusable (exit $cstatus${rreason:+, $rreason}) after $((t1-t0))s -> the real run compiles cache misses inline." >&2
