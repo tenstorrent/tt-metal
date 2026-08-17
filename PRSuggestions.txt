@@ -1,26 +1,15 @@
-1. Enable bring-up of models which are not natively in HF format, because there is a lot of models
-   not in this format
-    - In TTS most models are like this: XTTS-v2, StyleTTS2, F5-TTS, CosyVoice, GPT-SoVITS, Kokoro,
-      Voxtral-TTS and others all ship their own code. Being on the HF Hub does not mean transformers
-      can load it.
-    - You already have this and it works. We hid every PyTorch version of the model on the machine and
-      ran it anyway: it wrote the architecture itself, about a thousand lines covering all three
-      stacks, and every stage matches our reference to rounding with the audio codes identical. It is
-      a published architecture though, so this does not show it could do the same for a new one.
-    - First problem, when it runs is inconsistent. Pointed at a checkpoint that is not in HF format
-      the default path writes the loader on its own, but two other places that use it need an
-      environment variable that is off by default, and one of those says the feature is off unless you
-      set it, which is not true. We missed the feature completely because we had already converted the
-      model to HF format by hand, which is the one thing that stops it running.
-    - Second problem, its own check is a comment rather than code. The reasoning is good: it worked
-      out that this model cannot be checked on text, because the text head is unused and every RoPE
-      convention scores the same on it, so it drove the speech path instead and confirmed the model
-      stops on its own at a length that tracks the text, then tried a wrong RoPE on purpose and got a
-      buzz that never stops. Nothing can re-run any of that, and this file is what every later test is
-      scored against, so a slightly wrong one would set every target wrong unnoticed.
-    - Fix: one rule for when it runs, described correctly. Have it write that check as code and run
-      it, keeping the deliberate wrong version, since a check never seen to fail proves little. And
-      say in the log whether it adapted an existing implementation or wrote one itself.
+1. Check the model implementation the tool writes when a model is not in HF format
+    - For a model transformers cannot load, the tool writes its own PyTorch version of it, and every
+      later test is scored against that version. Ours was right, we hid every PyTorch version of the
+      model on the machine and it still matched our reference on every stage. But the only check on it
+      is a comment. It reasoned well, that this model cannot be checked on text since the text head is
+      unused, so it drove the speech path instead and even tried a wrong RoPE on purpose to show the
+      check catches it. Then it wrote all of that down as prose. Nothing can re-run it, so a slightly
+      wrong version would set every later target wrong and nothing would notice.
+    - Fix: have it write that check as code and run it, keeping the deliberate wrong version, since a
+      check never seen to fail proves little. Cheap additions: every weight in the checkpoint used,
+      the values the checkpoint declares actually built, cached and recomputed paths agreeing, and the
+      same seed giving the same result.
 
 2. Fix the model bring up from local path
     - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
