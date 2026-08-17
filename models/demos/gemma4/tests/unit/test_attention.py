@@ -326,15 +326,12 @@ def _build_sliding_window_mask(cache_len, sliding_window):
     return mask
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
-    """Test decode attention with paged KV cache against HF reference.
+def _run_decode_paged(layer_idx, cache_len, mesh_device, request, real_weights, label):
+    """Paged-decode PCC body, shared by the random-init and real-weight tests.
 
-    Tests at various cache lengths including positions beyond the sliding window (1024).
-    At cache_len=1500 with sliding_window=1024, SDPA must correctly mask out old entries.
-    Global layers (no sliding window) should attend to all cache positions.
+    Split out rather than parametrized on a ``weights`` axis: an extra axis would
+    rename every existing node and silently strand the ``test_attention_decode_paged``
+    entries in pcc_thresholds.json back on the 0.99 default.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -345,6 +342,9 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
+    if real_weights:
+        load_real_weights_into(hf_attn, f"layers.{layer_idx}.self_attn")
+        hf_attn.eval()
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
 
@@ -435,9 +435,41 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
-        f"Attention paged decode (layer={layer_idx}, cache_len={cache_len}, "
+        f"Attention paged decode {label} (layer={layer_idx}, cache_len={cache_len}, "
         f"sliding_window={sliding_window}) PCC too low: {pcc_msg}"
     )
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
+    """Test decode attention with paged KV cache against HF reference.
+
+    Tests at various cache lengths including positions beyond the sliding window (1024).
+    At cache_len=1500 with sliding_window=1024, SDPA must correctly mask out old entries.
+    Global layers (no sliding window) should attend to all cache positions.
+    """
+    _run_decode_paged(layer_idx, cache_len, mesh_device, request, real_weights=False, label="random-init")
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_real_weights(layer_idx, cache_len, mesh_device, reset_seeds, request):
+    """Paged decode on the checkpoint's trained projections.
+
+    Decode is the shipped hot path and had no real-weight module gate: it reads
+    the paged KV cache, runs the per-user RoPE lookup and a single-query SDPA,
+    none of which the prefill test exercises. Two cache lengths, one inside the
+    1024 sliding window and one past it, so the window masking is checked at
+    real weight magnitudes.
+
+    The KV cache is still filled with ``torch.randn`` — a real cache would need
+    a real prefill first, which is what ``test_full_model_decode`` covers. This
+    isolates the weights, not the cache contents.
+    """
+    _run_decode_paged(layer_idx, cache_len, mesh_device, request, real_weights=True, label="real-weights")
 
 
 # ── Batched Decode PCC Test (paged attention, batch > 1) ─────────────────
@@ -479,26 +511,11 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
-)
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
-@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
-    """True batched decode (batch > 1 single forward) with paged KV cache.
+def _run_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, request, real_weights, label):
+    """Batched paged-decode PCC body, shared by the random-init and real-weight tests.
 
-    Each user gets independent random K/V, an independent query, and a distinct
-    position ``cache_len - b`` so the per-user RoPE path (apply_rope_decode_peruser
-    on [1, batch, 1, head_dim]) is exercised — a single broadcast position would
-    not catch a per-user-position bug. Compares each user's TT output against an HF
-    reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
-    real decode takes); the 4D legacy cache cannot represent per-user positions.
-
-    Skipped in CI (slow — runs across every gemma4 variant's unit job); run
-    locally for batched-decode coverage.
+    Split out rather than parametrized on a ``weights`` axis — see
+    ``_run_decode_paged`` for why an extra axis is not an option here.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -509,6 +526,9 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
+    if real_weights:
+        load_real_weights_into(hf_attn, f"layers.{layer_idx}.self_attn")
+        hf_attn.eval()
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
 
@@ -656,8 +676,56 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     ref_stacked = torch.stack(ref_outputs, dim=0)  # [batch, hidden_size]
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_stacked, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
-        f"Batched decode (layer={layer_idx}, batch={batch}, cache_len={cache_len}, "
+        f"Batched decode {label} (layer={layer_idx}, batch={batch}, cache_len={cache_len}, "
         f"tp={tp}, sliding_window={sliding_window}) PCC too low: {pcc_msg}"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+    """True batched decode (batch > 1 single forward) with paged KV cache.
+
+    Each user gets independent random K/V, an independent query, and a distinct
+    position ``cache_len - b`` so the per-user RoPE path (apply_rope_decode_peruser
+    on [1, batch, 1, head_dim]) is exercised — a single broadcast position would
+    not catch a per-user-position bug. Compares each user's TT output against an HF
+    reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
+    real decode takes); the 4D legacy cache cannot represent per-user positions.
+
+    Skipped in CI (slow — runs across every gemma4 variant's unit job); run
+    locally for batched-decode coverage.
+    """
+    _run_decode_paged_batched(
+        layer_idx, batch, cache_len, mesh_device, request, real_weights=False, label="random-init"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("batch", [32], ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("cache_len", [1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_batched_real_weights(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+    """Batched decode on the checkpoint's trained projections.
+
+    Narrower than the random-init grid on purpose — one point, the hardest one:
+    the full 32-user batch at a cache length past the 1024 sliding window, where
+    the per-user RoPE lookup and the window masking are both live. The random-init
+    test keeps the full batch/cache sweep; this adds real weight magnitudes to
+    the corner that matters rather than multiplying a 36-case grid.
+    """
+    _run_decode_paged_batched(
+        layer_idx, batch, cache_len, mesh_device, request, real_weights=True, label="real-weights"
     )
 
 
