@@ -59,13 +59,11 @@ def _write_state_wh(h, k_row, delta, beta_t):
        the same broadcast cost as the first instead of a second full-size elementwise pass.
        MEASURED (WH, real shape): 484.1us vs 579.6us for scale-after (-16.5%).
 
-    5. The outer-product's own output is written as bfloat8_b when h is bfloat8_b (the WH decode
-       default), halving the bandwidth of materializing this [B,H,K,V] tensor -- it's the single
-       most expensive write in the step. Only when h is bf8: this is another cut into the values
-       that feed h's accumulation (same category as h's own dtype), so it's gated to match h
-       rather than applied unconditionally -- a caller running high_precision=True (fp32 h) keeps
-       outer at its default (unrounded) precision. MEASURED (WH, real shape): 560.8us vs 534.2us
-       for bf16-intermediate (-4.7%), PCC 0.99996 -> 0.99994 (both excellent)."""
+    5. The outer-product's own output is written as bfloat8_b unless h is float32 (high_precision).
+       WH decode h is bf16 (bf8 *state* failed PCC), so this used to stay bf16 and paid a full-width
+       BinaryNg write of [B,H,K,V] at bf16. Writing the increment as bf8 then adding into bf16 h cuts
+       that write's bandwidth without changing h's accumulation dtype. high_precision=True (fp32 h)
+       keeps the unrounded outer, unchanged."""
     B, H, V = h.shape[0], h.shape[1], h.shape[3]
     _L1 = ttnn.L1_MEMORY_CONFIG
 
@@ -78,7 +76,7 @@ def _write_state_wh(h, k_row, delta, beta_t):
     d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=_L1)
 
     d_scaled = ttnn.multiply(d_row, beta_expanded, memory_config=_L1)
-    outer_dtype = ttnn.bfloat8_b if h.dtype == ttnn.bfloat8_b else None
+    outer_dtype = None if h.dtype == ttnn.float32 else ttnn.bfloat8_b
     outer = ttnn.multiply(k_col, d_scaled, memory_config=_L1, dtype=outer_dtype)
     return ttnn.add(h, outer, memory_config=_L1)
 
@@ -114,12 +112,14 @@ def recurrent_gated_delta_rule_decode_wh(
         g = ttnn.typecast(g, ttnn.float32)
 
     # L2 norm. q is intentionally left at its incoming dtype here -- see module docstring.
-    q = l2_norm_ttnn(q, dim=-1)
-    k = l2_norm_ttnn(k, dim=-1)
-
+    # Fold q's L2 1/sqrt(K) into the attention scale: l2_norm_ttnn is rms_norm + *(K**-0.5), then the
+    # caller did q *= scale (scale is also K**-0.5 by default). One multiply by (scale * K**-0.5) is
+    # algebraically identical and drops one BinaryNg vs the separate l2_norm_ttnn + multiply pair.
     if scale is None:
         scale = K**-0.5
-    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q = ttnn.rms_norm(q, epsilon=1e-6 / K)
+    q = ttnn.multiply(q, scale * (K**-0.5), memory_config=ttnn.L1_MEMORY_CONFIG)
+    k = l2_norm_ttnn(k, dim=-1)
 
     # q/k arrive [B,1,H,K]; q_row/k_row need [B,H,1,K] -- a swap of dims 1,2, not a reshape that
     # adds/removes a singleton. ttnn.transpose does this in one op instead of reshape crossing the
@@ -145,7 +145,10 @@ def recurrent_gated_delta_rule_decode_wh(
     elif high_precision and h.dtype != ttnn.float32:
         h = ttnn.typecast(h, ttnn.float32)
 
-    h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
+    # Skip the DRAM->L1 copy when the caller already hoisted rec_state (eager decode in tp.py).
+    # Same-config to_memory_config is not reliably a no-op in the device trace.
+    if h.memory_config().buffer_type != ttnn.BufferType.L1:
+        h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
 
     read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -201,10 +204,10 @@ def recurrent_gated_delta_rule_decode_wh(
         q_row, h, memory_config=_L1, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
 
-    # Reshape output to [B, 1, H, V]
-    o = ttnn.reshape(o_t, [B, 1, H, V], memory_config=_L1)
-
-    return o, h
+    # Leave o at the matmul's native [B,H,1,V] -- reshaping to [B,1,H,V] crosses the tiled pair
+    # (1,V)->(H,V) for no benefit: the caller (forward_decode) rms_norms on this layout (last dim is
+    # still V) and does its own single reshape to [1,B,H*V] for the gate/out-proj.
+    return o_t, h
 
 
 def recurrent_gated_delta_rule_decode_dispatch(*args, **kwargs):
