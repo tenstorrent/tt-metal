@@ -9,11 +9,12 @@
       gives a buzz that never stops. Make that run.
 
 2. Fix bring-up from a local folder
-    - A folder on disk is not treated like a Hub name. It gets a shallower check and the run dies
-      three stages later pointing at the wrong thing. Optimizer stage then confuses the folder
-      holding the weights with the folder holding the generated code, and loses track of which model
-      it came from, so it cannot build its own correctness check. We named it by hand.
-    - Fix: accept a folder anywhere a Hub name works, and keep track of both.
+    - A folder on disk is not treated the same as a model name downloaded from HuggingFace. It gets
+      a shallower check and the run dies three stages later pointing at the wrong thing. Optimizer
+      stage then confuses the folder holding the weights with the folder holding the generated code,
+      and loses track of which model it came from, so it cannot build its own correctness check. We
+      named it by hand.
+    - Fix: accept a folder everywhere a name from HuggingFace works, and keep track of both.
     - Also, running a model's own code is only allowed for one hardcoded model name. Ours passed the
       early checks and then failed when it ran, blaming the model rather than the setting. A model's
       config already declares that it ships its own code, so decide from that. We did, and it worked.
