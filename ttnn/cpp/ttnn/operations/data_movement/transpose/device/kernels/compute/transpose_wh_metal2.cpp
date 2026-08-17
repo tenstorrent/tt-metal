@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Metal 2.0 fork of transpose_wh.cpp (cross-op shared with legacy permute / nlp_create_qkv_heads /
-// split_query_key_value_and_split_heads). The legacy source stays in place, non-Metal-2.0, for its cross-op consumers;
-// only the transpose Metal 2.0 factory binds this fork. Sunset when those consumers migrate.
+
+// Metal 2.0 fork of transpose_wh.cpp (see the legacy copy alongside).
+// Compute logic is unchanged; resource access uses Metal 2.0 named handles:
+//   - c_0 / c_16 (legacy magic CB indices) -> dfb::cb_in / dfb::cb_out
+//   - NHtWt (legacy RTA 0)                 -> named RTA
+// Forked (not modified in place) because the legacy copy is still used by the transpose op.
 
 #include <cstdint>
 
@@ -16,11 +18,14 @@
 void kernel_main() {
     uint32_t NHtWt = get_arg(args::NHtWt);
 
-    compute_kernel_hw_startup(dfb::in, dfb::out);
-    transpose_init(dfb::in);
+    constexpr auto cb_in = dfb::cb_in;
+    constexpr auto cb_out = dfb::cb_out;
 
-    DataflowBuffer dfb_in(dfb::in);
-    DataflowBuffer dfb_out(dfb::out);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    transpose_init(cb_in);
+
+    DataflowBuffer dfb_in(cb_in);
+    DataflowBuffer dfb_out(cb_out);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
@@ -31,11 +36,11 @@ void kernel_main() {
         dfb_out.reserve_back(1);
 
         tile_regs_acquire();
-        transpose_tile(dfb::in, 0, 0);
+        transpose_tile(cb_in, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, dfb::out);
+        pack_tile(0, cb_out);
         tile_regs_release();
 
         dfb_out.push_back(1);

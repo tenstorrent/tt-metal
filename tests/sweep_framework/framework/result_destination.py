@@ -31,28 +31,6 @@ from infra.data_collection.pydantic_models import (
     TestStatus,
 )
 
-# Cached available-device count. ttnn.GetNumAvailableDevices() constructs a
-# cluster; with a persistent job device open in the sweeps worker, a live query
-# would collide (CHIP_IN_USE). Query once (prime_device_count, from run_sweeps
-# before the worker opens) and reuse.
-_CACHED_NUM_DEVICES = None
-
-
-def prime_device_count():
-    """Return the available device count, querying ttnn at most once and caching.
-    Call from the main process before any persistent device is opened; later
-    callers reuse the cached value instead of constructing a cluster. Returns 0 if
-    ttnn is unavailable or the query fails."""
-    global _CACHED_NUM_DEVICES
-    if _CACHED_NUM_DEVICES is None:
-        try:
-            import ttnn
-
-            _CACHED_NUM_DEVICES = int(ttnn.GetNumAvailableDevices())
-        except Exception:
-            _CACHED_NUM_DEVICES = 0
-    return _CACHED_NUM_DEVICES
-
 
 # Optional numpy import for numeric handling in hot paths
 try:
@@ -166,12 +144,11 @@ def _coerce_to_optional_string(value: Any) -> str | None:
 
 def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
     """
-    Build card_type string from run metadata with fallback to ttnn device query.
+    Build the card_type string from run metadata. Never touches the device.
 
     Priority:
     1. runner_label from CI environment (e.g., N150, N300, BH-LoudBox)
-    2. ttnn device count query at runtime (for local runs without RUNNER_LABEL)
-    3. arch name only as final fallback
+    2. arch name alone (local runs, where no runner_label exists)
     """
     if not run_metadata:
         return "n/a"
@@ -184,15 +161,21 @@ def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
     if runner_label:
         return f"{arch} ({runner_label})"
 
-    # Priority 2 fallback: cached device count (see prime_device_count). Must use
-    # the cache: ttnn.GetNumAvailableDevices() constructs a cluster, and the sweeps
-    # runner keeps a job device open in its worker across modules, so a live query
-    # here (main process, during per-module export) would collide -> CHIP_IN_USE
-    # deadlock. prime_device_count() is populated once before the worker opens.
-    num_devices = prime_device_count()
-    if num_devices and num_devices > 0:
-        device_label = "device" if num_devices == 1 else "devices"
-        return f"{arch} ({num_devices} {device_label})"
+    # NOTE: there used to be a device-count fallback here ("wormhole_b0 (32 devices)"),
+    # fed by prime_device_count(). It was removed because obtaining that count is not free:
+    # ttnn.GetNumAvailableDevices() is MetalContext::instance().get_cluster()
+    # .number_of_user_devices(), i.e. it CONSTRUCTS a cluster. Querying it live here (main
+    # process, during per-module export) collided with the worker's persistent job device
+    # -> CHIP_IN_USE, so it was pre-primed in the parent instead -- which on a 6u Galaxy
+    # created a worse problem: the parent then holds a MetalContext while the child opens the
+    # mesh, and that open forces a MetalContext teardown + dispatch relaunch. The result was a
+    # first-vector hang that burned the 300s vector timeout twice before being reported as
+    # FAIL_CRASH_HANG (reproduced repeatedly on wh-glx6u-02; the same vectors pass in 4.2s
+    # once the prime is skipped). It only fired OUTSIDE CI, because Priority 1 above
+    # short-circuits whenever RUNNER_LABEL is set -- so the hazard landed precisely on anyone
+    # debugging a Galaxy sweep by hand.
+    # Risking a 32-chip device wedge for a cosmetic metadata string is not a good trade, and
+    # the count adds nothing ARCH_NAME plus the results themselves do not already convey.
 
     # Final fallback: just the architecture name
     return arch

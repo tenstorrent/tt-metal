@@ -1,0 +1,59 @@
+# Test for Quasar unary broadcast, one stage per broadcast type (COL/ROW/SCALAR),
+# each packed to its own output.
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "output_col"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "output_row"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "output_scalar"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "UnaryBroadcast"
+        unpacker: "UnaryBroadcastUnpacker"
+        broadcast_type: "COL"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "output_col"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "UnaryBroadcast"
+        unpacker: "UnaryBroadcastUnpacker"
+        broadcast_type: "ROW"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "output_row"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "UnaryBroadcast"
+        unpacker: "UnaryBroadcastUnpacker"
+        broadcast_type: "SCALAR"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "output_scalar"
+        packer: "Packer"

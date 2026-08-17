@@ -139,7 +139,16 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
     passed = sum(1 for t in tests if t.get("status") == "pass")
     failed = sum(1 for t in tests if _is_failure(t.get("status", "")))
     skipped = total - passed - failed
-    pass_rate = f"{passed * 100.0 / total:.2f}%" if total else "N/A"
+    # Pass rate is over EXECUTED vectors (pass + fail), not the whole set. A skipped vector
+    # never produced a result: it is NOT_RUN because the runner classified an environment
+    # fault -- a box that enumerated 16 chips instead of 32, a device that wedged, a failed
+    # reset -- and booked the rest of the batch rather than reporting phantom test failures.
+    # Dividing by total made a bad runner look like an op regression: one 16-chip box taking
+    # six jobs in run 31290760722 booked 239 vectors NOT_RUN and dropped the reported rate to
+    # 66.7% on a run with ZERO test failures. Skipped stays its own row so the coverage loss
+    # is still visible -- it just no longer masquerades as a correctness signal.
+    executed = passed + failed
+    pass_rate = f"{passed * 100.0 / executed:.2f}%" if executed else "N/A"
     status_icon = "✅" if failed == 0 else "⚠️"
 
     normalized_type = _normalize_run_type(run_type) if run_type else ""
@@ -160,10 +169,11 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
     lines.extend(
         [
             f"| **Total Tests** | {total} |",
+            f"| **Executed** | {executed} |",
             f"| **Passed** | {passed} |",
             f"| **Failed** | {failed} |",
-            f"| **Skipped** | {skipped} |",
-            f"| **Pass Rate** | **{pass_rate}** |",
+            f"| **Skipped** (not run — infra) | {skipped} |",
+            f"| **Pass Rate** (of executed) | **{pass_rate}** |",
             "",
         ]
     )
@@ -384,10 +394,16 @@ def push_results(
         print(f"  GitHub Pipeline ID: {github_pipeline_id}")
         print(f"  Run Contents: {run_contents}")
         print(f"  Card Type: {card_type}")
+        # Same denominator as the job summary: executed = pass + fail. Skipped vectors are
+        # environment faults booked NOT_RUN, not results, so they are reported separately
+        # rather than folded into the rate. See _write_job_summary for the rationale.
+        executed = pass_count + fail_count
         print(f"  Total Tests: {len(tests)}")
+        print(f"  Executed: {executed}")
         print(f"  Pass Count: {pass_count}")
         print(f"  Fail Count: {fail_count}")
-        print(f"  Pass Rate: {pass_count * 100.0 / len(tests):.2f}%" if tests else "N/A")
+        print(f"  Skipped (not run): {len(tests) - executed}")
+        print(f"  Pass Rate (of executed): {pass_count * 100.0 / executed:.2f}%" if executed else "  Pass Rate: N/A")
 
         return run_id
 

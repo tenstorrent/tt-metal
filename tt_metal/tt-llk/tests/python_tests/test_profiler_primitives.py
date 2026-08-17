@@ -5,7 +5,7 @@
 import pandas as pd
 import pytest
 from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.profiler import Profiler
 from helpers.test_config import BuildMode, TestConfig
 

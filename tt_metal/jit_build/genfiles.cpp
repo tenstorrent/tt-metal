@@ -275,10 +275,17 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
+    // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
+    const uint32_t cta_vararg_size = settings.get_compile_time_vararg_count();
+
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
-               "#include \"experimental/kernel_args.h\"\n\n";
+               "#include <array>\n"
+               "#include \"experimental/kernel_args.h\"\n"
+               "#include \"api/compile_time_args.h\"\n"
+               "#include \"api/debug/assert.h\"\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
@@ -312,7 +319,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         content << "}  // namespace args\n\n";
     }
 
-    // Vararg helpers — always emitted.
+    // Runtime / common-runtime vararg helpers — always emitted.
     // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
@@ -324,6 +331,28 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
+
+    // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
+    // Three accessors:
+    //   1. get_num_compile_time_varargs() — baked prefix length
+    //   2. get_compile_time_vararg<idx>() — template index (with bounds check)
+    //   3. get_compile_time_vararg(idx) — function-parameter index
+    content << fmt::format(
+        R"(
+FORCE_INLINE constexpr uint32_t get_num_compile_time_varargs() {{
+    return {0}u;
+}}
+template <uint32_t idx>
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
+    static_assert(idx < get_num_compile_time_varargs(), "Compile-time vararg index out of range");
+    return kernel_compile_time_args[idx];
+}}
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
+    ASSERT(idx < get_num_compile_time_varargs());  // Attempt to access out of bound vararg CTA.
+    return kernel_compile_time_args[idx];
+}}
+)",
+        cta_vararg_size);
 
     write_file(path, content.str());
 }

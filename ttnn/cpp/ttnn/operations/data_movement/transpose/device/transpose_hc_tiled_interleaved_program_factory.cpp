@@ -188,13 +188,13 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         pad_defines.emplace("NEEDS_PADDING", "1");
     }
 
-    Group<DFBBinding> reader_dfb = {
-        DFBBinding{.dfb_spec_name = HCTI_SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}};
+    Group<DFBBinding> reader_dfb = {DFBBinding{
+        .dfb_spec_name = HCTI_SRC0_DFB, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}};
     Group<DFBBinding> writer_dfb = {
         DFBBinding{.dfb_spec_name = HCTI_SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}};
     if (needs_padding) {
         reader_dfb.push_back(DFBBinding{
-            .dfb_spec_name = HCTI_PADDING_DFB, .accessor_name = "padding", .endpoint_type = DFBEndpointType::PRODUCER});
+            .dfb_spec_name = HCTI_PADDING_DFB, .accessor_name = "cb_pad", .endpoint_type = DFBEndpointType::PRODUCER});
         writer_dfb.push_back(DFBBinding{
             .dfb_spec_name = HCTI_PADDING_DFB, .accessor_name = "padding", .endpoint_type = DFBEndpointType::CONSUMER});
     }
@@ -208,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             "reader_unary_transpose_hc_interleaved_tiled_padding_aware_metal2.cpp",
         .compiler_options = {.defines = pad_defines},
         .dfb_bindings = reader_dfb,
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCTI_INPUT, .accessor_name = "src"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCTI_INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"num_writes", num_writes},
              {"padding_val_packed", padding_val_packed},

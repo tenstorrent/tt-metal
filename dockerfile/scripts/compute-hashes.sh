@@ -31,7 +31,7 @@ echo "CCACHE_SHA256=$($SHA_CMD "$TMPDIR/ccache.tar.xz" | cut -d' ' -f1)"
 echo ""
 
 # mold
-MOLD_VERSION="${MOLD_VERSION:-2.40.4}"
+MOLD_VERSION="${MOLD_VERSION:-2.42.0}"
 echo "Downloading mold ${MOLD_VERSION}..."
 curl -fsSL -o "$TMPDIR/mold.tar.gz" \
     "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"

@@ -18,6 +18,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_domains import _OP_DOMAIN_REGISTRY, exclude_undefined_pair, for_op
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -41,23 +42,58 @@ def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
 
 
-def _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions=[64, 64]):
+def _ternary_default_specs(mathop, input_format):
+    """Per-operand defaults for *mathop*: its registered domain, else the built-in one.
 
-    _divide_by_c = mathop in (MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta)
+    No ternary op has an _OP_DOMAIN_REGISTRY entry, so every op currently takes the
+    built-in branch. This is the single place a registered domain would take effect, and
+    callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
+    exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
+    """
+    if mathop in _OP_DOMAIN_REGISTRY:
+        # OperandSpecs carries only A and B, so a registered ternary op has no third
+        # operand to read; reuse B for C.
+        specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
+        return specs.spec_A, specs.spec_B, specs.spec_B
+
+    # addcdiv and snake_beta divide by c, so c is held away from zero.
+    divide_by_c = mathop in (MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta)
     spec_ab = StimuliSpec.uniform(low=-1.0, high=1.0)
     spec_c = (
         StimuliSpec.uniform(low=1.0, high=2.0)
-        if _divide_by_c
+        if divide_by_c
         else StimuliSpec.uniform(low=-1.0, high=1.0)
     )
+    return spec_ab, spec_ab, spec_c
+
+
+def _run_sfpu_ternary(
+    formats,
+    dest_acc,
+    mathop,
+    input_dimensions=[64, 64],
+    spec_A=None,
+    spec_B=None,
+    spec_C=None,
+):
+    # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
+    # sitting near its tolerance pass or fail by luck. Same as the binary driver.
+    torch.manual_seed(0)
+
+    default_A, default_B, default_C = _ternary_default_specs(
+        mathop, formats.input_format
+    )
+    spec_a = spec_A if spec_A is not None else default_A
+    spec_b = spec_B if spec_B is not None else default_B
+    spec_c = spec_C if spec_C is not None else default_C
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        spec_A=spec_ab,
-        spec_B=spec_ab,
+        spec_A=spec_a,
+        spec_B=spec_b,
     )
 
     src_C, tile_cnt_C, _, _ = generate_stimuli(

@@ -98,9 +98,9 @@ ttnn::device_operation::ProgramArtifacts build_wh_tiled(const TransposeInputs& t
             "transpose_wh_metal2.cpp",
         .dfb_bindings =
             {DFBBinding{
-                 .dfb_spec_name = WH_SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+                 .dfb_spec_name = WH_SRC0_DFB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{
-                 .dfb_spec_name = WH_OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+                 .dfb_spec_name = WH_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
         .hw_config = ComputeHardwareConfig{compute_cfg},
     };
@@ -114,7 +114,7 @@ ttnn::device_operation::ProgramArtifacts build_wh_tiled(const TransposeInputs& t
             "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = WH_OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = WH_OUTPUT, .accessor_name = "output"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = WH_OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
