@@ -32,6 +32,7 @@ enum class PoolType : std::uint8_t
     SUM,
     AVG,
     MAX,
+    MIN,
 };
 
 enum class DataCopyType : std::uint8_t
