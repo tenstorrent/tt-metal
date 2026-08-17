@@ -111,8 +111,9 @@ place to start. Points 5 and 6 are one line each.
           so it has to be measured rather than assumed
         - chunk attention above a measured length when it uses a sliding window, rather than building
           the whole score matrix and masking most of it away
-        - pad a varying input to a few sizes chosen for the model's own range, rather than borrowing a
-          ladder from another workload, since the padding is wasted work on every call
+        - pad a varying input to a few fixed sizes, since every distinct size compiles its own
+          kernels, but choose those sizes for the model's own range: a ladder from another workload
+          pads further than it needs to, and that is wasted work on every call
         - split a fused op into primitives once tracing is on
         - swap a hand rolled interior for a library primitive
         - try removing a config applied earlier
