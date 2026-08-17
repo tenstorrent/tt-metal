@@ -72,8 +72,8 @@ effect for the least work.
     - The number every edit is ranked by is also not generation time. It times one prefill against one
       decode, so prefill carries about half the weight while being 2% of a real utterance, and decode,
       which is 97%, enters once. The edits still helped and the shipped path did get faster, but they
-      were ranked by something that does not reflect where the time goes. It also reports per call time
-      as per token time. Rank by a whole utterance instead.
+      were ranked by something that does not reflect where the time goes. It also reports per call
+      time as per token time. Rank by a whole utterance instead.
 
 5. The two accuracy thresholds disagree, and the looser one is what you get
     - The gate documents 0.99 as required, the command line passes 0.95 and overrides it. Same port,
