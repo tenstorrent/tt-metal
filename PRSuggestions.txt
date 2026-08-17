@@ -99,13 +99,20 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       tensors are split. The one category for changing the computation itself is where every large
       win came from, and it names only three things to try, none of which the agent used. It
       improvised the rest, which is why the run was good and why another would not repeat it.
-    - Worth naming, each with a condition for when it fires: fold an add into the matmul that
-      consumes it; use in-place variants when an operand dies immediately; try both orders when a
-      projection sits next to a slice or gather; bake a constant scale into the weights at load;
-      concatenate projections that share an input, as with Q, K and V; split a fused op into
-      primitives once tracing is on; swap a hand rolled interior for a library primitive; try
-      removing a config applied earlier. The order one goes both ways, so it has to be measured
-      rather than assumed.
+    - Worth naming, each with a condition for when it fires. The theme is fewer and bigger kernels:
+        - fold a repeated evaluation into rows of one larger matmul, rather than repeating the call
+          or the tensor. Two instances of this gave us 2.23x and 1.40x
+        - fold an add into the matmul that consumes it
+        - concatenate projections that share an input, as with Q, K and V
+        - bake a constant scale into the weights at load
+        - use in-place variants when an operand dies immediately
+        - try both orders when a projection sits next to a slice or gather. This one goes both ways,
+          so it has to be measured rather than assumed
+        - chunk attention above a measured length when the window is bounded, rather than building
+          the whole score matrix and masking most of it away
+        - split a fused op into primitives once tracing is on
+        - swap a hand rolled interior for a library primitive
+        - try removing a config applied earlier
     - Three things it cannot express: the host is never a valid destination, though moving one
       argmax there was among our largest wins; fewer ops is treated as always better, though once
       tracing removes launch cost the opposite can win; and correctness is checked at one sequence
