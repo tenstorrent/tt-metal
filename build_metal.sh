@@ -51,6 +51,7 @@ show_help() {
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
+    echo "  --use-system-sfpi                Use the SFPI toolchain already installed on the system/image instead of downloading it."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
@@ -93,6 +94,7 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
+use_system_sfpi="OFF"
 toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
 
@@ -137,6 +139,7 @@ cpm-source-cache:
 cpm-use-local-packages
 c-compiler-path:
 ttnn-shared-sub-libs
+use-system-sfpi
 toolchain-path:
 configure-only
 without-distributed
@@ -201,6 +204,8 @@ while true; do
             build_all="ON";;
         --ttnn-shared-sub-libs)
             ttnn_shared_sub_libs="ON";;
+        --use-system-sfpi)
+            use_system_sfpi="ON";;
         --configure-only)
             configure_only="ON";;
         --without-python-bindings)
@@ -372,6 +377,10 @@ fi
 
 if [ "$ttnn_shared_sub_libs" = "ON" ]; then
     cmake_args+=("-DENABLE_TTNN_SHARED_SUBLIBS=ON")
+fi
+
+if [ "$use_system_sfpi" = "ON" ]; then
+    cmake_args+=("-DTT_USE_SYSTEM_SFPI=ON")
 fi
 
 if [ "$build_tests" = "ON" ]; then

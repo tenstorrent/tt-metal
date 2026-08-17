@@ -14,7 +14,8 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
+from helpers.sfpu_domains import sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -85,21 +86,21 @@ def _get_stable_sort_modes(mathop):
     return [StableSort.No]
 
 
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ]
-    ),
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
-    mathop=[
+# Every op with a unary SFPU kernel, taken from the same registry the correctness sweep
+# in test_sfpu_unary.py drives, so an op cannot be added there and silently skip perf.
+# _UNARY_OPS_NOT_SWEPT is deliberately *not* subtracted: those ops (the topk halves) are
+# exempt from the correctness sweep precisely because they are perf-only, so they belong
+# here. Sorted so the parametrize ids are stable across runs.
+PERF_SWEEP_OPS = sorted(sfpu_unary_ops(), key=lambda op: op.name)
+
+# Five PerfRunTypes per variant, so all 97 registry ops against all 16 format pairs is
+# ~30k ELF builds and profiled runs on llk_perf_tests.yaml's five shards, against ~6.4k
+# before the reroute -- and it buys little, since an SFPU kernel's math cost is its
+# instruction sequence while the format pair moves unpack/pack cycles, which these ops
+# already characterise. So every op is still swept (with its own dest_acc / fast_mode /
+# stable_sort / approx_mode), but only the pre-reroute set carries the full 16-pair matrix.
+_FULL_FORMAT_MATRIX_OPS = frozenset(
+    {
         MathOperation.Reciprocal,
         MathOperation.Sqrt,
         MathOperation.Rsqrt,
@@ -107,18 +108,51 @@ def _get_stable_sort_modes(mathop):
         MathOperation.Gelu,
         MathOperation.GeluTanh,
         MathOperation.Exp,
-        MathOperation.Lrelu,
-        MathOperation.ReluMin,
-        MathOperation.Erfinv,
-        MathOperation.Heaviside,
-        MathOperation.Softshrink,
-        MathOperation.Softsign,
-        MathOperation.Square,
-        MathOperation.Log,
         MathOperation.TopKLocalSort,
         MathOperation.TopKMerge,
         MathOperation.TopKRebuild,
+    }
+)
+
+_FULL_FORMATS = [
+    DataFormat.Float32,
+    DataFormat.Float16,
+    DataFormat.Float16_b,
+    DataFormat.Bfp8_b,
+]
+
+# Float16_b in and out: the SFPU's native 16-bit exponent-B format, so the measurement is
+# the kernel's own cost with no unpack/pack conversion folded in.
+_REPRESENTATIVE_FORMAT = [DataFormat.Float16_b]
+
+_FULL_FORMAT_PAIRS = input_output_formats(_FULL_FORMATS)
+_REPRESENTATIVE_FORMAT_PAIRS = input_output_formats(_REPRESENTATIVE_FORMAT)
+
+# An op named here but no longer in the sweep would silently stop being measured on the
+# full matrix, which is the one regression this split can cause.
+_UNSWEPT_FULL_MATRIX_OPS = sorted(
+    op.name for op in _FULL_FORMAT_MATRIX_OPS - set(PERF_SWEEP_OPS)
+)
+assert not _UNSWEPT_FULL_MATRIX_OPS, (
+    "these ops are declared as carrying the full format matrix but are not in "
+    f"PERF_SWEEP_OPS: {_UNSWEPT_FULL_MATRIX_OPS}"
+)
+
+
+def _get_formats(mathop):
+    if mathop in _FULL_FORMAT_MATRIX_OPS:
+        return _FULL_FORMAT_PAIRS
+    return _REPRESENTATIVE_FORMAT_PAIRS
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=lambda mathop: _get_formats(mathop),
+    approx_mode=[
+        ApproximationMode.Yes,
+        ApproximationMode.No,
     ],
+    mathop=PERF_SWEEP_OPS,
     dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
     loop_factor=[
         16,

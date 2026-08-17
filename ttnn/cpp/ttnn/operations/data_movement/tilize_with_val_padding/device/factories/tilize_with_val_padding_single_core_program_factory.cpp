@@ -134,7 +134,8 @@ ProgramDescriptor TilizeWithValPaddingSingleCoreFactory::create_descriptor(
     uint32_t tile_row_size_bytes = a.element_size() * TILE_HEIGHT;
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {tile_row_size_bytes, unpadded_row_size_bytes};
+    std::vector<uint32_t> reader_compile_time_args = {
+        tile_row_size_bytes, unpadded_row_size_bytes, static_cast<uint32_t>(a.element_size())};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Tilized reader

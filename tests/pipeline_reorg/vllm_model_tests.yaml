@@ -386,7 +386,7 @@
     wh_llmbox:
       timeout: 52
       tier: 2
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: "Qwen3-VL-32B-Instruct"

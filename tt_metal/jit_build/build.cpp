@@ -164,8 +164,17 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-        "-flto=auto -ffast-math "
+        // Use C++17, plus some specific C++20 features we've enabled
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        // Ban dynamic initializations, via a check we've added
+        "-ftt-no-dyninit "
+        // Rely on Link Time Optimization (removes globally unreachable code)
+        "-flto=auto "
+        // Fast math allows non-IEEE compliant optimizations ...
+        "-ffast-math "
+        // ... but we require these IEEE behaviors
+        "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+        // No exceptions or rtti emission, and no using cxa-atexit for cleanups
         "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
@@ -179,11 +188,14 @@ void JitBuildEnv::init(
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
+        // Extra warnings and make them fatal
         "-Wall -Werror "
+        // But don't die for these warnings
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
-        "-Wno-error=unused-but-set-variable -Wno-unused-variable "
-        "-Wno-unused-function ";
+        "-Wno-error=unused-but-set-variable "
+        // And don't detect these issues
+        "-Wno-unused-variable -Wno-unused-function ";
 
     // Defines
     this->defines_ = "";
@@ -906,6 +918,17 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
     static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
+
+    // Per-kernel compile time makes a slow/stuck compile visible instead of silent, but a workload
+    // can compile 10k+ kernels, so it is off by default (TT_METAL_LOG_KERNEL_COMPILE=1 opts in;
+    // models/tt_dit sets it for every DiT run). Read once, lazily, so an importer that sets the env
+    // before the first compile is honored; only when something actually compiled (cache hits are noise).
+    if (compiled.any() && !kernel_name.empty()) {
+        static const bool log_compile = tt::parse_env<bool>("TT_METAL_LOG_KERNEL_COMPILE", false);
+        if (log_compile) {
+            log_info(tt::LogBuildKernels, "compiled {} in {:.0f} ms", kernel_name, elapsed_ms);
+        }
+    }
 }
 
 tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {

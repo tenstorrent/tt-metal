@@ -101,7 +101,6 @@ class Stream:
                 raise TimeoutError(
                     f"Stream: timed out after {timeout}s waiting for free space"
                 )
-            time.sleep(0.001)
 
     def _consumer_poll_avail(self) -> int:
         """Poll for number of available bytes."""
@@ -123,7 +122,6 @@ class Stream:
                 raise TimeoutError(
                     f"Stream: timed out after {timeout}s waiting for data"
                 )
-            time.sleep(0.001)
 
     def init(self) -> None:
         """Initialize the stream. Should be called only once, before all operations."""
