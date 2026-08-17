@@ -89,6 +89,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
         stage5_tp_axis=tp_axis,
         stages_na3d_backend="op_sp_w_sharded" if stages_wsp else None,
         stages_sp_axis=1 if stages_wsp else None,
+        stages_tp_axis=tp_axis if stages_wsp else None,  # 2-D SP x TP for the det stages too
     )
     dec.load_checkpoint(CHECKPOINT)
 
@@ -139,3 +140,52 @@ def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
     print(
         f"\n[decode gather-mesh 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
     )
+
+
+# Isolate the PCC cost of TP in stage 5 at real 1080p. The replicated reference OOMs at 1080p, so use
+# the no-TP sharded decode as the high-fidelity reference and PCC the TP variants against it: TP head-slice
+# only (DIFFVAE_TP_PROJ=0) vs TP + column-parallel qkv (DIFFVAE_TP_PROJ=1). The delta between those two
+# is exactly the col-qkv numerics cost.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_decode_1080p_tp_pcc(*, mesh_device):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from loguru import logger
+
+    from models.tt_dit.parallel.manager import CCLManager
+
+    os.environ["DIFFVAE_SP_FUSED"] = "1"
+    config = decoder_config(CHECKPOINT)
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+    def run(tp_axis, tp_proj):
+        os.environ["DIFFVAE_TP_PROJ"] = "1" if tp_proj else "0"
+        dec = DiffVAEDecoder(
+            config,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            stage5_na3d_backend="op_sp_w_sharded",
+            stage5_sp_axis=1,
+            stage5_tp_axis=tp_axis,
+            stages_na3d_backend="op_sp_w_sharded",
+            stages_sp_axis=1,
+        )
+        dec.load_checkpoint(CHECKPOINT)
+        return dec.decode(latent, seed=0).float()
+
+    def pcc(a, b):
+        a, b = a.flatten().double(), b.flatten().double()
+        return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+    ref = run(None, False)  # no TP -- highest-fidelity sharded path that fits at 1080p
+    tp_head = run(0, False)  # TP head-slice only (no col-qkv)
+    tp_full = run(0, True)  # TP + column-parallel qkv
+
+    logger.info(f"[1080p-tp-pcc] TP head-slice vs no-TP:  {pcc(tp_head, ref) * 100:.4f} %")
+    logger.info(f"[1080p-tp-pcc] TP + col-qkv vs no-TP:   {pcc(tp_full, ref) * 100:.4f} %")
+    logger.info(f"[1080p-tp-pcc] col-qkv delta (full vs head): {pcc(tp_full, tp_head) * 100:.4f} %")

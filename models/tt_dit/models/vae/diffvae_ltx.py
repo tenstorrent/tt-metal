@@ -231,6 +231,7 @@ class NeighborhoodAttention(Module):
         na3d_backend: str = "gather",
         ccl_manager=None,
         sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ):
         super().__init__()
         # No ccl_manager here for the gather path: the deterministic stages build their device plans
@@ -248,6 +249,11 @@ class NeighborhoodAttention(Module):
         self.na3d_backend = na3d_backend
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
+        # TP-over-heads on the orthogonal mesh axis (only under op_sp_w_sharded): the attention head-
+        # slices q/k/v over tp_axis and gathers back before the out-proj -- makes the det stages 2-D
+        # (W-SP x TP-heads), tapping the axis they'd otherwise run replicated over. num_heads varies
+        # per stage (32/16/8/8) but all divide 4. The det RoPE tables broadcast over heads, so no rebuild.
+        self.tp_axis = tp_axis
         self.rope_dim_split = default_rope_dim_split(head_dim)
 
         # Three projections rather than the checkpoint's fused one. Fused, the (rows, 3*dim) output
@@ -339,6 +345,7 @@ class NeighborhoodAttention(Module):
                 sp_axis=self.sp_axis,
                 ccl_manager=self.ccl_manager,
                 scale=1.0,
+                tp_axis=self.tp_axis,
             )
         else:
             attended = neighborhood_attention_3d(
@@ -402,6 +409,7 @@ class NABlock(Module):
         na3d_backend: str = "gather",
         ccl_manager=None,
         sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ):
         super().__init__()
         # Upstream rounds the 4x MLP ratio up to a multiple of 16.
@@ -415,6 +423,7 @@ class NABlock(Module):
             na3d_backend=na3d_backend,
             ccl_manager=ccl_manager,
             sp_axis=sp_axis,
+            tp_axis=tp_axis,
         )
         self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
         self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device)
@@ -560,6 +569,7 @@ class DeterministicStages(Module):
         ccl_manager=None,
         na3d_backend: str | None = None,
         sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ):
         super().__init__()
         assert len(upsamples) == len(stage_channels) - 1, "one upsample between consecutive stages"
@@ -573,6 +583,9 @@ class DeterministicStages(Module):
         # handoff to stage 5 is unchanged. Defaults to the env override for the OOM diagnostic.
         self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
         self.sp_axis = sp_axis
+        # TP-over-heads on the orthogonal axis for the W-sharded stages (2-D SP x TP): the det stages
+        # otherwise run replicated over this axis. Only applied to the op_sp_w_sharded stages (1+).
+        self.tp_axis = tp_axis
         self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
         self.sp = int(list(mesh_device.shape)[sp_axis]) if self._w_sharded else 1
         if self._w_sharded:
@@ -599,6 +612,7 @@ class DeterministicStages(Module):
                             na3d_backend=block_backend(stage),
                             ccl_manager=ccl_manager if self._w_sharded and stage > 0 else None,
                             sp_axis=sp_axis if self._w_sharded and stage > 0 else None,
+                            tp_axis=tp_axis if self._w_sharded and stage > 0 else None,
                         )
                         for _ in range(stage_depths[stage])
                     ]
@@ -796,6 +810,7 @@ class DiffVAEDecoder(Module):
         stage5_tp_axis: int | None = None,
         stages_na3d_backend: str | None = None,
         stages_sp_axis: int | None = None,
+        stages_tp_axis: int | None = None,
     ):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
@@ -825,6 +840,7 @@ class DiffVAEDecoder(Module):
             ccl_manager=ccl_manager,
             na3d_backend=stages_na3d_backend,
             sp_axis=stages_sp_axis,
+            tp_axis=stages_tp_axis,
         )
         self.stage5 = DiffVAEStage5(
             DiffVAEStage5Config(

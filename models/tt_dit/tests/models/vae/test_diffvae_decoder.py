@@ -185,6 +185,7 @@ def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
         stage5_tp_axis=tp_axis,
         stages_na3d_backend="op_sp_w_sharded",
         stages_sp_axis=sp_axis,
+        stages_tp_axis=tp_axis,
     )
     sharded.load_checkpoint(CHECKPOINT)
     pixels_sp = sharded.decode(latent, seed=0)
