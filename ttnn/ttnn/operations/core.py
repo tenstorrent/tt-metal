@@ -253,18 +253,7 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
 
     # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
-    torch_dtype = {
-        ttnn.uint8: torch.uint8,
-        ttnn.uint16: torch.uint16,
-        ttnn.uint32: torch.uint32,
-        ttnn.int8: torch.int8,
-        ttnn.int32: torch.int32,
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-        ttnn.bfloat8_b: torch.float32,
-        ttnn.bfloat4_b: torch.float32,
-    }[target_dtype]
-    return input_tensor.to(torch_dtype)
+    return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
 
 
 @ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)

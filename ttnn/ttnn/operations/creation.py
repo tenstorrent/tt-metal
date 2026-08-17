@@ -8,22 +8,6 @@ from typing import Union
 import ttnn
 
 
-def _to_torch_dtype(dtype):
-    import torch
-
-    return {
-        ttnn.uint8: torch.uint8,
-        ttnn.uint16: torch.uint16,
-        ttnn.uint32: torch.uint32,
-        ttnn.int8: torch.int8,
-        ttnn.int32: torch.int32,
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-        ttnn.bfloat8_b: torch.float32,
-        ttnn.bfloat4_b: torch.float32,
-    }[dtype]
-
-
 def _golden_function(input_tensor: ttnn.Tensor, **_):
     import torch
 
@@ -46,7 +30,7 @@ def _golden_function(input_tensor: ttnn.Tensor, fill_value: float, dtype=None, *
     import torch
 
     # Honor the output dtype override instead of always inheriting the input tensor dtype.
-    torch_dtype = _to_torch_dtype(dtype) if dtype is not None else None
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else None
     return torch.full_like(input_tensor, fill_value, dtype=torch_dtype)
 
 

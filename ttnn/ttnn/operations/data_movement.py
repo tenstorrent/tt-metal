@@ -402,18 +402,7 @@ ttnn.attach_golden_function(ttnn.plus_one, golden_function=_golden_function)
 
 
 def _golden_function(buffer, shape, dtype, *args, **kwargs):
-    import torch
-
-    torch_dtype = {
-        ttnn.uint8: torch.uint8,
-        ttnn.int8: torch.int8,
-        ttnn.uint16: torch.uint16,
-        ttnn.int32: torch.int32,
-        ttnn.uint32: torch.uint32,
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-    }[dtype]
-    return torch.as_tensor(buffer, dtype=torch_dtype).reshape(list(shape))
+    return torch.as_tensor(buffer, dtype=ttnn.ttnn_dtype_to_torch_dtype(dtype)).reshape(list(shape))
 
 
 ttnn.attach_golden_function(ttnn.from_buffer, golden_function=_golden_function)
