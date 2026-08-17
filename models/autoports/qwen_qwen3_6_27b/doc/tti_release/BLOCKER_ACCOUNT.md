@@ -122,3 +122,45 @@ IFEval metric-variant mismatch (0.544 → parity), Qwen's GPQA 256-token cap, an
 Qwen's IFEval 1280 truncation. In each case the port was measured, not broken.
 The lesson worth carrying: check the task definition and the retained samples
 before attributing a low score to the implementation.
+
+---
+
+## Resolved: why IFEval `loose` equals `strict` exactly
+
+Flagged above as "worth understanding rather than accepting". It is benign, and it
+corroborates the truncation diagnosis rather than complicating it.
+
+`lm_eval/tasks/ifeval/utils.py:test_instruction_following_loose` evaluates **eight**
+variants of each response and passes an instruction if *any* of them satisfies it:
+
+```
+response, revised_response (asterisks removed),
+response_remove_first, response_remove_last, response_remove_both,
+revised_response_remove_first, revised_response_remove_last, revised_response_remove_both
+```
+
+So `loose >= strict` holds by construction, and `loose > strict` exactly when a
+failure was caused by presentation — a markdown wrapper, a preamble line, a
+trailing sign-off.
+
+The recorded values decode to whole counts:
+
+| metric | recorded | as a fraction |
+|---|---:|---:|
+| `inst_level_*_acc` | 0.3488372093023256 | **15/43** |
+| `prompt_level_*_acc` | 0.17857142857142858 | **5/28** |
+
+Identical for strict and loose, in both `release_final3` and `release_final4`.
+So across 28 prompts and 43 instructions, **none of the eight formatting variants
+rescued a single instruction.**
+
+That is what truncation looks like. Stripping asterisks or dropping a first line
+cannot rescue a response that stopped mid-sentence — and the retained samples show
+median 759 words with only 9/28 ending in terminal punctuation. Had the failures
+been formatting artifacts, loose would have exceeded strict.
+
+Read the other way, this is mildly reassuring about the port: the model is not
+producing subtly malformatted output. It is producing output that ends too early.
+Whether a larger budget actually recovers the score is what the queued
+`ifeval` @ 4096 run tests; the 1280 re-run is only a reproducibility control,
+since 1280 is what the task already granted.
