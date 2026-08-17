@@ -261,6 +261,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
     ckernel::sfpu::_init_topk();
 
+    if constexpr (TOPK_STABLE_SORT)
+    {
+        // Stable tie-break polarity is a global property of the sort order, set once per kernel
+        // (deliberately not reset by _init_topk). TOPK_SORT_DIRECTION binds to top_min/idir at
+        // the call sites below (0 = Descending / largest-first, 1 = Ascending), so descending
+        // mode is TOPK_SORT_DIRECTION == 0.
+        ckernel::sfpu::set_topk_stable_descending_mode(TOPK_SORT_DIRECTION == 0);
+    }
+
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
     {
         for (std::uint32_t current_iteration = 0; current_iteration < TOPK_NUM_ITERATIONS; ++current_iteration) // Iterates over topk pipelines.
