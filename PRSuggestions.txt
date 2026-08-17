@@ -69,11 +69,12 @@ effect for the least work.
       the port is about to read. Then let the component use the cache, its signature already has the
       argument. For the traced version the position is baked in when the run is recorded, so it
       always writes to the same slot; it has to become a tensor on the device.
-    - The number the optimizer tries to reduce is also not generation time. It times one decode step
-      together with its setup and its correctness check, so it is mostly minimising work that happens
-      once per run, and barely minimising the work that happens on every frame, which is nearly all of
-      a real utterance. It also reports per call time as per token time. Time the loop that generates
-      speech instead.
+    - The number every edit is ranked by is also not generation time. It times one prefill against one
+      decode, so prefill carries about half the weight while being 2% of a real utterance, and decode,
+      which is 97%, enters once. The edits still helped and the shipped path did get faster, but they
+      were ranked by something that does not reflect where the time goes, and the improvement reported
+      was four points higher than the one delivered. It also reports per call time as per token time.
+      Rank by a whole utterance instead.
 
 5. The two accuracy thresholds disagree, and the looser one is what you get
     - The gate documents 0.99 as required, the command line passes 0.95 and overrides it. Same port,
