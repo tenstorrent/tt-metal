@@ -692,7 +692,9 @@ Local only; nothing pushed.
 |---|---|
 | `12c947d9147670eb0b3a9b23136635b89de709f3` (`12c947d9147`) | the whole stage: `models/autoports/qwen_qwen3_6_35b_a3b/**` plus the `conftest.py` guarded-import fix (README §7 item 4) |
 | `b2bb054161fcde8a1664f848ce0f35ad3f58aeea` (`b2bb054161f`) | records the SHA above |
-| `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10 — the shipped `decode_sdpa_max_cores_per_head = 1`, ROW_MAJOR RoPE tables, the per-slot state reset — and every artifact regenerated against that code |
+| `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10 — ROW_MAJOR RoPE tables, the per-slot state reset, and the `decode_sdpa_max_cores_per_head = 1` config whose *rationale* round 4 later overturned — and every artifact regenerated against that code |
+| `b5c71c62624f984353960c1d6c266dc2fbd428d2` (`b5c71c62624`) | **review round 3** (§11): the classified real-weight maxabs anomaly, `_zero_`, `_tilized`, the provenance-log reset rule, and two new tests |
+| `60e2a90711448a9fd48366919a17f61a37026153` (`60e2a907114`) | **review round 4** (§12): the corrected decode-SDPA root cause and the shipped `decode_sdpa_k_chunk_size = 512`, the 2-D sweep with its identity control, `_zero_` via `ttnn.fill`, the ragged tail-reference cases, three new op probes, the extended maxabs sweep, and every artifact regenerated against that code |
 | later commits | documentation only: SHA records and analysis notes that could not be written before the commits they describe |
 
 A table cannot contain its own SHA, so the last rows are deliberately open-ended rather than
