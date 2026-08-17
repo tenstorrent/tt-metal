@@ -24,8 +24,13 @@ A page-table / index bug would show up as an ``attn_pcc`` cliff at one position.
 conditioning effect shows up as ``attn_rms`` shrinking like 1/sqrt(context) while ``attn_pcc``
 stays high, so the *relative* error of a fixed absolute error grows smoothly.
 
-The last row repeats position 262143 with the query scaled up, which peaks the softmax and
-therefore removes the cancellation without changing any code path.
+The last row repeats position 262143 with the input token scaled by 8. Note what this does and
+does not show: ``input_layernorm`` is an RMS norm, so scaling the token leaves q/k/v — and hence
+the attention branch — **bit-identical** (the ``tt_vs_*`` and ``attn_rms`` columns repeat exactly).
+What changes is only the residual magnitude, so the row isolates how much of the *layer* error is
+just the attention branch's fixed absolute error divided by a larger residual: 8x residual ->
+``1 - layer_pcc`` falls ~64x. It is a sensitivity check on the residual, **not** a softmax-peaking
+control.
 
     python models/autoports/qwen_qwen3_6_35b_a3b/tests/diag_long_decode.py
 """
@@ -67,9 +72,13 @@ def hf_attn_branch_bf16_inputs(pair, token, pos, k_all, v_all):
     This is what a *correct* bf16 implementation must produce. It uses the layer's own
     ``q_proj``/``q_norm``/``k_proj``/``k_norm``/``o_proj`` modules and HF's
     ``apply_rotary_pos_emb``, and only rounds q/k/v to bf16 before the attention itself —
-    exactly the precision the device path carries. If the device output tracks *this* closely
-    while diverging from the fp32 reference, the divergence is operand quantisation under an
-    ill-conditioned (near-uniform) softmax, not an implementation error.
+    exactly the precision the device path carries.
+
+    It is a two-sided test. If the device tracked *this* closely while diverging from fp32, the
+    divergence would be operand quantisation. The measured result is the opposite: this control
+    matches fp32 to 2.4e-6 at every context while the device diverges from both identically
+    (0.7687 vs fp32, 0.7687 vs this control, at 262143). So operand precision is ruled *out*,
+    and the cause is in the op — see README section 3.8.
     """
     attn = pair.hf.self_attn
     cfg = pair.hf_config
@@ -132,7 +141,9 @@ def main():
             f"{'bf16ctl_vs_fp32':>16} {'attn_rms':>10}"
         )
         print("DIAG " + header)
-        for pos, tok, tag in [(p, token, "") for p in POSITIONS] + [(262143, token * 8.0, " q*8")]:
+        # the final row scales the input token, not q: RMSNorm makes the attention branch
+        # identical, so it isolates residual dilution only (see the module docstring)
+        for pos, tok, tag in [(p, token, "") for p in POSITIONS] + [(262143, token * 8.0, " token*8")]:
             got_layer = None
             tt_pos = to_tt_positions(device, torch.tensor([pos]))
             tt_tok = to_tt_decode(device, tok.reshape(1, 1, -1))

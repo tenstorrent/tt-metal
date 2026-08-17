@@ -12,7 +12,7 @@ measured window that ``tt-perf-report`` filters on:
 
 Shape/iteration knobs (env): ``QWEN36_PERF_PREFILL_SEQ`` (2048),
 ``QWEN36_PERF_DECODE_BATCH`` (32), ``QWEN36_PERF_DECODE_POS`` (4095),
-``QWEN36_PERF_ITERS`` (prefill 3 / decode 20).
+``QWEN36_PERF_PREFILL_ITERS`` (2), ``QWEN36_PERF_DECODE_ITERS`` (8).
 
 Decode is timed at ``QWEN36_PERF_DECODE_POS`` rather than immediately after the seeding
 prefill: paged-SDPA cost grows with the context length, so a position right after a 512-token
@@ -46,6 +46,14 @@ DECODE_POS = int(os.environ.get("QWEN36_PERF_DECODE_POS", 4095))
 #: iterations is a complete measurement.
 PREFILL_ITERS = int(os.environ.get("QWEN36_PERF_PREFILL_ITERS", 2))
 DECODE_ITERS = int(os.environ.get("QWEN36_PERF_DECODE_ITERS", 8))
+#: The layer is built at this `supported_context`, **not** the advertised 262144. Two reasons, both
+#: worth knowing when reading the numbers: the paged K/V for batch 32 at the full context is 16 GiB
+#: (see `test_long_context.py::test_max_batch_full_context_capacity`), which leaves no room for a
+#: profiler buffer; and decode cost grows with `cur_pos`, so a fixed 4095 is what makes the
+#: prefill/decode rows comparable across runs. It does mean the decode rows are *not* the
+#: advertised-context latency: the decode SDPA alone is 11.5 ms/call at 262144 keys against ~1 ms
+#: here (`logs/diag_sdpa_decode.txt`), so the advertised-context step is ~10 ms slower than the
+#: table shows. Override with QWEN36_PERF_CONTEXT / QWEN36_PERF_DECODE_POS to measure elsewhere.
 PERF_CONTEXT = int(os.environ.get("QWEN36_PERF_CONTEXT", 8192))
 
 
@@ -68,7 +76,7 @@ def perf_device():
     device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     yield device
     # Flush the device profiler before close. Without this, closing a device that still holds a
-    # layer's ~2.2 GiB of weights plus a full profiler buffer segfaults inside close_mesh_device.
+    # layer's ~1.5 GiB of weights plus a full profiler buffer segfaults inside close_mesh_device.
     ttnn.ReadDeviceProfiler(device)
     ttnn.synchronize_device(device)
     ttnn.close_mesh_device(device)

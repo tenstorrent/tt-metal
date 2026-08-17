@@ -518,10 +518,45 @@ def decode_and_compare(
 # =======================================================================================
 # evidence logging
 # =======================================================================================
+#: Log names to divert to ``<name>_partial.jsonl``. ``conftest.py`` fills this with the logs the
+#: main suite owns when the session is a filtered (``-k`` / ``-m``) run, so a subset run cannot
+#: overwrite committed evidence. Deliberately a *set of names* rather than a global suffix:
+#: ``long_context.jsonl`` is produced by five filtered runs on purpose
+#: (``tests/run_long_context.sh``, one case per process), so it must never be diverted.
+PARTIAL_LOGS: set[str] = set()
+
+
+def log_path(name: str) -> Path:
+    suffix = "_partial" if name in PARTIAL_LOGS else ""
+    return ARTIFACT_DIR / f"{name}{suffix}.jsonl"
+
+
+def reset_log(name: str) -> None:
+    """Start a fresh provenance log, so one run == one file.
+
+    Two things this has to get right, both learned the hard way:
+
+    * **Per run, not per process.** ``record`` stays append-only because the advertised-context
+      evidence comes from five separate pytest processes (``tests/run_long_context.sh``) that all
+      accumulate into ``long_context.jsonl``; truncating per process would leave only the last case.
+      The main suite resets from the session fixture in ``conftest.py``, the runner scripts delete
+      theirs before looping.
+    * **Only for a whole-file run of the suite that owns the log.** A filtered run
+      (``pytest -k context_contract``) collects a couple of tests that write no PCC rows, so
+      truncating would replace 274 rows of committed evidence with nothing. ``conftest.py`` puts the
+      main suite's logs in ``PARTIAL_LOGS`` for filtered sessions and those rows land in
+      ``*_partial.jsonl``, which ``doc/.gitignore`` keeps out of the commit. Only those names are
+      diverted -- ``long_context.jsonl`` is *always* written by filtered runs and must not be.
+    """
+    path = log_path(name)
+    if path.exists():
+        path.unlink()
+
+
 def record(results, name: str, extra: dict | None = None) -> Path:
     """Append PCC/perf rows to a JSONL provenance log under doc/functional_decoder/."""
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    path = ARTIFACT_DIR / f"{name}.jsonl"
+    path = log_path(name)
     rows = results if isinstance(results, list) else [results]
     with path.open("a") as fh:
         for row in rows:

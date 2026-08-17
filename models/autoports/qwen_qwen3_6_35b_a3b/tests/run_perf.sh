@@ -17,6 +17,8 @@ cd "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 AUTOPORT=models/autoports/qwen_qwen3_6_35b_a3b
 ARTIFACT_DIR="$AUTOPORT/doc/functional_decoder"
 TEST=$AUTOPORT/tests/test_perf.py
+# one run == one evidence file; each case appends its host-wall row
+rm -f "$ARTIFACT_DIR/perf_host_summary.jsonl"
 
 run_one() {
   local mode=$1 kind=$2
@@ -65,7 +67,14 @@ run_one() {
     --no-summary --no-advice \
     > "$outdir/${mode}_perf_report.txt"
 
+  # The raw ops CSV and the Tracy transcript are large (1-21 MB) and only useful in bulk, so
+  # store them gzipped. Do this *after* both tt-perf-report runs, which read the plain CSV.
+  # tracy/.gitignore drops whichever .gz still exceeds this repo's 500 KB committed-file limit
+  # (the two decode ops CSVs); everything derived from them is committed either way.
+  gzip -f "$outdir/${mode}_ops.csv" "$outdir/tracy_run.log"
+
   echo "report: $outdir/${mode}_perf_report.txt"
+  echo "artifacts: $(du -sh "$outdir" | cut -f1) in $outdir"
 }
 
 MODES=${1:-"prefill decode"}

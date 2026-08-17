@@ -9,23 +9,23 @@ rest (PCC 0.9986 at position 262143 vs ~0.99999 everywhere else). ``diag_long_de
 narrowed it to the attention branch and ruled out operand quantisation (the device diverges from
 an *exact* bf16-operand reference too). This script strips away everything else — no
 projections, no RoPE, no output gate, no o_proj, no MoE — and drives the op directly with random
-K/V over a paged cache, sweeping context length x core grid x ``k_chunk_size``.
+K/V over a paged cache.
 
-What it establishes:
+Omitting the program config changes **four** things at once, so all four are swept independently:
 
-* With ``k_chunk_size`` left unset the op takes its **dynamic** path
-  (``get_dynamic_Sk_chunk_t`` in
-  ``ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp``, which
-  picks ``nearest_pow_of_2_up_to_8(seq_len_in_tiles)`` from ``cur_pos`` and carries an in-source
-  "seeing PCC issues" caveat). That path is structurally correct at every position but loses
-  accuracy as the context grows.
-* Explicit configs trade the two failure modes against each other: larger grids are more
-  accurate at long context but return structurally wrong results at particular short contexts
-  (too few k-chunks to feed the cross-core reduction), and small grids are correct everywhere
-  but both slower and less accurate at long context.
-* Because ``cur_pos`` is a runtime *device* value, the layer cannot select a config per call
-  without a host read, so the functional decoder keeps the dynamic path. See
-  ``doc/functional_decoder/README.md`` section 3.8.
+1. the core grid (device grid vs whatever is passed);
+2. ``k_chunk_size`` (dynamic vs explicit);
+3. ``exp_approx_mode`` (defaults to ``true`` with no config);
+4. ``max_cores_per_head_batch`` -- the one that is easy to miss. It is a *struct default*
+   (``sdpa_config.hpp:18``, value 16), and the factory reads
+   ``program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available``
+   (``sdpa_decode_program_factory.cpp:192-193``). So on this 11x10 part with batch 1 and 2 KV
+   heads, **no config gives 55 cores per head while any explicit config defaults to 16** --
+   passing a config silently changes the parallel decomposition and the depth of the
+   partial-softmax tree reduction, not just the knob you set.
+
+Sweeping (4) is what separates "a program config is present" from "the op runs on N cores per
+head". The ``max_cores=110`` row is the control: it should reproduce the no-config row exactly.
 
     python models/autoports/qwen_qwen3_6_35b_a3b/tests/diag_sdpa_decode.py
 """
@@ -39,17 +39,47 @@ MAX_CONTEXT = 262144
 
 #: contexts chosen to include tiny, tile/block boundaries, non-multiples and the advertised max
 CONTEXTS = [1, 32, 64, 128, 257, 1024, 4096, 32768, 131072, 262143, 262144]
-#: (grid, k_chunk_size); k_chunk_size 0 means "leave unset" -> the op's dynamic path
+#: (grid, k_chunk_size, exp_approx, max_cores_per_head_batch). ``k_chunk_size=0`` keeps the
+#: dynamic chunk path and is legal for the paged *causal* decode op (only the non-causal branch
+#: requires > 0, sdpa_decode_device_operation.cpp:321-327), so chunking can be held fixed while
+#: the other axes move. ``max_cores=None`` means "leave the struct default", i.e. 16.
 COMBOS = [
-    ((8, 8), 0),
-    ((1, 1), 128),
-    ((2, 1), 128),
-    ((4, 1), 128),
-    ((8, 1), 64),
-    ((8, 1), 128),
-    ((8, 8), 128),
-    ((8, 8), 512),
+    # --- reference: no program config at all (this is what the layer shipped) ---
+    (None, 0, None, None),
+    # --- axis 4, everything else held at the device grid + dynamic chunk + exact exp ---
+    ((11, 10), 0, False, 1),
+    ((11, 10), 0, False, 2),
+    ((11, 10), 0, False, 4),
+    ((11, 10), 0, False, 8),
+    ((11, 10), 0, False, 16),
+    ((11, 10), 0, False, 32),
+    ((11, 10), 0, False, 55),
+    ((11, 10), 0, False, 110),  # <- the missing control: should reproduce the no-config row
+    # --- axis 3 (exp_approx) at both ends of axis 4, to show it is still irrelevant ---
+    ((11, 10), 0, True, 16),
+    ((11, 10), 0, True, 110),
+    # --- axis 1 (grid) at a fixed max_cores, to show the grid itself is not the variable ---
+    ((8, 8), 0, False, 16),
+    ((8, 8), 0, False, 110),
+    # --- axis 2 (chunking) at a fixed max_cores ---
+    ((11, 10), 128, False, 16),
+    ((11, 10), 512, False, 16),
+    ((11, 10), 128, False, 110),
+    # --- the original small-grid rows, kept so the earlier table stays comparable ---
+    ((1, 1), 128, False, None),
+    ((2, 1), 128, False, None),
+    ((8, 1), 64, False, None),
+    ((8, 8), 512, False, None),
 ]
+
+
+def cores_per_head(grid, max_cores, device_grid_cores, batch=1, num_kv_heads=NKV):
+    """The factory's own arithmetic (sdpa_decode_program_factory.cpp:192-197), so the table can be
+    read without the source open. ``grid is None`` == no program config."""
+    avail = device_grid_cores if grid is None else grid[0] * grid[1]
+    max_cores_per_head = avail if grid is None else (16 if max_cores is None else max_cores)
+    uncapped = min(avail, max_cores_per_head * batch * num_kv_heads) // batch
+    return max(1, uncapped // num_kv_heads)
 
 
 def pcc(a, b):
@@ -60,9 +90,19 @@ def pcc(a, b):
     return float((x @ y) / (x.norm() * y.norm() + 1e-30))
 
 
+#: (label, max_cores_per_head_batch or None-for-no-config) timed at TIME_CONTEXT. Accuracy is only
+#: half the decision: 1 core/head serialises each KV head's keys onto a single core, so the cost
+#: has to be measured rather than assumed.
+TIMED = [("no-config (55/head)", "none"), ("16/head", 16), ("4/head", 4), ("1/head", 1)]
+TIME_CONTEXT = 262144
+TIME_ITERS = 20
+
+
 def main():
     torch.set_num_threads(16)
     device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    dev_grid = device.compute_with_storage_grid_size()
+    grid_cores = dev_grid.x * dev_grid.y
     hifi = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -100,8 +140,12 @@ def main():
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        print("DIAG2 " + f"{'grid':>5} {'kchunk':>7} " + " ".join(f"{c:>8}" for c in CONTEXTS))
-        for grid, kc in COMBOS:
+        print(
+            "DIAG2 "
+            + f"{'grid':>6} {'kchunk':>7} {'exp':>7} {'maxcore':>7} {'/head':>5} "
+            + " ".join(f"{c:>8}" for c in CONTEXTS)
+        )
+        for grid, kc, exp_approx, max_cores in COMBOS:
             row = []
             for ctx in CONTEXTS:
                 want = torch.nn.functional.scaled_dot_product_attention(
@@ -118,12 +162,16 @@ def main():
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 kwargs = {"compute_kernel_config": hifi}
-                if kc:
+                if grid is not None:
+                    pc_kwargs = {}
+                    if max_cores is not None:
+                        pc_kwargs["max_cores_per_head_batch"] = max_cores
                     kwargs["program_config"] = ttnn.SDPAProgramConfig(
                         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
                         q_chunk_size=32,
                         k_chunk_size=kc,
-                        exp_approx_mode=False,
+                        exp_approx_mode=exp_approx,
+                        **pc_kwargs,
                     )
                 try:
                     out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -142,13 +190,55 @@ def main():
                 except Exception as exc:  # noqa: BLE001 - diagnostic reports, never raises
                     row.append(f"ERR:{type(exc).__name__}")
                 ttnn.deallocate(cur)
-            label = "dynamic" if kc == 0 else str(kc)
-            print(f"DIAG2 {grid[0]}x{grid[1]:<3} {label:>7} " + " ".join(f"{r:>8}" for r in row))
-        print(
-            "DIAG2 note: the same 262144-key attention computed by the *prefill* op "
-            "(chunked_scaled_dot_product_attention, explicit q=k=128 config) scores 0.9999891 "
-            "at the layer level, so this is specific to the decode op's dynamic chunk path."
+            chunk_label = "dynamic" if kc == 0 else str(kc)
+            grid_label = "op-dflt" if grid is None else f"{grid[0]}x{grid[1]}"
+            exp_label = "op-dflt" if exp_approx is None else ("approx" if exp_approx else "exact")
+            per_head = cores_per_head(grid, max_cores, grid_cores)
+            mc_label = "avail" if grid is None else str(16 if max_cores is None else max_cores)
+            print(
+                f"DIAG2 {grid_label:>6} {chunk_label:>7} {exp_label:>7} {mc_label:>7} {per_head:>5} "
+                + " ".join(f"{r:>8}" for r in row)
+            )
+        # ---- cost of the accuracy: time the op itself at the advertised context ----
+        import time
+
+        cur = ttnn.from_torch(
+            torch.tensor([TIME_CONTEXT - 1], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        print(f"DIAG2 timing at context {TIME_CONTEXT}, {TIME_ITERS} warmed iterations")
+        for label, max_cores in TIMED:
+            kwargs = {"compute_kernel_config": hifi}
+            if max_cores != "none":
+                kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(dev_grid.x, dev_grid.y),
+                    q_chunk_size=32,
+                    k_chunk_size=0,
+                    exp_approx_mode=False,
+                    max_cores_per_head_batch=max_cores,
+                )
+            call = lambda: ttnn.transformer.paged_scaled_dot_product_attention_decode(  # noqa: E731
+                tt_q,
+                cache_k,
+                cache_v,
+                page_table_tensor=page_table,
+                cur_pos_tensor=cur,
+                scale=HD**-0.5,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **kwargs,
+            )
+            ttnn.deallocate(call())  # compile
+            ttnn.synchronize_device(device)
+            start = time.perf_counter()
+            for _ in range(TIME_ITERS):
+                ttnn.deallocate(call())
+            ttnn.synchronize_device(device)
+            per_iter_ms = (time.perf_counter() - start) * 1000.0 / TIME_ITERS
+            print(f"DIAG2 TIME {label:>22}  {per_iter_ms:8.3f} ms/call")
+        ttnn.deallocate(cur)
     finally:
         ttnn.close_mesh_device(device)
 

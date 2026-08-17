@@ -2,41 +2,55 @@
   {
     "kind": "linear",
     "mode": "prefill",
-    "ops_in_window": 1746,
+    "ops_in_window": 1750,
     "iters": 2,
-    "device_kernel_ms_per_iter": 342.063,
-    "op_to_op_gap_ms_per_iter": 0.813,
-    "host_wall_ms_per_iter": 343.325,
+    "device_kernel_ms_per_iter": 341.847,
+    "op_to_op_gap_ms_per_iter": 0.86,
+    "host_wall_ms_per_iter": 343.143,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
+    "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.47,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.816,
-      "BinaryNgDeviceOperation": 25.32,
-      "UnaryDeviceOperation": 21.82,
-      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.178
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.413,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.784,
+      "BinaryNgDeviceOperation": 25.356,
+      "UnaryDeviceOperation": 21.657,
+      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.185
+    },
+    "blocks": {
+      "boundary_op_index_in_iteration": 687,
+      "mixer_ms_per_iter": 63.605,
+      "expert_matmul_ms_per_iter": 227.197,
+      "moe_elementwise_ms_per_iter": 51.045
     }
   },
   {
     "kind": "full",
     "mode": "prefill",
-    "ops_in_window": 388,
+    "ops_in_window": 392,
     "iters": 2,
-    "device_kernel_ms_per_iter": 281.56,
-    "op_to_op_gap_ms_per_iter": 0.133,
-    "host_wall_ms_per_iter": 282.051,
+    "device_kernel_ms_per_iter": 281.524,
+    "op_to_op_gap_ms_per_iter": 0.136,
+    "host_wall_ms_per_iter": 282.013,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
+    "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.077,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.623,
-      "UnaryDeviceOperation": 21.233,
-      "BinaryNgDeviceOperation": 16.092,
-      "FastReduceNCDeviceOperation": 6.378
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 146.974,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.652,
+      "UnaryDeviceOperation": 21.215,
+      "BinaryNgDeviceOperation": 16.101,
+      "FastReduceNCDeviceOperation": 6.406
+    },
+    "blocks": {
+      "boundary_op_index_in_iteration": 28,
+      "mixer_ms_per_iter": 3.815,
+      "expert_matmul_ms_per_iter": 226.626,
+      "moe_elementwise_ms_per_iter": 51.083
     }
   },
   {
@@ -44,39 +58,53 @@
     "mode": "decode",
     "ops_in_window": 968,
     "iters": 8,
-    "device_kernel_ms_per_iter": 57.99,
+    "device_kernel_ms_per_iter": 57.96,
     "op_to_op_gap_ms_per_iter": 0.089,
-    "host_wall_ms_per_iter": 58.11,
+    "host_wall_ms_per_iter": 58.077,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
+    "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.539,
-      "BinaryNgDeviceOperation": 9.507,
+      "UnaryDeviceOperation": 10.511,
+      "BinaryNgDeviceOperation": 9.518,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.467,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.11,
-      "FillPadDeviceOperation": 5.744
+      "FillPadDeviceOperation": 5.74
+    },
+    "blocks": {
+      "boundary_op_index_in_iteration": 68,
+      "mixer_ms_per_iter": 8.834,
+      "expert_matmul_ms_per_iter": 18.578,
+      "moe_elementwise_ms_per_iter": 30.548
     }
   },
   {
     "kind": "full",
     "mode": "decode",
-    "ops_in_window": 880,
+    "ops_in_window": 872,
     "iters": 8,
-    "device_kernel_ms_per_iter": 50.157,
-    "op_to_op_gap_ms_per_iter": 0.228,
-    "host_wall_ms_per_iter": 50.417,
+    "device_kernel_ms_per_iter": 50.076,
+    "op_to_op_gap_ms_per_iter": 0.238,
+    "host_wall_ms_per_iter": 50.346,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
+    "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.445,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.457,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.11,
-      "BinaryNgDeviceOperation": 7.889,
-      "FillPadDeviceOperation": 5.569
+      "UnaryDeviceOperation": 10.419,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.456,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.111,
+      "BinaryNgDeviceOperation": 7.895,
+      "FillPadDeviceOperation": 5.567
+    },
+    "blocks": {
+      "boundary_op_index_in_iteration": 56,
+      "mixer_ms_per_iter": 1.051,
+      "expert_matmul_ms_per_iter": 18.567,
+      "moe_elementwise_ms_per_iter": 30.459
     }
   }
 ]

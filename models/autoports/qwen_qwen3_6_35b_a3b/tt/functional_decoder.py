@@ -37,10 +37,12 @@ construction happens there; the two forward methods below run pure TTNN on devic
     ``page_table`` : ``int32 [max_batch, ceil(supported_context / block_size)]``, ROW_MAJOR.
                      Required for ``full_attention`` layers, ignored for ``linear_attention``.
     ``start_pos``  : absolute position of ``x[..., 0, :]``. Must be a multiple of
-                     ``PREFILL_ALIGN`` (128) so that chunked SDPA offsets and page-table
-                     block offsets stay legal. Lets a caller stream a long prompt through
-                     several calls; the KV cache, conv state and recurrent state all carry
-                     over.
+                     ``PREFILL_ALIGN`` (128) == ``sdpa_chunk``, because chunked SDPA turns the
+                     offset into a chunk index by integer division and a misaligned offset is
+                     silently wrong rather than an error (see ``prefill_forward``). Lets a
+                     caller stream a long prompt through several calls; the KV cache, conv
+                     state and recurrent state all carry over. A fresh request needs
+                     ``start_pos = 0``, so this never restricts prompt length.
     returns        : ``[1, 1, seq_len, hidden]``, TILE, DRAM.
 
     One sequence per call (``user_id``), matching the per-request prefill that vLLM and the
@@ -133,6 +135,16 @@ class DecoderConfig:
     delta_chunk_size: int = 64
     moe_prefill_chunk_tokens: int = 512
     sdpa_chunk: int = 128
+    #: Cores the decode SDPA splits each KV head's keys across. This is the variable behind the
+    #: long-context decode accuracy (README section 3.8): accuracy rises with it at long context
+    #: and *breaks structurally* below some context that grows with it, so 1 is the only value
+    #: measured correct at every ``cur_pos``. Leaving it unset is not neutral -- the op then uses
+    #: ``num_cores_available`` (55 per head here), which scores 0.9986 at the advertised context
+    #: against 0.9998 for 1 core/head. ``None`` means "pass no program config at all".
+    decode_sdpa_max_cores_per_head: int | None = 1
+    #: Escape hatch: a fully-specified ``ttnn.SDPAProgramConfig`` for the decode SDPA, used
+    #: verbatim and overriding ``decode_sdpa_max_cores_per_head``. For sweeps in later stages.
+    decode_sdpa_program_config: Any = None
     activation_dtype: ttnn.DataType = ttnn.bfloat16
     weight_dtype: ttnn.DataType = ttnn.bfloat16
     expert_weight_dtype: ttnn.DataType = ttnn.bfloat16
@@ -260,6 +272,35 @@ def _sdpa_program_config(chunk: int) -> ttnn.SDPAProgramConfig:
         q_chunk_size=chunk,
         k_chunk_size=chunk,
         exp_approx_mode=False,
+    )
+
+
+def _decode_sdpa_program_config(cfg: DecoderConfig):
+    """The decode SDPA program config, built once at setup.
+
+    ``cfg.decode_sdpa_program_config`` wins if given. Otherwise
+    ``cfg.decode_sdpa_max_cores_per_head`` selects how many cores the op splits each KV head's keys
+    across -- the variable behind long-context decode accuracy (README section 3.8) -- and ``None``
+    means "pass no program config", which lets the op use every available core per head.
+
+    Everything else here is chosen to be the op's own behaviour rather than a second variable:
+    the device grid, ``k_chunk_size=0`` (the dynamic chunk path, identical to the no-config
+    default), and ``exp_approx_mode=False`` -- spelled out because the op's default is ``true``
+    (``sdpa_decode_program_factory.cpp:211-213``) and this is the exact config the on-model
+    comparison measured. The sweep shows the two are bit-identical, so this pins provenance rather
+    than accuracy. ``q_chunk_size`` is unused by the decode factory but the struct requires a value.
+    """
+    if cfg.decode_sdpa_program_config is not None:
+        return cfg.decode_sdpa_program_config
+    if cfg.decode_sdpa_max_cores_per_head is None:
+        return None
+    grid = cfg.mesh_device.compute_with_storage_grid_size()
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        q_chunk_size=32,
+        k_chunk_size=0,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=cfg.decode_sdpa_max_cores_per_head,
     )
 
 
@@ -441,6 +482,7 @@ class FunctionalDecoder(LightweightModule):
         super().__init__()
         self.cfg = cfg
         self.compute_config = _hifi_config(cfg.mesh_device)
+        self.decode_sdpa_config = _decode_sdpa_program_config(cfg)
         self.w: dict[str, ttnn.Tensor] = {}
 
     # -----------------------------------------------------------------------------------
@@ -467,11 +509,18 @@ class FunctionalDecoder(LightweightModule):
                 continue
             self.w[name] = _to_device(tensor, dtype, mesh_device)
 
-        # RoPE tables (full attention only)
+        # RoPE tables (full attention only), stored **ROW_MAJOR**. That is decode's requirement,
+        # not a detail: `ttnn.embedding` converts a TILE weight to ROW_MAJOR *on every call*
+        # (`ttnn/cpp/ttnn/operations/embedding/embedding.cpp:30-32`), so a TILE table would
+        # untilize the whole `supported_context` x `rotary_dim` table per decode step -- 2 x 32 MiB
+        # at the advertised context, to read `max_batch_size` rows. Prefill wants TILE instead, but
+        # only for the chunk it slices, so it tilizes that slice (<= `prefill_chunk_size` rows)
+        # rather than paying for a second full table: keeping both layouts costs 64 MiB per layer
+        # at the advertised context, which is real DRAM pressure once several layers are live.
         if not cfg.is_linear:
             cos, sin = _build_rope_tables(cfg)
-            self.w["rope_cos"] = _to_device(cos, cfg.activation_dtype, mesh_device)
-            self.w["rope_sin"] = _to_device(sin, cfg.activation_dtype, mesh_device)
+            self.w["rope_cos"] = _to_device(cos, cfg.activation_dtype, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+            self.w["rope_sin"] = _to_device(sin, cfg.activation_dtype, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # delta-rule constants
         if cfg.is_linear:
@@ -536,7 +585,7 @@ class FunctionalDecoder(LightweightModule):
         """Free every device tensor this layer owns (weights, caches, state).
 
         Not needed for correctness — the tensors are freed when the layer is dropped — but a
-        layer holds ~2.2 GiB of MoE weights plus the paged cache, so an explicit release lets a
+        layer holds ~1.5 GiB of MoE weights plus the paged cache, so an explicit release lets a
         caller reclaim DRAM before opening another layer or closing the device.
         """
         for tensor in list(self.w.values()):
@@ -577,6 +626,13 @@ class FunctionalDecoder(LightweightModule):
         if seq_len < 1:
             raise ValueError("prefill needs seq_len >= 1")
         if start_pos % PREFILL_ALIGN:
+            # Op contract, not a shortcut: chunked SDPA converts the absolute offset to a chunk
+            # index by integer division, in both entry points this checkout offers --
+            # sdpa_program_factory.cpp:133 (`chunk_start_idx / q_chunk_size`, scalar offset) and
+            # kernels/dataflow/reader_interleaved.cpp:260 (same expression, device-tensor offset).
+            # A misaligned offset therefore places the causal-mask diagonal in the wrong tile and
+            # returns silently wrong values, so reject it instead of rounding. `sdpa_chunk` is the
+            # knob: it sets q_chunk_size == PREFILL_ALIGN, and TILE (32) is the floor.
             raise ValueError(f"start_pos must be a multiple of {PREFILL_ALIGN}, got {start_pos}")
         if start_pos + seq_len > cfg.supported_context:
             raise ValueError(
@@ -594,6 +650,16 @@ class FunctionalDecoder(LightweightModule):
         # linear-attention layers thread the conv left-context and the recurrent state
         # across the internal chunks of this call.
         carry = self._load_linear_carry(user_id) if cfg.is_linear else None
+        if carry is not None and start_pos == 0:
+            # `start_pos == 0` means this slot is starting a new sequence, so the carry must not
+            # be whatever the previous occupant of the slot left behind. Full attention
+            # self-heals (this prefill rewrites every block it will later read); the DeltaNet
+            # conv left-context and recurrent state do not, so zero them here. Both pieces of
+            # `carry` are owned copies (`_load_linear_carry`), so this cannot touch the shared
+            # `conv_state` / `recurrent_state` buffers -- they are updated per slot by
+            # `_store_linear_carry` at the end of the call.
+            for piece in carry:
+                ttnn.mul(piece, 0.0, output_tensor=piece)
 
         pieces = []
         for offset in range(0, padded_len, cfg.prefill_chunk_size):
@@ -682,8 +748,20 @@ class FunctionalDecoder(LightweightModule):
         q = self._norm_heads(q, "q_norm_w")
         k = self._norm_heads(k, "k_norm_w")
 
-        cos = ttnn.slice(self.w["rope_cos"], [0, 0, abs_pos, 0], [1, 1, abs_pos + seq, cfg.rotary_dim])
-        sin = ttnn.slice(self.w["rope_sin"], [0, 0, abs_pos, 0], [1, 1, abs_pos + seq, cfg.rotary_dim])
+        # The tables are ROW_MAJOR (decode's requirement, see `from_state_dict`), so slice the
+        # chunk's rows and tilize just those -- `rotary_embedding_hf` wants TILE. `_subview`, not a
+        # raw slice: a chunk covering the whole table (abs_pos == 0 and chunk length ==
+        # supported_context, reachable whenever supported_context <= prefill_chunk_size) aliases it,
+        # and deallocating that would free the layer's weights.
+        rope_end = [1, 1, abs_pos + seq, cfg.rotary_dim]
+        cos_rows, owns_cos = _subview(self.w["rope_cos"], [0, 0, abs_pos, 0], rope_end)
+        sin_rows, owns_sin = _subview(self.w["rope_sin"], [0, 0, abs_pos, 0], rope_end)
+        cos = ttnn.to_layout(cos_rows, ttnn.TILE_LAYOUT)
+        sin = ttnn.to_layout(sin_rows, ttnn.TILE_LAYOUT)
+        if owns_cos:
+            _dealloc(cos_rows)
+        if owns_sin:
+            _dealloc(sin_rows)
         q = self._partial_rope_prefill(q, cos, sin)
         k = self._partial_rope_prefill(k, cos, sin)
         _dealloc(cos, sin)
@@ -896,9 +974,10 @@ class FunctionalDecoder(LightweightModule):
 
     def _valid_mask(self, valid_len: int, total: int):
         """``[1, 1, total, 1]`` — 1 for logical tokens, 0 for the padded tail. Device-only."""
-        head = ttnn.slice(self.w["ones_column"], [0, 0, 0, 0], [1, 1, valid_len, 1])
+        head, owns_head = _subview(self.w["ones_column"], [0, 0, 0, 0], [1, 1, valid_len, 1])
         mask = ttnn.pad(head, padding=[(0, 0), (0, 0), (0, total - valid_len), (0, 0)], value=0.0)
-        _dealloc(head)
+        if owns_head:
+            _dealloc(head)
         return mask
 
     def _masked(self, tensor, valid):
@@ -1162,6 +1241,9 @@ class FunctionalDecoder(LightweightModule):
         _dealloc(k_sharded, v)
 
         q_sdpa = _move(q, ttnn.DRAM_MEMORY_CONFIG)
+        sdpa_kwargs = {}
+        if self.decode_sdpa_config is not None:
+            sdpa_kwargs["program_config"] = self.decode_sdpa_config
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_sdpa,
             keys,
@@ -1171,6 +1253,7 @@ class FunctionalDecoder(LightweightModule):
             scale=cfg.attn_scale,
             compute_kernel_config=self.compute_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **sdpa_kwargs,
         )
         _dealloc(q_sdpa)
 
@@ -1200,10 +1283,19 @@ class FunctionalDecoder(LightweightModule):
         return out
 
     def _decode_rope(self, current_pos):
-        """cos/sin ``[1, batch, 1, rotary_dim]`` looked up from the on-device RoPE table."""
+        """cos/sin ``[1, batch, 1, rotary_dim]`` looked up from the on-device RoPE table.
+
+        ``current_pos`` is clamped to ``>= 0`` first: a slot marked inactive with ``-1`` would
+        otherwise reach ``ttnn.embedding`` as a huge unsigned index and read outside the table.
+        The clamped row is discarded downstream (SDPA skips that slot), so the clamp only has to
+        keep the lookup in bounds.
+        """
         cfg = self.cfg
         idx = ttnn.reshape(current_pos, (1, cfg.max_batch_size))
+        idx = ttnn.maximum(idx, 0)
         idx = ttnn.typecast(idx, dtype=ttnn.uint32)
+        # The tables are ROW_MAJOR (see `from_state_dict`), which is what keeps this a gather of
+        # `max_batch_size` rows instead of an untilize of the whole table.
         cos = ttnn.embedding(idx, self.w["rope_cos"], layout=ttnn.TILE_LAYOUT)
         sin = ttnn.embedding(idx, self.w["rope_sin"], layout=ttnn.TILE_LAYOUT)
         _dealloc(idx)

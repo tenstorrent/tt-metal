@@ -67,18 +67,20 @@ def main():
             "device": "1x Blackhole p300c chip, 1x1 mesh",
             "usable_dram_bytes": 33822867456,
             "usable_dram_probe": (
-                "allocated 512 MiB DRAM tensors until the bank manager refused: 31.5 GiB "
-                "(doc/functional_decoder/work_log.md section 1)"
+                "tests/probe_dram_capacity.py: allocated 512 MiB DRAM tensors until the bank "
+                "manager refused, 63 x 512 MiB = 33822867456 B = 31.50 GiB "
+                "(doc/functional_decoder/logs/probe_dram_capacity.log)"
             ),
             "paged_kv_bytes_batch32_full_context": capacity.get("bytes_total"),
             "paged_kv_blocks_batch32_full_context": capacity.get("blocks"),
             "paged_kv_allocated_on_device": capacity.get("allocated"),
-            "moe_weight_bytes_per_layer_bf16": 2 * 256 * 1024 * 2048 * 2,
+            # 256 experts x (gate_up [1024, 2048] + down [2048, 512]) in bf16
+            "moe_weight_bytes_per_layer_bf16": 256 * (1024 * 2048 + 2048 * 512) * 2,
             "note": (
                 "batch 32 at the full advertised context needs 2 x 8 GiB of paged K/V (17.18 GB "
                 "total), which was actually allocated on device by "
                 "tests/test_long_context.py::test_max_batch_full_context_capacity. Together with "
-                "~2.15 GB of MoE weights per layer this fits the 31.5 GiB part, so no capability "
+                "~1.61 GB of MoE weights per layer this fits the 31.5 GiB part, so no capability "
                 "reduction is required at the decoder-layer level."
             ),
         },

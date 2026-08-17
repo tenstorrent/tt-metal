@@ -136,15 +136,17 @@ def test_longest_decode_context(long_device, kind):
     """Decode the last position of the advertised context.
 
     Both kinds build the state the *real* way — by prefilling 262143 tokens through the layer —
-    and the HF side advances its own cache/state over the same tokens in O(seq). Using a
-    random-valued paged cache instead would make the comparison badly conditioned rather than
-    wrong: with i.i.d. random K/V the softmax over 262144 keys is near-uniform, so the
-    attention output is a near-total cancellation whose magnitude falls as 1/sqrt(context)
-    while the bf16 error floor stays flat. Measured in
-    ``tests/diag_long_decode.py`` (recorded in ``logs/diag_long_decode.txt``): the
-    attention-branch PCC under a random cache falls smoothly 0.9997 -> 0.7687 as the context
-    grows 1024 -> 262144, with no cliff, i.e. it is an input-conditioning artefact of random
-    K/V and not a page-table or indexing effect.
+    and the HF side advances its own cache/state over the same tokens in O(seq), so this is the
+    contract's own path rather than a synthetic cache.
+
+    This layer's full-attention decode PCC at the advertised context (0.9986) is below the
+    ~0.99999 the rest of the stage reaches. It is not an artefact of how this test is set up:
+    README section 3.8 traces it to the decode SDPA op's parallel decomposition
+    (``max_cores_per_head_batch``), reproduced with no model code at all in
+    ``tests/diag_sdpa_decode.py`` and confirmed on the real layer with a real prefilled cache in
+    ``tests/diag_decode_sdpa_onmodel.py``. An earlier version of this docstring blamed the
+    conditioning of random K/V; that explanation was refuted by both of those diagnostics and is
+    gone.
     """
     position = LONG_CONTEXT - 1
     pair = build_layer_pair(long_device, kind=kind, max_batch_size=1, supported_context=LONG_CONTEXT)

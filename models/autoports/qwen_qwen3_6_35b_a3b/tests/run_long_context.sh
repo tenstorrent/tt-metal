@@ -9,6 +9,8 @@ cd "${TT_METAL_HOME:?}"
 L=models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/logs
 T=models/autoports/qwen_qwen3_6_35b_a3b/tests/test_long_context.py
 mkdir -p "$L"
+# one run == one evidence file; the five cases below accumulate into it
+rm -f models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/long_context.jsonl
 for sel in "longest_decode_context and linear" \
            "longest_prefill and linear" \
            "longest_decode_context and full" \

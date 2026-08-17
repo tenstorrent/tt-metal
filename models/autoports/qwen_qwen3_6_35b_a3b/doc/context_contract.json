@@ -19,14 +19,14 @@
         "tile_aligned": false,
         "hf_pcc": 0.9999742,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 43.875
+        "device_wall_seconds": 43.878
       },
       "full_attention": {
         "seq_len": 262143,
         "tile_aligned": false,
         "hf_pcc": 0.9999891,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 48.828
+        "device_wall_seconds": 48.846
       }
     },
     "decode": {
@@ -35,26 +35,26 @@
         "context_entries": 262144,
         "hf_pcc": 0.999986,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.042
+        "device_wall_seconds": 0.041
       },
       "full_attention": {
         "position": 262143,
         "context_entries": 262144,
-        "hf_pcc": 0.9985674,
+        "hf_pcc": 0.9997685,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.053
+        "device_wall_seconds": 0.045
       }
     }
   },
   "device_capacity_evidence": {
     "device": "1x Blackhole p300c chip, 1x1 mesh",
     "usable_dram_bytes": 33822867456,
-    "usable_dram_probe": "allocated 512 MiB DRAM tensors until the bank manager refused: 31.5 GiB (doc/functional_decoder/work_log.md section 1)",
+    "usable_dram_probe": "tests/probe_dram_capacity.py: allocated 512 MiB DRAM tensors until the bank manager refused, 63 x 512 MiB = 33822867456 B = 31.50 GiB (doc/functional_decoder/logs/probe_dram_capacity.log)",
     "paged_kv_bytes_batch32_full_context": 17179869184,
     "paged_kv_blocks_batch32_full_context": 131072,
     "paged_kv_allocated_on_device": true,
-    "moe_weight_bytes_per_layer_bf16": 2147483648,
-    "note": "batch 32 at the full advertised context needs 2 x 8 GiB of paged K/V (17.18 GB total), which was actually allocated on device by tests/test_long_context.py::test_max_batch_full_context_capacity. Together with ~2.15 GB of MoE weights per layer this fits the 31.5 GiB part, so no capability reduction is required at the decoder-layer level."
+    "moe_weight_bytes_per_layer_bf16": 1610612736,
+    "note": "batch 32 at the full advertised context needs 2 x 8 GiB of paged K/V (17.18 GB total), which was actually allocated on device by tests/test_long_context.py::test_max_batch_full_context_capacity. Together with ~1.61 GB of MoE weights per layer this fits the 31.5 GiB part, so no capability reduction is required at the decoder-layer level."
   },
   "prefill_input_contract": {
     "accepts_any_logical_seq_len": true,

@@ -1,0 +1,5 @@
+experts=256 top_k=8 group=32 groups=64 seq=2048
+GROUP_UNION uniform  = 163.3
+GROUP_UNION measured = mean 162.3  min 152  max 174
+GROUP_UNION work multiplier vs ideal gather-by-expert = 20.3x
+BF16_TOPK token expert-set agreement = 94.0%  (123 of 2048 tokens differ)

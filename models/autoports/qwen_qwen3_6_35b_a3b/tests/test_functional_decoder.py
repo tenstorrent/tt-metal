@@ -179,6 +179,102 @@ def test_prefill_per_user_slots(layer_pairs, kind):
         _assert_pcc(compare(f"prefill-slot[{kind}] user={user_id}", got, want, user_id=user_id))
 
 
+def test_prefill_covering_whole_context_does_not_free_weights(layer_pairs):
+    """Regression: a prefill chunk that spans the entire RoPE table must not free it.
+
+    ``ttnn.slice`` returns an *alias* when the slice covers the whole tensor, so slicing the
+    persistent cos/sin tables for a chunk at ``abs_pos == 0`` whose length equals
+    ``supported_context`` and then deallocating the result would free the layer's own weights.
+    Reachable whenever ``supported_context <= prefill_chunk_size``. The second forward is the
+    assertion: it only works if the tables survived the first.
+    """
+    context = 1024  # <= prefill_chunk_size (2048), so the whole context is one chunk
+    pair = layer_pairs("full", max_batch_size=1, supported_context=context)
+    pair.tt.reset_state()
+    # padded_len == context exactly, so the rope slice covers the whole table
+    x = ref.synthetic_hidden_states(pair.hf_config, 1, context, seed=61)
+    first = prefill_and_compare(pair, seq_len=context, hidden_states=x, seed=61)
+    _assert_pcc(first)
+
+    # same layer, second call: fails with "Tensor is not allocated" if the tables were freed
+    second = prefill_and_compare(pair, seq_len=context - 24, seed=62)
+    _assert_pcc(second)
+    third = decode_and_compare(pair, prefill_len=context - 24, steps=1, seed=63)
+    for result in third:
+        _assert_pcc(result)
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_prefill_resets_linear_state_for_new_sequence(layer_pairs, kind):
+    """A slot reused for a new sequence must not inherit the previous sequence's state.
+
+    ``start_pos == 0`` means "this slot starts a new sequence". Full attention self-heals — the
+    prefill rewrites every paged block it will later read — but the DeltaNet conv left-context and
+    recurrent state are a running summary that would silently continue the previous occupant's
+    sequence, which is exactly the multi-request case a serving stage hits.
+
+    Deliberately does **not** go through ``prefill_and_compare``: that helper calls
+    ``reset_state()`` for ``start_pos == 0``, which is what hid this. Here slot 0 is dirtied by a
+    first sequence and the second prefill is compared against a *fresh* HF layer state, with no
+    reset in between.
+    """
+    # (kind, 2, 1024) on purpose: every distinct layer_pairs key materialises another ~1.5 GiB of
+    # expert weights for the whole session, so tests reuse keys rather than inventing them.
+    pair = layer_pairs(kind, max_batch_size=2, supported_context=1024)
+    pair.tt.reset_state()
+
+    # 1. dirty the slot with a first sequence
+    dirty = ref.synthetic_hidden_states(pair.hf_config, 1, 1024, seed=81)
+    tt_dirty = to_tt_prefill(pair.device, dirty)
+    ttnn.deallocate(pair.tt.prefill_forward(tt_dirty, user_id=0, page_table=pair.page_table))
+    ttnn.deallocate(tt_dirty)
+
+    # 2. a new sequence in the same slot, no reset_state() anywhere
+    x = ref.synthetic_hidden_states(pair.hf_config, 1, 640, seed=82)
+    tt_x = to_tt_prefill(pair.device, x)
+    tt_out = pair.tt.prefill_forward(tt_x, user_id=0, page_table=pair.page_table)
+    got = from_tt(tt_out)
+    ttnn.deallocate(tt_out)
+    ttnn.deallocate(tt_x)
+
+    # 3. HF, from scratch: this is what "new sequence" has to mean
+    want = ref.hf_prefill(pair.hf, pair.hf_config, x, start_pos=0, cache=ref.make_cache(pair.hf_config)).output
+    _assert_pcc(compare(f"prefill-fresh-slot[{kind}] seq=640", got, want))
+
+
+def test_decode_forward_rejects_out_of_contract_inputs(layer_pairs, expect_error):
+    """The documented API constraints are enforced, not just written down."""
+    pair = layer_pairs("full", max_batch_size=2, supported_context=1024)
+    cfg = pair.cfg
+    x = to_tt_decode(pair.device, ref.synthetic_hidden_states(pair.hf_config, 2, 1, seed=71).reshape(2, 1, -1))
+    pos = to_tt_positions(pair.device, torch.tensor([0, 0]))
+    try:
+        with expect_error(ValueError, "page_table"):
+            pair.tt.decode_forward(x, current_pos=pos, page_table=None)
+        with expect_error(ValueError, "current_pos"):
+            pair.tt.decode_forward(x, current_pos=None, page_table=pair.page_table)
+        wrong_batch = to_tt_decode(
+            pair.device, ref.synthetic_hidden_states(pair.hf_config, 1, 1, seed=72).reshape(1, 1, -1)
+        )
+        with expect_error(ValueError, "max_batch_size"):
+            pair.tt.decode_forward(wrong_batch, current_pos=pos, page_table=pair.page_table)
+        ttnn.deallocate(wrong_batch)
+
+        prefill_x = to_tt_prefill(pair.device, ref.synthetic_hidden_states(pair.hf_config, 1, 128, seed=73))
+        with expect_error(ValueError, "multiple of"):
+            pair.tt.prefill_forward(prefill_x, user_id=0, page_table=pair.page_table, start_pos=64)
+        with expect_error(ValueError, "exceeds supported context"):
+            pair.tt.prefill_forward(prefill_x, user_id=0, page_table=pair.page_table, start_pos=cfg.supported_context)
+        with expect_error(ValueError, "user_id"):
+            pair.tt.prefill_forward(prefill_x, user_id=cfg.max_batch_size, page_table=pair.page_table)
+        with expect_error(ValueError, "page_table"):
+            pair.tt.prefill_forward(prefill_x, user_id=0, page_table=None)
+        ttnn.deallocate(prefill_x)
+    finally:
+        ttnn.deallocate(x)
+        ttnn.deallocate(pos)
+
+
 # =======================================================================================
 # decode PCC
 # =======================================================================================
@@ -308,6 +404,10 @@ def test_decode_skips_inactive_slots_with_negative_position(layer_pairs):
         _assert_pcc(compare(f"decode-active-slot user={user_id}", got[user_id : user_id + 1], want))
 
     for user_id in inactive:
+        assert torch.isfinite(got[user_id]).all(), (
+            f"inactive slot {user_id} produced non-finite output; current_pos=-1 must stay in "
+            "bounds for the RoPE table lookup"
+        )
         after = read_kv_cache(pair, user_id=user_id, seq=prefill_len)
         for name, old, new in zip(("keys", "values"), before[user_id], after):
             assert (
@@ -653,6 +753,12 @@ def _code_only(source: str) -> str:
     return "\n".join(kept)
 
 
+#: Module-level helpers that only ever run at weight-load time. Everything else at module level
+#: is on the runtime path and gets audited; ``_hifi_config`` builds the compute-kernel config in
+#: ``from_state_dict``, and the other three are the torch->ttnn conversion itself.
+_SETUP_HELPERS = frozenset({"_hifi_config", "_prepare_weights", "_build_rope_tables", "_to_device"})
+
+
 def test_no_runtime_host_fallback():
     """No torch / host round-trip anywhere in a prefill or decode pass.
 
@@ -667,14 +773,26 @@ def test_no_runtime_host_fallback():
         for pattern in _FORBIDDEN:
             if re.search(pattern, source):
                 offenders.append(f"FunctionalDecoder.{name}: {pattern}")
-    helpers = (
-        fd._move,
-        fd._subview,
-        fd._owned_slice,
-        fd._dealloc,
-        fd._sparse_program_config,
-        fd._sdpa_program_config,
+    # Every module-level callable except the setup-time converter is audited, derived from the
+    # module rather than listed by hand: a hand-list silently misses new helpers (``_view`` was
+    # missing from it), and the per-method self-check below only sees ``self._*`` calls.
+    helpers = tuple(
+        obj
+        for name, obj in vars(fd).items()
+        if inspect.isfunction(obj)
+        and name.startswith("_")
+        and obj.__module__ == fd.__name__
+        and name not in _SETUP_HELPERS
     )
+    assert {h.__name__ for h in helpers} >= {
+        "_move",
+        "_subview",
+        "_owned_slice",
+        "_view",
+        "_dealloc",
+        "_sparse_program_config",
+        "_sdpa_program_config",
+    }, sorted(h.__name__ for h in helpers)
     for helper in helpers:
         source = _code_only(inspect.getsource(helper))
         for pattern in _FORBIDDEN:
@@ -731,7 +849,12 @@ def test_no_host_ops_during_forward(layer_pairs, kind):
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.timeout(3600)
 def test_real_weights_prefill_and_decode(layer_pairs, kind):
-    """Real checkpoint weights, both layer kinds, prefill + traced decode."""
+    """Real checkpoint weights, both layer kinds: prefill plus two eager decode steps.
+
+    Eager, not traced, on purpose: trace capture is covered by ``test_traced_decode_pcc`` /
+    ``test_traced_decode_matches_eager`` (which prove replay is bit-identical to eager), and
+    keeping this case eager makes it a direct check of the real-weight *numerics*.
+    """
     pair = layer_pairs(kind, max_batch_size=2, supported_context=2048, real_weights=True)
     assert pair.weights_source == "real"
     result = prefill_and_compare(pair, seq_len=1024, seed=55)

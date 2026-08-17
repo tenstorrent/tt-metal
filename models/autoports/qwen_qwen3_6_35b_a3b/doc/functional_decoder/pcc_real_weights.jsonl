@@ -2,11 +2,5 @@
 {"label": "decode[linear] pos=512 batch=2", "pcc": 0.9999833592983952, "maxabs": 0.03933155536651611, "rel_rms": 0.005795711185783148, "pos": 512, "batch": 2}
 {"label": "decode[linear] pos=513 batch=2", "pcc": 0.9999945565467006, "maxabs": 0.0215451717376709, "rel_rms": 0.0033588199876248837, "pos": 513, "batch": 2}
 {"label": "prefill[full] seq=1024 start=0 user=0", "pcc": 0.9999796048293254, "maxabs": 0.13674664497375488, "rel_rms": 0.006409341469407082, "seq_len": 1024, "start_pos": 0, "user_id": 0}
-{"label": "decode[full] pos=512 batch=2", "pcc": 0.9999888109908649, "maxabs": 0.04371589422225952, "rel_rms": 0.004758785013109446, "pos": 512, "batch": 2}
-{"label": "decode[full] pos=513 batch=2", "pcc": 0.9999901840434453, "maxabs": 0.02567124366760254, "rel_rms": 0.004480082541704178, "pos": 513, "batch": 2}
-{"label": "prefill[linear] seq=1024 start=0 user=0", "pcc": 0.9999435116262231, "maxabs": 1.268744707107544, "rel_rms": 0.01062873937189579, "seq_len": 1024, "start_pos": 0, "user_id": 0}
-{"label": "decode[linear] pos=512 batch=2", "pcc": 0.9999833592983952, "maxabs": 0.03933155536651611, "rel_rms": 0.005795711185783148, "pos": 512, "batch": 2}
-{"label": "decode[linear] pos=513 batch=2", "pcc": 0.9999945565467006, "maxabs": 0.0215451717376709, "rel_rms": 0.0033588199876248837, "pos": 513, "batch": 2}
-{"label": "prefill[full] seq=1024 start=0 user=0", "pcc": 0.9999796048293254, "maxabs": 0.13674664497375488, "rel_rms": 0.006409341469407082, "seq_len": 1024, "start_pos": 0, "user_id": 0}
-{"label": "decode[full] pos=512 batch=2", "pcc": 0.9999888109908649, "maxabs": 0.04371589422225952, "rel_rms": 0.004758785013109446, "pos": 512, "batch": 2}
-{"label": "decode[full] pos=513 batch=2", "pcc": 0.9999901840434453, "maxabs": 0.02567124366760254, "rel_rms": 0.004480082541704178, "pos": 513, "batch": 2}
+{"label": "decode[full] pos=512 batch=2", "pcc": 0.999985624969251, "maxabs": 0.040143728256225586, "rel_rms": 0.005378320347517729, "pos": 512, "batch": 2}
+{"label": "decode[full] pos=513 batch=2", "pcc": 0.99999078694995, "maxabs": 0.02567124366760254, "rel_rms": 0.004352524410933256, "pos": 513, "batch": 2}
