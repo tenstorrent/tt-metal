@@ -142,10 +142,13 @@ def render_model_scenarios(rows):
         today_e = r.get("today_engine", "")
         # Reader-facing names for the harness layer ids: the column answers
         # "what runs when the model makes this call today".
+        # This column answers exactly one question: which op does the model
+        # call today. Engine detail (single-core vs bitonic vs tree) is in
+        # the notes; implementation state is what the ours-columns compare.
         today_label = {
-            "stocknow": "stock ttnn.topk",
-            "op": "topk_large_indices (direct call)",
-            "routed": "ttnn.topk (our routing)",
+            "stocknow": "ttnn.topk",
+            "routed": "ttnn.topk",
+            "op": "topk_large_indices",
         }.get(today_e, today_e)
         today = fnum(r.get("today_us"))
         ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
@@ -189,7 +192,7 @@ def render_model_scenarios(rows):
         )
     head = (
         '<thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th>'
-        '<th class="n">today: engine</th><th class="n">today µs</th>'
+        '<th>calls today</th><th class="n">today µs</th>'
         '<th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th>'
         '<th class="n">drop-in speedup</th><th>note</th></tr></thead>'
     )
