@@ -48,6 +48,7 @@ on:
           - "[tt-train] tinyllama_1_1b_ddp32"
           - "[tt-train] qwen3_1_7b_ddp32"
           - "[tt-train] tiny_deepseek_v3_ddp32"
+          - xtts-v2
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
