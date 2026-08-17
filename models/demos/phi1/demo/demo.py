@@ -16,7 +16,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 try:
     import ttnn
 
-    TTNN_AVAILABLE = True
+    # A bare `import ttnn` can silently "succeed" as an empty namespace package
+    # (e.g. when the tt-metal repo's own unbuilt `ttnn/` source directory is on
+    # PYTHONPATH but the compiled extension isn't installed) - checking for a
+    # real attribute catches that case instead of proceeding to crash later.
+    TTNN_AVAILABLE = hasattr(ttnn, "open_device")
+    if not TTNN_AVAILABLE:
+        print("[WARNING] `ttnn` module found but incomplete (no `open_device`). Running in offline mode.")
 except ImportError:
     TTNN_AVAILABLE = False
     print("[WARNING] ttnn not detected locally. Running in offline/emulation preparation mode.")
@@ -70,6 +76,32 @@ def compute_pcc(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor = None) -> 
     return float((cov / (std_a * std_b)).item())
 
 
+def truncate_hf_layers(hf_model, num_layers: int):
+    """Truncate the active decoder-layer container to `num_layers`, in place.
+
+    Only the decoder-layer container is sliced; the embedding, final norm, and LM
+    head live outside it in every checkpoint format below, so they are preserved
+    by construction regardless of how many layers are kept.
+    """
+    if hasattr(hf_model, "model") and hasattr(hf_model.model, "layers"):
+        hf_model.model.layers = hf_model.model.layers[:num_layers]
+    elif hasattr(hf_model, "transformer") and hasattr(hf_model.transformer, "h"):
+        hf_model.transformer.h = hf_model.transformer.h[:num_layers]
+    elif hasattr(hf_model, "layers"):
+        hf_model.layers = hf_model.layers[:num_layers]
+    return hf_model
+
+
+def detect_base_address(state_dict) -> str:
+    """Infer the TT model's state_dict key prefix from the loaded checkpoint's format."""
+    if any(k.startswith("transformer.h.") for k in state_dict.keys()):
+        return "transformer"
+    elif any(k.startswith("model.layers.") for k in state_dict.keys()):
+        return "model"
+    else:
+        return "model"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Tenstorrent Bounty #18287: microsoft/phi-1 Bring-Up Runner")
     parser.add_argument(
@@ -102,25 +134,11 @@ def main():
 
     # Truncate layers if requested (for single-layer benchmarking)
     if args.num_layers < 24:
-        if hasattr(hf_model, "model") and hasattr(hf_model.model, "layers"):
-            hf_model.model.layers = hf_model.model.layers[: args.num_layers]
-        elif hasattr(hf_model, "transformer") and hasattr(hf_model.transformer, "h"):
-            hf_model.transformer.h = hf_model.transformer.h[: args.num_layers]
-        elif hasattr(hf_model, "layers"):
-            hf_model.layers = hf_model.layers[: args.num_layers]
+        truncate_hf_layers(hf_model, args.num_layers)
 
     state_dict = hf_model.state_dict()
-
-    # Detect state_dict format to determine base_address
-    if any(k.startswith("transformer.h.") for k in state_dict.keys()):
-        base_address = "transformer"
-        print("      -> Detected MixFormer checkpoint format (transformer.h.X)")
-    elif any(k.startswith("model.layers.") for k in state_dict.keys()):
-        base_address = "model"
-        print("      -> Detected native HF PhiForCausalLM format (model.layers.X)")
-    else:
-        base_address = "model"
-        print("      -> Using default base_address='model'")
+    base_address = detect_base_address(state_dict)
+    print(f"      -> Detected checkpoint format, base_address='{base_address}'")
 
     print(f"      -> Successfully loaded HF model ({args.num_layers} layers selected).")
 
