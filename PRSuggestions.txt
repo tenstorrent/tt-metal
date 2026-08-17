@@ -1,3 +1,7 @@
+We took Voxtral-TTS, a 4B text to speech model with three stacks, through the whole pipeline on a
+single p150b. Four things worth fixing. Point 4 is the one that changes what the model computes, the
+others cost us time.
+
 1. Check that the model implementation the tool writes actually works
     - When a model is not in HF format the tool writes its own PyTorch version of it, and every later
       test is scored against that version. What it checks only confirms the weights fit, not that the
@@ -9,12 +13,15 @@
       gives a buzz that never stops. Make that run.
 
 2. Fix bring-up from a local folder
-    - A folder on disk is not treated the same as a model name downloaded from HuggingFace. It gets
-      a shallower check and the run dies three stages later pointing at the wrong thing. Optimizer
-      stage then confuses the folder holding the weights with the folder holding the generated code,
-      and loses track of which model it came from, so it cannot build its own correctness check. We
-      named it by hand.
-    - Fix: accept a folder everywhere a name from HuggingFace works, and keep track of both.
+    - A folder on disk takes a different path than a name downloaded from HuggingFace, and that path
+      stops before working out the model's structure and memory needs. So the run reports every
+      component as supported, then one step later refuses to continue because it cannot tell whether
+      the model is supported at all, naming neither the cause nor the input.
+    - Optimizer stage then confuses the folder holding the weights with the folder holding the
+      generated code, and pointing it at the generated code loses which model it came from, so it
+      cannot build its own correctness check. We supplied the model name by hand.
+    - Fix: give a local folder the same treatment as a downloaded name, and keep the model's identity
+      separate from where its files live.
     - Also, running a model's own code is only allowed for one hardcoded model name. Ours passed the
       early checks and then failed when it ran, blaming the model rather than the setting. A model's
       config already declares that it ships its own code, so decide from that. We did, and it worked.
@@ -52,16 +59,17 @@
       arrived empty either way. With no cache the test compares a single value and returns 1.0
       whatever the inputs are, so a version that uses the cache and one that ignores it score the
       same, and the simpler one was accepted.
-    - That then decided the demo, because the demo has to use the components that passed. A component
-      that cannot remember anything has to be given the whole prompt plus everything generated so far,
-      so every frame re-runs all layers over the entire sequence and keeps only the last position.
-    - A correct fix will fail two checks that were written around the current behaviour: the plan
-      expects the backbone to run once per frame plus once for the prompt, which only a recomputing
-      version does, and another check verifies which components the demo uses. Change both in the same
-      commit, or the fix will look like a regression.
+    - That then determined how the demo had to work, because the demo has to use the components that
+      passed. A component that cannot remember anything has to be given the whole prompt plus
+      everything generated so far, so every frame re-runs all layers over the entire sequence and
+      keeps only the last position.
+    - A correct fix will fail two checks that were written around the current behaviour: one expects
+      the backbone to run once per frame plus once for the prompt, which only a recomputing version
+      does, and another verifies which components the demo uses. Change both in the same commit, or
+      the fix will look like a regression.
     - Fix: as in point 3, let the agent build the cache input rather than relying on a list of names.
       Copy the saved inputs before passing them to each side, so the reference cannot write into what
       the port is about to read. Then let the component use the cache, its signature already has the
-      argument. For the traced version the position is baked in when the run is recorded, so it always
-      writes to the same slot; it has to become a tensor on the device.
+      argument. For the traced version the position is baked in when the run is recorded, so it
+      always writes to the same slot; it has to become a tensor on the device.
     - And check that the code measured for speed is the code that generates speech.
