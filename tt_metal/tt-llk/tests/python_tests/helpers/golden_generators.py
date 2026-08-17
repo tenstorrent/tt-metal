@@ -5078,6 +5078,48 @@ class SamplingGolden:
         return truncate_to_bfloat16(values)
 
 
+# DEST-row geometry of the SFPU rope, shared by the golden and by the tests that
+# build its stimuli. Module-level rather than methods on RopeGolden: under
+# --compile-producer the registry hands out a DummyGoldenGenerator, which only carries
+# __call__, and stimuli are still generated in that phase.
+
+ROPE_VECTOR_ROWS = 4  # DEST rows one SFPU vector covers
+ROPE_FACE_ROWS = 16  # DEST rows per face
+
+
+def rope_bands(
+    ht: int,
+    wt: int,
+    x_base: int,
+    x_stride: int,
+    cos_base: int,
+    sin_base: int,
+    cs_stride: int,
+):
+    """(x_row, cos_row, sin_row) for every vector `sfpu_rope_all_rows` issues.
+
+    cos/sin are shared by all ht heads at a given (width tile, face), which is why the
+    head loop is the innermost one in the LLK too.
+    """
+    for w in range(wt):
+        for face in range(2):
+            cs_offset = w * cs_stride + face * ROPE_FACE_ROWS
+            for head in range(ht):
+                x_row = (
+                    x_base + w * x_stride + face * ROPE_FACE_ROWS + head * wt * x_stride
+                )
+                yield x_row, cos_base + cs_offset, sin_base + cs_offset
+
+
+def rope_rotated_rows(**geometry) -> list[int]:
+    """Every DEST row the rotation writes, ascending."""
+    return sorted(
+        x_row + i
+        for x_row, _, _ in rope_bands(**geometry)
+        for i in range(ROPE_VECTOR_ROWS)
+    )
+
+
 @register_golden
 class RopeGolden:
     """Golden for the SFPU RoPE (experimental/ckernel_sfpu_rope.h).
@@ -5095,49 +5137,8 @@ class RopeGolden:
     first, in the fp32 LReg, so only the final store quantizes.
 
     Rows no operand covers come back untouched, so this returns a full copy of `dest`
-    rather than only the rotated band. `rotated_rows` reports which rows those are.
+    rather than only the rotated band; `rope_rotated_rows` reports which rows those are.
     """
-
-    VECTOR_ROWS = 4  # one SFPU vector covers 4 DEST rows
-    FACE_ROWS = 16  # DEST rows per face
-
-    @classmethod
-    def bands(
-        cls,
-        ht: int,
-        wt: int,
-        x_base: int,
-        x_stride: int,
-        cos_base: int,
-        sin_base: int,
-        cs_stride: int,
-    ):
-        """(x_row, cos_row, sin_row) for every vector the LLK issues.
-
-        cos/sin are shared by all ht heads at a given (width tile, face), which is why
-        the head loop is the innermost one in the LLK too.
-        """
-        for w in range(wt):
-            for face in range(2):
-                cs_offset = w * cs_stride + face * cls.FACE_ROWS
-                for head in range(ht):
-                    x_row = (
-                        x_base
-                        + w * x_stride
-                        + face * cls.FACE_ROWS
-                        + head * wt * x_stride
-                    )
-                    yield x_row, cos_base + cs_offset, sin_base + cs_offset
-
-    @classmethod
-    def rotated_rows(cls, **geometry) -> list[int]:
-        """Every DEST row the rotation writes, ascending."""
-        rows = [
-            x_row + i
-            for x_row, _, _ in cls.bands(**geometry)
-            for i in range(cls.VECTOR_ROWS)
-        ]
-        return sorted(rows)
 
     def __call__(
         self, dest: torch.Tensor, scale: float = None, **geometry
@@ -5149,8 +5150,8 @@ class RopeGolden:
         odd = even + 1
         factor = 1.0 if scale is None else scale
 
-        for x_row, cos_row, sin_row in self.bands(**geometry):
-            for i in range(self.VECTOR_ROWS):
+        for x_row, cos_row, sin_row in rope_bands(**geometry):
+            for i in range(ROPE_VECTOR_ROWS):
                 cos = source[cos_row + i, even] * factor
                 sin = source[sin_row + i, even] * factor
                 x_even = source[x_row + i, even]

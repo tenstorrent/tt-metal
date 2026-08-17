@@ -40,7 +40,6 @@ DST_ACCUM_MODE, so a caller built with fp32 accumulation would hit that.
 
 import math
 
-import pytest
 import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -48,20 +47,20 @@ from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     RopeGolden,
     get_golden_generator,
+    rope_bands,
+    rope_rotated_rows,
 )
 from helpers.llk_params import format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import ROPE, TILE_COUNT
-from helpers.utils import passed_test
 
 pytestmark = blackhole_only
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
 TILE_ROWS = 64  # DEST rows per tile slot
-FACE_ROWS = 16  # DEST rows per face
 ROW_DATUMS = 16  # datums per DEST row (one face row)
 VECTOR_ROWS = 4  # DEST rows one SFPU vector covers
 MAX_DEST_TILES = 8  # tile slots in half of a 16-bit DEST
@@ -75,33 +74,59 @@ def _round_up(value, multiple):
     return ((value + multiple - 1) // multiple) * multiple
 
 
-def _geometry(ht, wt, stride):
+def _geometry(ht, wt, stride, operands_first=False):
     """Operand addresses in DEST rows, for `ht` heads of `wt` width tiles.
 
-    x starts at row 0 and cos/sin follow on the next tile boundary, so that the number
-    of DEST tiles the kernel has to unpack stays minimal for both strides.
+    x normally starts at row 0 with cos/sin on the next tile boundary above it.
+    `operands_first` swaps the two so that x_base is nonzero; both orders cost the same
+    number of DEST tiles.
     """
     x_rows = ht * wt * stride
-    cos_base = _round_up(x_rows, TILE_ROWS)
+    cs_rows = wt * stride
+
+    if operands_first:
+        cos_base = 0
+        x_base = _round_up(2 * cs_rows, TILE_ROWS)
+    else:
+        x_base = 0
+        cos_base = _round_up(x_rows, TILE_ROWS)
+
     return {
         "ht": ht,
         "wt": wt,
-        "x_base": 0,
+        "x_base": x_base,
         "x_stride": stride,
         "cos_base": cos_base,
-        "sin_base": cos_base + wt * stride,
+        "sin_base": cos_base + cs_rows,
         "cs_stride": stride,
     }
 
 
 def _dest_tiles(geometry):
     """DEST tile slots the operands span."""
-    last = geometry["sin_base"] + geometry["wt"] * geometry["cs_stride"]
+    last = max(
+        geometry["x_base"] + geometry["ht"] * geometry["wt"] * geometry["x_stride"],
+        geometry["sin_base"] + geometry["wt"] * geometry["cs_stride"],
+    )
     return _round_up(last, TILE_ROWS) // TILE_ROWS
 
 
 def _fits_in_dest(ht, wt, stride):
     return _dest_tiles(_geometry(ht, wt, stride)) <= MAX_DEST_TILES
+
+
+def _heads(stride, wt):
+    """Head counts to sweep for one (stride, wt): 1, 2, and as many as DEST holds.
+
+    The largest fills the DEST half, running the operand addresses up to row 512 and the
+    head loop out to its longest, which the ht=1 and ht=2 cases cannot do.
+    """
+    fitting = [
+        ht
+        for ht in range(1, MAX_DEST_TILES * TILE_ROWS)
+        if _fits_in_dest(ht, wt, stride)
+    ]
+    return sorted({1, 2, fitting[-1]})
 
 
 def _stimuli(geometry, tiles, seed):
@@ -116,9 +141,7 @@ def _stimuli(geometry, tiles, seed):
         -1.0, 1.0, generator=generator
     )
 
-    # RopeGolden's geometry helpers are used through the class, not through
-    # get_golden_generator: compile-producer swaps the instance for a dummy.
-    for _, cos_row, sin_row in RopeGolden.bands(**geometry):
+    for _, cos_row, sin_row in rope_bands(**geometry):
         for i in range(VECTOR_ROWS):
             for pair in range(ROW_DATUMS // 2):
                 # Keyed on the absolute cos row, so every (width tile, face, row) pair
@@ -134,6 +157,8 @@ def _stimuli(geometry, tiles, seed):
 
 def _run(geometry, tiles, dest, scale_fp32=None):
     """Rotate `dest` on device and return the packed result as [tiles * 64, 16]."""
+    assert tiles <= MAX_DEST_TILES, f"{tiles} tiles is past the DEST half"
+
     configuration = TestConfig(
         "sources/rope_test.cpp",
         FORMATS,
@@ -164,28 +189,36 @@ def _run(geometry, tiles, dest, scale_fp32=None):
 
 
 def _assert_rotation(geometry, dest, device, scale=None):
-    """The rotated bands match the golden; every other DEST row is untouched."""
-    golden_generator = get_golden_generator(RopeGolden)
-    golden = golden_generator(dest, scale=scale, **geometry)
+    """Every DEST row matches the golden bit-exactly, rotated or not."""
+    golden = get_golden_generator(RopeGolden)(dest, scale=scale, **geometry)
+    rotated = rope_rotated_rows(**geometry)
 
-    rotated = RopeGolden.rotated_rows(**geometry)
-    assert passed_test(
-        golden[rotated].flatten(),
-        device[rotated].flatten(),
-        FORMATS.output_format,
-        print_errors=True,
-    ), f"rotation does not match golden (rows {rotated[0]}..{rotated[-1]})"
+    # Liveness: the x rows have to come back changed. Everything below compares the
+    # device against a golden, so a device that returned its stimuli untouched would
+    # pass for any geometry whose rotation happened to be the identity. The stimuli
+    # never make cos=1/sin=0, so this is a real signal that the SFPU ran.
+    assert not torch.equal(
+        device[rotated], dest[rotated].to(device.dtype)
+    ), "the rotated rows came back identical to the input: the rotation did not run"
 
-    # Everything the op does not write goes unpack -> DEST -> pack with no arithmetic,
-    # so it has to come back bit-identical, cos/sin operands included. An off-by-one in
-    # the stride or the face offset lands here rather than in the check above.
-    untouched = torch.ones(dest.shape[0], dtype=torch.bool)
-    untouched[rotated] = False
-    differs = (device != golden.to(device.dtype)).any(dim=1)
-    stray = torch.nonzero(untouched & differs).flatten()
-    assert (
-        stray.numel() == 0
-    ), f"rope wrote outside its 4-row bands, at DEST rows {stray.tolist()}"
+    # Bit-exact, not a tolerance check: the SFPU computes in fp32 and the golden models
+    # the truncating SFPSTORE. Rows the op must leave alone are in the same comparison,
+    # since the golden holds the input there -- cos/sin operands included. An off-by-one
+    # in a stride or a face offset lands on those rows rather than on the rotated ones.
+    differs = torch.nonzero((device != golden.to(device.dtype)).any(dim=1)).flatten()
+    if differs.numel():
+        banded = set(rotated)
+        wrong = [row for row in differs.tolist() if row in banded]
+        stray = [row for row in differs.tolist() if row not in banded]
+        row = differs[0].item()
+        report = []
+        if wrong:
+            report.append(f"wrong rotation at DEST rows {wrong}")
+        if stray:
+            report.append(f"wrote outside its 4-row bands at DEST rows {stray}")
+        report.append(f"row {row}: device={device[row].tolist()}")
+        report.append(f"row {row}: golden={golden[row].tolist()}")
+        raise AssertionError("\n".join(report))
 
 
 def _bf16_bits(value: float) -> int:
@@ -203,17 +236,10 @@ def _bf16_bits(value: float) -> int:
     ) & 0xFFFFFFFF
 
 
-# Heads and width tiles across both strides. Wt=2 is head_dim 64, where each width tile
-# has its own cos/sin operand, so a variant that reads only the first one fails.
-@parametrize(
-    stride=[TILE_SLOT_STRIDE, DENSE_STRIDE],
-    ht=[1, 2, 4],
-    wt=[1, 2],
-)
-def test_rope(stride, ht, wt):
-    if not _fits_in_dest(ht, wt, stride):
-        pytest.skip(f"ht={ht} wt={wt} stride={stride} needs more than half of DEST")
-
+# Wt=2 is head_dim 64, where each width tile carries its own cos/sin operand, so a
+# variant that reads only the first one fails.
+@parametrize(stride=[TILE_SLOT_STRIDE, DENSE_STRIDE], wt=[1, 2], ht=_heads)
+def test_rope(stride, wt, ht):
     geometry = _geometry(ht, wt, stride)
     tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=101)
@@ -223,12 +249,14 @@ def test_rope(stride, ht, wt):
     _assert_rotation(geometry, dest, device)
 
 
-# The heads that fill half of DEST at stride 64: 6 x tiles plus one cos and one sin.
-def test_rope_fills_dest():
-    geometry = _geometry(ht=6, wt=1, stride=TILE_SLOT_STRIDE)
-    tiles = _dest_tiles(geometry)
-    assert tiles == MAX_DEST_TILES
+# Every case above puts x at DEST row 0, where a variant that ignored x_base and started
+# from the base of DEST would still pass. Here cos/sin come first, so x_base is the only
+# thing pointing at the x rows.
+def test_rope_nonzero_x_base():
+    geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE, operands_first=True)
+    assert geometry["x_base"] != 0
 
+    tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=202)
 
     device = _run(geometry, tiles, dest)
@@ -237,46 +265,72 @@ def test_rope_fills_dest():
 
 
 # has_scale folds a deferred normalization into cos/sin, once per (width tile, face)
-# rather than per head. scale=0 is the case the promotion made explicit by dropping the
-# `scale_fp32 = 0` default: it must zero the rotated rows, not pass them through.
-@parametrize(scale=[0.0, 0.5, 1.0, 1.75, -2.0], wt=[1, 2])
-def test_rope_scale(scale, wt):
-    geometry = _geometry(ht=2, wt=wt, stride=TILE_SLOT_STRIDE)
+# rather than per head. One nontrivial value covers the arithmetic; the two below are
+# here for what is special about them, not for their magnitude.
+def test_rope_scale():
+    geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE)
     tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=303)
 
-    device = _run(geometry, tiles, dest, scale_fp32=_bf16_bits(scale))
+    device = _run(geometry, tiles, dest, scale_fp32=_bf16_bits(-2.0))
 
-    _assert_rotation(geometry, dest, device, scale=scale)
+    _assert_rotation(geometry, dest, device, scale=-2.0)
 
-    if scale == 0.0:
-        rotated = RopeGolden.rotated_rows(**geometry)
-        assert bool(
-            (device[rotated].to(torch.float32) == 0.0).all()
-        ), f"scale=0 must zero every rotated row:\n{device[rotated]}"
+
+# scale=0 is the case the promotion made reachable by dropping the `scale_fp32 = 0`
+# default: it must zero the rotated rows, not pass them through. Asserted directly
+# rather than through the golden, which would agree with a golden-side sign error.
+def test_rope_zero_scale():
+    geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE)
+    tiles = _dest_tiles(geometry)
+    dest = _stimuli(geometry, tiles, seed=404)
+
+    device = _run(geometry, tiles, dest, scale_fp32=_bf16_bits(0.0))
+
+    _assert_rotation(geometry, dest, device, scale=0.0)
+
+    rotated = rope_rotated_rows(**geometry)
+    assert bool(
+        (device[rotated].to(torch.float32) == 0.0).all()
+    ), f"scale=0 must zero every rotated row:\n{device[rotated]}"
+
+
+# scale=1 must reproduce the unscaled path bit for bit: the scale multiplies cos/sin in
+# an fp32 LReg, so either way only the final store quantizes. This is the one check that
+# compares two device runs instead of a device run against the golden.
+def test_rope_unit_scale_matches_unscaled():
+    geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE)
+    tiles = _dest_tiles(geometry)
+    dest = _stimuli(geometry, tiles, seed=505)
+
+    scaled = _run(geometry, tiles, dest, scale_fp32=_bf16_bits(1.0))
+    unscaled = _run(geometry, tiles, dest)
+
+    _assert_rotation(geometry, dest, scaled, scale=1.0)
+    assert torch.equal(
+        scaled, unscaled
+    ), "has_scale with scale=1 diverged from the unscaled path"
 
 
 # A rotation by 90 degrees is exact in bf16: cos=0, sin=1 sends (e, o) to (-o, e). This
-# pins the sign convention, which a tolerance check against a golden that shares the
+# pins the sign convention, which a comparison against a golden that shares the
 # convention cannot catch.
 def test_rope_quarter_turn():
     geometry = _geometry(ht=1, wt=1, stride=TILE_SLOT_STRIDE)
     tiles = _dest_tiles(geometry)
 
-    generator = torch.Generator().manual_seed(404)
+    generator = torch.Generator().manual_seed(606)
     dest = torch.empty((tiles * TILE_ROWS, ROW_DATUMS), dtype=torch.float32).uniform_(
         -1.0, 1.0, generator=generator
     )
-    # RopeGolden's geometry helpers are used through the class, not through
-    # get_golden_generator: compile-producer swaps the instance for a dummy.
-    for _, cos_row, sin_row in RopeGolden.bands(**geometry):
+    for _, cos_row, sin_row in rope_bands(**geometry):
         dest[cos_row : cos_row + VECTOR_ROWS, :] = 0.0
         dest[sin_row : sin_row + VECTOR_ROWS, :] = 1.0
     dest = dest.to(torch.bfloat16)
 
     device = _run(geometry, tiles, dest)
 
-    rotated = RopeGolden.rotated_rows(**geometry)
+    rotated = rope_rotated_rows(**geometry)
     even = torch.arange(0, ROW_DATUMS, 2)
     odd = even + 1
     assert torch.equal(device[rotated][:, even], -dest[rotated][:, odd]), (
