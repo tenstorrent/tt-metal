@@ -73,7 +73,10 @@ inline std::optional<FusionSemaphoreBankConfig> make_fusion_semaphore_bank_confi
     return FusionSemaphoreBankConfig{
         .tensor_spec = tt::tt_metal::TensorSpec(
             Shape({1, 1, num_cores_u32, shard_width}),
-            tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config)),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::UINT32,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+                memory_config)),
         .initial_values = initial_values,
     };
 }
@@ -124,8 +127,8 @@ public:
         Tensor host_tensor(
             tt::tt_metal::HostBuffer(std::move(host_values)),
             config.tensor_spec.logical_shape(),
-            DataType::UINT32,
-            Layout::ROW_MAJOR);
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::Layout::ROW_MAJOR);
         ttnn::copy_to_device(host_tensor, tensor_);
 
         TT_FATAL(
