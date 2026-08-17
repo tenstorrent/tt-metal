@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 KV-cache golden PCC validation (bring-up / standalone only — never used in serving).
+"""MiniMax-M3 KV-cache golden PCC validation (bring-up only — never used in serving).
 
 Per-layer K / V / index_k PCC: the device cache (``runtime.gather_layer``) vs the golden trace written
 by ``scripts/generate_golden_kv_cache.py`` (keys ``key/value/index_k_cache_layer_N``, HF layout). The
@@ -10,7 +10,7 @@ device stores K / index_k Meta-RoPE swizzled over the rotary slice (``ModelArgs.
 Meta interleaved; identity tail) before comparing. V is raw (no swizzle).
 
 Ported from ``tests/galaxy_prefill_kv_pcc.py::check_kv_pcc`` so the runner and the standalone test share
-one implementation. Called by ``TtPrefillRuntime.kv_cache_pcc_check`` (the runner's PREFILL_STANDALONE_PCC
+one implementation. Called by ``TtPrefillRuntime.kv_cache_pcc_check`` (the migration validators' KV-PCC
 hook). At <= 2048 tokens MSA == dense so the dense golden matches; above that the device's block-sparse
 MSA diverges from the dense golden (see the m3-cpu-reference-model notes).
 """

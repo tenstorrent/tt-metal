@@ -87,15 +87,23 @@ ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::N
         config.core = parse_core_coord(dest_yaml["core"]);
     }
     if (dest_yaml["hops"]) {
-        TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map.");
-        std::unordered_map<RoutingDirection, uint32_t> hops_map;
-        for (const auto& it : dest_yaml["hops"]) {
-            std::string dir_str = parse_scalar<std::string>(it.first);
-            RoutingDirection dir = detail::routing_direction_mapper.from_string(dir_str, "RoutingDirection");
-            uint32_t num_hops = parse_scalar<uint32_t>(it.second);
-            hops_map[dir] = num_hops;
+        if (dest_yaml["hops"].IsScalar()) {
+            TT_FATAL(
+                parse_scalar<std::string>(dest_yaml["hops"]) == "full_mcast",
+                "Scalar 'hops' only supports the value 'full_mcast'.");
+            config.full_mcast_hops = true;
+        } else {
+            TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map or the scalar 'full_mcast'.");
+            std::unordered_map<RoutingDirection, uint32_t> hops_map;
+            for (const auto& it : dest_yaml["hops"]) {
+                std::string dir_str = parse_scalar<std::string>(it.first);
+                RoutingDirection dir = detail::routing_direction_mapper.from_string(dir_str, "RoutingDirection");
+                uint32_t num_hops =
+                    (parse_scalar<std::string>(it.second) == "max") ? kHopsMax : parse_scalar<uint32_t>(it.second);
+                hops_map[dir] = num_hops;
+            }
+            config.hops = hops_map;
         }
-        config.hops = hops_map;
     }
     if (dest_yaml["target_address"]) {
         config.target_address = parse_scalar<uint32_t>(dest_yaml["target_address"]);
@@ -797,13 +805,44 @@ static bool check_mesh_scope_filter(ParsedTestConfig& test_config, const std::op
     return checker;
 }
 
+// gtest-style glob match: '*' matches any (possibly empty) sequence, '?' matches any single
+// character. Used for --filter name.<glob> when the value contains a '*'; otherwise callers do an
+// exact string comparison so e.g. `name.Mesh` never silently matches `MeshLooped_short`.
+static bool name_glob_match(const std::string& pattern, const std::string& str) {
+    size_t p = 0, s = 0;
+    size_t star = std::string::npos, s_after_star = 0;
+    while (s < str.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == str[s])) {
+            ++p;
+            ++s;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            star = p++;
+            s_after_star = s;
+        } else if (star != std::string::npos) {
+            p = star + 1;
+            s = ++s_after_star;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '*') {
+        ++p;
+    }
+    return p == pattern.size();
+}
+
 bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
     if (!filter_type.has_value()) {
         return true;
     }
     const std::string& type = filter_type.value();
     if (type == "name" || type == "Name") {
-        return test_config.name == filter_value;
+        // Exact match unless the filter value contains an explicit '*' (gtest-style glob).
+        const std::string& value = filter_value.value();
+        if (value.find('*') != std::string::npos) {
+            return name_glob_match(value, test_config.name);
+        }
+        return test_config.name == value;
     }
     if (type == "topology" || type == "Topology") {
         return check_topology_filter(test_config, filter_value);
@@ -932,7 +971,11 @@ void CmdlineParser::print_help() {
         LogTest,
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
-    log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
+    log_info(
+        LogTest,
+        "  --filter <type>.<value>                      Filter tests, e.g. name.LinearLooped_short, "
+        "topology.Mesh. For 'name', <value> is an exact match unless it contains a '*' (gtest-style "
+        "glob), e.g. name.'*_short', name.'FlowControl*'.");
     log_info(LogTest, "");
     log_info(LogTest, "Display Options:");
     log_info(
@@ -1417,6 +1460,10 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                 }
             }
         }
+
+        // Resolve destination hop sentinels (max / full_mcast) from the global mesh shape now that the
+        // cluster is available, before any step that reads concrete hop values.
+        resolve_hop_sentinels(iteration_test);
 
         // After patterns are expanded, duplicate senders for different links if specified
         if (!expand_link_duplicates(iteration_test)) {
@@ -2248,8 +2295,9 @@ void TestConfigBuilder::expand_full_or_half_ring_unicast_or_multicast(
             }
         } else {
             for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
-                // Skip dimensions with only one device
-                if (this->route_manager_.get_mesh_shape()[dim] < 2) {
+                // A collapsed torus axis has no distinct wrap peer, so it cannot carry a ring multicast.
+                if (this->route_manager_.get_mesh_shape()[dim] < 2 ||
+                    this->route_manager_.is_degenerate_torus_axis(dim)) {
                     continue;
                 }
 
@@ -2505,6 +2553,33 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
     }
 
     test.senders = std::move(new_senders);
+}
+
+void TestConfigBuilder::resolve_hop_sentinels(ParsedTestConfig& test) {
+    for (auto& sender : test.senders) {
+        FabricNodeId src_node = resolve_device_identifier(sender.device, device_info_provider_);
+        for (auto& pattern : sender.patterns) {
+            if (!pattern.destination.has_value()) {
+                continue;
+            }
+            auto& dest = pattern.destination.value();
+            if (dest.full_mcast_hops) {
+                dest.hops = route_manager_.get_full_mcast_hops(src_node);
+                dest.full_mcast_hops = false;
+            } else if (dest.hops.has_value()) {
+                for (auto& [dir, count] : dest.hops.value()) {
+                    if (count == kHopsMax) {
+                        TT_FATAL(
+                            dir == RoutingDirection::N || dir == RoutingDirection::S || dir == RoutingDirection::E ||
+                                dir == RoutingDirection::W,
+                            "destination.hops: 'max' is only supported for N/S/E/W (got {})",
+                            enchantum::to_string(dir));
+                        count = route_manager_.get_full_line_mcast_hops(dir);
+                    }
+                }
+            }
+        }
+    }
 }
 
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {

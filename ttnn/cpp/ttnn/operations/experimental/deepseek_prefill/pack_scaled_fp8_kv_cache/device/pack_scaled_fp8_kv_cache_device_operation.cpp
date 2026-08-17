@@ -24,7 +24,7 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& config) {
 }
 
 void validate_input(const Tensor& tensor, const char* name, tt::tt_metal::DataType dtype, uint32_t width) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
@@ -84,7 +84,7 @@ PackScaledFp8KvCacheDeviceOperation::spec_return_value_t PackScaledFp8KvCacheDev
         dims.push_back(static_cast<uint32_t>(input_shape[dim]));
     }
     dims.push_back(packed::PACKED_ROW_BYTES);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(dims),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FP8_E4M3,

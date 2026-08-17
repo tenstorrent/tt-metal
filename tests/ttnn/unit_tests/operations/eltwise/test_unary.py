@@ -1046,11 +1046,95 @@ def test_leaky_relu_uint8_full_range(device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("scalar", [1.5, 2.0])
+# scalar 3 is an integer literal: with unary_remainder now a ScalarVariant, an int scalar on a
+# bfloat16 input flows as the uint32 variant alternative (not float). It must still take the float
+# reciprocal path (non-UINT32 input) and match the golden.
+@pytest.mark.parametrize("scalar", [1.5, 2.0, 3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_remainder(device, h, w, scalar):
     run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("scalar", [1, 2, 7, 255, 65536, 2147483647, 2147483648, 4294967295])
+def test_remainder_uint32_full_range(device, input_shapes, value_ranges, scalar):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("values", [[0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]])
+@pytest.mark.parametrize("scalar", [1, 3, 41, 256, 2147483647, 2147483648, 4294967295])
+def test_remainder_uint32_scalar_edge_cases(device, values, scalar):
+    torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device).to(torch.uint32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar), dtype=torch.uint32)
+    assert torch.equal(output_tensor, torch_output_tensor), f"mismatch for divisor {scalar}"
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("scalar", [7, 255, 65536, 2147483648, 4294967295])
+@pytest.mark.parametrize("relu_max_limit", [50, 1000])
+def test_remainder_uint32_with_activations(device, input_shapes, value_ranges, scalar, relu_max_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_remainder = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device)
+    torch_output_tensor = torch.clamp(torch_remainder, max=relu_max_limit).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(
+        ttnn.remainder(
+            input_tensor,
+            scalar,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MAX, relu_max_limit)],
+        ),
+        dtype=torch.uint32,
+    )
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_remainder_divisor_guard(device, expect_error):
+    uint32_tensor = ttnn.from_torch(
+        torch.tensor([[5, 7, 10, 100]], dtype=torch.int64).to(torch.uint32),
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # uint32 requires a positive integer divisor: zero and negative divisors are rejected.
+    for bad_divisor in [0, -5]:
+        with expect_error(RuntimeError, "Divisor must be positive"):
+            ttnn.remainder(uint32_tensor, bad_divisor)
+
+    # a float divisor on a uint32 tensor is rejected (it would silently truncate).
+    with expect_error(RuntimeError, "integer scalar divisor"):
+        ttnn.remainder(uint32_tensor, 3.0)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
@@ -2700,3 +2784,111 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+# Kimi K3 up-half beta.
+SOFTCAP_BETA = 25.0
+
+# Accuracy-ratio floor: softcap scales x by 1/beta and again by the Horner chain's leading
+# 5.9e-3, so a normal input can drive a subnormal intermediate the SFPU flushes to zero.
+SOFTCAP_FLUSH_FLOOR = 1e-30
+
+# bf16 output rounds the polynomial's ~2.3e-3 relative error to well under half a bf16 ULP, so
+# accuracy is gated in ULP (measured worst case: 0.35). bfp8_b shares one exponent per 16-element
+# block, so a small element next to a large one in the same block carries tens of bf16 ULP through
+# no fault of the op; that arm is gated by PCC instead, and its near-beta output lands on a coarser
+# grid (hence the wider overshoot margin). Both are the dtypes Kimi K3 actually runs.
+SOFTCAP_ULP = 2
+SOFTCAP_BF16_PCC = 0.9999
+SOFTCAP_BFP8_PCC = 0.999
+# The beta bound is exact in fp32, but the pack rounds to nearest, so a beta that is not
+# bf16-representable can come back up to half a bf16 ULP high. 2**-8 keeps this beta-independent.
+SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 2**-8, ttnn.bfloat8_b: 5e-2}
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([4, 128, 32])),
+    ),
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_unary_softcap(input_shapes, ttnn_dtype, device):
+    torch.manual_seed(0)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        # bfp8_b shares one exponent per 16-element block, so the full-range stress input
+        # (1e-5 .. 3e38 in a single tile) is neither representable nor a realistic activation.
+        # Use a bounded range that still spans the near-linear and saturated (|x| >> beta) regions.
+        in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100.0, 100.0)
+    else:
+        # No range limiting: x/beta may overflow the polynomial's Horner chain to inf,
+        # but the min(., 1.0) clamp that bounds tanh turns that back into exactly beta.
+        in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_res = ttnn.to_torch(ttnn.softcap(input_tensor, SOFTCAP_BETA))
+    golden = ttnn.get_golden_function(ttnn.softcap)(in_data, beta=SOFTCAP_BETA, device=device)
+
+    # tanh is bounded by 1, so beta is a hard bound; an overshoot means the polynomial's
+    # saturation clamp is not holding.
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
+    assert max_abs <= bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BFP8_PCC)
+    else:
+        assert_with_ulp(golden, tt_res, ulp_threshold=SOFTCAP_ULP)
+        assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+def test_softcap_bfloat16_full_domain(device):
+    """Every representable bfloat16 value.
+
+    The Sollya polynomial tanh carries ~2.3e-3 relative error, which is thousands of
+    fp32 ULP but under half a bf16 ULP, so the bf16 output is gated in ULP. The
+    subnormal-flush region is excluded and checked separately.
+    """
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+
+    # NaN does not propagate through min(., 1.0), so the op returns a finite value where
+    # torch returns NaN. Excluded here.
+    input_tensor = torch.where(torch.isnan(input_tensor), torch.zeros_like(input_tensor), input_tensor)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden = ttnn.get_golden_function(ttnn.softcap)(input_tensor, beta=SOFTCAP_BETA, device=device)
+    result = ttnn.to_torch(ttnn.softcap(tt_in, SOFTCAP_BETA))
+
+    max_abs = result.to(torch.float32).abs().max().item()
+    fd_bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn.bfloat16])
+    assert max_abs <= fd_bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {fd_bound:.4f}"
+    assert not torch.isnan(result).any(), "finite input produced NaN"
+
+    mask = golden.abs() > SOFTCAP_FLUSH_FLOOR
+    assert_with_ulp(golden[mask], result[mask], ulp_threshold=SOFTCAP_ULP)
+    assert_with_pcc(golden[mask], result[mask], pcc=SOFTCAP_BF16_PCC)
+
+    tiny_max = result[~mask].to(torch.float32).abs().max().item()
+    assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+def test_softcap_zero_beta_guard(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.zeros([32, 32], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # 1/beta is precomputed host-side, so a zero beta would reach the SFPU as inf.
+    with expect_error(RuntimeError, "SOFTCAP requires a non-zero beta"):
+        ttnn.softcap(input_tensor, 0.0)

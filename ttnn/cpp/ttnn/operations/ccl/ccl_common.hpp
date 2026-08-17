@@ -19,10 +19,15 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
+
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType input_dtype);
 
 // Warn about ideal packet size
 void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
@@ -91,6 +96,26 @@ enum class CoreAllocationStrategy {
     ROW_MAJOR,
     COL_MAJOR,
 };
+
+struct WorkerCoreSelection {
+    CoreRangeSet core_range_set;
+    std::vector<CoreCoord> cores;
+    // Selected cores that core_grid_offset shifted off the device's worker grid. Kernels cannot be placed on these.
+    std::vector<CoreCoord> unplaceable_cores;
+
+    bool all_placeable() const { return unplaceable_cores.empty(); }
+};
+
+// Selects worker cores without asserting on the result. Callers that can adapt to a selection which does not fit at
+// core_grid_offset use this; everyone else should use choose_worker_cores(), which rejects such a selection.
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>
 
 #include <ostream>
 

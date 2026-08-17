@@ -31,6 +31,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/dprint.h"  // TEMP: config dump
+#include "../adaptive_chunk.hpp"
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -99,7 +100,10 @@ void kernel_main() {
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(6);
 
     constexpr uint32_t local_expert_id = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    // per_core_M_max: the CB-sized maximum per-core M (= chunk_M_max / GRID_Y).
+    // The RUNTIME per_core_M is picked from the device token count below and is
+    // <= this. CBs are allocated to the max; a smaller runtime pick uses fewer.
+    constexpr uint32_t per_core_M_max = get_compile_time_arg_val(8);
     constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(9);
     constexpr uint32_t per_core_N_d = get_compile_time_arg_val(10);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(11);
@@ -109,8 +113,11 @@ void kernel_main() {
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(15);
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(16);
     constexpr uint32_t M_tiles_full = get_compile_time_arg_val(17);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(18);
-    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(19);
+    // num_chunks_max: compile-time upper bound on the runtime chunk count (clamp).
+    // chunk_M_max: CB-sized maximum chunk (per_core_M_max * GRID_Y); the runtime
+    // picker never exceeds it.
+    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(18);
+    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(19);
     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
@@ -136,12 +143,21 @@ void kernel_main() {
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
-    constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
-    constexpr uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
+    // cb_in0_down_full stays sized to the compile-time MAX per-core M: the down
+    // matmul keeps a full ring and MAC-skips rows >= the runtime per_core_M, so
+    // the reader pushes the full block (filling only per_core_M runtime rows via
+    // the activated mcast; the rest are MAC-skipped downstream).
+    constexpr uint32_t d_in0_block_num_tiles = per_core_M_max * in0_block_w_d;
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
+    // The compute down-matmul tail-skips the last block's padding K-tiles when
+    // the down-K padding is confined to that block (padding < in0_block_w_d);
+    // then that weight is never read, so the reader can skip zeroing it (below).
+    // Derived from the same constants as the compute's d_last_block_w, so the two
+    // always agree. When false the matmul reads those rows and the fill stays.
+    constexpr bool down_k_tail_skip = (K_down_tiles_padded - K_down_tiles) < in0_block_w_d;
 
     constexpr uint32_t x_accessor_offset = 31;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -182,6 +198,31 @@ void kernel_main() {
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
     const auto start_acc = TensorAccessor(start_args, start_addr);
 
+#ifdef FUSE_BIAS
+    // gpt-oss expert biases. RT addrs immediately follow start_addr; CT bias CB
+    // ids + accessors follow the start accessor. Read once (below), added by the
+    // compute kernel (gate/up before the activation, down after the down matmul).
+    const uint32_t gate_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1);
+    const uint32_t up_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 2);
+    const uint32_t down_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 3);
+    constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(bias_cb_offset + 0);
+    constexpr uint32_t cb_up_bias = get_compile_time_arg_val(bias_cb_offset + 1);
+    constexpr uint32_t cb_down_bias = get_compile_time_arg_val(bias_cb_offset + 2);
+    constexpr uint32_t gate_bias_accessor_offset = bias_cb_offset + 3;
+    constexpr auto gate_bias_args = TensorAccessorArgs<gate_bias_accessor_offset>();
+    const auto gate_bias_acc = TensorAccessor(gate_bias_args, gate_bias_addr, get_tile_size(cb_gate_bias));
+    constexpr uint32_t up_bias_accessor_offset = gate_bias_args.next_compile_time_args_offset();
+    constexpr auto up_bias_args = TensorAccessorArgs<up_bias_accessor_offset>();
+    const auto up_bias_acc = TensorAccessor(up_bias_args, up_bias_addr, get_tile_size(cb_up_bias));
+    constexpr uint32_t down_bias_accessor_offset = up_bias_args.next_compile_time_args_offset();
+    constexpr auto down_bias_args = TensorAccessorArgs<down_bias_accessor_offset>();
+    const auto down_bias_acc = TensorAccessor(down_bias_args, down_bias_addr, get_tile_size(cb_down_bias));
+    CircularBuffer cb_gate_bias_obj(cb_gate_bias);
+    CircularBuffer cb_up_bias_obj(cb_up_bias);
+    CircularBuffer cb_down_bias_obj(cb_down_bias);
+#endif
+
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
     // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
     // those concurrently with mcast traffic on the kernel's default NoC for
@@ -204,8 +245,8 @@ void kernel_main() {
 
     // x staging CB for the in0 path. Row-major: the reader fills + mcasts
     // cb_x_rm (bf16 row-major) and the compute kernel tilizes it into cb_in0_x.
-    // TILE: the reader fills + mcasts cb_in0_x directly. reserve / pre-zero /
-    // mcast / push all operate on x_stage_obj; only the DRAM read loop differs
+    // TILE: the reader fills + mcasts cb_in0_x directly. reserve / mcast /
+    // push all operate on x_stage_obj; only the DRAM read loop differs
     // (partial-stick vs tile-page). In row-major mode the reader never touches
     // cb_in0_x — compute produces it.
     constexpr uint32_t x_stage_cb = (x_is_row_major != 0) ? cb_x_rm : cb_in0_x;
@@ -250,25 +291,16 @@ void kernel_main() {
     // For count=0 the loop is empty (no chunks processed). For count > 0 we
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
     // (if any) are skipped — no DRAM reads, no mcasts, no compute.
-    const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
-    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
-    // Clamp to compile-time num_chunks just in case (defensive against bad input).
-    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
-
-    // TEMP config dump (one core): understand RM vs TILE blocking difference.
-    if (is_in0_sender && my_mt == 0 && my_nt_gu == 0) {
-        DPRINT(
-            "CFG rm="
-            "{}"
-            " ibw_gu={} per_core_M={} chunk_M={} num_chunks={} eff={} K_gate={}\n",
-            (uint32_t)x_is_row_major,
-            in0_block_w_gu,
-            per_core_M,
-            chunk_M_tiles,
-            num_chunks,
-            effective_chunks,
-            K_gate_tiles);
-    }
+    const uint32_t count_tiles = (count_value + 31) / 32;
+    // Runtime chunk layout from the actual token count (identical math in the
+    // compute and writer kernels, so all three agree on the row mapping). Full
+    // chunks span chunk_M_max tile-rows; the tail chunk shrinks per_core_M to the
+    // remainder. per_core_M is thus per-chunk (see the loop) and ADAPTS to the
+    // count with minimal phantom work; the chunk count is the minimum.
+    const uint32_t effective_chunks_runtime = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+    // Clamp to the compile-time max just in case (defensive against bad input).
+    const uint32_t effective_chunks =
+        effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
 
     // x-read row offset. Zero unless read_x_at_offset: then x is a shared buffer
     // and this expert's rows begin at start[global_id]. Fetch the start page and
@@ -294,23 +326,6 @@ void kernel_main() {
         x_start_stick = start_value;
     }
 
-    // Per-chunk pre-zero bookkeeping. For each chunk we decide whether
-    // THIS core (as in0 sender) needs to zero its cb_in0_x slots before
-    // starting the K-loop: it does iff some of the chunk's per_core_M rows
-    // are past min(count_tiles, M_tiles_full). The K-loop then SKIPS writes
-    // for invalid rows; the pre-zero ensures the slot's invalid-row L1
-    // regions are zero across all K-blocks (the K-loop only overwrites
-    // valid rows). One pre-zero per chunk replaces the prior per-K-block
-    // memset (~14× savings on RISC-V CPU stores).
-    //
-    // Need to re-pre-zero per chunk because: the L1 carries content from
-    // the previous chunk's K-blocks. Multi-chunk cases (e.g. 3.2k with
-    // chunk_M=56 num_chunks=2: chunk 0 all-valid, chunk 1 has invalid
-    // rows) would otherwise leave chunk 1's invalid rows holding chunk 0's
-    // real data — matmul wastes cycles on the garbage even if writer
-    // skips the OOB output writes downstream.
-    const uint32_t M_bound = (count_tiles < M_tiles_full) ? count_tiles : M_tiles_full;
-
     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
@@ -331,37 +346,68 @@ void kernel_main() {
     // UP_SPLIT handshake counter, kept in lockstep with the writer's.
     uint32_t up_seq = 0;
 
-    // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
-    // so this expert only does work proportional to its actual token count,
-    // not the max-tokens-padded shape of the input. Eliminates the host-side
-    // count read that previously had to narrow the input tensor.
-    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
-
-        // Pre-zero both DB slots of cb_in0_x for this chunk IFF this core
-        // (as in0 sender) has any M-rows past M_bound. The K-loop below
-        // overwrites valid rows but skips writes for invalid rows — those
-        // rows must already be zero in L1 to avoid feeding garbage (or
-        // leftover chunk-N-1 real data) into the matmul. Fires only on
-        // tail chunks of non-aligned M.
-        if (is_in0_sender) {
-            const uint32_t this_core_last_row = this_core_first_row + per_core_M;
-            if (this_core_last_row > M_bound) {
-                // Zero the staging slots so invalid rows the read loop skips feed
-                // zeros to the matmul (row-major: zeros tilize to zero tiles;
-                // TILE: zeros are read directly). Both cb_x_rm and cb_in0_x are
-                // double-buffered.
-                constexpr uint32_t x_stage_slots = 2u;
-                const uint32_t slot_size_bytes = g_in0_block_num_tiles * x_stage_tile_bytes;
-                const uint32_t all_slots_bytes = x_stage_slots * slot_size_bytes;
-                volatile tt_l1_ptr uint64_t* zero_dst =
-                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(x_stage_obj.get_write_ptr());
-                const size_t num_u64_words = all_slots_bytes / sizeof(uint64_t);
-                for (size_t word = 0; word < num_u64_words; ++word) {
-                    zero_dst[word] = 0;
+#ifdef FUSE_BIAS
+    // Read this core's N-column slice of the (1, N) biases ONCE (constant across
+    // chunks; the compute kernel wait_fronts without popping). Bias is a single
+    // tile-row tensor, so the DRAM page index == tile column. Phantom columns
+    // (col >= actual N) are zero-filled — their output columns are dropped by
+    // the writer / are already zero.
+    {
+        const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
+        cb_gate_bias_obj.reserve_back(per_core_N_gu);
+        cb_up_bias_obj.reserve_back(per_core_N_gu);
+        uint32_t lg = cb_gate_bias_obj.get_write_ptr();
+        uint32_t lu = cb_up_bias_obj.get_write_ptr();
+        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+            const uint32_t col = my_nt_gu * per_core_N_gu + n;
+            if (col < N_gate_tiles_full) {
+                noc_read.async_read(gate_bias_acc, CoreLocalMem<uint32_t>(lg), gbias_tb, {.page_id = col}, {});
+                noc_read.async_read(up_bias_acc, CoreLocalMem<uint32_t>(lu), gbias_tb, {.page_id = col}, {});
+            } else {
+                volatile tt_l1_ptr uint64_t* pg = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lg);
+                volatile tt_l1_ptr uint64_t* pu = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lu);
+                for (uint32_t i = 0; i < gbias_tb / 8; ++i) {
+                    pg[i] = 0;
+                    pu[i] = 0;
                 }
             }
+            lg += gbias_tb;
+            lu += gbias_tb;
         }
+        const uint32_t dbias_tb = get_tile_size(cb_down_bias);
+        cb_down_bias_obj.reserve_back(per_core_N_d);
+        uint32_t ld = cb_down_bias_obj.get_write_ptr();
+        for (uint32_t n = 0; n < per_core_N_d; ++n) {
+            const uint32_t col = my_nt_d * per_core_N_d + n;
+            if (col < N_down_tiles_full) {
+                noc_read.async_read(down_bias_acc, CoreLocalMem<uint32_t>(ld), dbias_tb, {.page_id = col}, {});
+            } else {
+                volatile tt_l1_ptr uint64_t* pd = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ld);
+                for (uint32_t i = 0; i < dbias_tb / 8; ++i) {
+                    pd[i] = 0;
+                }
+            }
+            ld += dbias_tb;
+        }
+        noc_read.async_read_barrier();
+        cb_gate_bias_obj.push_back(per_core_N_gu);
+        cb_up_bias_obj.push_back(per_core_N_gu);
+        cb_down_bias_obj.push_back(per_core_N_d);
+    }
+#endif
+
+    // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
+    // so this expert only does work proportional to its actual token count,
+    // not the max-tokens-padded shape of the input. chunk_M_tiles / per_core_M
+    // were picked from the count above; the row mapping is contiguous (core gy
+    // owns rows [chunk*chunk_M + gy*per_core_M, + per_core_M)).
+    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        // Per-chunk per_core_M: per_core_M_max for full chunks, a smaller divisor
+        // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
+        // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
+        const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+        const uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
+        const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
 
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
         //
@@ -417,65 +463,102 @@ void kernel_main() {
                 uint32_t l1_x = x_stage_obj.get_write_ptr();
                 const uint32_t block_start = l1_x;
                 // Rows past count_tiles are NOT valid — they hold uninitialized
-                // DRAM. Reading them would feed garbage (NaN/Inf) into the matmul.
-                // Skip them; the pre-zero above left those L1 bytes zero
-                // (silu(0)=0, 0*up=0, 0@W_down=0 — safe).
-                {  // TEMP profiling: time the x DRAM read (row-major strided vs tiled)
-                    DeviceZoneScopedN("XREAD");
-                    if constexpr (x_is_row_major != 0) {
-                        // Row-major: read this K-block's column window (in0_block_w_gu
-                        // tiles wide) from each of the TILE_HEIGHT token-row sticks of
-                        // every tile-row, laid contiguously so each tile-row forms one
-                        // TILE_HEIGHT x (in0_block_w_gu*32) strip for tilize_block.
-                        // page_id is the token-row stick; offset_bytes is the K-block
-                        // column window within the emb-wide stick.
-                        constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
-                        const uint32_t col_off_bytes = kb * rm_kblock_bytes;
-                        for (uint32_t m = 0; m < per_core_M; ++m) {
-                            const uint32_t tile_row = this_core_first_row + m;
-                            if (tile_row < count_tiles) {
-                                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
-                                    // x_start_stick offsets into this expert's region
-                                    // of the shared row-major buffer (0 when x is a
-                                    // standalone per-expert buffer).
-                                    const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
-                                    noc_read.async_read(
-                                        x_acc_rm,
-                                        CoreLocalMem<uint32_t>(l1_x),
-                                        rm_kblock_bytes,
-                                        {.page_id = stick, .offset_bytes = col_off_bytes},
-                                        {});
-                                    l1_x += rm_kblock_bytes;
-                                }
-                            } else {
-                                // Pre-zero already covered these L1 bytes. Just advance.
-                                l1_x += TILE_HEIGHT * rm_kblock_bytes;
+                // DRAM. Skip the read and leave the stale L1 as-is: no FFN stage
+                // reduces across M (tokens), so garbage stays confined to its own
+                // row, and the writer drops every row >= count_tiles (its
+                // `row < count_tiles` guard), so it never reaches the output.
+                if constexpr (x_is_row_major != 0) {
+                    // Row-major: read this K-block's column window (in0_block_w_gu
+                    // tiles wide) from each of the TILE_HEIGHT token-row sticks of
+                    // every tile-row, laid contiguously so each tile-row forms one
+                    // TILE_HEIGHT x (in0_block_w_gu*32) strip for tilize_block.
+                    // page_id is the token-row stick; offset_bytes is the K-block
+                    // column window within the emb-wide stick.
+                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                    const uint32_t col_off_bytes = kb * rm_kblock_bytes;
+                    for (uint32_t m = 0; m < per_core_M; ++m) {
+                        const uint32_t tile_row = this_core_first_row + m;
+                        if (tile_row < count_tiles) {
+                            // Only sticks < count_value are real tokens; the rest of a valid
+                            // tile-row is dispatch padding. Read just the real sticks (the
+                            // last tile-row is usually partial) and leave the padding sticks
+                            // stale — they are free-dim (token) rows, dropped downstream (the
+                            // writer emits full tile-rows but combine consumes only the real
+                            // count), so no cross-row contamination. This is stick-granular,
+                            // unlike the TILE path where a 32-row tile can't be partially read.
+                            const uint32_t row_base = tile_row * TILE_HEIGHT;
+                            const uint32_t real_r =
+                                (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
+                            for (uint32_t r = 0; r < real_r; ++r) {
+                                // x_start_stick offsets into this expert's region
+                                // of the shared row-major buffer (0 when x is a
+                                // standalone per-expert buffer).
+                                const uint32_t stick = x_start_stick + row_base + r;
+                                noc_read.async_read(
+                                    x_acc_rm,
+                                    CoreLocalMem<uint32_t>(l1_x),
+                                    rm_kblock_bytes,
+                                    {.page_id = stick, .offset_bytes = col_off_bytes},
+                                    {});
+                                l1_x += rm_kblock_bytes;
                             }
-                        }
-                    } else {
-                        for (uint32_t m = 0; m < per_core_M; ++m) {
-                            const uint32_t row = this_core_first_row + m;
-                            const bool row_valid = row < count_tiles;
-                            if (row_valid) {
-                                for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                                    const uint32_t col = kb * in0_block_w_gu + k;
-                                    // x_start_tile_idx offsets into this expert's region
-                                    // of a shared buffer (0 when x is per-expert).
-                                    const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
-                                    noc_read.async_read(
-                                        x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
-                                    l1_x += x_tile_bytes;
-                                }
-                            } else {
-                                // Pre-zero already covered these L1 bytes. Just advance.
-                                l1_x += in0_block_w_gu * x_tile_bytes;
-                            }
+                            // Skip the padding sticks in this tile-row (stale L1, dropped).
+                            l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
+                        } else {
+                            // Invalid row (>= count_tiles): skip the read, advance the
+                            // write ptr. Stale L1 here is dropped by the writer (see above).
+                            l1_x += TILE_HEIGHT * rm_kblock_bytes;
                         }
                     }
-                    noc_read.async_read_barrier();
-                }  // end TEMP XREAD profiling zone
+                } else {
+                    for (uint32_t m = 0; m < per_core_M; ++m) {
+                        const uint32_t row = this_core_first_row + m;
+                        const bool row_valid = row < count_tiles;
+                        if (row_valid) {
+                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                                const uint32_t col = kb * in0_block_w_gu + k;
+                                // x_start_tile_idx offsets into this expert's region
+                                // of a shared buffer (0 when x is per-expert).
+                                const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+                                noc_read.async_read(
+                                    x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+                                l1_x += x_tile_bytes;
+                            }
+                        } else {
+                            // Invalid row (>= count_tiles): skip the read, advance the
+                            // write ptr. Stale L1 here is dropped by the writer (see above).
+                            l1_x += in0_block_w_gu * x_tile_bytes;
+                        }
+                    }
+                }
+                noc_read.async_read_barrier();
 
-                const uint32_t block_bytes = g_in0_block_num_tiles * x_stage_tile_bytes;
+                // Multicast only the real rows of the block. Valid tile-rows form a
+                // contiguous prefix from block_start; padding rows past the token
+                // count stay stale at receivers and are dropped downstream (same
+                // free-dim-M safety as the skipped reads above). RM trims to the real
+                // token-row sticks; TILE to whole valid tile-rows (a 32-row tile can't
+                // be split). A fully-padding M-row (this_core_first_row >= count_tiles)
+                // sends no data — only the valid sem, so receivers still advance.
+                const uint32_t valid_tile_rows =
+                    (this_core_first_row < count_tiles)
+                        ? ((count_tiles - this_core_first_row < per_core_M) ? (count_tiles - this_core_first_row)
+                                                                            : per_core_M)
+                        : 0;
+                uint32_t mcast_bytes;
+                if constexpr (x_is_row_major != 0) {
+                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                    uint32_t real_sticks = 0;
+                    if (valid_tile_rows > 0) {
+                        const uint32_t last_valid = this_core_first_row + valid_tile_rows - 1;
+                        const uint32_t real_r_last =
+                            (last_valid == count_tiles - 1) ? (count_value - last_valid * TILE_HEIGHT) : TILE_HEIGHT;
+                        real_sticks = (valid_tile_rows - 1) * TILE_HEIGHT + real_r_last;
+                    }
+                    mcast_bytes = real_sticks * rm_kblock_bytes;
+                } else {
+                    mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+                }
                 // linked=true keeps the multicast path RESERVED so the in0_valid
                 // sem multicast below travels the SAME path and is delivered
                 // AFTER the data at every receiver. With linked=false the path is
@@ -486,18 +569,20 @@ void kernel_main() {
                 // matmul output for that core (rare, timing-dependent). A write
                 // barrier does NOT fix this on Blackhole (multicast writes are
                 // posted; no completion ack). Mirrors the phase-4 activated mcast.
-                noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(block_start),
-                    MulticastEndpoint{},
-                    block_bytes,
-                    in0_num_receivers,
-                    {.offset_bytes = 0},
-                    {.noc_x_start = in0_mcast_nx_start,
-                     .noc_y_start = in0_mcast_ny_start,
-                     .noc_x_end = in0_mcast_nx_end,
-                     .noc_y_end = in0_mcast_ny_end,
-                     .addr = block_start},
-                    /*linked=*/true);
+                if (mcast_bytes > 0) {
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(block_start),
+                        MulticastEndpoint{},
+                        mcast_bytes,
+                        in0_num_receivers,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = in0_mcast_nx_start,
+                         .noc_y_start = in0_mcast_ny_start,
+                         .noc_x_end = in0_mcast_nx_end,
+                         .noc_y_end = in0_mcast_ny_end,
+                         .addr = block_start},
+                        /*linked=*/true);
+                }
                 x_stage_obj.push_back(g_in0_block_num_tiles);
 
                 noc.async_writes_flushed();
@@ -526,9 +611,18 @@ void kernel_main() {
                                 {.page_id = tile_idx},
                                 {});
                         } else {
-                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
-                            for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
-                                p[i] = 0;
+                            // N-OOB hidden padding column (col >= N_gate_tiles_full ==
+                            // down's K_down_tiles). Its garbage gate output feeds the down
+                            // matmul's K reduction, so keep it zero UNLESS the compute
+                            // tail-skips the last down block's padding (down_k_tail_skip) —
+                            // then down never reduces this column and the garbage is dropped.
+                            // Mirrors the down-weight K-OOB fill below.
+                            if constexpr (!down_k_tail_skip) {
+                                volatile tt_l1_ptr uint64_t* p =
+                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
+                                for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
+                                    p[i] = 0;
+                                }
                             }
                         }
                         l1_w_gate += gate_tile_bytes;
@@ -552,10 +646,14 @@ void kernel_main() {
                                 noc_read.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
                             } else {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                                // N-OOB hidden padding column: same rationale as the gate read
+                                // above — kept zero only when the down matmul still reduces it.
+                                if constexpr (!down_k_tail_skip) {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
+                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
                                 }
                             }
                             l1_w_up += up_tile_bytes;
@@ -568,7 +666,6 @@ void kernel_main() {
                 if constexpr (up_split) {
                     up_done_sem.wait_min(up_seq);
                 }
-
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                 // locally-read weights go straight to compute via cb_push_back.
                 if (in1_num_receivers > 0) {
@@ -615,18 +712,20 @@ void kernel_main() {
                             /*linked=*/true);
                     }
                 }
-
                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
-
                 if (in1_num_receivers > 0) {
                     noc.async_writes_flushed();
-
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
-                        noc, in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_num_receivers);
+                        noc,
+                        in1_mcast_nx_start,
+                        in1_mcast_ny_start,
+                        in1_mcast_nx_end,
+                        in1_mcast_ny_end,
+                        in1_num_receivers);
                 }
             }
 
@@ -704,63 +803,32 @@ void kernel_main() {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
                             noc_read.async_read(
                                 down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
-                        } else {
-                            volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
-                            for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
-                                p[i] = 0;
+                        } else if (row >= K_down_tiles) {
+                            // K-OOB (reduction dim): the matmul may still read these, so keep
+                            // them zero — 0 * (stale/Inf weight) would NaN a valid output col.
+                            // Skipped when the compute tail-skips the last block's padding
+                            // (down_k_tail_skip) — then these tiles are never read.
+                            if constexpr (!down_k_tail_skip) {
+                                volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                                for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
+                                    p[i] = 0;
+                                }
                             }
                         }
+                        // N-OOB (col >= N_down_tiles_full): output column is dropped by the
+                        // writer's col guard (free dim), so stale L1 is harmless — skip the fill.
                         l1_w += down_tile_bytes;
                     }
                 }
             }
 
-            // Step 3: activated L1 mcast (sender for this K-block = gx==kb).
-            // act_sender starts as soon as compute pushes cb_activated AND
-            // the ready acks are in (already done in step 1).
-            if (is_act_sender) {
-                cb_activated_obj.wait_front(d_in0_block_num_tiles);
-                act_ready_sem.wait(GRID_X_NOC - 1);
-                act_ready_sem.set(0);
-
-                const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
-                const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
-                const uint32_t mcast_bytes = d_in0_block_num_tiles * intermed_tile_bytes;
-                // linked=true keeps the multicast path RESERVED so the
-                // valid-semaphore multicast below travels the SAME path and is
-                // delivered AFTER the data at every receiver. With linked=false
-                // the path is released and the (posted) valid-sem multicast can
-                // overtake the bulk data multicast at a receiver -> the receiver
-                // observes act_valid, pushes cb_in0_down_full, and compute reads
-                // stale L1 -> that core's whole down-matmul output block is wrong
-                // (run-to-run nondeterministic). A write barrier does NOT fix this
-                // on Blackhole (multicast writes are posted; no completion ack to
-                // wait on) — only path-linking orders the sem behind the data.
-                // Mirrors the canonical matmul in0 sender
-                // (reader_bmm_tile_layout_in0_sender_padding.cpp).
-                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                    CoreLocalMem<uint32_t>(src_l1),
-                    MulticastEndpoint{},
-                    mcast_bytes,
-                    GRID_X_NOC,
-                    {.offset_bytes = 0},
-                    {.noc_x_start = mrow_first_nx,
-                     .noc_y_start = mrow_first_ny,
-                     .noc_x_end = mrow_last_nx,
-                     .noc_y_end = mrow_last_ny,
-                     .addr = dst_l1},
-                    /*linked=*/true);
-                noc.async_writes_flushed();
-
-                act_valid_sem.set(ACT_VALID);
-                act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                    noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
-
-                cb_activated_obj.pop_front(d_in0_block_num_tiles);
-            }
-
-            // Step 4: in1_down sender finishes — barrier on DRAM reads (NoC 0,
-            // in flight during step 3 activated mcast on NoC 1), then mcast.
+            // Step 3: in1_down sender finishes — barrier on the DRAM reads it
+            // kicked off in step 2, then mcasts the down-weight block. Reordered
+            // BEFORE the activated mcast: the down weight has no compute
+            // dependency (DRAM-ready early), so sending it first clears NoC 1 for
+            // the compute-gated activated mcast below. Tradeoff: on the one core
+            // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
+            // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
                 noc_read.async_read_barrier();
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
@@ -769,7 +837,7 @@ void kernel_main() {
                     const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     // linked=true so the in1_valid-sem multicast is ordered behind
                     // the weight data on the same reserved path (see the activated
-                    // mcast above for the full rationale).
+                    // mcast below for the full rationale).
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(in1_block_start),
                         MulticastEndpoint{},
@@ -786,7 +854,67 @@ void kernel_main() {
 
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
-                        noc, in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_num_receivers);
+                        noc,
+                        in1_mcast_nx_start,
+                        in1_mcast_ny_start,
+                        in1_mcast_nx_end,
+                        in1_mcast_ny_end,
+                        in1_num_receivers);
+                }
+            }
+
+            // Step 4: activated L1 mcast (sender for this K-block = gx==kb). Runs
+            // after the in1_down mcast; starts as soon as compute pushes
+            // cb_activated AND the ready acks are in (already done in step 1).
+            if (is_act_sender) {
+                // cb_activated holds this core's per_core_M (runtime) x in0_block_w_d
+                // activated tiles; read/mcast/pop exactly that many. cb_in0_down_full
+                // is pushed FULL (compile-time max) below so the down matmul's ring
+                // stays aligned — the rows past per_core_M are MAC-skipped there.
+                const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
+                if (re_act_tiles > 0) {
+                    cb_activated_obj.wait_front(re_act_tiles);
+                }
+                act_ready_sem.wait(GRID_X_NOC - 1);
+                act_ready_sem.set(0);
+
+                const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
+                const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
+                const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
+                // linked=true keeps the multicast path RESERVED so the
+                // valid-semaphore multicast below travels the SAME path and is
+                // delivered AFTER the data at every receiver. With linked=false
+                // the path is released and the (posted) valid-sem multicast can
+                // overtake the bulk data multicast at a receiver -> the receiver
+                // observes act_valid, pushes cb_in0_down_full, and compute reads
+                // stale L1 -> that core's whole down-matmul output block is wrong
+                // (run-to-run nondeterministic). A write barrier does NOT fix this
+                // on Blackhole (multicast writes are posted; no completion ack to
+                // wait on) — only path-linking orders the sem behind the data.
+                // Mirrors the canonical matmul in0 sender
+                // (reader_bmm_tile_layout_in0_sender_padding.cpp).
+                if (mcast_bytes > 0) {
+                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                        CoreLocalMem<uint32_t>(src_l1),
+                        MulticastEndpoint{},
+                        mcast_bytes,
+                        GRID_X_NOC,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = mrow_first_nx,
+                         .noc_y_start = mrow_first_ny,
+                         .noc_x_end = mrow_last_nx,
+                         .noc_y_end = mrow_last_ny,
+                         .addr = dst_l1},
+                        /*linked=*/true);
+                }
+                noc.async_writes_flushed();
+
+                act_valid_sem.set(ACT_VALID);
+                act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                    noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
+
+                if (re_act_tiles > 0) {
+                    cb_activated_obj.pop_front(re_act_tiles);
                 }
             }
 

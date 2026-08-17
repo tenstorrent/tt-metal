@@ -196,7 +196,7 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
         operation_attributes.dtype,
         input_tensor.tensor_spec().page_config(),
         operation_attributes.all_reduce_mem_config);
-    auto all_reduce_tensor_spec = TensorSpec(input_shape, output_tensor_layout);
+    auto all_reduce_tensor_spec = tt::tt_metal::TensorSpec(input_shape, output_tensor_layout);
 
     auto batch = input_shape[2];
     if (operation_attributes.slice_size.has_value()) {
@@ -254,15 +254,15 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
 
     return {
         .all_reduce = all_reduce_tensor_spec,
-        .q = TensorSpec(
+        .q = tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        .k = TensorSpec(
+        .k = tt::tt_metal::TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        .v = TensorSpec(
+        .v = tt::tt_metal::TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};

@@ -162,11 +162,48 @@ class TT_CCL:
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
 
+    def reset_global_semaphores(self):
+        """Reset all global semaphores to 0 and rotating indices, so a reused CCL behaves like a
+        freshly-created one. close() only resets the stall group and leaves semaphores intact, so
+        when a CCL is reused across repeat batches the semaphore values drift away from the
+        trace-capture-time state (which assumes fresh 0-valued semaphores), eventually hanging the
+        CCL ops. Resetting here re-establishes that clean state at each mode switch."""
+
+        def _reset(obj):
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _reset(item)
+            elif obj is not None:
+                ttnn.reset_global_semaphore_value(obj, 0)
+
+        for container in (
+            self.gather_semaphore_handles,
+            self.barrier_semaphore_handles,
+            getattr(self, "from_semaphore_handles", None),
+            getattr(self, "to_semaphore_handles", None),
+            getattr(self, "reduce_semaphore_handles", None),
+        ):
+            _reset(container)
+        self.reset_gather_and_buffer_idx()
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
+
+    def get_and_cycle_ag_semaphore_handles(self, cluster_axis):
+        # All-gather semaphore accessor for the force-argmax sampling path (Blackhole).
+        # ttnn.experimental.all_gather_async requires two global semaphores; build the pair from
+        # consecutive entries of the per-axis gather semaphore ring (same construction the internal
+        # all_gather_async path uses), then advance the rotating index.
+        current_idx = self.gather_idx[cluster_axis]
+        semaphores = [
+            self.gather_semaphore_handles[cluster_axis][current_idx],
+            self.gather_semaphore_handles[cluster_axis][(current_idx + 1) % self.num_cbs],
+        ]
+        self.gather_idx[cluster_axis] = (current_idx + 1) % self.num_cbs
+        return semaphores
 
     def get_all_gather_concat_inter_buffer(self):
         if ttnn.get_arch_name().lower() == "blackhole":
@@ -813,6 +850,9 @@ class TT_CCL:
                 subdevice_id=self.worker_sub_device_id,
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+                # fp32 dest accumulation for the LM-head all_reduce only: its bf16 cross-device sum was
+                # order-dependent (ETH ring arrival order) -> per-row logit non-determinism -> greedy flips.
+                fp32_dest_acc=lm_head,
             )
             if lm_head:
                 persistent_buffer.deallocate(True)
@@ -1605,6 +1645,7 @@ def tt_distributed_rmsnorm(
     mesh_device,
     compute_kernel_config,
     tt_ccl=None,
+    output_dtype=None,
 ):
     use_2d_grid = False
 
@@ -1618,7 +1659,8 @@ def tt_distributed_rmsnorm(
     )
     tt_stats.deallocate(True)
 
-    # Run distributed rmsnorm part 2
+    # Run distributed rmsnorm part 2. output_dtype lets the caller keep the norm output bf8 even when
+    # the residual input is bf16 (BH no-prefetch), so downstream matmul activations stay small in L1.
     tt_out = ttnn.rms_norm_post_all_gather(
         inp,
         tt_stats_gathered,
@@ -1626,6 +1668,7 @@ def tt_distributed_rmsnorm(
         weight=gamma,
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
+        dtype=output_dtype,
     )
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)

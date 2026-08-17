@@ -17,6 +17,7 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -80,6 +81,25 @@ class Qwen25Coder32BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size`` — Qwen2.5-Coder-32B does, below).
+    # Qwen2.5-Coder is a standard dense Qwen2.5 attention (NO QK-norm), so every prefill op is
+    # row-independent and the batched fold is bit-safe (same as the qwen25_7b port).
+    # ``max_prefill_batch_size`` caps the per-group batch; 32 folds the whole batch-32 prefill in ONE
+    # 32-user pass (TTTv1 structural parity) so the eager norm+lm_head tail + full-vocab readback run
+    # once instead of 4×. At the natural 128 bucket the fold is 32*128=4096=2*2048, an exact multiple of
+    # MAX_QKV_MM_SEQ_LEN (reshape-safe), and 4096 % mlp_prefill_len_cutoff(1024) == 0 for the FF reshape;
+    # the DRAM guard (padded_batch*seq < 128K) passes with 4096. This model already runs the 1024 engine
+    # default for the FF cutoff (_resolve_coder_32b_wh_tuning), so the fold is the only prefill lever
+    # applied here. ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
+    # ``max_prefill_chunk_size`` (above) drives the #45234 chunked-prompt decline.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int) -> bool:
         # Mirror TTTv1's ModelArgs.get_trace_prefill_supported_seq_lens: on the only supported SKU
@@ -287,8 +307,32 @@ def _post_attn_norm_decode_configs(
     return program_config, mlp.config.decode_input_memcfg
 
 
+# Cast coder's two per-layer prefill norm-reconstruction all-gathers (pre-attn + post-attn) from bf16 to
+# bfloat8_b, mirroring the sibling qwen25_72b H003 (commit 783d2945e2b, model.py:262). Every coder prefill
+# decoder layer runs two full-activation all-gathers at bf16 to reconstruct the dim-fractured RMSNorm output
+# to full ``dim`` before Attention1D / MLP1D (the QKV / W1/W3 matmuls expect width ``dim``). Each moves a
+# 5120-wide activation across 8 devices, x2/layer x64 layers = 128 bf16 all-gathers on the batched b32-ci
+# prefill critical path. Every matmul these gathers feed already quantizes activations to bf8_b (QKV/WO) or
+# bf4_b (W1/W3), so the bf16 gather precision is largely unconsumed; casting the gather input to bf8_b halves
+# each collective's cross-device payload (AllGatherAsync is payload-bound at dim=5120). PREFILL-ONLY: the
+# decode + tail-norm call sites of _all_gather_rmsnorm_tensor pass no dtype -> byte-identical decode/tail.
+# Unlike 72b there is no third fused pre-WO gather to cast: coder's dim=5120 fails the fused all-gather auto-
+# gate ((5120//32//8) % 8 = 4 != 0), so only these two norm gathers apply (the fused hook is a no-op here).
+# NOT bit-exact vs bf16 (mantissa drop) -> gated on token-accuracy + eval-32, NOT the 32-user byte-compare
+# (INVALID on coder's tie-heavy on_device_topk). coder's perf recipe is BFP4-FF/LoFi (less precision-tolerant
+# than 72b's >70B bf4/bf8 recipe), so the accuracy profile is re-gated separately. A/B escape hatch: set
+# DISABLE_PREFILL_AG_BF8=1 to keep the gathers at bf16 (byte-identical to the pre-change HEAD). None disables.
+_PREFILL_AG_CCL_DTYPE: ttnn.DataType | None = (
+    None if os.environ.get("DISABLE_PREFILL_AG_BF8") == "1" else ttnn.bfloat8_b
+)
+
+
 def _all_gather_rmsnorm_tensor(
-    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
+    norm: RMSNorm1D,
+    x: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    dtype: ttnn.DataType | None = None,
 ) -> ttnn.Tensor:
     cfg = norm.config
     if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
@@ -296,6 +340,15 @@ def _all_gather_rmsnorm_tensor(
 
     if memory_config is None:
         memory_config = x.memory_config()
+
+    # Prefill-only opt-in (``dtype`` is set only at the two per-layer prefill call sites): cast the gather
+    # input (bf16) to a smaller CCL dtype (bfloat8_b) to halve this collective's cross-device payload. Decode
+    # and tail-norm call sites leave ``dtype=None`` -> byte-identical. An explicit typecast is required
+    # (to_memory_config does not cast an already-DRAM tensor).
+    if dtype is not None and x.dtype != dtype:
+        x_cast = ttnn.typecast(x, dtype)
+        ttnn.deallocate(x)
+        x = x_cast
 
     tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
     return ttnn.experimental.all_gather_async(
@@ -324,6 +377,28 @@ class _Qwen25Coder32BWHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for the QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 32B the
+    # batch-32-ci prefill is matmul-compute-bound (~80% of FLOPs = the 3 MLP matmuls), so minimal_matmul
+    # is a real prefill-TTFT win — it narrows the batch-32-ci TTFT gap vs TTTv1 (which uses minimal_matmul
+    # for the same matmuls). The shared plumbing (attention_1d.use_minimal_qkv_matmul / mlp_1d
+    # use_minimal_w2_matmul, both gated seq_len>128) is already in the base; this flag just engages it.
+    # Coder is a Qwen2.5 arch: the QKV bias is added AFTER the matmul, so it is unchanged by the minimal
+    # path (same as the mistral_7b / deepseek Qwen2 ports). Independent of the FF-hidden DRAM-shard pad
+    # (a decode fix); minimal_matmul is prefill-only, so decode throughput is unchanged.
+    prefill_minimal_matmul: bool = True
+    # Cast coder's per-layer prefill attention output reduce-scatter from bf16 to bfloat8_b, matching
+    # TTTv1's ccl_dtype (model_config.py:1070). coder's dim=5120 fails the fused all-gather auto-gate
+    # ((5120//32//8) % 8 = 4 != 0), so attention runs a SEPARATE per-layer reduce_scatter on the bf16 WO
+    # output (attention_1d._all_reduce_output_prefill), x64 layers; a bf16 reduce moves 2x the cross-device
+    # bytes of a bf8_b one and reduce_scatter on this shape is dtype-bound (PLAN_03: 2210us -> 1534us/layer
+    # at dim=5120). TTTv1 already reduces this at bf8_b, so the result matches the shipped reference numerics
+    # (not a degradation below it). PREFILL-ONLY: the decode reduce (_all_reduce_output_decode) never reads
+    # prefill_reduce_ccl_dtype -> decode byte-identical. A/B escape hatch: set DISABLE_PREFILL_REDUCE_BF8=1
+    # to keep the reduce at bf16 (byte-identical to the pre-change HEAD). Not bit-exact vs bf16 (mantissa
+    # drop) -> gated on token-accuracy + eval-32, not the 32-user byte-compare (INVALID on coder's tie-heavy
+    # on_device_topk).
+    prefill_reduce_ccl_bf8: bool = True
 
 
 def _resolve_qwen_coder_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25Coder32BWHTuning:
@@ -338,10 +413,14 @@ def _resolve_qwen_coder_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen
         mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
+    t.prefill_reduce_ccl_bf8 = not os.environ.get("DISABLE_PREFILL_REDUCE_BF8")
     logger.info(
         f"L1 tuning for Qwen2.5-Coder-32B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}, "
+        f"prefill_reduce_ccl_bf8={t.prefill_reduce_ccl_bf8}"
     )
     return t
 
@@ -423,10 +502,37 @@ def _build_decoder_layer(
             sdpa_decode_compute_kernel_cfg=precision.attn_sdpa_kernel_cfg,
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+            # Route the folded-batch prefill WO projection through minimal_matmul (completes PLAN_01's
+            # QKV+FF2 minimal plumbing on coder). WO is the least-efficient prefill matmul on ttnn.linear;
+            # the minimal op (already used for QKV/FF2) recovers most of that gap and makes TTTv2 beat
+            # TTTv1's ttnn.linear WO (a shared op on both stacks). coder's WO is the non-fused shape
+            # (dim=5120 fails the fused all-gather auto-gate), so this runs every layer. Gated by the
+            # same DISABLE_MINIMAL_MATMUL escape hatch (OFF => byte-identical to the pre-change HEAD).
+            prefill_wo_minimal_matmul=wh.prefill_minimal_matmul,
+            # Cast the per-layer prefill attention output reduce-scatter (bf16 WO output) to bfloat8_b,
+            # matching TTTv1's ccl_dtype. coder is on the NON-fused path (dim=5120 fails the fused
+            # all-gather auto-gate), so this reduce runs every layer; a bf8_b reduce halves the
+            # cross-device payload. Prefill-only (the decode reduce ignores this field). Gated by the
+            # DISABLE_PREFILL_REDUCE_BF8 escape hatch (None => byte-identical to the pre-change HEAD).
+            prefill_reduce_ccl_dtype=(ttnn.bfloat8_b if wh.prefill_reduce_ccl_bf8 else None),
         )
     )
 
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
+    # Pad the FF hidden dim to a grid-friendly per-device size so the DRAM-sharded decode FF
+    # matmuls (W1/W3/W2) use a full multi-core grid instead of 4. The decode grid must divide both
+    # the K-tile and N-tile counts (in0 is K-width-sharded on dim, weights are N-sharded on hidden);
+    # with the raw per-device hidden 27648/8 -> 3456 = 108 tiles (2^2*27), gcd(dim_tiles=160, 108)=4
+    # -> only 4 DRAM readers stream the FF weights, which dominate memory-bound decode. Padding per
+    # device to 128 tiles (4096, total 32768) gives gcd(160, 128)=32 cores. The extra columns are
+    # zeros (silu(0)=0, mul->0, and W2 contracts the padded rows to 0), so decode output is unchanged.
+    _ff_align = TILE_SIZE * TILE_SIZE * num_dev  # 32*32*8 = 8192 on T3K
+    _ff_pad = math.ceil(w1.shape[-1] / _ff_align) * _ff_align
+    if _ff_pad != w1.shape[-1]:
+        w1 = torch.nn.functional.pad(w1, (0, _ff_pad - w1.shape[-1]))
+        w3 = torch.nn.functional.pad(w3, (0, _ff_pad - w3.shape[-1]))
+        w2 = torch.nn.functional.pad(w2, (0, 0, 0, _ff_pad - w2.shape[-2]))
     mlp = MLP1D.from_config(
         MLP1DConfig(
             w1=_lazy(
@@ -446,13 +552,16 @@ def _build_decoder_layer(
             ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
         mlp,
         dim=qcfg.dim,
-        hidden_dim=qcfg.hidden_dim,
+        # Use the padded FF hidden so the post-attn RMSNorm decode output is width-sharded on the
+        # SAME (32-core) grid as MLP1D's W1/W3 decode input; a mismatch silently corrupts decode.
+        hidden_dim=_ff_pad,
         num_devices=num_dev,
         max_batch_size=qcfg.max_batch_size,
     )
@@ -560,11 +669,15 @@ class Qwen25Coder32BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
-        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r)
+        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r, dtype=_PREFILL_AG_CCL_DTYPE)
         r = self.self_attn.forward(
             r,
             None,
@@ -574,10 +687,11 @@ class Qwen25Coder32BDecoderLayer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
-        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2)
+        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2, dtype=_PREFILL_AG_CCL_DTYPE)
         r2 = self.mlp.prefill_forward(r2)
         return ttnn.add(h, r2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -844,6 +958,7 @@ class Qwen25Coder32B(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
@@ -873,7 +988,11 @@ class Qwen25Coder32B(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -883,6 +1002,7 @@ class Qwen25Coder32B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
 
         if get_last_token == -1:

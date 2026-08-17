@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 from itertools import chain
 
 import pytest
@@ -220,3 +221,51 @@ def test_argmax_nc_preallocated_output(device):
     ttnn_out = ttnn.zeros(list(out_shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, output_tensor=ttnn_out)
     assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+
+
+@pytest.mark.timeout(120, method="thread")
+def test_argmax_reduce_all_multicore_no_deadlock(device):
+    """
+    Guard for the multi-core reduce_all (whole-tensor) argmax path.
+
+    The reduce core signals each iteration via start_sem (set + multicast), which increases
+    monotonically.  In the reduce_all path there is no per-iteration done_sem back-pressure (it is
+    lifted out of the k-loop), so the reduce core free-runs and can advance start_sem past a given
+    value before a lagging worker samples it.  Workers therefore wait with wait_min(k+1) (>=) rather
+    than an exact match, so a skipped-over value cannot strand a worker at noc_semaphore_wait and
+    deadlock the op.
+
+    A ROW_MAJOR tensor with dim=None routes to the multi-core reduce_all reader; the shape is large
+    enough to split across many cores and run several k-iterations.  The check guards correctness of
+    the reduce_all multi-core path and, via the worker-thread watchdog + pytest-timeout, converts a
+    deadlock into an assertion failure instead of a hung session.
+    """
+    torch.manual_seed(0)
+    t = torch.randn((64, 4096), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    result = {}
+
+    def _run():
+        try:
+            out = ttnn.argmax(ttnn_in)  # dim=None -> reduce_all multi-core path
+            ttnn.synchronize_device(device)
+            result["out"] = out
+        except Exception as exc:  # surface device/compile errors to the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=60.0)
+
+    assert not worker.is_alive(), (
+        "ttnn.argmax(dim=None) did not complete on the multi-core reduce_all path: a worker's "
+        "start_sem wait was starved -- workers must wait_min(>=) on the monotonic start_sem, since "
+        "an exact-match wait can be lapped by the free-running reduce core."
+    )
+    if "error" in result:
+        raise result["error"]
+
+    ref = int(torch.argmax(t.reshape(-1)))
+    got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
+    assert got == ref, f"argmax reduce_all mismatch: got {got}, expected {ref}"

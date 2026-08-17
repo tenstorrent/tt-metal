@@ -29,6 +29,17 @@ struct StridedReduceScatterProgramArtifacts {
     uint32_t num_cores_per_link;
     // Index into the reader RT args where addcmul_a_address lives (0 = not used).
     uint32_t reader_addcmul_rt_arg_offset = 0;
+    // Per-core MM signaling: privately allocated L1 backing for the per-MM-core progress counter array
+    std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
+    // The counter-array L1 address baked into the reader + MM runtime args at build time
+    uint32_t mm_progress_counters_addr = 0;
+    // Rolling-window return path: backing L1 buffer for the per-RS-reader credit counters (one
+    // shard/row per MM core). Held for the same reason as the array above — its L1 address is baked
+    // into the reader + MM runtime args, so freeing it would leave both kernels polling memory the
+    // allocator has handed to something else.
+    std::shared_ptr<tt::tt_metal::Buffer> rs_credit_counters_buffer;
+    // Credit-array L1 address baked into the reader + MM runtime args at build time
+    uint32_t rs_credit_counters_addr = 0;
 };
 
 struct operation_attributes_t {
@@ -55,6 +66,7 @@ struct operation_attributes_t {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(17);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
@@ -82,7 +94,7 @@ struct tensor_args_t {
     std::optional<Tensor> optional_output_tensor;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail

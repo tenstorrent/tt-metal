@@ -27,19 +27,30 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
 
-    const auto& shard_spec = input.shard_spec().value();
-    auto all_cores = shard_spec.grid;
+    // Input is TILE + interleaved (no shard spec). Derive the work split from the shape: keep the
+    // fixed 8x8 (64-core) grid and the binary-tree reduction, giving each core a contiguous range of
+    // token rows. Each core reads the TILE pages covering its rows from interleaved memory and untiles
+    // in-kernel. tile_h (32) is the tile height; the token count is tile-aligned by construction.
+    const uint32_t tile_h = input.tensor_spec().page_config().get_tile().get_height();
+    const uint32_t tokens = input.padded_shape()[0];
+
+    CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(7, 7)));
     uint32_t num_cores = all_cores.num_cores();
-    uint32_t shard_height = shard_spec.shape[0];
+    TT_FATAL(tokens % num_cores == 0, "Token count ({}) must be divisible by the {}-core grid", tokens, num_cores);
+    uint32_t shard_height = tokens / num_cores;  // rows per core
 
     uint32_t h_brisc = shard_height / 2;
     uint32_t h_ncrisc = shard_height - h_brisc;
+
+    // Max TILE pages a RISC's row range can span (misaligned ranges straddle one extra tile).
+    uint32_t max_tiles_brisc = (h_brisc + tile_h - 1) / tile_h + 1;
+    uint32_t max_tiles_ncrisc = (h_ncrisc + tile_h - 1) / tile_h + 1;
 
     auto* src_buffer = input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     auto* mask_buffer = expert_mask.buffer();
 
-    uint32_t input_page_size = src_buffer->aligned_page_size();
+    uint32_t input_page_size = src_buffer->aligned_page_size();  // one TILE (32x32 uint16)
     uint32_t output_page_size = dst_buffer->aligned_page_size();
     uint32_t mask_page_size = mask_buffer->aligned_page_size();
 
@@ -53,7 +64,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     // CB 0: BRISC input pages (per-shard)
     uint32_t cb_in_brisc = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_in_brisc_config =
-        tt::tt_metal::CircularBufferConfig(h_brisc * input_page_size, {{cb_in_brisc, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(max_tiles_brisc * input_page_size, {{cb_in_brisc, input_cb_data_format}})
             .set_page_size(cb_in_brisc, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_brisc_config);
 
@@ -67,7 +78,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     // CB 2: NCRISC input pages (per-shard)
     uint32_t cb_in_ncrisc = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_in_ncrisc_config =
-        tt::tt_metal::CircularBufferConfig(h_ncrisc * input_page_size, {{cb_in_ncrisc, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(max_tiles_ncrisc * input_page_size, {{cb_in_ncrisc, input_cb_data_format}})
             .set_page_size(cb_in_ncrisc, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_ncrisc_config);
 
@@ -116,6 +127,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         num_cores,
         cb_mask,
         mask_page_size,
+        tile_h,
     };
     ct_args_brisc.insert(ct_args_brisc.end(), accessor_args.begin(), accessor_args.end());
 
@@ -138,6 +150,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         num_cores,
         cb_mask,
         mask_page_size,
+        tile_h,
     };
     ct_args_ncrisc.insert(ct_args_ncrisc.end(), accessor_args.begin(), accessor_args.end());
 

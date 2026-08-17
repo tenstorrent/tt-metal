@@ -36,6 +36,7 @@ class DRAMZeroFill:
         *,
         num_users: int = 1,
         max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
+        k_chunk_size: int = DEFAULT_K_CHUNK_SIZE,
         kvpe_dim: int = DEFAULT_KVPE_DIM,
         dtype: ttnn.DataType = ttnn.bfloat8_b,
         mesh_shape: tuple[int, int] | None = None,
@@ -51,6 +52,7 @@ class DRAMZeroFill:
             device: Single device or MeshDevice to allocate on.
             num_users: Batch / user count (first dimension).
             max_seq_len: Total (global) sequence length across all mesh rows.
+            k_chunk_size: Size of the chunk to decode for FlashMLADecode.
             kvpe_dim: Combined KNOPE + KROPE feature dimension.
             dtype: Data type for the cache (default bfloat8_b).
             mesh_shape: (rows, cols) mesh shape for the tensor topology.
@@ -74,7 +76,9 @@ class DRAMZeroFill:
         if mesh_shape is None:
             mesh_shape = (mesh_rows, mesh_cols)
 
-        program_config = FlashMLADecode.ProgramConfig(k_chunk_size=DEFAULT_K_CHUNK_SIZE, exp_approx_mode=False)
+        if k_chunk_size <= 0:
+            raise ValueError(f"k_chunk_size must be positive; got {k_chunk_size}")
+        program_config = FlashMLADecode.ProgramConfig(k_chunk_size=k_chunk_size, exp_approx_mode=False)
         if per_device_seq % program_config.k_chunk_size != 0:
             raise ValueError(
                 "Per-device sequence length must be divisible by k_chunk_size for KV cache allocation: "

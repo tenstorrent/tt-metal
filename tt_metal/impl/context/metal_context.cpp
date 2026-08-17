@@ -13,7 +13,6 @@
 #include <vector>
 #include <unordered_set>
 
-#include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
@@ -22,6 +21,7 @@
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
@@ -228,21 +228,24 @@ void MetalContext::initialize(
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
-    bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
-        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
+        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl(), *this);
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    bool are_fd_kernels_on_same_core = get_cluster().arch() == tt::ARCH::QUASAR && num_hw_cqs == 1;
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, are_fd_kernels_on_same_core, rtoptions());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH,
-        num_hw_cqs,
-        hal(),
-        is_galaxy_cluster,
-        /*are_fd_kernels_on_same_core=*/false,
-        rtoptions());
+    const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
+    // Build the single canonical DispatchMemMap for the core type we actually dispatch on. On Quasar the dispatch
+    // engine runs on DISPATCH cores (resolved per-device from the soc descriptor), which differs from the WORKER/ETH
+    // config core type; elsewhere the resolved type matches the config core type.
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config_);
+    const auto& cluster = get_cluster();
+    if (env_ != nullptr && cluster.arch() == tt::ARCH::QUASAR && !cluster.all_chip_ids().empty()) {
+        const ChipId device_id = *cluster.all_chip_ids().begin();
+        dispatch_core_type =
+            resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_);
+    }
+    const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout();
+    dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
+        dispatch_core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
@@ -267,11 +270,10 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        TT_FATAL(hal().get_arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
-        profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(MetalEnvAccessor(*this->env_).impl());
     }
 
-    data_collector_ = std::make_unique<DataCollector>();
+    data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -317,7 +319,7 @@ void MetalContext::reinitialize_dispatch_managers() {
     // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
     // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
-        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl());
+        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl(), *this);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(
         *this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs_);
 }
@@ -507,11 +509,7 @@ void MetalContext::register_handlers_locked() {
 }
 
 void MetalContext::teardown_dispatch_state() {
-    for (auto& mem_map : dispatch_mem_map_) {
-        if (mem_map) {
-            mem_map.reset();
-        }
-    }
+    dispatch_mem_map_.reset();
     device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
@@ -522,7 +520,7 @@ MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_e
     check_context_id(context_id);
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
-    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl());
+    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
@@ -585,13 +583,8 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
-    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
-}
-
-const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
-    return *mem_map;
+    TT_FATAL(dispatch_mem_map_, "Tried to get dispatch_mem_map before initializing it.");
+    return *dispatch_mem_map_;
 }
 
 // ─── Fabric / control plane / system mesh — delegated to MetalEnv ─────────────
@@ -772,7 +765,7 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
 
     CoreCoord virtual_coord = get_cluster().get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id) ||
-           get_cluster().is_dram_core(virtual_coord, id);
+           get_cluster().is_dram_core(virtual_coord, id) || get_cluster().is_dispatch_core(virtual_coord, id);
 }
 
 void MetalContext::on_dispatch_timeout_detected() {

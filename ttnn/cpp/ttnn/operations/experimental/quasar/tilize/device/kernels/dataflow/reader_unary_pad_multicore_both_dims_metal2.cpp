@@ -151,6 +151,10 @@ void kernel_main() {
 
                 // Block before copying data from tmp to cb buffer
                 noc.async_read_barrier();
+                // [#48552] invalidate_l1_cache() is a no-op on Quasar DM; the tt_memmove below CPU-reads
+                // temp_addr (a reused single-slot scratch just NOC-written) -> discard the stale L2 line so the
+                // copy re-fetches fresh data from TL1. Placed before fill_with_val (which writes the pad tail).
+                invalidate_l2_cache_range(temp_addr, width_size + dram_alignment);
 
                 uint32_t prev_size = start_column_id;
                 uint32_t this_block_size = unpadded_X_size - prev_size;

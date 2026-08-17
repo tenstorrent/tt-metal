@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -13,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -43,19 +46,20 @@ using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_m
 // Use ASICPosition from tt::tt_metal namespace
 using AsicPosition = tt::tt_metal::ASICPosition;
 
-// Map from AsicID to its physical position (TrayID, ASICLocation); used for pinning validation and anchors.
+// Map from AsicID to its physical position (TrayID, ASICLocation)
+// Required only when using pinning constraints
 using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 
-// Pinning constraint: maps an ASIC position to a FabricNodeId
-// This constrains which physical ASIC a logical node can be mapped to
-using PinningConstraint = std::pair<AsicPosition, FabricNodeId>;
+// MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings()).
+using PinningConstraint = ::tt::tt_fabric::AsicPinningGroup;
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
 // and the mesh is not folded. Pins all four logical corners to the four tray corners (with hard_pin_node_0
 // fixing the NW corner to tray 1 / asic 1); nw_corner_only pins ONLY the NW corner to any tray-corner ASIC
 // (asic_location==1 on trays 1..4) for sub-galaxy slices. Shared by
 // generate_rank_bindings (Phase 1) and ControlPlane (Phase 2) so both apply identical placement.
-std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+// Each returned group is 1:many (single corner node, multiple allowed tray positions).
+std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
     MeshId mesh_id,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
     bool hard_pin_node_0 = false,
@@ -70,12 +74,12 @@ struct TopologyMappingConfig {
     // that still set the field.
     bool strict_mode = false;
 
-    // Optional pinning constraints that restrict which physical ASICs
-    // specific logical nodes can be mapped to
+    // Optional many-to-many pinning groups restricting which physical ASIC positions
+    // listed logical nodes may map to
     std::vector<PinningConstraint> pinnings;
 
-    // Map from AsicID to (TrayID, ASICLocation) from discovery — required when pinnings are non-empty, and populated
-    // for topology mapping anchors (e.g. soft preference for tray 1 / ASIC location 1 on logical mesh 0).
+    // Map from AsicID to (TrayID, ASICLocation) - required if pinnings is non-empty.
+    // Used to validate pinning constraints against the physical topology.
     AsicPositionMap asic_positions;
 
     // Per-mesh validation modes for intra-mesh mapping (fabric node to ASIC).
@@ -328,6 +332,21 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
 /**
+ * @brief Merge logical multi-mesh graphs into one with automatic MeshId renumbering
+ *
+ * Inputs are processed in order. For each part, all distinct MeshIds in that part (in fabric
+ * adjacency, mesh-level graph, and exit maps) are collected, sorted, and assigned consecutive
+ * global ids starting at a running base. If \p per_part_local_to_global_mesh_ids is set, it is filled
+ * with one map per input part: MGD-local mesh id -> merged global mesh id (for pinnings, validation, rank
+ * bindings, etc.).
+ *
+ * A single input is returned unchanged; the optional vector contains one identity map for that graph.
+ */
+LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
+    const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs,
+    std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids = nullptr);
+
+/**
  * @brief Represents a physical mesh node in a 2-layer adjacency graph
  *
  * Simplified to just be a MeshId. The internal adjacency graph is accessed via
@@ -440,6 +459,22 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const std::optional<std::vector<PinningConstraint>>& pinnings = std::nullopt);
+
+/**
+ * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
+ *
+ * For each MGD, collects valid MESH groupings (same as the single-MGD build), then merges results.
+ * With multiple MGD files in one process, ensure PGD/MGD keys remain consistent (each descriptor may need distinct
+ * instance names when \c DistributedContext::subcontext_id() uniquifies names per split rank).
+ *
+ * @param mesh_graph_descriptors  Const reference to the caller's `std::vector` (the container is not copied;
+ *                                only a reference is passed). Elements are the loaded MGDs in order.
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
+    const std::vector<std::optional<std::vector<PinningConstraint>>>& per_mgd_pinnings = {});
 
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor

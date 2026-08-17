@@ -19,6 +19,6 @@ struct NlpCreateQkvHeadsVitInputs {
 
 using NlpCreateQkvHeadsVitResult = std::vector<Tensor>;
 
-using NlpCreateQkvHeadsVitResultSpec = std::vector<TensorSpec>;
+using NlpCreateQkvHeadsVitResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::experimental::prim

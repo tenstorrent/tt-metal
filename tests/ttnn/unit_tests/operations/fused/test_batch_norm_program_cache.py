@@ -164,10 +164,13 @@ def test_bn_cache_miss_different_dtype(device, isolate_program_cache):
 
 
 def test_bn_cache_optional_stat_presence(device, isolate_program_cache):
-    """running_mean/running_var presence is baked into the RunningStatistics program, so each
-    present/absent combination must key a distinct program while a repeated combination reuses it.
-    Only RunningStatistics depends on this presence, so the entry growth is attributable to it
-    (the upstream reduction/batch-norm programs are identical across combinations)."""
+    """running_mean/running_var presence is baked into the RunningStatistics program.  Three
+    presence combinations dispatch RunningStatistics (both, mean-only, var-only) and each must
+    key a distinct program while a repeated combination reuses it.  The fourth combination
+    (both absent) never dispatches RunningStatistics — batch_norm.cpp skips the op — so no
+    new program entry is created.  Only RunningStatistics depends on this presence, so the
+    entry growth is attributable to it (the upstream reduction/batch-norm programs are identical
+    across combinations)."""
     # Both stats present.
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=True, with_var=True, seed=0)
     n_both = device.cache_entries_counter.total
@@ -188,10 +191,10 @@ def test_bn_cache_optional_stat_presence(device, isolate_program_cache):
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=True, seed=5)
     assert device.cache_entries_counter.total == n_var_only  # same combo -> reuse
 
-    # Neither stat present -> a fourth distinct combination. In training mode RunningStatistics
-    # still runs (it just has no buffers to update), so this presence combo keys its own program.
+    # Neither stat present -> batch_norm.cpp skips running_statistics entirely (no buffers
+    # to update), so no new program entry is created for this combination.
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=False, seed=6)
     n_neither = device.cache_entries_counter.total
-    assert n_neither > n_var_only
+    assert n_neither == n_var_only  # no running_statistics dispatch -> no new entry
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=False, seed=7)
-    assert device.cache_entries_counter.total == n_neither  # same combo -> reuse
+    assert device.cache_entries_counter.total == n_neither  # still no growth

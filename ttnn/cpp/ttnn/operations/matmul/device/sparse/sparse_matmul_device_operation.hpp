@@ -15,11 +15,13 @@ namespace ttnn::prim {
 struct SparseMatmulDeviceOperation {
     using operation_attributes_t = SparseMatmulParams;
     using tensor_args_t = SparseMatmulInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<SparseMatmulMultiCoreReuseMcast1DProgramFactory>;
     static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(

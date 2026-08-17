@@ -29,19 +29,19 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     dfb_in1_obj.wait_front(onetile);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         tile_regs_acquire();
         dfb_in0_obj.wait_front(onetile);
         if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short_with_dt(dfb_in1_obj, dfb_in0_obj);
+            add_bcast_scalar_init_with_dt(dfb_in1_obj, dfb_in0_obj);
             add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            add_bcast_rows_init_short_with_dt(dfb_in1_obj, dfb_in0_obj);
+            add_bcast_rows_init_with_dt(dfb_in1_obj, dfb_in0_obj);
             add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            add_bcast_cols_init_short_with_dt(dfb_in1_obj, dfb_in0_obj);
+            add_bcast_cols_init_with_dt(dfb_in1_obj, dfb_in0_obj);
             add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
         } else {
             copy_tile_init_with_dt(dfb_in0_obj);
@@ -61,7 +61,7 @@ void kernel_main() {
         // output * (1 / number_of_elements)
         tile_regs_acquire();
         dfb_intermed0_obj.wait_front(onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(dfb_intermed0_obj, dfb_scalar_obj);
+        mul_bcast_scalar_init_with_dt(dfb_intermed0_obj, dfb_scalar_obj);
         mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
         tile_regs_commit();
 

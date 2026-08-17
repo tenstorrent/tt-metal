@@ -22,7 +22,7 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -73,6 +73,7 @@ def _run(formats, dest_acc, input_dimensions):
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
     return configuration
 

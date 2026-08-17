@@ -43,10 +43,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
+using ttnn::Tensor;
 
 int g_world_rank = -1;
 int g_world_size = -1;
@@ -104,7 +104,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
     const tt::tt_metal::D2HStreamService& service,
     const tt::tt_metal::CoreRange& worker_cores,
     uint32_t fill_seed) {
-    const tt::tt_metal::Tensor& backing = service.get_backing_tensor();
+    const ttnn::Tensor& backing = service.get_backing_tensor();
     auto* backing_buf = backing.buffer();
     TT_FATAL(backing_buf != nullptr, "build_d2h_metadata_worker_workload: backing tensor has no buffer");
 

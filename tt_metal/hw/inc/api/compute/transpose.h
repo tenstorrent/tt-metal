@@ -71,16 +71,10 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
 #else
-    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559) and no int-FPU 8-bit integer
-    // reconstruct path; reject formats that would otherwise silently take the wrong path. UInt32 is
-    // treated as unpack-to-dest on WH/BH and Int8/UInt8 (low nibble 0xE) need the int-FPU path.
-    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
-    LLK_ASSERT(!is_8bit_int, "8-bit integer transpose not supported on Quasar");
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false /*acc_to_dest*/,
@@ -105,9 +99,9 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  *
  * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
  * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in_cb_id       | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
- * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
- * | dst_tile_index | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | icb            | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
+ * | itile          | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
 ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
@@ -130,9 +124,8 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
     }
 #else
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
     UNPACK((llk_unpack_A<BroadcastType::NONE, false /*acc_to_dest*/>(icb, itile)));

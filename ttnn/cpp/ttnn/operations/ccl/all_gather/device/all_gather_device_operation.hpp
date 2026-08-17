@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 struct AllGatherDeviceOperation {
     using operation_attributes_t = AllGatherParams;
     using tensor_args_t = AllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using program_factory_t = std::variant<AllGatherMulticastFactory, AllGatherUnicastFactory>;
@@ -34,6 +34,12 @@ struct AllGatherDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
+
+tt::tt_metal::TensorSpec compute_output_specs_helper(
+    const Tensor& input_tensor,
+    int32_t gather_dim_from_end,
+    uint32_t num_devices,
+    const std::optional<MemoryConfig>& memory_config);
 
 }  // namespace ttnn::operations::ccl
 

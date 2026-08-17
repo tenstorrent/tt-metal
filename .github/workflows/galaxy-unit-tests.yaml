@@ -49,6 +49,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -57,12 +58,13 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   galaxy-unit-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:

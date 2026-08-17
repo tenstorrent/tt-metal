@@ -76,13 +76,26 @@ struct UnifiedRoutedExpertFfnParams {
     // it is part of the program-cache key below.
     RoutedExpertActivation activation = RoutedExpertActivation::Silu;
 
+    // Whether the (optional) gate/up/down expert biases are fused. Derived from
+    // the presence of the bias tensors in the inputs. Drives a compile-time
+    // FUSE_BIAS define in the compute/reader kernels, so a bias vs no-bias
+    // program caches distinctly — hence it is part of the program-cache key.
+    // (gpt-oss experts have gate/up/down biases; DeepSeek / MiniMax-M3 do not.)
+    bool fuse_bias = false;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset", "x_is_row_major", "activation");
+        "chunk_M_tiles",
+        "m_tiles",
+        "local_expert_id",
+        "read_x_at_offset",
+        "x_is_row_major",
+        "activation",
+        "fuse_bias");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation);
+            chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation, fuse_bias);
     }
 };
 
@@ -114,6 +127,14 @@ struct UnifiedRoutedExpertFfnInputs {
     // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
     // Requires optional_output to also be set.
     std::optional<Tensor> expert_region_offsets;
+    // Optional per-expert projection biases (gpt-oss). All three are present or
+    // all absent (validated host-side). gate_bias/up_bias are (1, N=hidden);
+    // down_bias is (1, N=emb). When set, the fused kernel adds gate/up bias
+    // before the activation and down bias after the down matmul. Absent for the
+    // bias-free DeepSeek / MiniMax-M3 path (byte-identical).
+    std::optional<Tensor> gate_bias;
+    std::optional<Tensor> up_bias;
+    std::optional<Tensor> down_bias;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

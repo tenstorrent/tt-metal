@@ -42,7 +42,7 @@ void bind_common(nb::module_& mod) {
            const std::optional<tt::tt_fabric::Topology>& topology,
            const std::optional<uint32_t>& cluster_axis) {
             TT_FATAL(
-                tt::tt_metal::is_device_tensor(tensor),
+                ttnn::is_device_tensor(tensor),
                 "get_usable_topology requires a device tensor; got a host tensor whose mesh placement is unknown");
             return ttnn::ccl::get_usable_topology(tensor, topology, cluster_axis);
         },

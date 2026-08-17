@@ -40,6 +40,6 @@ void kernel_main() {
             src_dram, l1_buf, sizeof(uint32_t), {.bank_id = dram_src_bank_id, .addr = dram_src_address + offset}, {});
         noc.async_read_barrier();
 
-        sem.up(1);
+        sem.set(i + 1);
     }
 }

@@ -165,7 +165,7 @@ GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output
     }
 
     // Output layout matches the input layout: TILE-in → TILE-out, RM-in → RM-out.
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             tensor_args.input_tensor.dtype(), PageConfig(tensor_args.input_tensor.layout()), output_mem_config));

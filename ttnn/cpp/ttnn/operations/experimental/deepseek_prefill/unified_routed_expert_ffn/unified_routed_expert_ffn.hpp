@@ -79,7 +79,14 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<uint32_t>& input_m_tiles = std::nullopt,
     bool read_x_at_offset = false,
     bool x_is_row_major = false,
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    // Optional per-expert projection biases (gpt-oss). All three together or
+    // none. gate_bias/up_bias: (1, hidden); down_bias: (1, emb). When set, the
+    // kernel adds gate/up bias before the activation and down bias after the
+    // down matmul. Omit for the bias-free DeepSeek / MiniMax-M3 path.
+    const std::optional<ttnn::Tensor>& gate_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& up_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
@@ -102,7 +109,13 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    // Optional per-expert biases (gpt-oss), one entry per local expert (same
+    // length/order as gate_projs). All three lists together or none. Omit for
+    // the bias-free DeepSeek / MiniMax-M3 path.
+    const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
+    const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

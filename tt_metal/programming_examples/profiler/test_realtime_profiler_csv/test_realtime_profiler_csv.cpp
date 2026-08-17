@@ -13,13 +13,17 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
+#include <fmt/compile.h>
+#include <fmt/format.h>
+
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fstream>
-#include <mutex>
+#include <iterator>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -27,58 +31,55 @@ using namespace tt::tt_metal;
 constexpr uint32_t NUM_PROGRAMS = 100;
 const char* const DEFAULT_CSV_PATH = "realtime_profiler_records.csv";
 
-static std::mutex g_csv_mutex;
 static std::ofstream g_csv_file;
-static bool g_csv_header_written = false;
+static uint64_t g_dropped_records = 0;
 
-static void WriteRealtimeRecordToCsv(const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-    uint64_t duration_cycles =
-        (record.end_timestamp >= record.start_timestamp) ? (record.end_timestamp - record.start_timestamp) : 0;
-    double duration_ns = (record.frequency > 0.0) ? (static_cast<double>(duration_cycles) / record.frequency) : 0.0;
+static void WriteRealtimeRecordsToCsv(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+    static thread_local fmt::memory_buffer csv_buffer;
+    csv_buffer.clear();
+    auto out = std::back_inserter(csv_buffer);
 
-    fmt::print(
-        "realtime record: id={} chip_id={} start={} end={} duration_cycles={} duration_ns={:.2f}\n",
-        record.runtime_id,
-        record.chip_id,
-        record.start_timestamp,
-        record.end_timestamp,
-        duration_cycles,
-        duration_ns);
+    for (const auto& record : batch.records) {
+        uint64_t duration_cycles =
+            (record.end_timestamp >= record.start_timestamp) ? (record.end_timestamp - record.start_timestamp) : 0;
+        double duration_ns = (record.frequency > 0.0) ? (static_cast<double>(duration_cycles) / record.frequency) : 0.0;
 
-    std::string kernel_sources_str;
-    for (size_t i = 0; i < record.kernel_sources.size(); i++) {
-        if (i > 0) {
-            kernel_sources_str += ";";
+        fmt::format_to(
+            out,
+            FMT_COMPILE("{},{},{},{},{},{:.6g},{:.6g},\""),
+            record.runtime_id,
+            record.chip_id,
+            record.start_timestamp,
+            record.end_timestamp,
+            duration_cycles,
+            duration_ns,
+            record.frequency);
+
+        for (size_t i = 0; i < record.kernel_sources.size(); i++) {
+            const std::string_view source = record.kernel_sources[i];
+            if (i > 0) {
+                csv_buffer.push_back(';');
+            }
+            if (source.find('"') == std::string_view::npos) {
+                csv_buffer.append(source);
+            } else {
+                for (char c : source) {
+                    if (c == '"') {
+                        csv_buffer.push_back('"');
+                    }
+                    csv_buffer.push_back(c);
+                }
+            }
         }
-        kernel_sources_str += record.kernel_sources[i];
-    }
-    // Escape quotes in kernel_sources for CSV
-    std::string escaped;
-    escaped.reserve(kernel_sources_str.size() + 2);
-    escaped += '"';
-    for (char c : kernel_sources_str) {
-        if (c == '"') {
-            escaped += "\"\"";
-        } else {
-            escaped += c;
-        }
-    }
-    escaped += '"';
-
-    std::lock_guard<std::mutex> lock(g_csv_mutex);
-    if (!g_csv_file.is_open()) {
-        return;
+        csv_buffer.push_back('"');
+        csv_buffer.push_back('\n');
     }
 
-    if (!g_csv_header_written) {
-        g_csv_file << "runtime_id,chip_id,start_timestamp,end_timestamp,duration_cycles,duration_ns,frequency_ghz,"
-                   << "kernel_sources\n";
-        g_csv_header_written = true;
+    g_dropped_records += batch.dropped;
+
+    if (csv_buffer.size() != 0) {
+        g_csv_file.write(csv_buffer.data(), static_cast<std::streamsize>(csv_buffer.size()));
     }
-    g_csv_file << record.runtime_id << "," << record.chip_id << "," << record.start_timestamp << ","
-               << record.end_timestamp << "," << duration_cycles << "," << duration_ns << "," << record.frequency << ","
-               << escaped << "\n";
-    g_csv_file.flush();
 }
 
 static void RunPrograms(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_programs) {
@@ -131,12 +132,11 @@ int main(int argc, char** argv) {
             fmt::print(stderr, "Failed to open CSV file: {}\n", csv_path);
             return 1;
         }
+        g_csv_file << "runtime_id,chip_id,start_timestamp,end_timestamp,duration_cycles,duration_ns,frequency_ghz,"
+                   << "kernel_sources\n";
 
         tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle callback_handle =
-            tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-                    WriteRealtimeRecordToCsv(record);
-                });
+            tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(WriteRealtimeRecordsToCsv);
 
         RunPrograms(mesh_device, num_programs);
         mesh_device->quiesce_devices();
@@ -145,11 +145,14 @@ int main(int argc, char** argv) {
 
         tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(callback_handle);
 
-        {
-            std::lock_guard<std::mutex> lock(g_csv_mutex);
-            g_csv_file.close();
-        }
+        g_csv_file.close();
 
+        if (g_dropped_records != 0) {
+            fmt::print(
+                stderr,
+                "Warning: dropped {} record(s); callback could not keep up with incoming records\n",
+                g_dropped_records);
+        }
         fmt::print("Wrote real-time profiler records to {} ({} programs)\n", csv_path, num_programs);
         pass &= mesh_device->close();
 

@@ -101,13 +101,13 @@ CreateQKVHeadsResultSpec CreateQKVHeadsDeviceOperation::compute_output_specs(
     auto mem_config_v = tt::tt_metal::MemoryConfig(
         args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), v_spec);
 
-    TensorSpec out_tensor_q(
+    tt::tt_metal::TensorSpec out_tensor_q(
         q_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_q));
-    TensorSpec out_tensor_k(
+    tt::tt_metal::TensorSpec out_tensor_k(
         k_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_k));
-    TensorSpec out_tensor_v(
+    tt::tt_metal::TensorSpec out_tensor_v(
         v_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_v));
     return {out_tensor_q, out_tensor_k, out_tensor_v};

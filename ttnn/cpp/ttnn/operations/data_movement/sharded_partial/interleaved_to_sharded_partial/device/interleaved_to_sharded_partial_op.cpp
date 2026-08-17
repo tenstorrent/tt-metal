@@ -46,7 +46,7 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         "Grid size for sharding must be less than or equal to total grid available");
 }
 
-TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     auto shape = input_tensor.padded_shape();
 
@@ -62,7 +62,7 @@ TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
         operation_attributes.output_mem_config.buffer_type(),
         operation_attributes.shard_spec);
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
@@ -76,11 +76,15 @@ Tensor InterleavedToShardedPartialDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    // slice_index is deliberately excluded from the key: it only feeds the runtime read-offset
+    // starting_idx_h (same program structure for every slice of a given num_slices), and it is
+    // re-applied on every cache hit via get_dynamic_runtime_args. Keying on it would rebuild the
+    // program for each slice of a partial-slicing loop. num_slices -- which drives the work split --
+    // stays keyed.
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
         operation_attributes.num_slices,
-        operation_attributes.slice_index,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         input_tensor.dtype(),

@@ -71,7 +71,7 @@ static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size, uint3
 }
 
 [[maybe_unused]]
-static uint32_t read_l1_u32(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
+static uint32_t read_l1_u32(tt::tt_metal::IDevice* const device, const tt::tt_metal::CoreCoord& core, uint64_t l1_addr) {
     auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
         device->id(), device->worker_core_from_logical_core(core), l1_addr, sizeof(uint32_t));
 
@@ -79,7 +79,7 @@ static uint32_t read_l1_u32(tt::tt_metal::IDevice* const device, const CoreCoord
 }
 
 [[maybe_unused]]
-static uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
+static uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const tt::tt_metal::CoreCoord& core, uint64_t l1_addr) {
     auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
         device->id(), device->worker_core_from_logical_core(core), l1_addr, 2 * sizeof(uint32_t));
 
@@ -87,7 +87,7 @@ static uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord
 }
 
 [[maybe_unused]]
-static uint32_t read_eth_l1_u32(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
+static uint32_t read_eth_l1_u32(tt::tt_metal::IDevice* const device, const tt::tt_metal::CoreCoord& core, uint64_t l1_addr) {
     auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
         device->id(), device->ethernet_core_from_logical_core(core), l1_addr, sizeof(uint32_t));
 
@@ -95,7 +95,7 @@ static uint32_t read_eth_l1_u32(tt::tt_metal::IDevice* const device, const CoreC
 }
 
 [[maybe_unused]]
-static uint64_t read_eth_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
+static uint64_t read_eth_l1_u64(tt::tt_metal::IDevice* const device, const tt::tt_metal::CoreCoord& core, uint64_t l1_addr) {
     auto delta_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
         device->id(), device->ethernet_core_from_logical_core(core), l1_addr, 2 * sizeof(uint32_t));
 
@@ -123,7 +123,7 @@ public:
 [[maybe_unused]]
 static bool bandwidth_check(
     tt::tt_metal::IDevice* const send_device,
-    const CoreCoord& send_core,
+    const tt::tt_metal::CoreCoord& send_core,
     uint32_t send_delta_addr,
     uint64_t total_transferred,
     double threshold) {

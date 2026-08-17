@@ -16,7 +16,7 @@ namespace ttml::metal::ops::variable_matmul::device {
 struct VariableMatmulDeviceOperation {
     using operation_attributes_t = VariableMatmulParams;
     using tensor_args_t = VariableMatmulInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
 
     using program_factory_t = std::variant<VariableMatmulProgramFactory>;

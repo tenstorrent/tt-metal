@@ -32,6 +32,12 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_in_channels
 
+from .ltx_mesh_params import (
+    LTX_VAE_DECODER_MESH_PARAMS,
+    LTX_VAE_DECODER_MULTI_ONLY_MESH_PARAMS,
+    LTX_VAE_ENCODER_PROD_MESH_PARAMS,
+)
+
 
 def _require_diffusers_ltx_vae():
     """Return diffusers LTX-2 VAE building blocks (preferred) or LTX-Video fallbacks."""
@@ -73,7 +79,7 @@ def _require_diffusers_ltx_vae():
 
 
 def _diffusers_resnet_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Remap diffusers LTX-2 resnet keys to the TT/ltx_core layout."""
+    """Remap diffusers LTX-2 resnet keys to the TT/Lightricks layout."""
     out = dict(state)
     if "conv_shortcut.weight" in out:
         out["conv_shortcut.conv.weight"] = out.pop("conv_shortcut.weight")
@@ -107,7 +113,7 @@ def _run_diffusers_downsample(block: nn.Module, x: torch.Tensor, *, causal: bool
 
 
 class _PerChannelStatistics(nn.Module):
-    """Minimal per-channel latent stats (ltx_core key names for TT weight load)."""
+    """Minimal per-channel latent stats (Lightricks key names for TT weight load)."""
 
     def __init__(self, latent_channels: int) -> None:
         super().__init__()
@@ -171,7 +177,7 @@ def _unpatchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 
 def _patchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 1) -> torch.Tensor:
     """Space-to-depth patchify (exact inverse of ``_unpatchify``): folds a
     ``(p_t, p_hw, p_hw)`` patch into channels with order ``(c, p_t, p_width, p_height)``.
-    Mirrors the ltx_core/TT encoder patchify so both references agree.
+    Mirrors the Lightricks/TT encoder patchify so both references agree.
     """
     batch_size, num_channels, num_frames, height, width = x.shape
     p = patch_size_hw
@@ -183,7 +189,7 @@ def _patchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 1)
 
 
 class _TorchLTXVideoDecoder(nn.Module):
-    """Block-list LTX decoder built from diffusers VAE primitives (matches TT/ltx_core layout)."""
+    """Block-list LTX decoder built from diffusers VAE primitives (matches TT/Lightricks layout)."""
 
     def __init__(
         self,
@@ -300,64 +306,12 @@ def _vae_parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
     return {"parallel_config": parallel_config, "ccl_manager": ccl_manager}
 
 
-# Fabric required for multi-device decoder tests (mirrors wan2_2 VAE tests).
-_LTX_VAE_FABRIC_DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}]
-_LTX_SKIP_SMALL_MESH_FABRIC = os.environ.get("LTX_VAE_FORCE_SMALL_MESH_FABRIC", "0") != "1"
-
 # Single-chip: no fabric (avoids BH fabric router handshake when only one device is opened).
 # Stand-alone conv/res/upsample tests use raw (unsharded) tensors — 1x1 only.
 _LTX_VAE_MESH_DEVICE_PARAMS = [
     ((1, 1), {}),
 ]
 _LTX_VAE_MESH_DEVICE_IDS = ["1x1"]
-
-# Multi-mesh configs for full LTXVideoDecoder parity (mirrors test_vae_wan2_1.py).
-_LTX_DECODER_MESH_PARAMS = [
-    pytest.param(
-        (1, 1),
-        0,
-        1,
-        1,
-        marks=pytest.mark.skipif(
-            _LTX_SKIP_SMALL_MESH_FABRIC,
-            reason=("Known flaky fabric handshake on 1x1 mesh; set " "LTX_VAE_FORCE_SMALL_MESH_FABRIC=1 to force-run."),
-        ),
-    ),
-    ((2, 4), 0, 1, 1),
-    ((2, 4), 1, 0, 1),
-    ((1, 8), 0, 1, 1),
-    pytest.param(
-        (1, 4),
-        1,
-        0,
-        1,
-        marks=pytest.mark.skipif(
-            _LTX_SKIP_SMALL_MESH_FABRIC,
-            reason=("Known flaky fabric handshake on 1x4 mesh; set " "LTX_VAE_FORCE_SMALL_MESH_FABRIC=1 to force-run."),
-        ),
-    ),
-    ((4, 8), 0, 1, 2),
-]
-_LTX_DECODER_MESH_IDS = [
-    "1x1_h0_w1",
-    "2x4_h0_w1",
-    "2x4_h1_w0",
-    "1x8_h0_w1",
-    "1x4_h1_w0",
-    "4x8_h0_w1",
-]
-
-# 2K decode does not fit on a single device — multi-device meshes only.
-_LTX_DECODER_MESH_MULTI_ONLY_PARAMS = [
-    ((2, 4), 0, 1, 1),
-    ((2, 4), 1, 0, 1),
-    ((4, 8), 0, 1, 2),
-]
-_LTX_DECODER_MESH_MULTI_ONLY_IDS = [
-    "2x4_h0_w1",
-    "2x4_h1_w0",
-    "4x8_h0_w1",
-]
 
 # (num_frames, height, width): H/W divisible by 64; (num_frames - 1) % 8 == 0 for VAE.
 _LTX_DECODER_SHAPE_PARAMS = [
@@ -728,12 +682,10 @@ def _run_ltx_decoder_parity(
 @pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_SHAPE_PARAMS)
 @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3)], ids=["std1", "std3"])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    _LTX_DECODER_MESH_PARAMS,
-    ids=_LTX_DECODER_MESH_IDS,
-    indirect=["mesh_device"],
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_VAE_DECODER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
 def test_ltx_video_decoder(
     mesh_device: ttnn.MeshDevice,
     num_frames: int,
@@ -744,6 +696,7 @@ def test_ltx_video_decoder(
     h_axis: int,
     w_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
 ):
     """
     Test full LTXVideoDecoder against PyTorch VideoDecoder reference using the
@@ -835,12 +788,10 @@ def test_prof_vae_ltx_devicetime(mesh_device, device_params):
 @pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_2K_SHAPE_PARAMS)
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    _LTX_DECODER_MESH_MULTI_ONLY_PARAMS,
-    ids=_LTX_DECODER_MESH_MULTI_ONLY_IDS,
-    indirect=["mesh_device"],
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_VAE_DECODER_MULTI_ONLY_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
 def test_ltx_video_decoder_2k(
     mesh_device: ttnn.MeshDevice,
     num_frames: int,
@@ -851,6 +802,7 @@ def test_ltx_video_decoder_2k(
     h_axis: int,
     w_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
 ):
     """Full LTXVideoDecoder at the 2K production resolution (2048x1080 -> 1088x2048).
 
@@ -866,7 +818,7 @@ def test_ltx_video_decoder_2k(
 # Encoder parity (LTXVideoEncoder vs a diffusers-primitives reference encoder)
 # ---------------------------------------------------------------------------
 def _diffusers_encoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Remap diffusers LTX-2 encoder keys (incl. nested resnets) to the TT/ltx_core layout."""
+    """Remap diffusers LTX-2 encoder keys (incl. nested resnets) to the TT/Lightricks layout."""
     out: dict[str, torch.Tensor] = {}
     for key, value in state.items():
         if key.endswith("conv_shortcut.weight"):
@@ -879,7 +831,7 @@ def _diffusers_encoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, 
 
 
 class _TorchLTXVideoEncoder(nn.Module):
-    """Block-list LTX encoder built from diffusers VAE primitives (matches TT/ltx_core layout).
+    """Block-list LTX encoder built from diffusers VAE primitives (matches TT/Lightricks layout).
 
     Mirrors the reference ``VideoEncoder`` encode path: patchify -> conv_in -> down_blocks
     (``res_x`` mid blocks + ``compress_*_res`` space-to-depth downsamplers) -> PixelNorm + SiLU
@@ -1176,12 +1128,10 @@ _LTX_ENCODER_PROD_SHAPE_PARAMS = [
 
 @pytest.mark.parametrize("num_frames, height, width", _LTX_ENCODER_PROD_SHAPE_PARAMS)
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [((4, 8), 0, 1, 2)],
-    ids=["4x8_h0_w1"],
-    indirect=["mesh_device"],
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_VAE_ENCODER_PROD_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
 def test_ltx_video_encoder_prod(
     mesh_device: ttnn.MeshDevice,
     num_frames: int,
@@ -1190,6 +1140,7 @@ def test_ltx_video_encoder_prod(
     h_axis: int,
     w_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
 ):
     """Production-config LTXVideoEncoder parity vs the diffusers reference, sharded like the I2V pipeline.
 

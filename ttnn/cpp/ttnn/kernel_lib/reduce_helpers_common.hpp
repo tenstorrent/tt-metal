@@ -20,10 +20,10 @@ enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
 /**
  * @brief Determines whether a reduce operation should use the SFPU path.
  *
- * Int32 MAX and SUM on REDUCE_ROW/COL use SFPU (GMPOOL/matmul have no Int32 support).
+ * Int32 MAX, MIN and SUM on REDUCE_ROW/COL use SFPU (GMPOOL/matmul have no Int32 support).
  * Int32 REDUCE_SCALAR is unsupported (no SFPU scalar primitive); the host decomposes an
  * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
- * MIN is pre-lowered to MAX + negate and dispatched via reduce_{h,w}_neg.
+ * Int32 MIN drives the LLK MIN reduce directly, instead of the -MAX(-x) reduce_{h,w}_neg path that FPU MIN uses.
  *
  * Float32 SUM additionally opts into the SFPU path when the caller passes ReduceFp32Mode::Accurate
  * (accurate ttnn.mean); the host threads that mode in from the kernel's compile-time args.
@@ -34,7 +34,9 @@ template <
     DataFormat data_format,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast>
 constexpr bool is_sfpu_reduce_path() {
-    if constexpr (pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM) {
+    if constexpr (
+        pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM &&
+        pool_type != ckernel::PoolType::MIN) {
         return false;
     }
     if constexpr (data_format != DataFormat::Int32) {

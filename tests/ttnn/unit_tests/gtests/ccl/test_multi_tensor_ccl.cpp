@@ -58,10 +58,11 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        tensors.push_back(
+            ttnn::Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
 
-    auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+    auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
 
     // Quiesce parent mesh before all gather
     mesh_device_->quiesce_devices();
@@ -73,7 +74,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     // Quiesce parent mesh after all gather
     mesh_device_->quiesce_devices();
 
-    auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+    auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
@@ -94,14 +95,15 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
         ttnn::Shape({4, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        tensors.push_back(
+            ttnn::Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
         std::vector<bfloat16> output_data(output_tensor_spec.logical_shape().volume(), bfloat16(0));
-        output_tensors.push_back(
-            Tensor::from_vector(std::move(output_data), output_tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        output_tensors.push_back(ttnn::Tensor::from_vector(std::move(output_data), output_tensor_spec)
+                                     .to_device(mesh_devices[dev_idx].get()));
     }
 
-    auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
-    auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+    auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
+    auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
     // Quiesce parent mesh before all gather
     mesh_device_->quiesce_devices();
@@ -136,13 +138,13 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
         ttnn::Shape({1, 8, 1024, 192}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (auto& mesh_device : mesh_devices) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_device.get()));
+        tensors.push_back(ttnn::Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_device.get()));
         std::vector<bfloat16> output_data(output_tensor_spec.logical_shape().volume(), bfloat16(0));
         output_tensors.push_back(
-            Tensor::from_vector(std::move(output_data), output_tensor_spec).to_device(mesh_device.get()));
+            ttnn::Tensor::from_vector(std::move(output_data), output_tensor_spec).to_device(mesh_device.get()));
     }
-    auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
-    auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+    auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
+    auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
     // Quiesce parent mesh before reduce scatter
     mesh_device_->quiesce_devices();
@@ -174,10 +176,10 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (auto& mesh_device : mesh_devices) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_device.get()));
+        tensors.push_back(ttnn::Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_device.get()));
     }
 
-    auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+    auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
 
     // Quiesce parent mesh before all reduce
     mesh_device_->quiesce_devices();
@@ -187,7 +189,7 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
     // Quiesce parent mesh after all reduce
     mesh_device_->quiesce_devices();
 
-    auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_reduced_tensor);
+    auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_reduced_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
         for (auto val : data) {
