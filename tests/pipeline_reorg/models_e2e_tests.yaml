@@ -1021,11 +1021,6 @@
   team: models
 
 # ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
-# Merges the retired t3k demo (test_pipeline_qwenimage.py) and t3k perf
-# (test_performance_qwenimage.py) legs onto BH QuietBox 2. Both files parametrize
-# a 2x2, a 2x4 and a 4x8 mesh; require_exact_physical_num_devices in device_params
-# picks the one matching the machine, so no -k topology filter is needed — on this
-# 4-chip SKU the 2x4 and 4x8 cases skip and the new 2x2 case runs.
 - name: TT-DiT Qwen-Image e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -1039,7 +1034,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08TED0JM9D # Samuel Adesoye
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # ── Panoptic DeepLab ───────────────────────────────────────────────

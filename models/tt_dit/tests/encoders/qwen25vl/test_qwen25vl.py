@@ -212,7 +212,6 @@ def test_qwen25vl_text_encoder(
 
 @pytest.mark.parametrize(
     "mesh_device , submesh_shape",
-    # The 2x2 case covers 4-chip boxes (BH QuietBox 2); its submesh shrinks to 2 columns to fit.
     [[(2, 2), (1, 2)], [(2, 4), (1, 4)], [(4, 8), (1, 4)]],
     ids=["2x2_1x2", "2x4_1x4", "4x8_1x4"],
     indirect=["mesh_device"],

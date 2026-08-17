@@ -22,7 +22,6 @@ from ....utils.tracing import Tracer
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
-        # 2x2 covers 4-chip boxes (BH QuietBox 2): the 2x4 config with tp halved to fit axis 1.
         pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((1, 8), 0, 1, 1, id="1x8sp0tp1"),
         pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),

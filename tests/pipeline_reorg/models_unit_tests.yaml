@@ -1157,14 +1157,6 @@
   team: models
 
 # ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
-# The Qwen2.5-VL text encoder pair is the only Qwen-Image unit leg that was in CI:
-# it backed both the retired t3k integration leg (-k 2x4) and the retired Galaxy
-# integration leg (-k 4x8). require_exact_physical_num_devices now selects the mesh
-# per machine, so the new 2x2 case is the one that runs on this 4-chip SKU.
-# The transformer test is added on top of it for Tier 2 module coverage (Tier 3 only
-# requires the single most critical module). Traced-only: that is the path the
-# pipeline actually runs, and it halves the leg — `not not_traced` is needed because
-# a plain `-k traced` also substring-matches the `not_traced` id.
 - name: TT-DiT Qwen-Image unit tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -1178,7 +1170,7 @@
     bh_quietbox_2:
       timeout: 45
       tier: 2
-  owner_id: U08TED0JM9D # Samuel Adesoye
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # ============================================================================

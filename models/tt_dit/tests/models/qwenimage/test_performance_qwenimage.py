@@ -26,7 +26,6 @@ from ....utils.test import line_params_req_exact_devices
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        # 2x2 config for 4-chip boxes (BH QuietBox 2): the 2x4 config with tp halved to fit axis 1.
         [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
         pytest.param(
             (2, 4),
