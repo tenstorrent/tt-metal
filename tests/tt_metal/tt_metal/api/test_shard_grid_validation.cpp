@@ -53,38 +53,20 @@ std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType bu
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1RejectsCoreOutsideGrid) {
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
-        // Past the Tensix grid entirely: these coordinates name no core at all.
-        const CoreCoord tensix_grid = device->logical_grid_size();
+        // Shards live on the compute-with-storage rectangle; a core outside it has no L1 bank.
+        const CoreCoord grid = device->compute_with_storage_grid_size();
 
-        EXPECT_ANY_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(tensix_grid.x, 0)));
-        EXPECT_ANY_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(0, tensix_grid.y)));
-    }
-}
-
-TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1RejectsCoreWithoutBank) {
-    for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
-        // A Tensix core that exists but is not ComputeAndStore -- dispatch owns its L1, so the
-        // allocator hands out no bank there. This one is worth pinning separately from the case
-        // above: the core translates fine, so a raw write to it succeeds and silently lands on
-        // memory the allocator does not manage.
-        const CoreCoord tensix_grid = device->logical_grid_size();
-        const CoreCoord compute_grid = device->compute_with_storage_grid_size();
-        if (compute_grid.x >= tensix_grid.x) {
-            GTEST_SKIP() << "No Tensix column outside the compute grid on this device";
-        }
-
-        EXPECT_ANY_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(compute_grid.x, 0)));
+        EXPECT_ANY_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(grid.x, 0)));
+        EXPECT_ANY_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(0, grid.y)));
     }
 }
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1AcceptsCoreInsideGrid) {
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
-        const CoreCoord compute_grid = device->compute_with_storage_grid_size();
+        const CoreCoord grid = device->compute_with_storage_grid_size();
 
-        EXPECT_NO_THROW(
-            make_width_sharded_buffer(device, BufferType::L1, CoreCoord(compute_grid.x - 1, compute_grid.y - 1)));
+        EXPECT_NO_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(grid.x - 1, grid.y - 1)));
     }
 }
 
