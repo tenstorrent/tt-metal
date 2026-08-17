@@ -358,6 +358,46 @@ def _protected_pids() -> set:
     return protected
 
 
+def _live_temps() -> list:
+    """Plausible per-chip die temperatures, straight from the driver. [] when none answer.
+
+    Bounds-checked at the source: an ARC that is not running publishes all-ones (65535999 = 65535.999
+    C), which is a successful read of a value that is not a temperature, so the VALUE is the only
+    thing that separates a reading from silence."""
+    try:
+        from agent.probes import board_telemetry
+
+        return list(board_telemetry()[0] or [])
+    except Exception:  # noqa: BLE001 -- no telemetry available is itself the wedge signal
+        return []
+
+
+def _board_needs_reset() -> bool:
+    """True when at least one chip cannot report a die temperature -- the evidence a reset is for.
+
+    THREE STATES, NOT TWO, and the middle one is why this is not simply "does anything answer".
+
+        every chip reports        nothing is wedged      -> skip; a reset here is pure risk
+        some chips report         partly down            -> reset; the silent ones need it
+        no chip reports           fully wedged           -> reset
+
+    "Some" must reset. Right now this board has two chips at 55-57C and two publishing all-ones, and
+    those two do not come back on their own -- skipping because a majority answered would leave half
+    a board permanently dead.
+
+    Costs a file read per chip and never opens the device, so unlike tt-smi it still answers while
+    the board is saturated -- which matters, because the moment a reset decision is made is the
+    moment the board is least able to answer an expensive question about itself.
+    """
+    try:
+        from agent.probes import board_telemetry
+
+        live, dead = board_telemetry()
+        return bool(dead) or not live
+    except Exception:  # noqa: BLE001 -- cannot tell: fall back to the old unconditional behaviour
+        return True
+
+
 def reap_device_holders() -> list:
     """SIGKILL every process holding /dev/tenstorrent except this one and its ancestors.
 
@@ -441,6 +481,39 @@ def recover(where: str, reset, error_text: str = "", config_target: str = "", lo
     reaped = reap_device_holders()
     if reaped and log:
         log("reclaimed %d device holder(s) before reset at %s: %s" % (len(reaped), where, reaped))
+    # A RESET IS FOR A WEDGE, AND FOR NOTHING ELSE.
+    #
+    # Resetting a board that is still answering is not a neutral act -- it is how this board was
+    # broken twice on 2026-08-17. `tt-smi -r 0,1,2,3` halts each chip and brings it back in turn, so
+    # a sequence that errors partway leaves the chips it already halted DOWN, with no firmware and no
+    # telemetry. Measured: the run used ONE chip (MESH_DEVICE=P150), the recovery reset FOUR, the
+    # sequence returned rc=1, and the two dead afterwards were the last two in that list -- devices
+    # the run had never touched.
+    #
+    # And the board was alive when it was reset. All four chips were reporting 97-102C through sysfs
+    # at that moment. The reset went ahead because the liveness question was put to tt-smi, which has
+    # to OPEN the device to answer and therefore hangs exactly when the board is busy or still held:
+    #
+    #     tt-smi -s          opens the device; ~0.27 s idle, HANGS under load
+    #     sysfs temp1_input  a file read; 0.0003 s, answered throughout
+    #
+    # So the cheap signal is asked first, and it can only ever CANCEL a reset, never cause one. A
+    # chip that reports a plausible die temperature has a running ARC, which is the thing a reset
+    # exists to restore -- there is nothing to restore. Holders are reaped above regardless, because
+    # a leaked process is worth clearing whether or not the board is sick.
+    #
+    # Deliberately conservative in the skip direction: a board that is alive-but-unusable loses a
+    # reset it might have wanted, and gets one on the next attempt once its telemetry goes. A board
+    # that is alive and healthy no longer gets reset at all, which is the failure that cost four
+    # chips today.
+    if not _board_needs_reset():
+        if log:
+            log(
+                "reset SKIPPED at %s: every chip reports a die temperature (%s), so nothing is "
+                "wedged -- resetting a live board is what took two chips down on 2026-08-17"
+                % (where, ", ".join("%.1fC" % t for t in _live_temps()[:4]) or "n/a")
+            )
+        return True
     targets = targets_for(error_text, config_target, expand=expand)
     for tgt in targets:
         try:

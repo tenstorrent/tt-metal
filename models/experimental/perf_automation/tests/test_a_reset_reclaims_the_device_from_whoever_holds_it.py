@@ -50,7 +50,11 @@ def test_the_reap_runs_before_the_reset_not_after():
     a device that no longer matches them."""
     src = (_PA / "agent" / "device_recovery.py").read_text()
     i = src.index("def recover(")
-    body = src[i : i + 4000]
+    # THE WHOLE FUNCTION, not a character window. A 4000-char slice made this fail whenever anything
+    # was added above `targets_for(` -- the wedge gate did exactly that -- failing a test whose
+    # subject had not moved. A window measured in characters is a guess about layout.
+    _next = src.find("\ndef ", i + 1)
+    body = src[i : _next if _next > 0 else len(src)]
     assert "reap_device_holders()" in body, "recover() does not reclaim"
     assert body.index("reap_device_holders()") < body.index("targets_for("), "the reap runs after the reset"
 

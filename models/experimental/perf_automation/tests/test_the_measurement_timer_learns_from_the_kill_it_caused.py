@@ -63,16 +63,38 @@ def test_the_backstop_still_derives_from_that_series():
     assert '"profile"' in src[i : i + 400], "the hard wall no longer derives from profile cost"
 
 
-def test_the_blind_backstop_stays_blind():
-    """Deliberate. The stall detector already checks CPU, output and live children; the absolute cap
-    exists precisely for the case where those are fooled -- a busy-wait deadlock. Voxtral produced
-    one: 85 minutes, 91 minutes of CPU, no log output after the first second."""
+def test_the_backstop_no_longer_kills_code_that_is_working():
+    """REVERSED ON 2026-08-17, deliberately, and the case it was written for is still real.
+
+    It used to assert the absolute cap must stay BLIND to activity: "the stall detector already
+    checks CPU, output and live children; the absolute cap exists precisely for the case where those
+    are fooled -- a busy-wait deadlock. Voxtral produced one: 85 minutes, 91 minutes of CPU, no log
+    output after the first second."
+
+    That reasoning stands. What changed is the price of being wrong in the other direction. On
+    2026-08-17 the cap killed a full-depth measurement at three hours while its tree was burning CPU
+    and the board sat at 97-102C -- work in progress, ended on a number that was not a judgement
+    about this measurement at all: it was the CEILING, taken only because --fresh had wiped the
+    observed durations meant to size it. And the kill does not merely discard the work; it triggers
+    the recovery, and that recovery reset four chips to rescue a one-chip run and left two of them
+    dead. Twice in one day.
+
+    So the rule is now the one the cooldown already follows: a run ends on evidence of death, not on
+    elapsed time. The stall clock still kills the moment CPU, output, live children and cooling all
+    go quiet -- which is what a wedge looks like.
+
+    THE COST, ACCEPTED KNOWINGLY: a busy-wait deadlock -- CPU moving, nothing produced -- now runs
+    until it stops or an operator stops it. The 85-minute voxtral deadlock would today run
+    indefinitely. That is the trade: this tool would rather spend hours on work that may finish than
+    destroy work that was finishing, because destroying it also costs chips.
+
+    If the trade ever needs revisiting, the fix is not to restore a blind clock -- it is to make
+    OUTPUT the liveness signal instead of CPU, since that deadlock printed nothing after one second
+    and would have been caught in minutes.
+    """
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index("if now - start - _cool_total() >= timeout_s:")
-    stanza = src[i : i + 200]
-    assert "moved" not in stanza and "cpu" not in stanza, "the absolute cap now consults activity"
-    # The ONE thing it may subtract is declared cooling, and only what was earned beat by beat --
-    # never an open-ended claim, or a deadlock could buy itself unlimited time by announcing a
-    # cooldown and going quiet. _cool_total() returns banked time only; see _cool_beat.
-    j = src.index("def _cool_total()")
-    assert 'return _cool["total"]' in src[j : j + 120], "the credit is extrapolated past the last beat"
+    k = src.index("if not _over_budget[0] and now - start - _cool_total() >= timeout_s:")
+    stanza = src[k : k + 600]
+    assert "TimeoutExpired" not in stanza, "the budget kills again instead of reporting"
+    assert "STILL WORKING" in stanza, "the over-budget case is no longer announced"
+    assert "raise subprocess.TimeoutExpired(cmd, limit)" in src, "nothing kills a genuinely stalled run"

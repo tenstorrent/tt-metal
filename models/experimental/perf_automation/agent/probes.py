@@ -877,6 +877,18 @@ def _sysfs_asic_temps() -> list:
 _NO_TELEMETRY_CHIPS: set = set()
 
 
+def board_telemetry():
+    """(live die temperatures, hwmon names that could not report) -- the recovery gate's whole input.
+
+    A named seam, deliberately. The gate must be stubbable by a test WITHOUT stubbing
+    _sysfs_asic_temps, because that function is itself under test elsewhere: patching it to silence
+    the gate also silenced the tests that check how a sentinel is parsed. One accessor for one
+    question keeps those independent.
+    """
+    live = list(_sysfs_asic_temps() or [])
+    return live, chips_without_telemetry()
+
+
 def chips_without_telemetry() -> list:
     """hwmon names whose last read was not a temperature. Empty when every chip answered.
 
@@ -998,6 +1010,7 @@ def _execute(
         last_progress = start
         last_size = -1
         last_cpu = _pgroup_cpu_jiffies(pgid)
+        _over_budget = [False]
         poll = 5.0
         while True:
             try:
@@ -1030,8 +1043,22 @@ def _execute(
                     f"made no forward progress for {stall_timeout_s}s "
                     f"(stalled/hung: no log growth and ~no CPU) — process group killed"
                 )
-            if now - start >= timeout_s:
-                _kill_and_raise(f"exceeded absolute backstop of {timeout_s}s (process group killed)")
+            # THE SAME RULE AS _run_device_proc: a clock does not get to call working code dead.
+            #
+            # This killed on elapsed time alone, with the stall check directly above it already
+            # holding the answer -- log growth and process-group CPU. A profile that is still
+            # emitting and still burning CPU is not hung, and ending it at a fixed number throws
+            # away the work AND triggers a recovery, which is the part that has damaged this board.
+            #
+            # The budget is reported once and the run continues; what ends it is going quiet.
+            if not _over_budget[0] and now - start >= timeout_s:
+                _over_budget[0] = True
+                print(
+                    f"  [probes] profile is over its {int(timeout_s)}s budget and STILL WORKING "
+                    f"(log growing or CPU moving) -- not killing it; the stall check decides",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
 
 _CSV_STDOUT_RE = re.compile(r"OPs csv generated at:\s*(\S+ops_perf_results_\S+\.csv)")

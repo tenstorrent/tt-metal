@@ -3167,6 +3167,7 @@ def _run_device_proc(
             last_progress = start
             last_cpu = _tree_cpu_jiffies(proc.pid)
             max_gap = 0.0
+            _over_budget = [False]
             while proc.poll() is None:
                 time.sleep(5)
                 now = time.monotonic()
@@ -3188,8 +3189,36 @@ def _run_device_proc(
                         flush=True,
                     )
                     raise subprocess.TimeoutExpired(cmd, limit)
-                if now - start - _cool_total() >= timeout_s:
-                    raise subprocess.TimeoutExpired(cmd, timeout_s)
+                # NO WALL-CLOCK KILL WHILE THE WORK IS REAL.
+                #
+                # This raised the moment `timeout_s` elapsed, regardless of what the process was
+                # doing. On 2026-08-17 that killed a full-depth measurement after three hours while
+                # its tree was burning CPU and the board sat at 97-102C -- work in progress, ended
+                # on a number. The number was not even a judgement about this measurement: it is the
+                # CEILING, taken because --fresh had wiped the observed durations meant to size it.
+                #
+                # The loop already knows the difference. `moved` is tree CPU, child output, a live
+                # LLM child or an in-progress cooldown, and the stall clock above kills the moment
+                # all of them go quiet -- which is what a wedge looks like. A process that is
+                # demonstrably working is not a wedge, and a clock cannot make it one.
+                #
+                # So the budget becomes a REPORT, not a sentence: it is said out loud, once, and the
+                # run continues. What bounds the run is death, not duration -- the same rule the
+                # cooldown follows, where waiting ends when the board is cold rather than when a
+                # timer expires.
+                #
+                # THE COST, STATED. A process that burns CPU forever without finishing now runs
+                # until it stops or the operator does. That is the trade: this tool would rather
+                # spend hours on work that may complete than throw away work that was completing,
+                # because the throw-away also triggers a recovery, and the recovery is what has
+                # twice damaged the board.
+                if not _over_budget[0] and now - start - _cool_total() >= timeout_s:
+                    _over_budget[0] = True
+                    print(
+                        f"  [optimize/cc] {label or 'device subprocess'} is over its {int(timeout_s)}s budget "
+                        f"and STILL WORKING (tree CPU is moving) -- not killing it; the stall check decides",
+                        flush=True,
+                    )
             rc = proc.returncode
             _pt.join(timeout=30)
             out = "".join(_buf)
