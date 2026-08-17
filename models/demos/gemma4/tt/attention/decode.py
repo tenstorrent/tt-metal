@@ -35,6 +35,45 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 
+def _decode_sdpa_compute_kernel_config(mesh_device):
+    """Opt-in HiFi4 for the decode SDPA. ``None`` (the op default) unless asked.
+
+    #47311 removed the softmax reduce's forced-FP32 accumulation. The prefill
+    SDPA sites compensate with an explicit ``HiFi4 + fp32_dest_acc_en`` config;
+    decode never did, and the residual gap is what the relaxed
+    ``test_attention_*decode*`` thresholds in ``pcc_thresholds.json`` absorb.
+    The proper LLK fix is tracked in #48746.
+
+    ``GEMMA4_DECODE_SDPA_FIDELITY=hifi4`` raises the decode SDPA to HiFi4 for a
+    diagnostic run. Measured on 12B / WH 1x1, HiFi4 alone (shipped bfp8 weights):
+
+        decode_paged_batched[cache1500-batch16-global]  0.989563 -> 0.991574
+        decode_paged[cache1023-sliding]                 0.982962 -> 0.985300
+        decode_paged[cache512-global]                   0.983648 -> 0.984423
+
+    DEFAULT OFF on purpose. HiFi4 is 4 FPU passes against HiFi2's 2 on the decode
+    hot path, and — more importantly — a test that runs at a precision the demo
+    does not would stop gating the shipped precision, which is where the real 12B
+    decode loss lives (bfp8 attention weights, `GEMMA4_ATTN_WEIGHT_DTYPE`).
+    Pair the two only for a diagnostic sweep, never as a CI default.
+
+    Do NOT add ``fp32_dest_acc_en=True`` here. It is not a precision knob on this
+    op: measured 0.336055 (31B, batch1) and 0.327873 (12B, batch1) against ~0.98
+    baselines, while improving other configurations to 0.997 — reproducible on
+    both variants and both head dims.
+    """
+    mode = os.environ.get("GEMMA4_DECODE_SDPA_FIDELITY", "").lower()
+    if mode not in ("hifi4",):
+        return None
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
 def _qkv_norm_island_memcfg(batch, use_embedding_rope):
     """Memory config for the per-head q/k/v norm + RoPE island at decode.
 
@@ -349,6 +388,7 @@ def decode_forward(
         k_chunk_size=64,
         exp_approx_mode=False,
     )
+    sdpa_compute_kernel_config = _decode_sdpa_compute_kernel_config(mesh_device)
 
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -362,6 +402,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -381,6 +422,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 
