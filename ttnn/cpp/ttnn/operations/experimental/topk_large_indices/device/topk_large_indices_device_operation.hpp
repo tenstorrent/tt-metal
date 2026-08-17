@@ -42,25 +42,36 @@ struct TopkLargeIndicesDeviceOperation {
         uint32_t k,
         std::optional<uint32_t> valid_length,
         bool return_values,
-        std::optional<uint32_t> num_slices);
+        std::optional<uint32_t> num_slices,
+        bool tile_output,
+        std::optional<DataType> index_dtype);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
+// Input may be ROW_MAJOR or TILE layout (BFLOAT16, interleaved). With the defaults the outputs
+// are ROW_MAJOR and the indices are UINT32 — bit-identical behavior to before the opt-ins below
+// existed. tile_output=true emits TILE-layout outputs directly (k must be a multiple of 32;
+// tile padding rows are zero-filled). index_dtype=UINT16 narrows the indices output (searched
+// width must be <= 65535; the -inf sentinel becomes 0xFFFF).
 Tensor topk_large_indices(
     const Tensor& input_tensor,
     uint32_t k,
     std::optional<uint32_t> valid_length = std::nullopt,
-    std::optional<uint32_t> num_slices = std::nullopt);
+    std::optional<uint32_t> num_slices = std::nullopt,
+    bool tile_output = false,
+    std::optional<DataType> index_dtype = std::nullopt);
 
-// (values, indices): values are ROW_MAJOR BFLOAT16, sorted descending to match the indices;
-// sentinel-index (-inf) lanes carry exact bf16 -inf values.
+// (values, indices): values are BFLOAT16, sorted descending to match the indices;
+// sentinel-index (-inf) lanes carry exact bf16 -inf values. Layout/dtype opt-ins as above.
 std::tuple<Tensor, Tensor> topk_large_indices_with_values(
     const Tensor& input_tensor,
     uint32_t k,
     std::optional<uint32_t> valid_length = std::nullopt,
-    std::optional<uint32_t> num_slices = std::nullopt);
+    std::optional<uint32_t> num_slices = std::nullopt,
+    bool tile_output = false,
+    std::optional<DataType> index_dtype = std::nullopt);
 
 }  // namespace ttnn::experimental

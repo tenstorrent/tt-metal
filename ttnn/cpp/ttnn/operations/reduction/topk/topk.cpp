@@ -193,11 +193,16 @@ std::vector<Tensor> post_topk_transform_tensor(
 // k up to 2048), but returns only UINT32 row-major indices, sorted by value
 // descending. This composite routes eligible calls through it:
 //
-//   TILE bf16 -> untilize -> topk_large_indices(return_values) emitting BOTH
-//   the UINT32 indices and the BFLOAT16 values (sorted descending, straight
-//   from the op's DST — no gather) -> tilize values+indices -> index dtype
-//   match -> the shared post_topk_transform (slice to user k, rank/dim
-//   restore).
+//   TILE bf16 -> [untilize only when the input has >1 flattened row]
+//   -> topk_large_indices(return_values, tile_output, index_dtype) emitting
+//   BOTH the indices (UINT16 when the padded width fits 16 bits, else UINT32)
+//   and the BFLOAT16 values (sorted descending, straight from the op's DST —
+//   no gather), natively in TILE layout for k_rounded <= 1024 -> the shared
+//   post_topk_transform (slice to user k, rank/dim restore). Single-row
+//   inputs feed the op their TILE tensor directly (its tile reader pulls
+//   just the row's face runs). k_rounded == 2048 keeps the RM output +
+//   tilize (+ typecast) tail — measured faster there; see
+//   large_k_route_tile_output_max_k.
 //
 // Routing lives here at the composite level, NOT in the device op's
 // select_program_factory, so the device op's program hash is untouched.
@@ -207,29 +212,28 @@ std::vector<Tensor> post_topk_transform_tensor(
 //     sorted=true and sorted=false callers (torch.topk(largest=True) order).
 //   * indices: the device op emits UINT16 when the (tile-padded) width fits
 //     16 bits and UINT32 otherwise (see compute_output_specs); the routed
-//     path typecasts to match that exact boundary.
+//     path passes index_dtype=UINT16 at that exact boundary so the op's
+//     writer narrows natively (bit-identical to the former typecast).
 //   * -inf lanes: topk_large_indices marks lanes whose value is exactly bf16
 //     -inf with the sentinel index 0xFFFFFFFF instead of a real position,
 //     and its values output carries exact bf16 -inf on those lanes (matching
 //     torch's values). The INDEX for a -inf lane stays the sentinel (0xFFFF
-//     after a UINT16 typecast) — a known, benign divergence: the stock path
+//     under the UINT16 contract) — a known, benign divergence: the stock path
 //     is itself loose there (it can return indices pointing into its own
 //     -inf padding beyond the logical width).
 //
 // Expected op count and cost shape (bench note):
-//   untilize + topk_large_indices + 2x tilize [+ typecast]
-//   [+ 2x slice when k was rounded]  ~= 4-7 dispatches. (The op's values
-//   output replaced the earlier gather + sentinel eq/where chain: 3-7 fewer
-//   dispatches and their device time; the values themselves ride out of the
-//   op's DST for one extra in-DST transpose + one pack per row — noise.)
-//   Every stage except untilize and topk_large_indices touches only
-//   [rows, k_rounded <= 2048] tensors (micro-ops). Untilize reads the
-//   tile-padded input — for a single logical row that is a 32x read
-//   amplification (W=131072: 8 MB read / 256 KB written), but split across
-//   the full grid and DRAM-bandwidth-bound it is tens of microseconds, i.e.
-//   3 orders of magnitude below the 158 ms single-core baseline it replaces;
-//   no extra width gating is warranted. Host dispatch dominates only when
-//   the row is small — which the k > 64 gate already bounds.
+//   [untilize, multi-row only] + topk_large_indices
+//   [+ 2x slice when k was rounded]  ~= 1-4 dispatches. (History: the op's
+//   values output first replaced a gather + sentinel eq/where chain; the
+//   tile_output/index_dtype opt-ins then deleted the tilize-values,
+//   tilize-indices, and typecast stages — measured 60-120 us of single-core
+//   TilizeWithValPadding at k <= 1024 — and single-row calls also dropped
+//   the untilize (18 us at W=65536: it read the full 32-row tile padding for
+//   one logical row).) The multi-row untilize reads real rows, grid-parallel
+//   and DRAM-bandwidth-bound: no extra width gating is warranted. Host
+//   dispatch dominates only when the row is small — which the k > 64 gate
+//   already bounds.
 
 // k <= 64 keeps the device op's fast multi-core bitonic path when that path
 // is eligible (padded width in [8192, 65535), power of two, cost check).
@@ -247,8 +251,10 @@ constexpr uint32_t large_k_route_min_k_exclusive = 64;
 constexpr uint32_t small_k_route_min_padded_width = 4096;
 // topk_large_indices LLK ceiling.
 constexpr uint32_t large_k_route_max_k = 2048;
-// topk_large_indices requires k to be a multiple of 16.
-constexpr uint32_t large_k_route_k_multiple = 16;
+// The routed pipeline asks the op for TILE-layout outputs (tile_output=true),
+// which requires k to be a multiple of 32 (the op itself accepts multiples of
+// 16). post_topk_transform slices back down to the user's k either way.
+constexpr uint32_t large_k_route_k_multiple = 32;
 // Conservative routed-width envelope: topk_large_indices itself allows up to
 // 2^30 columns, but the routed composite is silicon-validated to 131072;
 // 2^19 keeps a margin without excluding realistic vocab/logit widths. Wider
@@ -319,27 +325,77 @@ bool should_route_to_topk_large_indices(
     return width >= k_rounded && width <= large_k_route_max_width;
 }
 
+// TILE-native output ceiling (measured policy, p150a stage profile 2026-08-17):
+// tilize of a [rows, k_rounded] RM output lands on TilizeWithValPadding's
+// pathological single-core factory whenever the padded output has <= 32 tiles
+// (k_rounded <= 1024) — 20-78 us per tilize there, which the op's native
+// tile-scatter writer replaces for ~2-5 us of scattered slice writes. At
+// k_rounded == 2048 the tilize is multi-core and cheap (3-4 us) while the
+// native scatter costs ~10 us of small writes per stream, so the RM-output +
+// tilize chain stays the faster arm and is kept for k > 1024.
+constexpr uint32_t large_k_route_tile_output_max_k = 1024;
+
+// TILE-native input floor (measured policy, p150a stage profile 2026-08-17):
+// feeding the op its TILE input directly (deleting the untilize) pays only
+// when untilize's 32x tile-padding read amplification outweighs the tile
+// reader's staged 64-byte scatter reads. Measured on single-row cells: at
+// padded W=65536 untilize costs ~18 us vs ~7 us of reader overhead (win);
+// at W=2048 untilize is ~1.6-1.9 us vs ~5.5 us of reader overhead (loss).
+// The crossover sits in the low tens of thousands of columns; 32768 keeps a
+// safe margin. Narrower (or multi-row) inputs keep the untilize stage.
+constexpr uint32_t large_k_route_tile_input_min_width = 32768;
+
 // Runs the routed pipeline on the 4D, last-dim-target TILE bf16 tensor.
 // Returns {values, indices} in TILE layout with last dim k_rounded, matching
 // what ttnn::prim::topk would have produced for adjusted_k == k_rounded, so
 // the shared post_topk_transform_tensor handles the rest.
+//
+// Input side: for a single (flattened) row at padded width >=
+// large_k_route_tile_input_min_width the op consumes the TILE input directly
+// (its tile reader pulls only the row's own face runs), deleting the untilize
+// stage and its 32x tile-padding read amplification; narrower single rows and
+// multi-row inputs keep the untilize (grid-parallel and cheap there, while
+// the tile reader's staged scatter reads are not).
+//
+// Output side, k_rounded <= 1024 (see large_k_route_tile_output_max_k): the
+// op emits TILE-layout outputs natively (tile_output=true; zero-filled tile
+// padding, matching what tilize_with_val_padding produced here before) and,
+// when the device op's index-dtype contract calls for UINT16, emits UINT16
+// indices natively too — the former tilize-values, tilize-indices, and
+// typecast stages are gone. k_rounded == 2048 keeps the RM-output + tilize
+// (+ typecast) chain, which measures faster there.
 std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tensor, const uint32_t k_rounded) {
-    // TILE -> ROW_MAJOR (topk_large_indices wants RM).
-    const Tensor input_rm = ttnn::to_layout(transformed_tensor, Layout::ROW_MAJOR);
-
-    // BFLOAT16 values + UINT32 row-major indices of the top k_rounded per
-    // row, both sorted by value descending; -inf value lanes carry exact
-    // bf16 -inf values and the sentinel index.
-    const auto [values_rm, indices_rm] = ttnn::experimental::topk_large_indices_with_values(input_rm, k_rounded);
-
-    Tensor values = ttnn::to_layout(values_rm, Layout::TILE);
-    Tensor indices = ttnn::to_layout(indices_rm, Layout::TILE);
+    const auto& lshape = transformed_tensor.logical_shape();
+    const uint32_t flattened_rows =
+        ttnn::operations::experimental::topk_large_indices::flattened_rows_excluding_last_dim(lshape);
+    const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
+    const bool tile_native_input = flattened_rows == 1 && padded_width >= large_k_route_tile_input_min_width;
+    const Tensor op_input =
+        tile_native_input ? transformed_tensor : ttnn::to_layout(transformed_tensor, Layout::ROW_MAJOR);
 
     // Match the device op's index dtype contract: UINT16 iff the tile-padded
     // width fits 16 bits (compute_output_specs compares the padded shape).
-    const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
-    if (padded_width <= std::numeric_limits<uint16_t>::max()) {
-        indices = ttnn::typecast(indices, DataType::UINT16);
+    const bool emit_u16 = padded_width <= std::numeric_limits<uint16_t>::max();
+    const bool tile_native_output = k_rounded <= large_k_route_tile_output_max_k;
+
+    // BFLOAT16 values + (UINT32 or UINT16) indices of the top k_rounded per
+    // row, both sorted by value descending; -inf value lanes carry exact
+    // bf16 -inf values and the sentinel index (0xFFFF under the UINT16
+    // contract, exactly what a UINT32 -> UINT16 typecast produces).
+    auto [values, indices] = ttnn::experimental::topk_large_indices_with_values(
+        op_input,
+        k_rounded,
+        /*valid_length=*/std::nullopt,
+        /*num_slices=*/std::nullopt,
+        /*tile_output=*/tile_native_output,
+        (tile_native_output && emit_u16) ? std::optional<DataType>(DataType::UINT16) : std::nullopt);
+
+    if (!tile_native_output) {
+        values = ttnn::to_layout(values, Layout::TILE);
+        indices = ttnn::to_layout(indices, Layout::TILE);
+        if (emit_u16) {
+            indices = ttnn::typecast(indices, DataType::UINT16);
+        }
     }
 
     std::vector<Tensor> result;

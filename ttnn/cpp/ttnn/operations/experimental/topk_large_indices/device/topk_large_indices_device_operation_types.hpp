@@ -45,6 +45,20 @@ struct operation_attributes_t {
     // count; it is clamped only against the physical core grid (with a warning). Changes the
     // program structure, so it is part of the program hash. nullopt = the built-in cost model.
     std::optional<uint32_t> num_slices{};
+    // Emit the outputs (indices, and values when return_values) in TILE layout instead of
+    // ROW_MAJOR. The writer scatters the 16-element result slices straight into their tile
+    // positions and zero-fills the tile padding rows, so callers that need TILE tensors skip
+    // the tilize ops entirely. Requires k % 32 == 0 (no partial output tile columns). Swaps in
+    // dedicated writer kernels and output CBs, so it is part of the program hash. Default off:
+    // ROW_MAJOR outputs, byte-identical program to before this option existed.
+    bool tile_output{false};
+    // Output dtype of the indices tensor. nullopt/UINT32 = today's UINT32 output. UINT16 is an
+    // opt-in narrowing for callers that know every winner index fits 16 bits: it requires the
+    // searched width (valid_length if set, else the last dimension) to be <= 65535 so real
+    // indices are < 0xFFFF and the -inf sentinel truncates to the unambiguous 0xFFFF (the same
+    // value a UINT32 -> UINT16 typecast of the sentinel produces). Changes the writer kernel and
+    // output spec, so it is part of the program hash.
+    std::optional<tt::tt_metal::DataType> index_dtype{};
 };
 
 struct tensor_args_t {

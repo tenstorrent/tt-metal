@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <optional>
+#include <string>
 #include <tuple>
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
@@ -116,15 +118,32 @@ void create_values_output_cbs(
     }
 }
 
+// True when any output-format opt-in is active: the program then uses the flex
+// writer kernels instead of the default (byte-identical) writer sources.
+bool uses_flex_writer(const operation_attributes_t& attrs) {
+    return attrs.tile_output || attrs.index_dtype == DataType::UINT16;
+}
+
+// Rows of one 2D slice of the (flattened) row space: TILE layouts pad the last
+// two dims per slice, so tile-row addressing needs this alongside the flat row.
+uint32_t rows_2d_of(const ttnn::Shape& shape) { return shape.rank() >= 2 ? shape[shape.rank() - 2] : 1; }
+
+constexpr uint32_t pad_zero_slab_bytes = 2048;  // covers the largest zero run: 512 uint32 elements
+
 void set_runtime_args(
     tt::tt_metal::Program& program,
     const TopkLargeIndicesSharedVariables& shared,
     const Tensor& input,
     const tensor_return_value_t& outputs,
-    LlkTargetK llk_target_k,
-    std::optional<uint32_t> valid_length) {
+    const operation_attributes_t& attrs) {
+    const LlkTargetK llk_target_k = snap_to_llk_target_k(attrs.k);
+    const std::optional<uint32_t> valid_length = attrs.valid_length;
     const Tensor& indices = outputs[0];
     const bool return_values = outputs.size() > 1;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool flex_writer = uses_flex_writer(attrs);
+    const uint32_t rows_2d = rows_2d_of(input.logical_shape());
+    const uint32_t w_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const auto runtime_args = get_runtime_shape_args(input, llk_target_k, valid_length);
     const auto work_split = tt::tt_metal::split_work_to_cores(
         input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
@@ -145,19 +164,48 @@ void set_runtime_args(
             rows,
             num_rows_per_core_group_1);
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             start_row,
-             rows,
-             runtime_args.num_chunks,
-             runtime_args.input_tail_chunk_bytes,
-             runtime_args.input_row_bytes});
+        if (tile_input) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 start_row,
+                 rows,
+                 runtime_args.num_chunks,
+                 tt::div_up(runtime_args.tail_elements, tt::constants::FACE_WIDTH),
+                 w_tiles,
+                 rows_2d,
+                 start_row % rows_2d,
+                 start_row / rows_2d,
+                 0 /* start_element */});
+        } else {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 start_row,
+                 rows,
+                 runtime_args.num_chunks,
+                 runtime_args.input_tail_chunk_bytes,
+                 runtime_args.input_row_bytes});
+        }
         tt::tt_metal::SetRuntimeArgs(
             program, shared.compute_kernel_id, core, {rows, runtime_args.num_chunks, runtime_args.tail_elements});
-        if (return_values) {
+        if (flex_writer) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.writer_kernel_id,
+                core,
+                {indices.buffer()->address(),
+                 start_row,
+                 rows,
+                 return_values ? outputs[1].buffer()->address() : 0,
+                 rows_2d,
+                 start_row % rows_2d,
+                 start_row / rows_2d});
+        } else if (return_values) {
             tt::tt_metal::SetRuntimeArgs(
                 program,
                 shared.writer_kernel_id,
@@ -200,11 +248,17 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // Create kernels/CBs across the full worker grid so cache hits can use a different active core subset.
 
     const bool return_values = operation_attributes.return_values;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool tile_output = operation_attributes.tile_output;
+    const bool index_u16 = operation_attributes.index_dtype == DataType::UINT16;
+    const bool flex_writer = uses_flex_writer(operation_attributes);
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
     constexpr uint32_t cb_values = tt::CBIndex::c_3;
     constexpr uint32_t cb_values_scratch = tt::CBIndex::c_4;
+    constexpr uint32_t cb_pad_zero = tt::CBIndex::c_5;
+    constexpr uint32_t cb_stage = tt::CBIndex::c_6;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -213,7 +267,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t output_slices_per_row = k / row_slice_elements;
     const uint32_t indices_slice_bytes = row_slice_elements * indices.element_size();
     const uint32_t indices_row_bytes = k * indices.element_size();
-    const uint32_t indices_cb_row_bytes = llk_k * indices.element_size();
+    // The indices CB carries the raw 32-bit index words the packer produces,
+    // independent of the (possibly narrowed) output tensor dtype.
+    const uint32_t indices_cb_row_bytes = llk_k * static_cast<uint32_t>(sizeof(uint32_t));
 
     const uint32_t cb_depth = 2;
     const auto input_cb_config =
@@ -230,7 +286,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     }
     tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
 
-    if (llk_target_k != LlkTargetK::K512) {
+    // The scratch also serves as the UINT16 narrowing row (sized with the
+    // output element size either way), so it exists for every LLK window when
+    // narrowing is requested.
+    if (llk_target_k != LlkTargetK::K512 || index_u16) {
         const auto indices_scratch_cb_config =
             tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
                 .set_page_size(cb_indices_scratch, indices_row_bytes);
@@ -241,12 +300,34 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         create_values_output_cbs(program, all_cores, llk_target_k, k, cb_values, cb_values_scratch);
     }
 
-    std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    if (tile_output) {
+        const auto pad_cb_config =
+            tt::tt_metal::CircularBufferConfig(pad_zero_slab_bytes, {{cb_pad_zero, tt::DataFormat::UInt32}})
+                .set_page_size(cb_pad_zero, pad_zero_slab_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, pad_cb_config);
+    }
+    // TILE-input staging: one 64-byte slot per 16-element chunk slice, plus
+    // 64 bytes of slack for in-kernel 64-byte alignment of the slot base.
+    const uint32_t stage_bytes = (llk_k / row_slice_elements) * 64 + 64;
+    if (tile_input) {
+        const auto stage_cb_config =
+            tt::tt_metal::CircularBufferConfig(stage_bytes, {{cb_stage, tt::DataFormat::UInt32}})
+                .set_page_size(cb_stage, stage_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, stage_cb_config);
+    }
+
+    std::vector<uint32_t> reader_compile_args;
+    if (tile_input) {
+        reader_compile_args = {cb_in, cb_stage, llk_k / row_slice_elements, tiles_per_sequence};
+    } else {
+        reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    }
     interleaved_accessor_args(input).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
+        tile_input ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_tile.cpp"
+                   : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -275,37 +356,79 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .dst_full_sync_en = true,
             .compile_args = compute_compile_args});
 
-    std::vector<uint32_t> writer_compile_args = {
-        cb_indices,
-        cb_indices_scratch,
-        indices_row_bytes,
-        source_slices_per_row,
-        output_slices_per_row,
-        indices_slice_bytes};
-    if (return_values) {
-        writer_compile_args.push_back(cb_values);
-        writer_compile_args.push_back(cb_values_scratch);
-        writer_compile_args.push_back(k * values_element_bytes);
-        writer_compile_args.push_back(row_slice_elements * values_element_bytes);
-    }
-    interleaved_accessor_args(indices).append_to(writer_compile_args);
-    if (return_values) {
-        interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
-    }
+    tt::tt_metal::KernelHandle writer_kernel;
+    if (flex_writer) {
+        // Opt-in output formats (TILE layout and/or UINT16 indices): dedicated
+        // flex writer, gated by defines so the default program's writer
+        // binaries stay byte-identical.
+        const uint32_t idx_es = indices.element_size();
+        const uint32_t indices_page_bytes = tile_output ? tt::constants::TILE_HW * idx_es : indices_row_bytes;
+        const uint32_t values_page_bytes =
+            tile_output ? tt::constants::TILE_HW * values_element_bytes : k * values_element_bytes;
+        std::vector<uint32_t> flex_compile_args = {
+            cb_indices,
+            cb_indices_scratch,
+            indices_page_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            cb_values,
+            cb_values_scratch,
+            values_page_bytes,
+            cb_pad_zero,
+            tile_output ? k / tt::constants::TILE_WIDTH : 0};
+        interleaved_accessor_args(indices).append_to(flex_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(flex_compile_args);
+        }
+        std::map<std::string, std::string> flex_defines;
+        if (return_values) {
+            flex_defines["FLEX_WITH_VALUES"] = "1";
+        }
+        if (tile_output) {
+            flex_defines["FLEX_OUT_TILE"] = "1";
+        }
+        if (index_u16) {
+            flex_defines["FLEX_INDEX_U16"] = "1";
+        }
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_flex.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(flex_compile_args, flex_defines));
+    } else {
+        std::vector<uint32_t> writer_compile_args = {
+            cb_indices,
+            cb_indices_scratch,
+            indices_row_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            indices_slice_bytes};
+        if (return_values) {
+            writer_compile_args.push_back(cb_values);
+            writer_compile_args.push_back(cb_values_scratch);
+            writer_compile_args.push_back(k * values_element_bytes);
+            writer_compile_args.push_back(row_slice_elements * values_element_bytes);
+        }
+        interleaved_accessor_args(indices).append_to(writer_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
+        }
 
-    auto writer_kernel = tt::tt_metal::CreateKernel(
-        program,
-        return_values ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_with_values.cpp"
-                      : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            return_values
+                ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_with_values.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+    }
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
         .cores = cores};
-    set_runtime_args(program, shared, input, tensor_return_value, llk_target_k, operation_attributes.valid_length);
+    set_runtime_args(program, shared, input, tensor_return_value, operation_attributes);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -320,8 +443,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         cached_program.shared_variables,
         tensor_args.input_tensor,
         tensor_return_value,
-        snap_to_llk_target_k(operation_attributes.k),
-        operation_attributes.valid_length);
+        operation_attributes);
 }
 
 // ---------------------------------------------------------------------------
@@ -539,10 +661,13 @@ void set_runtime_args_multi_core(
     const TopkLargeIndicesMultiCoreSharedVariables& shared,
     const Tensor& input,
     const tensor_return_value_t& outputs,
-    LlkTargetK llk_target_k,
-    std::optional<uint32_t> valid_length) {
+    const operation_attributes_t& attrs) {
+    const LlkTargetK llk_target_k = snap_to_llk_target_k(attrs.k);
+    const std::optional<uint32_t> valid_length = attrs.valid_length;
     const Tensor& indices = outputs[0];
     const bool return_values = outputs.size() > 1;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool flex_writer = uses_flex_writer(attrs);
     const uint32_t llk_k = to_uint32(llk_target_k);
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
@@ -556,20 +681,40 @@ void set_runtime_args_multi_core(
     const auto slices = compute_slice_runtime(n, llk_k, num_slices, valid_length);
     auto* device = input.device();
 
+    const uint32_t rows_2d = rows_2d_of(shape);
+    const uint32_t w_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
     for (uint32_t i = 0; i < num_slices; ++i) {
         const auto& core = shared.cores[i];
         const auto& slice = slices[i];
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             0 /* start_row */,
-             num_rows,
-             slice.num_chunks,
-             slice.tail_elements * input.element_size(),
-             input_row_bytes,
-             slice.start_element * input.element_size()});
+        if (tile_input) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 0 /* start_row */,
+                 num_rows,
+                 slice.num_chunks,
+                 tt::div_up(slice.tail_elements, tt::constants::FACE_WIDTH),
+                 w_tiles,
+                 rows_2d,
+                 0 /* start_in_slice */,
+                 0 /* start_slice */,
+                 slice.start_element});
+        } else {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 0 /* start_row */,
+                 num_rows,
+                 slice.num_chunks,
+                 slice.tail_elements * input.element_size(),
+                 input_row_bytes,
+                 slice.start_element * input.element_size()});
+        }
 
         // Tree schedule for slice i: it wins levels [0, t) where t is the
         // index of i's lowest set bit (root i=0 wins every level), merging
@@ -629,6 +774,8 @@ void set_runtime_args_multi_core(
         writer_args.push_back(indices.buffer()->address());
         if (return_values) {
             writer_args.push_back(outputs[1].buffer()->address());
+        } else if (flex_writer) {
+            writer_args.push_back(0);  // flex writer arg-layout parity: unused values address
         }
         tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, writer_args);
     }
@@ -645,6 +792,10 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     const auto& input = tensor_args.input_tensor;
     auto& indices = tensor_return_value[0];
     const bool return_values = operation_attributes.return_values;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool tile_output = operation_attributes.tile_output;
+    const bool index_u16 = operation_attributes.index_dtype == DataType::UINT16;
+    const bool flex_writer = uses_flex_writer(operation_attributes);
 
     const uint32_t k = operation_attributes.k;
     const auto llk_target_k = snap_to_llk_target_k(k);
@@ -695,6 +846,10 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     // Root-only values output CBs (return_values only).
     constexpr uint32_t cb_values_out = tt::CBIndex::c_8;
     constexpr uint32_t cb_values_scratch = tt::CBIndex::c_9;
+    // Root-only tile-padding zero slab (tile_output only).
+    constexpr uint32_t cb_pad_zero = tt::CBIndex::c_10;
+    // TILE-input read staging (all cores, tile input only).
+    constexpr uint32_t cb_stage = tt::CBIndex::c_11;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -707,7 +862,9 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     const uint32_t output_slices_per_row = k / row_slice_elements;
     const uint32_t indices_slice_bytes = row_slice_elements * indices.element_size();
     const uint32_t indices_row_bytes = k * indices.element_size();
-    const uint32_t indices_cb_row_bytes = llk_k * indices.element_size();
+    // The indices CB carries the raw 32-bit index words the packer produces,
+    // independent of the (possibly narrowed) output tensor dtype.
+    const uint32_t indices_cb_row_bytes = llk_k * static_cast<uint32_t>(sizeof(uint32_t));
     constexpr uint32_t cb_depth = 2;
 
     // The recv CB spans the whole rectangle so every core sees the same L1
@@ -752,7 +909,9 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     }
     tt::tt_metal::CreateCircularBuffer(program, root_core_set, indices_cb_config);
 
-    if (llk_target_k != LlkTargetK::K512) {
+    // Also the UINT16 narrowing row when narrowing is requested (see the
+    // row-parallel factory).
+    if (llk_target_k != LlkTargetK::K512 || index_u16) {
         const auto indices_scratch_cb_config =
             tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
                 .set_page_size(cb_indices_scratch, indices_row_bytes);
@@ -763,18 +922,39 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         create_values_output_cbs(program, root_core_set, llk_target_k, k, cb_values_out, cb_values_scratch);
     }
 
+    if (tile_output) {
+        const auto pad_cb_config =
+            tt::tt_metal::CircularBufferConfig(pad_zero_slab_bytes, {{cb_pad_zero, tt::DataFormat::UInt32}})
+                .set_page_size(cb_pad_zero, pad_zero_slab_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, root_core_set, pad_cb_config);
+    }
+    if (tile_input) {
+        const uint32_t stage_bytes = (llk_k / row_slice_elements) * 64 + 64;
+        const auto stage_cb_config =
+            tt::tt_metal::CircularBufferConfig(stage_bytes, {{cb_stage, tt::DataFormat::UInt32}})
+                .set_page_size(cb_stage, stage_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, stage_cb_config);
+    }
+
     // Pairwise tree flow control (see writer_tree.cpp): ready = "my winner's
     // recv slot is free", data = "my current partner's sequence landed".
     const uint32_t ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t data_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // Leaf reader: the row-parallel reader plus a per-core slice offset
-    // (reader_local.cpp is reused unchanged from the gather design).
-    std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    // (reader_local.cpp is reused unchanged from the gather design;
+    // reader_tile.cpp serves TILE-layout inputs on both factories).
+    std::vector<uint32_t> reader_compile_args;
+    if (tile_input) {
+        reader_compile_args = {cb_in, cb_stage, llk_k / row_slice_elements, tiles_per_sequence};
+    } else {
+        reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    }
     interleaved_accessor_args(input).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_local.cpp",
+        tile_input ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_tile.cpp"
+                   : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_local.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -802,38 +982,84 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = true, .dst_full_sync_en = true, .compile_args = compute_root_compile_args});
 
-    std::vector<uint32_t> writer_compile_args = {
-        cb_ship_values,
-        cb_ship_indices,
-        cb_neginf_scratch,
-        cb_recv,
-        ready_sem_id,
-        data_sem_id,
-        tiles_per_sequence,
-        tile32_bytes,
-        cb_indices_out,
-        cb_indices_scratch,
-        indices_row_bytes,
-        source_slices_per_row,
-        output_slices_per_row,
-        indices_slice_bytes};
-    if (return_values) {
-        writer_compile_args.push_back(cb_values_out);
-        writer_compile_args.push_back(cb_values_scratch);
-        writer_compile_args.push_back(k * values_element_bytes);
-        writer_compile_args.push_back(row_slice_elements * values_element_bytes);
+    tt::tt_metal::KernelHandle writer_kernel;
+    if (flex_writer) {
+        const uint32_t idx_es = indices.element_size();
+        const uint32_t indices_page_bytes = tile_output ? tt::constants::TILE_HW * idx_es : indices_row_bytes;
+        const uint32_t values_page_bytes =
+            tile_output ? tt::constants::TILE_HW * values_element_bytes : k * values_element_bytes;
+        std::vector<uint32_t> flex_compile_args = {
+            cb_ship_values,
+            cb_ship_indices,
+            cb_neginf_scratch,
+            cb_recv,
+            ready_sem_id,
+            data_sem_id,
+            tiles_per_sequence,
+            tile32_bytes,
+            cb_indices_out,
+            cb_indices_scratch,
+            indices_page_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            cb_values_out,
+            cb_values_scratch,
+            values_page_bytes,
+            cb_pad_zero,
+            tile_output ? k / tt::constants::TILE_WIDTH : 0};
+        interleaved_accessor_args(indices).append_to(flex_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(flex_compile_args);
+        }
+        std::map<std::string, std::string> flex_defines;
+        if (return_values) {
+            flex_defines["FLEX_WITH_VALUES"] = "1";
+        }
+        if (tile_output) {
+            flex_defines["FLEX_OUT_TILE"] = "1";
+        }
+        if (index_u16) {
+            flex_defines["FLEX_INDEX_U16"] = "1";
+        }
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree_flex.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(flex_compile_args, flex_defines));
+    } else {
+        std::vector<uint32_t> writer_compile_args = {
+            cb_ship_values,
+            cb_ship_indices,
+            cb_neginf_scratch,
+            cb_recv,
+            ready_sem_id,
+            data_sem_id,
+            tiles_per_sequence,
+            tile32_bytes,
+            cb_indices_out,
+            cb_indices_scratch,
+            indices_row_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            indices_slice_bytes};
+        if (return_values) {
+            writer_compile_args.push_back(cb_values_out);
+            writer_compile_args.push_back(cb_values_scratch);
+            writer_compile_args.push_back(k * values_element_bytes);
+            writer_compile_args.push_back(row_slice_elements * values_element_bytes);
+        }
+        interleaved_accessor_args(indices).append_to(writer_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
+        }
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            return_values
+                ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree_with_values.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
     }
-    interleaved_accessor_args(indices).append_to(writer_compile_args);
-    if (return_values) {
-        interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
-    }
-    auto writer_kernel = tt::tt_metal::CreateKernel(
-        program,
-        return_values
-            ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree_with_values.cpp"
-            : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
     TopkLargeIndicesMultiCoreSharedVariables shared{
         .reader_kernel_id = reader_kernel,
@@ -841,8 +1067,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         .compute_root_kernel_id = compute_root_kernel,
         .writer_kernel_id = writer_kernel,
         .cores = cores};
-    set_runtime_args_multi_core(
-        program, shared, input, tensor_return_value, llk_target_k, operation_attributes.valid_length);
+    set_runtime_args_multi_core(program, shared, input, tensor_return_value, operation_attributes);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -857,8 +1082,7 @@ void TopkLargeIndicesMultiCoreProgramFactory::override_runtime_arguments(
         cached_program.shared_variables,
         tensor_args.input_tensor,
         tensor_return_value,
-        snap_to_llk_target_k(operation_attributes.k),
-        operation_attributes.valid_length);
+        operation_attributes);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

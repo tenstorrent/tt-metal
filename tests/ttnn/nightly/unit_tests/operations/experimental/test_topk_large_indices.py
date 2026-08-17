@@ -1074,3 +1074,223 @@ def test_topk_large_indices_tree_return_values(device, num_slices):
     gathered = torch.gather(torch_input, dim=-1, index=torch_indices)
     assert_equal(gathered, torch_values)
     assert torch_indices[0].unique().numel() == k
+
+
+# ---------------------------------------------------------------------------
+# FLEX formats (opt-ins): tile_output=True, index_dtype=uint16, and TILE-layout
+# input. The compute kernels are byte-shared with the default program — only
+# the reader/writer sources change — so the strongest assertion is BIT-IDENTITY
+# of the logical outputs against the default ROW_MAJOR/UINT32 call on the same
+# input (tie order included: same compute, same input, same result).
+# ---------------------------------------------------------------------------
+
+
+def _run_flex_vs_default(
+    device,
+    torch_input,
+    k,
+    *,
+    tile_input=False,
+    tile_output=False,
+    index_dtype=None,
+    valid_length=None,
+    num_slices=None,
+):
+    tt_in_default = _to_device(torch_input, device)
+    ref_values, ref_indices = ttnn.experimental.topk_large_indices(
+        tt_in_default, k=k, valid_length=valid_length, return_values=True, num_slices=num_slices
+    )
+    ref_values_t = ttnn.to_torch(ref_values).float()
+    ref_indices_t = ttnn.to_torch(ref_indices, dtype=torch.uint32).to(torch.int64)
+
+    in_layout = ttnn.TILE_LAYOUT if tile_input else ttnn.ROW_MAJOR_LAYOUT
+    tt_in_flex = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=in_layout, device=device)
+    values, indices = ttnn.experimental.topk_large_indices(
+        tt_in_flex,
+        k=k,
+        valid_length=valid_length,
+        return_values=True,
+        num_slices=num_slices,
+        tile_output=tile_output,
+        index_dtype=index_dtype,
+    )
+
+    expected_shape = list(torch_input.shape)
+    expected_shape[-1] = k
+    expected_layout = ttnn.TILE_LAYOUT if tile_output else ttnn.ROW_MAJOR_LAYOUT
+    assert values.layout == expected_layout
+    assert indices.layout == expected_layout
+    assert values.dtype == ttnn.bfloat16
+    assert indices.dtype == (index_dtype or ttnn.uint32)
+    assert list(values.shape) == expected_shape
+    assert list(indices.shape) == expected_shape
+
+    got_values = ttnn.to_torch(values).float()
+    if index_dtype == ttnn.uint16:
+        got_indices = ttnn.to_torch(indices, dtype=torch.int32).to(torch.int64) & 0xFFFF
+        expected_indices = ref_indices_t & 0xFFFF  # sentinel 0xFFFFFFFF truncates to 0xFFFF
+    else:
+        got_indices = ttnn.to_torch(indices, dtype=torch.uint32).to(torch.int64)
+        expected_indices = ref_indices_t
+
+    assert_equal(got_values, ref_values_t)
+    assert_equal(got_indices, expected_indices)
+    return got_values, got_indices
+
+
+@pytest.mark.parametrize(
+    "k,num_rows,n",
+    [
+        (32, 32, 4096),  # llk 512, exact 32-row tile fill (no padding rows)
+        (512, 2, 4096),  # llk 512, row-parallel, 30 padding rows
+        (1024, 3, 8192),  # llk 1024 (reordered CB slices), 29 padding rows
+        (2048, 2, 8192),  # llk 2048, 2 sequence tiles
+        (512, 33, 2048),  # rows straddle a tile-row boundary (2 tile rows, 31 pad rows)
+        (512, 1, 65536),  # column-parallel tree root emission
+        (2048, 1, 65536),  # column-parallel, widest window
+    ],
+)
+def test_topk_large_indices_tile_output_matches_default(device, k, num_rows, n):
+    torch.manual_seed(0)
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    _run_flex_vs_default(device, torch_input, k, tile_output=True)
+
+
+def test_topk_large_indices_tile_output_rank3_slab_padding(device):
+    # TILE padding is per 2D slab: [2, 3, n] pads each [3, k] slab to [32, k]
+    # independently; the slab-aware writer addressing (slice_idx/in_slice_row)
+    # and per-slab padding fill must not touch neighboring slabs' data rows.
+    torch.manual_seed(1)
+    torch_input = torch.randn(2, 3, 4096, dtype=torch.bfloat16)
+    _run_flex_vs_default(device, torch_input, 512, tile_output=True)
+
+
+@pytest.mark.parametrize(
+    "k,num_rows,n",
+    [
+        (512, 1, 65536),  # column-parallel: the routed single-row shape (face row 0)
+        (2048, 1, 65536),
+        (512, 1, 2048),  # single chunk-count row-parallel single core
+        (512, 3, 5000),  # odd face rows (delta=32 read staging) + non-tile-multiple width
+        (512, 2, 4096),
+        (2048, 33, 8192),  # rows straddle input tile rows, incl. bottom faces
+        (32, 32, 37984),  # sampling-like: k=32, 32 users, non-pow2 width
+    ],
+)
+def test_topk_large_indices_tile_input_matches_default(device, k, num_rows, n):
+    torch.manual_seed(2)
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    _run_flex_vs_default(device, torch_input, k, tile_input=True)
+
+
+def test_topk_large_indices_tile_input_last_chunk_winners(device):
+    # Every winner sits at the row's END: the tail chunk's final (partial)
+    # slice reads tile-padding garbage columns that the compute must mask by
+    # the logical width. Ascending winners = exact rank-order reference.
+    num_rows, n, k = 2, 4095, 512
+    torch_input = _make_large_index_input(num_rows, n, k)
+    _run_flex_vs_default(device, torch_input, k, tile_input=True)
+
+
+def test_topk_large_indices_tile_input_all_equal_ties(device):
+    # All-equal rows: every lane ties; indices must still be k distinct valid
+    # positions and bit-identical to the default path's tie resolution.
+    torch_input = torch.ones(3, 8192, dtype=torch.bfloat16)
+    _, got_indices = _run_flex_vs_default(device, torch_input, 512, tile_input=True, tile_output=True)
+    for row in got_indices:
+        assert row.unique().numel() == 512
+        assert row.max() < 8192
+
+
+@pytest.mark.parametrize("num_rows,n", [(2, 4096), (1, 65024)])  # row-parallel / column-parallel (n <= 65535)
+def test_topk_large_indices_uint16_matches_default(device, num_rows, n):
+    torch.manual_seed(3)
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    _run_flex_vs_default(device, torch_input, 512, index_dtype=ttnn.uint16)
+
+
+@pytest.mark.parametrize("tile_output", [False, True])
+def test_topk_large_indices_uint16_neginf_sentinel(device, tile_output):
+    # -inf lanes carry the 0xFFFF sentinel under the UINT16 contract (the
+    # exact value a UINT32 -> UINT16 typecast of 0xFFFFFFFF produces).
+    num_rows, n, k, finite_count = 2, 4096, 512, 16
+    torch_input = torch.full((num_rows, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, :finite_count] = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+
+    got_values, got_indices = _run_flex_vs_default(
+        device, torch_input, k, tile_output=tile_output, index_dtype=ttnn.uint16
+    )
+    assert (got_indices[:, finite_count:] == 0xFFFF).all()
+    assert torch.isneginf(got_values.float()[:, finite_count:]).all()
+
+
+def test_topk_large_indices_flex_route_combo(device):
+    # The exact combination the ttnn.topk composite routes through: TILE input
+    # (single row, no untilize), TILE output, UINT16 indices.
+    torch.manual_seed(4)
+    torch_input = torch.randn(1, 65024, dtype=torch.bfloat16)  # <= 65535 => u16-eligible
+    _run_flex_vs_default(device, torch_input, 2048, tile_input=True, tile_output=True, index_dtype=ttnn.uint16)
+
+
+def test_topk_large_indices_flex_multirow_combo(device):
+    # Sampling-shaped combo: 32 users, k=32, u16 + TILE both ways.
+    torch.manual_seed(5)
+    torch_input = torch.randn(32, 37984, dtype=torch.bfloat16)
+    _run_flex_vs_default(device, torch_input, 32, tile_input=True, tile_output=True, index_dtype=ttnn.uint16)
+
+
+def test_topk_large_indices_tile_input_valid_length(device):
+    # Bounded search on a TILE input: the stale tail (larger decoys) must
+    # never be read or ranked.
+    torch.manual_seed(6)
+    num_rows, n, k, valid_length = 2, 8192, 512, 600
+    torch_input = torch.zeros(num_rows, n, dtype=torch.bfloat16)
+    torch_input[:, :valid_length] = torch.randn(num_rows, valid_length).to(torch.bfloat16)
+    torch_input[:, valid_length:] = 100.0
+    got_values, got_indices = _run_flex_vs_default(device, torch_input, k, tile_input=True, valid_length=valid_length)
+    finite = got_indices != 0xFFFFFFFF
+    assert (got_values.float()[finite] < 100.0).all()
+    assert got_indices[finite].max() < valid_length
+
+
+def test_topk_large_indices_uint16_width_too_large_rejected(device, expect_error):
+    torch_input = torch.randn(1, 66560, dtype=torch.bfloat16)
+    with expect_error(RuntimeError, "index_dtype=UINT16 requires"):
+        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=512, index_dtype=ttnn.uint16)
+
+
+def test_topk_large_indices_tile_output_k_not_multiple_of_32_rejected(device, expect_error):
+    torch_input = torch.randn(2, 4096, dtype=torch.bfloat16)
+    with expect_error(RuntimeError, "tile_output requires k"):
+        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=48, tile_output=True)
+
+
+def test_topk_large_indices_flex_program_cache(device):
+    # tile_output / index_dtype / input layout are all program-hash inputs:
+    # each flip compiles a new program; repeats are cache hits.
+    torch.manual_seed(7)
+    num_rows, n, k = 2, 8192, 512
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    ref_values, _ = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        entries = []
+        configs = [
+            dict(),
+            dict(tile_output=True),
+            dict(tile_output=True, index_dtype=ttnn.uint16),
+            dict(tile_input=True, tile_output=True, index_dtype=ttnn.uint16),
+            dict(tile_output=True),  # repeat: cache hit
+        ]
+        for cfg in configs:
+            got_values, _ = _run_flex_vs_default(device, torch_input, k, **cfg)
+            assert_equal(got_values, ref_values)
+            entries.append(device.num_program_cache_entries())
+        assert entries[1] > entries[0]
+        assert entries[2] > entries[1]
+        assert entries[3] > entries[2]
+        assert entries[4] == entries[3]  # repeated tile_output config: no growth
+    finally:
+        device.disable_and_clear_program_cache()
