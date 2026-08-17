@@ -101,11 +101,15 @@ void kernel_main() {
     if (my_active_count < my_count && tile_row < total_tile_rows) {
         Noc noc;
         CircularBuffer out_cb(cb_out);
-        // cb_out is drained and push/pop-balanced here (read ptr == write ptr),
-        // so one zeroed page at its write pointer doubles as the pre-zeroed L1
-        // scratch that async_write_zeros streams to DRAM from its read pointer.
-        cb_reserve_back(cb_out, 1U);
-        fill_zeros_async(noc, cb_out, tile_bytes);
+        // async_write_zeros streams the scratch page from cb_out's READ pointer,
+        // so the zeros must be placed there. This side is the CB consumer: its
+        // local write pointer never leaves the CB base (only the producer pushes),
+        // while the read pointer sits (pages_popped % capacity) pages past it —
+        // fill_zeros_async targets the write pointer, so bridge the gap with an
+        // explicit offset or the streamed "zeros" are stale tile bytes. cb_out is
+        // drained (pushes == pops) and the producer has exited, so the page at
+        // the read pointer is free to reuse as scratch.
+        fill_zeros_async(noc, cb_out, tile_bytes, out_cb.get_read_ptr() - out_cb.get_write_ptr());
         noc.write_zeros_l1_barrier();
         for (uint32_t step = my_active_count; step < my_count && tile_row < total_tile_rows;
              ++step, tile_row += stride) {
