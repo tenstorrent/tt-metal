@@ -16,7 +16,7 @@
 // PR fixes is unreachable by every other test -- topk_xl_test.cpp includes only its own
 // header, and the top32_rm consumers only theirs. This test exists to make that
 // combination reachable: it is primarily a COMPILE-time assertion. If the extraction
-// regresses (either header re-declaring the helper locally), this file stops building.
+// regresses (either header redeclaring the helper locally), this file stops building.
 //
 // It also runs, so the shared helper is exercised rather than merely compiled: the math
 // thread calls set_dst_write_addr_offset to rebase the Dst write pointer, restores it to
