@@ -276,16 +276,16 @@ AUDITED_SEEDS = {
     ),
     "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
         semantic_cpp_class="ready",
-        semantic_cpp_blocker="No architectural conversion blocker identified at the vFloat leaf boundary; numerical-domain and FP32 destination parity must be characterized before promotion.",
-        paired_selector_status="absent",
-        test_status="not_run",
-        perf_status="blocked",
+        semantic_cpp_blocker="STALE-AUDIT CORRECTION (Lane AZ 2026-08-17): the old 'no isolated perf module / selector absent' blocker no longer holds — test_sfpu_sdpa_exp_unclamped sweeps the sdpa_exp_impl hand/generated selector (0 = handwritten production calculate_exponential, 1 = semantic unclamped; Lane AL hand-corr restore) and test_sfpu_sdpa_exp_unclamped_device_profile is the isolated KERNEL-marker perf fixture the nightly 'sdpa' full2x2 sweep row measures. Remaining work is performance engineering (M3 const-regs/drain-aware scheduling toward beating hand further), not conversion blockers.",
+        paired_selector_status="implemented",
+        test_status="pass",
+        perf_status="measured",
         correctness_metric="pcc",
-        correctness_threshold="PCC > 0.99 plus per-format element tolerance unless the paired test establishes a stricter contract",
-        correctness_source="test_sfpu_sdpa_exp_unclamped.py; helpers/utils.py:548-785",
-        silicon_status="blocked",
-        silicon_result="No isolated paired profiler module.",
-        silicon_source="f1_candidates.tsv rank 10",
+        correctness_threshold="PCC > 0.99 plus per-format element tolerance (suite gate) on the impl-parameterized functional nodes",
+        correctness_source="test_sfpu_sdpa_exp_unclamped.py::test_sfpu_sdpa_exp_unclamped (sdpa_exp_impl 0/1); helpers/utils.py:548-785",
+        silicon_status="win",
+        silicon_result="BH p150 KERNEL marker (sweep row 'sdpa', fire-and-forget replay-launch shape so BODY is invalid, HANDOFF section 1 metric caveat): sem ON 1004.0 vs hand 1009.0 = -0.50% WIN (same-pin cells, Lane AU close-out of the stale +2.7% residual; nightly-20260818e sdpa row GREEN, causal -0.50%-class vs-hand cells booked in sfpu_device_baseline_p150_v1.tsv).",
+        silicon_source="sweep_2x2_ops.tsv sdpa row; sfpu_device_baseline_p150_v1.tsv; nightly-20260818e REPORT.md; SDPA_EXP_UNCLAMPED_COMPILER_AB.md",
     ),
     "legacy__ckernel_sfpu_softmax_k": dict(
         semantic_cpp_class="ready",
@@ -608,10 +608,16 @@ AUDITED_SEEDS = {
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
     ),
-    "metal__ckernel_sfpu_mul_int32": dict(
+    "metal__ckernel_sfpu_binop_with_unary": dict(
         semantic_cpp_class="typed_wrapper_needed",
-        semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
+        semantic_cpp_blocker="Lane AZ reclassification of a B-PERF-ONLY skip: functional coverage landed upstream (test_sfpu_binop_scalar.py, 77c24691ab). The production header mixes typed SFPI with raw TTI (raw_tti=1), so a fresh semantic-C++ conversion still needs a typed-boundary audit; the recorded node exercises the production header under the compiler path either way (tier-b OFF-vs-ON row 'binopscalar' in sweep_2x2_ops.tsv).",
     ),
+    # NOTE (Lane AZ): a coverage-parity stub entry for metal__ckernel_sfpu_mul_int32
+    # used to sit here, DUPLICATING the reviewed measured seed above — Python
+    # dict literals keep the LAST duplicate, so the stub silently shadowed the
+    # measured/loss audit (class flipped to typed_wrapper_needed in the
+    # manifest; perf_status=measured only survived through --update's
+    # manifest-persistence path).  Deleted; the reviewed seed is effective.
     "metal__ckernel_sfpu_negative": dict(
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
@@ -748,6 +754,16 @@ AUDITED_SEEDS = {
 }
 
 AUDITED_MAPPINGS = {
+    "metal__ckernel_sfpu_binop_with_unary": dict(
+        functional_modules="test_sfpu_binop_scalar.py::test_sfpu_binop_scalar[formats:Float16_b->Float16_b-dest_acc:No-mathop:ScalarAdd]",
+        perf_modules="perf_sfpu_binop_scalar.py::test_perf_sfpu_binop_scalar[formats:Float16_b->Float16_b-dest_acc:No-mathop:ScalarAdd-loop_factor:16-iterations:32-input_dimensions:[128, 64]]",
+        notes="Lane AZ reclassification (was B-PERF-ONLY in the coverage-parity skip ledger): upstream 77c24691ab added test_sfpu_binop_scalar.py whose source sfpu_binop_scalar_test.cpp:68 includes llk_sfpu/ckernel_sfpu_binop_with_unary.h — audited chain test_sfpu_binop_scalar.py -> sources/sfpu_binop_scalar_test.cpp -> calculate_binop_with_scalar; exact BH-collected node recorded (representative ScalarAdd; Sub/Mul/Div/Rsub share the dispatch); perf twin perf_sfpu_binop_scalar.py collected on BH.",
+    ),
+    "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
+        functional_modules="test_sfpu_sdpa_exp_unclamped.py::test_sfpu_sdpa_exp_unclamped",
+        perf_modules="test_sfpu_sdpa_exp_unclamped.py::test_sfpu_sdpa_exp_unclamped_device_profile",
+        notes="Audited paired hand/semantic SDPA exp-unclamped selector (sdpa_exp_impl 0 = handwritten production, 1 = semantic unclamped; Lane AL hand-corr restore) with the isolated KERNEL-marker device-profile fixture — supersedes the stale f1_candidates 'no isolated perf module' mapping (Lane AZ audit correction; the nightly 'sdpa' sweep row measures these nodes).",
+    ),
     "metal__ckernel_sfpu_exp": dict(
         functional_modules="test_sfpu_unary.py::test_exp_fresh_cpp",
         perf_modules="perf_eltwise_unary_sfpu.py::test_perf_exp_fresh_cpp",

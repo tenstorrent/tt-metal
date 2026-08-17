@@ -60,6 +60,9 @@ python3 "$HERE/selftest_enforcement_gates.py" > "$EV/selftest-enforcement-gates.
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \
   || { echo "FATAL: conf-lint refused (see $EV/conf-lint.txt)"; exit 2; }
 
+# No --schedule filter here: the weekly sweep deliberately runs EVERY ops.tsv
+# row, including the schedule=weekly deferrals the nightly skips (the
+# device-time budget split is data in the TSV's schedule column, not a fork).
 python3 "$HERE/sweep_2x2.py" \
   --evidence-root "$EV" \
   --cc1plus-sha "$PINNED_CC1PLUS_SHA256" \

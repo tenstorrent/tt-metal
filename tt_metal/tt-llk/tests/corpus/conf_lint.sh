@@ -23,16 +23,25 @@
 #       one anchor line, prefix-matched against the conf;
 #   R6  the baseline TSV header names the conf's BH sim pin as CURRENT via
 #       the anchor "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" (the
-#       corrected-sim pairing is part of the measurement identity).
+#       corrected-sim pairing is part of the measurement identity);
+#   R7  (Lane AZ corpus expansion) every corpus manifest row with
+#       perf_status=measured has at least one sweep_2x2_ops.tsv row carrying
+#       its corpus_id — a measured op that silently drops out of the sweep
+#       surface is the omission class that hid welford/recip/bcast/mul_int
+#       for two pin cycles; machine-readable kind=skip rows satisfy the rule
+#       (visible in every scoreboard), silence does not.
 #
-# Usage: conf_lint.sh [<sweep_2x2.conf> <baseline.tsv>]
-#   Defaults: the checked-in conf beside this script and the baseline for
-#   ${CHIP_CLASS:-p150}.  Exit 0 GREEN, exit 1 RED.  Parses only — never
+# Usage: conf_lint.sh [<sweep_2x2.conf> <baseline.tsv> [<manifest.tsv> <ops.tsv>]]
+#   Defaults: the checked-in conf beside this script, the baseline for
+#   ${CHIP_CLASS:-p150}, sfpu_corpus_v2.tsv and sweep_2x2_ops.tsv beside this
+#   script.  Exit 0 GREEN, exit 1 RED.  Parses only — never
 #   sources the conf (a broken conf must still lint).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 CONF=${1:-$HERE/sweep_2x2.conf}
 BASELINE=${2:-$HERE/sfpu_device_baseline_${CHIP_CLASS:-p150}_v1.tsv}
+MANIFEST=${3:-$HERE/sfpu_corpus_v2.tsv}
+OPS=${4:-$HERE/sweep_2x2_ops.tsv}
 
 RED=0
 fail() { # fail <rule> <message...>
@@ -152,8 +161,43 @@ anchor_check() { # anchor_check <rule> <anchor-text> <expected-64hex> <what>
 [ -n "$CC1" ] && anchor_check R5 "CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256" "$CC1" "cc1plus"
 [ -n "$SBH" ] && anchor_check R6 "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" "$SBH" "BH sim"
 
+# ---- R7: every perf_status=measured corpus row is wired into the sweep ----
+if [ ! -f "$MANIFEST" ]; then
+  fail R7 "corpus manifest not found: $MANIFEST"
+elif [ ! -f "$OPS" ]; then
+  fail R7 "sweep ops TSV not found: $OPS"
+else
+  R7_OUT=$(awk -F'\t' '
+    FNR==1 { fileno++ }
+    /^#/ { next }
+    fileno==1 {
+      if (!ops_hdr) {
+        for (i=1;i<=NF;i++) if ($i=="corpus_id") ci=i
+        ops_hdr=1
+        if (!ci) { print "HDRFAIL ops: no corpus_id column"; exit 3 }
+        next
+      }
+      wired[$ci]=1; next
+    }
+    {
+      if (!man_hdr) {
+        for (i=1;i<=NF;i++) { if ($i=="perf_status") pi=i; if ($i=="id") idi=i }
+        man_hdr=1
+        if (!pi || !idi) { print "HDRFAIL manifest: no id/perf_status column"; exit 3 }
+        next
+      }
+      if ($pi=="measured" && !($idi in wired)) print $idi
+    }' "$OPS" "$MANIFEST")
+  if printf '%s' "$R7_OUT" | grep -q '^HDRFAIL'; then
+    fail R7 "cannot evaluate: $R7_OUT (manifest $MANIFEST, ops $OPS)"
+  elif [ -n "$R7_OUT" ]; then
+    fail R7 "corpus rows with perf_status=measured have NO sweep_2x2_ops.tsv row (a measured op silently absent from the sweep surface — wire a row, or a machine-readable kind=skip row with the reason):"
+    printf '%s\n' "$R7_OUT" | sed "s|^|    $MANIFEST: id |"
+  fi
+fi
+
 if [ "$RED" -eq 0 ]; then
-  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…)"
+  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); every measured corpus row is wired into the sweep (R7)"
   exit 0
 fi
 echo "conf-lint: FAILED — the pin audit trail disagrees with itself; fix the prose/header IN THE SAME COMMIT as any pin change (see rules in this script's header)"

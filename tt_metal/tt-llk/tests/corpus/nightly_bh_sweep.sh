@@ -146,6 +146,7 @@ python3 "$HERE/sweep_2x2.py" \
   --max-drift-pct "$MAX_DRIFT_PCT" \
   --max-abs-drift-pct "$MAX_ABS_DRIFT_PCT" \
   --red-loss-growth-pct "$RED_LOSS_GROWTH_PCT" \
+  --schedule nightly \
   ${PREV:+--prev-run "$PREV"} \
   "$@"
 RC=$?

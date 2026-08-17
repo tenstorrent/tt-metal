@@ -11,7 +11,10 @@
 #   6. baseline header missing the anchor entirely -> RED;
 #   7. missing/short sim pin value -> RED;
 #   8. THE CHECKED-IN conf + p150 baseline lint GREEN (the shipping state
-#      must satisfy its own gate).
+#      must satisfy its own gate);
+#   9. (R7) a measured corpus row wired into the ops TSV -> GREEN;
+#  10. (R7) a measured corpus row with NO ops TSV row -> RED (the
+#      welford/recip/bcast/mul_int omission class).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINT="$HERE/conf_lint.sh"
@@ -105,8 +108,38 @@ check "non-64-hex sim pin refuses RED" 1 $?
 check "checked-in conf+baseline lint GREEN" 0 $?
 grep -q "conf-lint: GREEN" "$TMP/out8.log" || { echo "SELFTEST FAIL: shipping-state lint did not report GREEN"; overall=1; }
 
+# R7 fixtures: a two-row manifest (one measured, one not_run) and an ops TSV.
+write_manifest() { # write_manifest <file>
+  cat > "$1" <<'EOF'
+# fixture corpus manifest
+id	surface	perf_status	notes
+fixture__op_measured	legacy	measured	measured fixture row
+fixture__op_idle	legacy	not_run	unmeasured fixture row
+EOF
+}
+write_ops() { # write_ops <file> <corpus-id-to-wire>
+  cat > "$1" <<EOF
+# fixture ops
+op	corpus_id	kind
+fixture-op	$2	semantic
+EOF
+}
+write_manifest "$TMP/man.tsv"
+
+# 9. measured row wired -> GREEN
+write_ops "$TMP/ops-ok.tsv" fixture__op_measured
+"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-ok.tsv" > "$TMP/out9.log" 2>&1
+check "R7 measured-row-wired lints GREEN" 0 $?
+
+# 10. measured row NOT wired -> RED naming the missing id
+write_ops "$TMP/ops-miss.tsv" fixture__op_idle
+"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-miss.tsv" > "$TMP/out10.log" 2>&1
+check "R7 measured-row-unwired refuses RED" 1 $?
+grep -q "\[R7\]" "$TMP/out10.log" || { echo "SELFTEST FAIL: R7 RED lacks the rule tag"; overall=1; }
+grep -q "fixture__op_measured" "$TMP/out10.log" || { echo "SELFTEST FAIL: R7 RED does not name the missing corpus id"; overall=1; }
+
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, R7-wired->GREEN, R7-unwired->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi
