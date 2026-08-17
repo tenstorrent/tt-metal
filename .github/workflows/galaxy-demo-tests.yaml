@@ -10,10 +10,8 @@ on:
         type: choice
         options:
           - all
-          - sd35
           - motif
           - wan22
-          - mochi
           - deepseek_v3
           - qwenimage
       platform:

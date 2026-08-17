@@ -96,8 +96,8 @@ jobs:
               | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
           # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
-          # tagged with "multihost": true by prepare_test_matrix.py when the SKU runs_on
-          # includes an exabox-multihost* label (e.g. exabox-multihost-ci-sc4).
+          # tagged with "multihost": true by prepare_test_matrix.py when their SKU is an
+          # exabox multihost SKU (runs_on exabox-multihost* / allocation block).
           SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
           MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
           emit() {  # $1 = output name, $2 = compact JSON array
