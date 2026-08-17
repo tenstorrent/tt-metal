@@ -232,6 +232,15 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
+    def convert_ttnn_to_torch(ttnn_tensor, **kwargs):
+        if ttnn_tensor.dtype == ttnn.DataType.FP8_E4M3:
+            # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
+            # This matches the FP8 golden's dequantized torch.float32 representation.
+            if ttnn.is_tensor_storage_on_device(ttnn_tensor):
+                ttnn_tensor = ttnn.from_device(ttnn_tensor)
+            ttnn_tensor = ttnn.to_dtype(ttnn_tensor, ttnn.float32)
+        return ttnn.to_torch(ttnn_tensor, **kwargs)
+
     try:
         topology = tensor.tensor_topology()
         placements = list(topology.placements())
@@ -255,7 +264,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
         if not device_tensors:
             return None
 
-        torch_shards = [ttnn.to_torch(device_tensor) for device_tensor in device_tensors]
+        torch_shards = [convert_ttnn_to_torch(device_tensor) for device_tensor in device_tensors]
         if len(torch_shards) == 1:
             return torch_shards[0]
 
@@ -301,7 +310,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                 isinstance(placement, ttnn.PlacementShard) and placement.dim >= per_device_rank
                 for placement in placements
             ):
-                return ttnn.to_torch(device_tensors[0])
+                return convert_ttnn_to_torch(device_tensors[0])
 
         if not has_shard:
             composed = compose_device_tensors()
@@ -330,13 +339,13 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                     mesh_shape_override=ttnn.MeshShape(composer_shape),
                 ),
             )
-            return ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+            return convert_ttnn_to_torch(tensor, mesh_composer=mesh_composer)
 
     composed = compose_device_tensors()
     if composed is not None:
         return composed
 
-    return ttnn.to_torch(tensor)
+    return convert_ttnn_to_torch(tensor)
 
 
 def get_tensor_report_record(tensor):

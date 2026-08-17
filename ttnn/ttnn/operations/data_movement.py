@@ -468,27 +468,16 @@ ttnn.attach_golden_function(ttnn.untilize_with_unpadding, golden_function=_golde
 
 
 def _golden_function(input_tensor, output_tensor_shape, pad_value, *args, **kwargs):
-    output_shape = tuple(int(dim) for dim in output_tensor_shape)
-    output_tensor = input_tensor.new_full(output_shape, pad_value)
-    slices = tuple(slice(0, dim) for dim in input_tensor.shape)
-    output_tensor[slices] = input_tensor
-    return output_tensor
+    # output_tensor_shape describes physical tile padding; the logical output keeps the input shape.
+    return input_tensor
 
 
 ttnn.attach_golden_function(ttnn.tilize_with_val_padding, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor, *args, **kwargs):
-    def _round_up(value, multiple):
-        return ((value + multiple - 1) // multiple) * multiple
-
-    output_shape = list(input_tensor.shape)
-    output_shape[-1] = _round_up(output_shape[-1], ttnn.TILE_SIZE)
-    output_shape[-2] = _round_up(output_shape[-2], ttnn.TILE_SIZE)
-    output_tensor = input_tensor.new_zeros(output_shape)
-    slices = tuple(slice(0, dim) for dim in input_tensor.shape)
-    output_tensor[slices] = input_tensor
-    return output_tensor
+    # Tile alignment is physical padding; the logical output keeps the input shape.
+    return input_tensor
 
 
 ttnn.attach_golden_function(ttnn.tilize_with_zero_padding, golden_function=_golden_function)

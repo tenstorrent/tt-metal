@@ -248,6 +248,10 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
     if isinstance(input_tensor, torch.Tensor) and input_tensor.is_floating_point() and target_dtype == ttnn.uint16:
         return torch.clamp(input_tensor.to(torch.int32), min=0, max=65535).to(torch.uint16)
 
+    if target_dtype == ttnn.fp8_e4m3:
+        # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
+        return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
     # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
     torch_dtype = {
         ttnn.uint8: torch.uint8,
@@ -259,7 +263,6 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
         ttnn.bfloat16: torch.bfloat16,
         ttnn.bfloat8_b: torch.float32,
         ttnn.bfloat4_b: torch.float32,
-        ttnn.fp8_e4m3: torch.float32,
     }[target_dtype]
     return input_tensor.to(torch_dtype)
 
