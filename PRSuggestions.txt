@@ -1,43 +1,26 @@
 1. Enable bring-up of models which are not natively in HF format, because there is a lot of models
    not in this format
-    - In TTS most models are like this. Only a few load directly with transformers (SpeechT5,
-      VITS/MMS, Bark, Parler-TTS, Moshi, CSM, Dia). Most ship their own code: XTTS-v2, StyleTTS2,
-      F5-TTS, CosyVoice, GPT-SoVITS, Kokoro, Voxtral-TTS and others. Being on the HF Hub does not
-      mean transformers can load it.
-    - You already have this, and it works better than we first thought. Pointed at a checkpoint that
-      is not in HF format, the default path writes the loader on its own. Two other places that use
-      the same feature need an environment variable that is off by default, and one of them says the
-      feature is off unless you set it, which is not true. Worth settling on one rule and describing
-      it correctly. We only missed this at first because we had already converted the model to HF
-      format by hand, which is the one condition that stops it from running.
-    - It worked. In 12 minutes it wrote a loader that reads the native 8 GB checkpoint, matches our
-      reference exactly, and produces audio. But an existing PyTorch version of the model was on the
-      machine and it adapted that, so this did not prove much.
-    - So we hid every PyTorch version on the machine and ran it again. It wrote the architecture
-      itself, about a thousand lines covering all three stacks, from the checkpoint and the model's
-      own description. We then tested it against our reference: every stage matches to rounding and
-      the audio codes come out identical. It even wrote a working cached decode step, which is more
-      than the component it later brings up does. It is a published architecture though, so this does
-      not show it could do the same for something genuinely new.
-    - What is missing is a check that can be re-run. When it can compare against an existing version
-      it writes itself a check and leaves it in the file. When it writes the architecture from scratch
-      it leaves only a written argument. And the argument is a good one: it worked out that this model
-      cannot be checked by having it continue text, because the text head is unused and all three RoPE
-      conventions score the same on it. So it drove the speech path instead, and confirmed the model
-      stops on its own at a length that tracks the text, with the pitch of the requested voice. It
-      even tried a wrong RoPE on purpose and got a buzz that never stops. All of that is a paragraph
-      in a comment. Nothing can run it, and nothing downstream knows whether it happened, on this
-      model or the next one where the same paragraph gets written without the work behind it.
-    - This matters because that file becomes what every later test is scored against. Ours was
-      correct. A slightly wrong one, one RoPE convention or one norm epsilon, would set every
-      component's target wrong and nothing in the run could tell.
-    - Fix: have it write that check as code instead of prose, and run it. It already designed the hard
-      part. Worth adding the cheap parts too: that every weight in the checkpoint got used, that the
-      values the checkpoint declares (head counts, epsilon, RoPE base) are the ones actually built,
-      that the cached and recomputed paths agree, that changing a later token does not change earlier
-      outputs, and that the same seed gives the same result. Keep the deliberate wrong version as part
-      of the check, since a check that has never been seen to fail proves little. And say in the log
-      which of the two it did.
+    - In TTS most models are like this: XTTS-v2, StyleTTS2, F5-TTS, CosyVoice, GPT-SoVITS, Kokoro,
+      Voxtral-TTS and others all ship their own code. Being on the HF Hub does not mean transformers
+      can load it.
+    - You already have this and it works. We hid every PyTorch version of the model on the machine and
+      ran it anyway: it wrote the architecture itself, about a thousand lines covering all three
+      stacks, and every stage matches our reference to rounding with the audio codes identical. It is a
+      published architecture though, so this does not show it could do the same for a new one.
+    - First problem, when it runs is inconsistent. Pointed at a checkpoint that is not in HF format the
+      default path writes the loader on its own, but two other places that use it need an environment
+      variable that is off by default, and one of those says the feature is off unless you set it,
+      which is not true. We missed the feature completely because we had already converted the model to
+      HF format by hand, which is the one thing that stops it running.
+    - Second problem, its own check is a comment rather than code. The reasoning is good: it worked out
+      that this model cannot be checked on text, because the text head is unused and every RoPE
+      convention scores the same on it, so it drove the speech path instead and confirmed the model
+      stops on its own at a length that tracks the text, then tried a wrong RoPE on purpose and got a
+      buzz that never stops. Nothing can re-run any of that, and this file is what every later test is
+      scored against, so a slightly wrong one would set every target wrong unnoticed.
+    - Fix: one rule for when it runs, described correctly. Have it write that check as code and run it,
+      keeping the deliberate wrong version, since a check never seen to fail proves little. And say in
+      the log whether it adapted an existing implementation or wrote one itself.
 
 2. Fix the model bring up from local path
     - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
