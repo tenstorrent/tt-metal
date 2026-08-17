@@ -345,7 +345,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
-        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
+        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension_along_axis(input_tensor, cluster_axis, axis);
         const auto discovered_num_links =
             static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
         if (num_links.has_value()) {

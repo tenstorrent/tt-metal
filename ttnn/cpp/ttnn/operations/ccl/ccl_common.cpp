@@ -5,6 +5,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <algorithm>
+#include <set>
 #include <cstdint>
 #include <cmath>
 
@@ -188,6 +189,33 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
     return device_coords.size();
+}
+
+uint32_t get_topological_dimension_along_axis(
+    const Tensor& tensor, const std::optional<uint32_t>& cluster_axis, uint32_t axis) {
+    // With an explicit cluster_axis the collective spans the full global mesh extent along it,
+    // which is what the caller's `axis` already equals (an axis is only active when it matches
+    // the requested cluster_axis).
+    if (cluster_axis.has_value()) {
+        return get_topological_dimension(tensor, cluster_axis);
+    }
+    // Without a cluster_axis the CCL spans only the tensor's own devices, and
+    // get_linearized_index_from_physical_coord indexes into that same list. Measure the
+    // participating extent along `axis` so the two stay in sync. Passing `axis` to
+    // get_topological_dimension here instead would take its cluster_axis branch and return the
+    // *global* mesh extent, building a collective sized for devices that never run the program
+    // (e.g. a 2-device tensor on a 1x8 mesh yields 8) — the multicast/barrier hop counts then
+    // wait on devices that never participate, and the op hangs.
+    const auto device_coords = tensor.device_storage().get_coords();
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    std::set<uint32_t> distinct_axis_coords;
+    for (const auto& coord : device_coords) {
+        TT_FATAL(coord.dims() > axis, "axis {} is out of range for device coord rank {}", axis, coord.dims());
+        distinct_axis_coords.insert(coord[axis]);
+    }
+    const auto extent = static_cast<uint32_t>(distinct_axis_coords.size());
+    log_debug(tt::LogOp, "Topological dimension along axis {} is {}", axis, extent);
+    return extent;
 }
 
 uint32_t get_linearized_index_from_physical_coord(

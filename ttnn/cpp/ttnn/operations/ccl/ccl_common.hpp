@@ -34,6 +34,13 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
+// Number of devices participating in the collective along a single mesh axis.
+// Use this (rather than get_topological_dimension(tensor, axis)) for per-axis device counts:
+// passing a bare `axis` always takes the cluster_axis branch and returns the global mesh extent,
+// which over-counts whenever the tensor covers only part of the mesh.
+uint32_t get_topological_dimension_along_axis(
+    const Tensor& tensor, const std::optional<uint32_t>& cluster_axis, uint32_t axis);
+
 tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,

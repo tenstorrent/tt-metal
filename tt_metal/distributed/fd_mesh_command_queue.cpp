@@ -222,7 +222,22 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         // This allows physical device close to proceed correctly, since we still
         // rely on single device CQs during this step. Not needed for functionality
         // once single device CQs are removed, however this is still good practice.
-        this->clear_expected_num_workers_completed();
+        //
+        // thread_exception_state_ only covers timeouts observed by the completion reader
+        // thread. A dispatch timeout raised on the calling thread (e.g. the fetch queue
+        // wait in SystemMemoryManager) leaves that flag clear, so this call can still hit
+        // an already-hung device and throw. Destructors are implicitly noexcept, so an
+        // escaping exception would call std::terminate and core-dump the process during
+        // close. Log instead, matching the warn-don't-abort handling below.
+        try {
+            this->clear_expected_num_workers_completed();
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "FDMeshCommandQueue destructor: failed to clear worker state: {}. "
+                "This may indicate a device hang or timeout occurred.",
+                e.what());
+        }
     }
 
     // Log warnings instead of aborting - destructors should never throw or abort.
