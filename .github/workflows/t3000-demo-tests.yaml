@@ -12,7 +12,6 @@ on:
           - all
           - motif
           - qwenimage
-          - mochi
           - qwen3_vl
       platform:
         required: false
@@ -48,7 +47,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, mochi, etc.)"
+        description: "Select model to test (all, motif, etc.)"
         required: false
         type: string
         default: "all"

@@ -32,6 +32,7 @@ on:
           - panoptic-deeplab
           - mistral-small-3.1-24b
           - sd35
+          - mochi
           - vggnet
           - bert-tiny
           - bert-large

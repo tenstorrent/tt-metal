@@ -5,10 +5,14 @@
 
 import csv
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence, Iterator
+
+# `utils` lives one level up, in the shared examples/grpo directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
