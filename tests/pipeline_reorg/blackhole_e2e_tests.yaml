@@ -77,6 +77,7 @@
 # fabric does not come up on — so the mesh a row asks for is fixed by the box it runs on.
 - id: bh-lb-ttnn-attn-res-gather-softmax-unit
   name: ttnn attn_res_gather_softmax unit tests
+  model-name: kimi_k3
   cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py -k "mesh-2x4"
   skus:
     bh_loudbox:
