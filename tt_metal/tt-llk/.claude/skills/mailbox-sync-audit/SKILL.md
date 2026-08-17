@@ -22,7 +22,7 @@ enumerates every in-tree mailbox FIFO endpoint and pairs writers with readers of
 the same directed channel):
 
     tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks mailbox-sync
-    # repo-root-relative path; run.sh self-locates, so any CWD works
+    # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
     # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["mailbox-sync"].findings
 

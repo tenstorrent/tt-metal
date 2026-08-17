@@ -20,7 +20,7 @@ user_invocable: true
 Before enumerating, run the deterministic `cb-sync` checker for a complete
 known-pattern worklist (reserve/push & wait/pop credit balance per CB):
 ```bash
-# repo-root-relative path; run.sh self-locates, so any CWD works
+# from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
 tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit   # cb-sync runs in the kernel tier
 ```
 `cb-sync` is **empty over the tt-llk headers** — CBs live in JIT-compiled kernels

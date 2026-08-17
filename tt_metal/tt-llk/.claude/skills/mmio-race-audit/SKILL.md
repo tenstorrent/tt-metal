@@ -22,7 +22,7 @@ Before manual analysis, get the deterministic candidate list from the recall too
 wrapper-hidden ones a grep misses):
 
     tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks mmio-race
-    # repo-root-relative path; run.sh self-locates, so any CWD works
+    # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
     # For a PR/branch-scoped audit, append --changed [BASE] (BASE defaults to main)
     # to the command above: only findings touching files changed vs BASE are reported.
     # candidates: out/audit.<arch>.json -> .checks["mmio-race"].findings

@@ -22,7 +22,7 @@ known-pattern worklist. This class is backed by **four** committed checkers —
 `noc-sync` (write→credit ordering), `noc-atomic-exit`, `noc-read-barrier`,
 `noc-l1-invalidate`:
 ```bash
-# repo-root-relative path; run.sh self-locates, so any CWD works
+# from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
 tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit   # kernel tier runs all four
 ```
 All four are **empty over the tt-llk headers** — their surface is JIT-compiled kernels

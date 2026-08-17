@@ -22,7 +22,7 @@ SrcA/SrcB data-valid handshake control points and flags the one ISA-grounded
 mechanical pattern):
 
     tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks srcreg-bank
-    # repo-root-relative path; run.sh self-locates, so any CWD works
+    # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
     # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["srcreg-bank"].findings
 

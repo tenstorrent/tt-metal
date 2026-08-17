@@ -31,11 +31,13 @@ shared fact base (which is also what makes the JOIN a lookup rather than a
 schema reconciliation):
 
     tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar>
-    # The path is relative to the TT-METAL REPO ROOT, which is the usual session CWD; in a
-    # session rooted at tt-llk itself, drop the `tt_metal/tt-llk/` prefix. Invoke it by path
-    # and never `cd` first: loading a skill does NOT change the shell's CWD, so a bare
-    # `cd .claude/...` fails from the repo root. run.sh self-locates (and always writes to
-    # the tool's own out/), so the CWD it runs from does not matter.
+    # Run this from the TT-METAL REPO ROOT — the path above is relative to it, and it is
+    # the usual session CWD. (In a session rooted at tt-llk itself, drop the
+    # `tt_metal/tt-llk/` prefix; from anywhere else, prefix an absolute repo path.)
+    # Invoke it BY PATH and do not `cd` first: loading a skill does NOT change the shell's
+    # CWD, so a bare `cd .claude/...` fails from the repo root. No `cd` is needed anyway —
+    # run.sh self-locates and always writes to the tool's own out/, so where you invoke it
+    # from changes nothing about what it does.
     # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
     # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
     #                                    semaphore-handshake, reconfig-stall,
@@ -106,12 +108,13 @@ treat these as **tool-drift tells** and act on them:
 - an `UNRESOLVED` bucket rising sharply in the checks that HAVE one — cfg-word
   (`UNRESOLVED`) and mailbox (`UNRESOLVED_ENDPOINT`) surface inputs they couldn't
   key; a jump means a new write/endpoint shape the registry doesn't classify;
-- the kernel-tier **coverage ledger** showing TUs it could not translate/parse — any
-  row whose status LEADS with a hole marker (`PARSE-FAIL`, `PARSE-HOLE`, `EMPTY-OUT`,
-  `EXEC-FAIL`, `SKIP-*`, `HOST-LEAK`, `NON-KERNEL-CMD`); these are also counted into
-  the audit JSON's `degraded`, and are excluded from its `ok/N parsed` headline. A
-  *capture* hole (the checkers never saw those kernels), distinct from a classification
-  gap but equally a silent miss;
+- the kernel-tier **coverage ledger** showing TUs it could not translate/parse, or did
+  not analyze cleanly for another reason — any row whose status LEADS with a hole marker
+  (`PARSE-FAIL`, `PARSE-HOLE`, `EMPTY-OUT`, `EXEC-FAIL`, `SKIP-*`, `HOST-LEAK`,
+  `NON-KERNEL-CMD`). Such rows are excluded from the ledger's own `ok/N TUs parsed`
+  headline, and their COUNT is passed into the audit JSON's `degraded`. A *capture* hole
+  (the checkers never saw those kernels), distinct from a classification gap but equally
+  a silent miss;
 - **the LLM tier finding a real sync site the deterministic worklist omitted** —
   the cleanest tell, and the ONLY one for **cb-sync / noc-sync**, which have no
   `UNRESOLVED` bucket (a CB/NoC object has many non-flow-control methods, so an
@@ -199,12 +202,15 @@ must never read as "all kernels covered").
 
 **How to run the capture** (the module is already committed — you only RUN it):
 1. **Get a build log** carrying the JIT compile commands — either
-   `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 <workload> > build.log 2>&1` captured on
+   `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 <workload> > $PWD/build.log 2>&1` captured on
    hardware once (then audit offline), or let bootstrap run the workload for you.
-2. **Run the tier** (same `run.sh` path as the preflight above — by path, no `cd`):
-   `LLK_KT_LOG=build.log tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit`
-   (log path), or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' <same run.sh> --full-jit`
-   (run-a-workload path). bootstrap → `capture.py` (scrape → GCC→clang translate →
+2. **Run the tier** — same `run.sh` path as the preflight above, from the repo root.
+   Give `LLK_KT_LOG` an **absolute** path: run.sh chdirs to its own directory, so a
+   relative one resolves against the tool dir, not your CWD, and fails as "not found".
+   `LLK_KT_LOG=$PWD/build.log tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit`
+   (log path), or the run-a-workload path:
+   `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit`.
+   bootstrap → `capture.py` (scrape → GCC→clang translate →
    `llk_extract` per kernel → merged fact base) → cb/noc/read/atomic/l1/mailbox over it.
 3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every TU
    as parsed or with a leading hole marker (`PARSE-FAIL`, `PARSE-HOLE`, `EMPTY-OUT`,

@@ -22,7 +22,7 @@ cfg write to its 32-bit word via cfg_defines.h, per register file, and attribute
 the thread):
 
     tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks cfg-word-overlap
-    # repo-root-relative path; run.sh self-locates, so any CWD works
+    # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
     # PR-scoped: add --changed [BASE] (default main) to report only words touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["cfg-word-overlap"].findings
 
