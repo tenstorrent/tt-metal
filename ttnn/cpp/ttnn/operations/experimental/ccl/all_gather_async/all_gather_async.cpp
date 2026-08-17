@@ -9,7 +9,6 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental {
