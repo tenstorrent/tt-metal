@@ -53,16 +53,31 @@ constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPL
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP = 5;
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 
-// Direction-neutral alias for the SFPCAST+SFPSETSGN combo emitted by
-// apply_sign_magnitude_conversion. The combo is the Blackhole workaround
-// for the SFPCAST RTL bug (tenstorrent/tt-llk-bh#16) and is symmetric:
-// it swaps between int32 sign-magnitude and 2's-complement representations
-// regardless of which side is the source. The named enum value
+// Direction-neutral alias for the cast mode passed to
+// apply_sign_magnitude_conversion. The cast is symmetric: BH's SFPCAST mod1=3
+// (this enum value) is a self-inverse, sign-preserving conditional negate that
+// swaps between int32 sign-magnitude and 2's-complement representations
+// regardless of which side is the source (BH ISA SFPCAST_IntInt.md: "their
+// implementations are identical"). The named enum value
 // InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP describes only one of those
-// directions; tt-llk convention (matching the canonical bug-fix commit and
-// the other int32 SFPU kernels) is to use it for both directions. The
-// sibling value INT32_2S_COMP_TO_INT_SIGN_MAGN has a known HW bug
-// (sign-mag -0 -> mostneg int32) and is not used in any tt-llk kernel.
+// directions; tt-llk convention (matching the canonical tt-llk-bh#16 commit and
+// the other int32 SFPU kernels) is to use it for both directions.
+//
+// Stale attributions corrected (2026-08, convert-smag-evidence-20260816 Lane N):
+// - The combo is NOT a "workaround for the SFPCAST RTL bug": the mod1=3 cast is
+//   already sign-correct, and the trailing SFPSETSGN is value-redundant — it
+//   survives as the move of the result back into the source LREG (see the
+//   apply_sign_magnitude_conversion comment in tt_llk_blackhole ckernel.h).
+// - The sibling value INT32_2S_COMP_TO_INT_SIGN_MAGN (mod1=2) is the one with
+//   the actual BH RTL bug, and the bug is NOT "sign-mag -0 -> mostneg int32":
+//   intended as a conversion, mod1=2 computes a 2's-complement ABS instead
+//   (SFPCAST_IntAbs.md: "due to a hardware bug"; craq-sim and sfpi_constants.h
+//   agree it "should be replaced by SFPABS"). It is used in no tt-llk kernel.
+//   The SM32 -0 <-> most-negative-int32 mapping is mod1=3's ISA-DEFINED corner
+//   (each format's unrepresentable value maps to the other), not a defect.
+// Adversarial confirmation: boundary-value suite (+/-0, +/-1, +/-INT32_MAX,
+// sign transitions) — bare mod1=3 cast vs cast+SETSGN bit-exact on BH CRAQ and
+// p150 silicon, OFF and ON flag legs (convert-smag-evidence-20260816).
 constexpr auto INT_REPR_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 
 // Configure ADDR_MOD_6 with dest auto-increment of one SFPU dst row
