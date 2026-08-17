@@ -424,3 +424,29 @@ under upstream enforcement nothing is checked at all. Three things have to land
 before a release verdict means anything for this model: a published or GPU
 reference for `r1_gpqa_diamond`, graded benchmark tiers instead of a lone
 `theoretical` block, and the eval-enforcement fix upstream.
+
+## Per-document check of the r1_gpqa_diamond smoke run
+
+The 3/3 aggregate audited document by document, so "passed" is not taken on trust:
+
+| doc | generated tokens | target | extraction | correct |
+|---:|---:|---|---|---|
+| 0 | 7,053 | `(C)` | ends `\boxed{C}` | ✓ |
+| 1 | 12,708 | `(A)` | ends `\boxed{A}` | ✓ |
+| 2 | 6,812 | `(B)` | ends `\boxed{B}` | ✓ |
+
+All three reason coherently to the end, terminate on their own, and none reach the
+32,768-token cap. `exact_match=1` comes from the task's own boxed extraction against
+the target, not from a lenient fallback or a truncated answer scored by accident.
+
+Qualifiers that keep this honest: n=3 is a plumbing check rather than an accuracy
+measurement (the graded limit is 0.2, ~40 of 198 documents, and at this model's
+published ~82 % you would expect several wrong); decoding is sampled at temperature
+1.0, so this is one draw; and the row grades `NA` regardless for lack of a reference.
+
+**This does close an earlier gap, though.** Post-fix verification until now had only
+ever crossed the 1024-token sliding-window boundary **once** (884 generated tokens
+from a 157-token prompt). Doc 1 here generates 12,708 tokens, crossing that boundary
+about **12 times**, and still lands a correct boxed answer — so the read-wrap fix
+holds across repeated wraps, not just the first one. That was the specific doubt
+`AUTODEBUG_GPQA_DIVERGENCE.md` raised about "32 wraps" and it is now evidenced to 12.
