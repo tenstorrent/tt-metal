@@ -35,38 +35,23 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
 
-// L1 layout, identical on every tensix core of every device in the mesh. Uniformity is load-bearing: a
-// producer on chip A addresses the drain sink of the peer worker on chip B without knowing anything about
-// B's harvesting or eth positions. Offsets are relative to the L1 unreserved base.
+// L1 layout, that is the parts that have to be in same places on every chip (e.g. semaphores)
 constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
-// Target of the drain's value-0 atomic increments: a remote atomic inc needs a real L1 address on the far
-// chip, and nothing ever reads this word.
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
 constexpr uint32_t L1_SLACK = 0x1000;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
-// Forwarding buffer: DRAM staging for tokens passing THROUGH this chip. The op forwards multi-hop traffic
-// itself rather than asking the fabric to, so a packet only ever travels one hop; anything bound further
-// lands in the next chip's forwarding buffer and is re-sent from there.
+// Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
+// is not left to fabric to do. Op manages it. Multihop data movement is broken down to single hops.
+// Fabric doesn't have enough context to properly orchestrate traffic nor deep enough buffers to not
+// block '1 -> 2' data movements if both '1 -> 2 -> 3' and '2 -> 3' movements are fighting for the
+// 2-3 link. Thus DRAM buffer for forwarding is introduced. Chip 1 sends everything going to chips
+// 2, 3, 4 and 5 to chip 2. What is destined for chip 2 is written to its final DRAM address by the
+// receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
+// "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-// One region per stream, each holding relay_chunks_per_stream chunks of fwd_pages_per_chunk pages. A chunk's
-// last used page is a sentinel marking its end, so a chunk need not be filled to capacity.
-
-// Pages a chunk can hold. Chunk lengths are data-dependent — a chunk is one producer's share of one
-// (origin chip -> this chip) run merged over the experts it serves — so only the expectation is known here:
-//
-//     avg tokens per chunk = seq_len_per_chip * num_experts_per_tok
-//                            / (num_dispatch_groups * dispatch_group_size * num_links)
-//
-// each token picks num_experts_per_tok experts, each expert lives on one chip of one dispatch group, so an
-// (origin, destination) pair carries 1/(NDG * dgs) of the traffic, split again across the planes.
-//
-// WARNING: provisioning 4x the mean is a heuristic, NOT a bound. It suits the roughly balanced traffic
-// random routing produces (measured spread of tokens per (origin, destination) pair is max/mean 1.43 at seq
-// 640, tighter as seq grows), but a chunk that does not fit would silently overwrite the next one. Nothing
-// detects that yet.
 uint32_t fwd_pages_per_chunk(
     uint32_t seq_len_per_chip,
     uint32_t num_experts_per_tok,
@@ -185,15 +170,11 @@ struct ForwardingBuffer {
 };
 
 // Never initialised and never read back: pure staging for tokens passing through a chip. One page per token,
-// and the page is token + tail so a single fabric write lands both. Fused into ONE page rather than split
-// across payload and metadata regions precisely because nothing outside the op reads it — so the
+// and the page is token + forwarding metadata so a single fabric write lands both. Fused into ONE page rather
+// than split across payload and metadata regions precisely because nothing outside the op reads it — so the
 // "one page = one token" property the caller's regions must keep does not apply here, and it saves a DRAM
 // read and a DRAM write per forwarded token.
 //
-// Parked on WorkloadDescriptor::buffers wrapped in a shared_ptr<Tensor>: holding only a
-// shared_ptr<MeshBuffer> would let DeviceStorage::deallocate free the memory when the local Tensor dies
-// (workload_descriptor.hpp:19-36). Being a mesh tensor, its device-local address is uniform across the mesh
-// by construction, which is what lets a producer address the NEXT chip's buffer.
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
