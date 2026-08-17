@@ -107,9 +107,23 @@ with open(sys.argv[1], "w") as f:
     json.dump(out, f, indent=2)
 
 print("\n=== VERDICT")
+# CONFOUND, found when this probe was first run: it sends no chat_template_kwargs,
+# so the chat template's default branch applies and the prompt ends with an OPEN
+# <think>. A trivial prompt then spends its whole budget on reasoning -- observed
+# 2026-08-17, both trivial prompts hit a 64-token cap emitting coherent
+# "Thinking Process: 1. **Identify the user's core question:** ..." text at 0%
+# repetition. That is thinking mode working, NOT stop tokens being ignored.
+#
+# So "trivial prompt hit the cap" does not license conclusion A. Use
+# thinking_mode_probe.py, which runs the same prompts with
+# chat_template_kwargs={"enable_thinking": false} as a control, to separate the two.
 triv = [out.get(n, {}) for n in ("trivial_math", "trivial_fact")]
 if any(t.get("hit_cap") for t in triv):
-    print("  A: stop tokens are NOT honoured -- a trivial prompt ran to the cap.")
+    print("  INCONCLUSIVE: a trivial prompt ran to the cap, but this probe leaves")
+    print("  thinking mode ON, so the cap may simply be smaller than the reasoning")
+    print("  preamble. Run thinking_mode_probe.py for the enable_thinking=false arm.")
+    print("  Check the head/tail above: reasoning prose at low repetition means")
+    print("  thinking mode; repeated n-grams would mean a degenerate loop.")
 elif all(t.get("finish_reason") == "stop" for t in triv if t):
     print("  stop tokens ARE honoured on short answers.")
     g = out.get("gpqa_style", {})
