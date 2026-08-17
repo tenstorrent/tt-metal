@@ -140,15 +140,8 @@ void kernel_main() {
         x.wait_front(Vt);
         gate.wait_front(Vt);
         square(Vt);
-        compute_kernel_lib::reduce<
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            cb_tmp,
-            cb_scaler,
-            cb_stats,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
+        compute_kernel_lib::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_tmp, cb_scaler, cb_stats>(
+            compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
         stats.wait_front(1);
         inverse_rms(epsilon_bits, inv_v_bits);
         inv.wait_front(1);
