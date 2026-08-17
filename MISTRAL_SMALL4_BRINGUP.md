@@ -171,7 +171,9 @@ Each of these was checked against the code or the checkpoint.
   passed/skipped counts, not the exit status. `test_mistral4_mla`'s `(8,1)` id does this too: it
   needs an 8-chip carve via `TT_VISIBLE_DEVICES` and skips otherwise.
 - **`--collect-only -q -k ...` before running.** `test_mla.py` collects thousands of cases; confirm
-  you selected the number you meant.
+  you selected the number you meant. Note `-k` matches the **module path** too, so
+  `-k deepseek_v3` selects *every* test under `models/demos/deepseek_v3_d_p/` — including Kimi's and
+  Mistral's. Filter on the variant id (`dsv3`, `kimi`, `mistral4`) instead.
 - **Point cache env vars somewhere writable in `$HOME`.** The shared `/mnt/models/...` tree is
   read-only; a cache *write* fails with `errno=13` from `serialization.cpp:74`. Reads from a complete
   cache are fine.
