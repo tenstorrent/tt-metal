@@ -296,6 +296,20 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
 
+// Whether to compile the specialized shapes of the relay_paged read loop, below. Each is specialized for a property
+// of the command that holds for its whole duration, and each costs its own copy of the loop.
+//
+// A Tensix prefetcher has room for them: its kernel text region is 1432 KB. An erisc one has 24 KB less the erisc
+// firmware's own text, which on Wormhole leaves 21424 B, and the fan-out is what took that build over the line
+// (issue #52429). So an erisc compiles the general shape alone. It keeps the bank walk, which is not part of the
+// cost -- it replaces address generation rather than adding to it -- and gives up programming the transaction
+// length once per command and folding a shared bank offset into the row address.
+#if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)
+constexpr bool specialize_paged_read_loop = false;
+#else
+constexpr bool specialize_paged_read_loop = true;
+#endif
+
 // Whether every interleaved bank carries the same base offset, for DRAM and for L1. That is what lets the relay_paged
 // read loop fold the offset into the row address and stop reprogramming the source address per read. The bank tables
 // are fixed once firmware init has written them, so this is scanned once in kernel_main rather than per command.
@@ -304,7 +318,10 @@ static bool l1_bank_offsets_uniform = false;
 
 template <bool is_dram>
 FORCE_INLINE bool bank_offsets_uniform() {
-    if constexpr (is_dram) {
+    if constexpr (!specialize_paged_read_loop) {
+        // The folding path is not compiled, so nothing reads the scan and kernel_main does not run it.
+        return false;
+    } else if constexpr (is_dram) {
         return dram_bank_offsets_uniform;
     } else {
         return l1_bank_offsets_uniform;
@@ -1324,10 +1341,13 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
 // per chunk and each loop body is free of it.
 //
 // Deliberately out of line. Inlined, the three loops below were emitted at both call sites and for both values of
-// is_dram -- twelve read loops, half of them redundant, and 1.7 KB of dispatch code that the eth prefetcher's 22 KB
+// is_dram -- twelve read loops, half of them redundant, and 1.7 KB of dispatch code that the eth prefetcher's 21 KB
 // kernel region does not have. Out of line the loops are still inlined here, so the per-page work is unchanged, and
 // the one call per scratch buffer is amortized over every page read into it: on Blackhole a 64 MB paged read holds
 // to within 0.5% from 32 B pages up, on DRAM and on L1.
+//
+// Where specialize_paged_read_loop is false only the general loop is compiled, and both callers pass flags that are
+// constant-false, so the choice below folds away with the other two loops.
 template <bool is_dram, typename AddrGen>
 __attribute__((noinline)) uint32_t read_pages_into_scratch(
     bool single_read,
@@ -1337,13 +1357,18 @@ __attribute__((noinline)) uint32_t read_pages_into_scratch(
     uint32_t scratch_read_addr,
     uint32_t amt_to_read,
     uint32_t page_size) {
-    if (!single_read) {
+    if constexpr (specialize_paged_read_loop) {
+        if (!single_read) {
+            return read_pages_into_scratch<false, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+        }
+        if (folded_offset) {
+            return read_pages_into_scratch<true, true>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+        }
+        return read_pages_into_scratch<true, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+    } else {
+        ASSERT(!single_read && !folded_offset);
         return read_pages_into_scratch<false, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
     }
-    if (folded_offset) {
-        return read_pages_into_scratch<true, true>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
-    }
-    return read_pages_into_scratch<true, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
 }
 
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
@@ -1412,7 +1437,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // command buffer with is their own, since the writes to the dispatcher go out on a different one. Programming it
     // with no send is the same thing paged_read_into_cmddat_q and noc_read_64bit_any_len do, and leaves the address
     // registers to the read loop, which has to write them anyway.
-    const bool single_read = page_size <= NOC_MAX_BURST_SIZE;
+    const bool single_read = specialize_paged_read_loop && page_size <= NOC_MAX_BURST_SIZE;
     if (single_read) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(
             noc_index, 0, 0, 0, page_size);
@@ -3125,8 +3150,10 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
-    dram_bank_offsets_uniform = InterleavedBankWalker<true>::scan_offsets_uniform();
-    l1_bank_offsets_uniform = InterleavedBankWalker<false>::scan_offsets_uniform();
+    if constexpr (specialize_paged_read_loop) {
+        dram_bank_offsets_uniform = InterleavedBankWalker<true>::scan_offsets_uniform();
+        l1_bank_offsets_uniform = InterleavedBankWalker<false>::scan_offsets_uniform();
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -22,6 +23,38 @@ void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_
         *ptr++ = packed_bf16_value;
     }
     dfb.push_back(1);
+}
+
+// Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
+// byte offsets scale with datum size (2B bf16 / 4B fp32). Blackhole (64B-granular DRAM reads): read the full
+// row into face 0 then L1->L1-copy its second half-row into face 1; else two direct reads, one per face.
+template <typename AccessorType>
+void async_read_row_to_tile(
+    const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t l1_dst_addr, uint32_t element_bytes) {
+    const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
+    const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
+#ifdef ARCH_BLACKHOLE
+    // Blackhole DRAM reads need 64B granularity: read both face-rows into face 0, then rearrange the
+    // second face-row into face 1 with an L1->L1 copy (legal at 16B alignment on BH once resident in L1).
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), 2 * half_row_bytes, {.page_id = page_id}, {});
+    noc.async_read_barrier();
+    UnicastEndpoint self;
+    noc.async_read(
+        self,
+        CoreLocalMem<uint32_t>(l1_dst_addr + face_bytes),
+        half_row_bytes,
+        {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_dst_addr + half_row_bytes},
+        {});
+#else
+    // Two direct DRAM reads: face-row 0 -> face 0, face-row 1 -> face 1.
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), half_row_bytes, {.page_id = page_id}, {});
+    noc.async_read(
+        accessor,
+        CoreLocalMem<uint32_t>(l1_dst_addr + face_bytes),
+        half_row_bytes,
+        {.page_id = page_id, .offset_bytes = half_row_bytes},
+        {});
+#endif
 }
 
 void kernel_main() {
@@ -58,6 +91,16 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(7);
 
+#ifdef PAD_CORRECTION
+    // Non-tile-aligned H*W: a second, row-masked set of mask tiles is streamed behind the normal
+    // one, which compute selects with +block_w. Arg 9 equals input_mask_tile_start_id on cores that
+    // do not hold a batch's final row-tile, making their second set a copy of the first.
+    constexpr uint32_t mask_tiles_per_group = 2 * block_w;
+    const uint32_t input_mask_row_tile_start_id = get_arg_val<uint32_t>(9);
+#else
+    constexpr uint32_t mask_tiles_per_group = block_w;
+#endif
+
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
@@ -87,11 +130,14 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#ifdef PAD_CORRECTION
+        uint32_t input_mask_row_tile_id = input_mask_row_tile_start_id;
+#endif
 #if defined(FUSE_NEGATIVE_MASK)
         uint32_t input_negative_mask_tile_id = input_mask_tile_start_id;
 #endif
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
-            dfb_input_mask.reserve_back(block_w);
+            dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
@@ -103,8 +149,20 @@ void kernel_main() {
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
+#ifdef PAD_CORRECTION
+            for (uint32_t j = 0; j < block_w; ++j) {
+                noc.async_read(
+                    mask,
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                    input_mask_single_tile_size_bytes,
+                    {.page_id = input_mask_row_tile_id},
+                    {});
+                l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
+                input_mask_row_tile_id += 1;
+            }
+#endif
             noc.async_read_barrier();
-            dfb_input_mask.push_back(block_w);
+            dfb_input_mask.push_back(mask_tiles_per_group);
 
 #if defined(FUSE_NEGATIVE_MASK)
             dfb_input_negative_mask.reserve_back(block_w);
@@ -126,15 +184,13 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
 #ifdef PAD_CORRECTION
-                // Non-tile-aligned H*W (#50682): host-precomputed corrected reduce scaler, plus
-                // K into dfb_k for the compute kernel's variance correction.
-                constexpr uint32_t dfb_k_id = tt::CBIndex::c_18;
+                // Host-precomputed corrected reduce scaler: the row mask fixes the numerator,
+                // this fixes the denominator.
                 const float pad_corrected_scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(8));
                 dataflow_kernel_lib::prepare_reduce_scaler<
                     dfb_in_2,
                     ckernel::PoolType::AVG,
                     ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-                generate_bcast_col_scalar(CircularBuffer(dfb_k_id), get_arg_val<uint32_t>(9));
 #else
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_in_2,
@@ -161,41 +217,14 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
+                    const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     dfb_gamma.reserve_back(num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = dfb_gamma.get_write_ptr();
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        uint32_t tile_id = gamma_tile_start_id + w;
-#ifdef ARCH_BLACKHOLE
-                        noc.async_read(
-                            gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            32 * 2,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read_barrier();
-                        UnicastEndpoint self_ep;
-                        noc.async_read(
-                            self_ep,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
-                            {});
-#else
-                        noc.async_read(
-                            gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            32,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read(
-                            gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.page_id = tile_id, .offset_bytes = 32},
-                            {});
-#endif
+                        async_read_row_to_tile(
+                            noc, gamma, gamma_tile_start_id + w, l1_write_addr_gamma, gamma_element_bytes);
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc.async_read_barrier();
@@ -204,41 +233,14 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
+                    const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     uint32_t l1_write_addr_beta = dfb_beta.get_write_ptr();
                     dfb_beta.reserve_back(num_cols_tile_gamma_beta);
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        uint32_t tile_id = beta_tile_start_id + w;
-#ifdef ARCH_BLACKHOLE
-                        noc.async_read(
-                            beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            32 * 2,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read_barrier();
-                        UnicastEndpoint self_ep;
-                        noc.async_read(
-                            self_ep,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
-                            {});
-#else
-                        noc.async_read(
-                            beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            32,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read(
-                            beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.page_id = tile_id, .offset_bytes = 32},
-                            {});
-#endif
+                        async_read_row_to_tile(
+                            noc, beta, beta_tile_start_id + w, l1_write_addr_beta, beta_element_bytes);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc.async_read_barrier();

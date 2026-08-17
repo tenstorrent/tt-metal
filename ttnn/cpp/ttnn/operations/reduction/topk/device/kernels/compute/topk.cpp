@@ -10,13 +10,14 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
  * Used in final stage to convert sorted results back to output format
  *
- * @param input_dfb_index    Circular buffer index containing tiles to transpose (source buffer)
- * @param dest_dfb_index     Circular buffer index to store transposed tiles (destination buffer)
+ * @param input_dfb_index    Dataflow buffer id for the tiles to transpose (source buffer)
+ * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
 FORCE_INLINE void transpose_and_pack(
@@ -55,11 +56,11 @@ FORCE_INLINE void transpose_and_pack(
 }
 
 /**
- * Pack two destination tiles (values and indices) to their respective circular buffers
+ * Pack two destination tiles (values and indices) to their respective dataflow buffers
  * Used after merge operation to store sorted results
  *
- * @param dfb0            Circular buffer index for packing the first tile (values)
- * @param dfb1            Circular buffer index for packing the second tile (indices)
+ * @param dfb0            Dataflow buffer id for packing the first tile (values)
+ * @param dfb1            Dataflow buffer id for packing the second tile (indices)
  * @param base_offset    Base offset in destination registers (first tile at base_offset, second at base_offset+1)
  */
 FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const uint32_t base_offset) {
@@ -75,10 +76,10 @@ FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const u
 }
 
 /**
- * Read tile from circular buffer and transpose it to destination register
+ * Read tile from dataflow buffer and transpose it to destination register
  * Used to prepare input tiles for sorting operations
  *
- * @param dfb               Circular buffer index to read tile from
+ * @param dfb               Dataflow buffer id to read tile from
  * @param base_offset      Base offset in destination register where transposed tile will be stored
  */
 FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_offset) {
@@ -90,10 +91,10 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_
 }
 
 /**
- * Utility function: Wait for tiles and pop them from front of circular buffer
+ * Utility function: Wait for tiles and pop them from front of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Circular buffer index to operate on
+ * @param dfb      Dataflow buffer id to operate on
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
 FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
@@ -103,10 +104,10 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
 }
 
 /**
- * Utility function: Reserve space and push tiles to back of circular buffer
+ * Utility function: Reserve space and push tiles to back of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Circular buffer index to operate on
+ * @param dfb      Dataflow buffer id to operate on
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
 FORCE_INLINE void cb_reserve_push_back(const uint32_t dfb, const uint32_t count) {
@@ -117,22 +118,24 @@ FORCE_INLINE void cb_reserve_push_back(const uint32_t dfb, const uint32_t count)
 
 void kernel_main() {
     // Runtime arguments
-    const uint32_t work_per_core = get_arg_val<uint32_t>(0);
+    const uint32_t work_per_core = get_arg(args::work_per_core);
+
+    // Dataflow buffer handles
+    constexpr auto input_val_dfb_index = dfb::input;                  // Input values buffer
+    constexpr auto input_ind_dfb_index = dfb::index;                  // Input indices buffer
+    constexpr auto transposed_val_dfb_index = dfb::transposed_val;    // Transposed values buffer
+    constexpr auto transposed_ind_dfb_index = dfb::transposed_ind;    // Transposed indices buffer
+    constexpr auto result_prep_val_dfb_index = dfb::result_prep_val;  // Result preparation values buffer
+    constexpr auto result_prep_ind_dfb_index = dfb::result_prep_ind;  // Result preparation indices buffer
+    constexpr auto output_val_dfb_index = dfb::output_val;            // Final output values buffer
+    constexpr auto output_ind_dfb_index = dfb::output_ind;            // Final output indices buffer
 
     // Compile time args
-    constexpr uint32_t input_val_dfb_index = get_compile_time_arg_val(0);        // Input values circular buffer
-    constexpr uint32_t input_ind_dfb_index = get_compile_time_arg_val(1);        // Input indices circular buffer
-    constexpr uint32_t transposed_val_dfb_index = get_compile_time_arg_val(2);   // Transposed values buffer
-    constexpr uint32_t transposed_ind_dfb_index = get_compile_time_arg_val(3);   // Transposed indices buffer
-    constexpr uint32_t result_prep_val_dfb_index = get_compile_time_arg_val(4);  // Result preparation values buffer
-    constexpr uint32_t result_prep_ind_dfb_index = get_compile_time_arg_val(5);  // Result preparation indices buffer
-    constexpr uint32_t output_val_dfb_index = get_compile_time_arg_val(6);       // Final output values buffer
-    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(7);       // Final output indices buffer
-    constexpr uint32_t Ht = get_compile_time_arg_val(8);                        // Height in tiles
-    constexpr uint32_t Wt = get_compile_time_arg_val(9);                        // Width in tiles
-    constexpr uint32_t output_tiles = get_compile_time_arg_val(10);             // Number of output tiles (ceil(K/32))
-    constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
-    constexpr bool stable_sort = get_compile_time_arg_val(12) == 1;             // Ties keep the lowest index
+    constexpr uint32_t Ht = get_arg(args::Ht);                      // Height in tiles
+    constexpr uint32_t Wt = get_arg(args::Wt);                      // Width in tiles
+    constexpr uint32_t output_tiles = get_arg(args::output_tiles);  // Number of output tiles (ceil(K/32))
+    constexpr uint32_t largest = get_arg(args::largest);            // 1 for largest K, 0 for smallest K
+    constexpr bool stable_sort = get_arg(args::stable_sort) == 1;   // Ties keep the lowest index
 
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);

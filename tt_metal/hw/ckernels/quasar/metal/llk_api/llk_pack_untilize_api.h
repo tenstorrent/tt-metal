@@ -79,6 +79,7 @@ inline void llk_pack_untilize(
     std::uint32_t pack_output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     const std::uint32_t output_id = get_output_id(pack_output);
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);

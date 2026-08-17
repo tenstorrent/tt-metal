@@ -179,7 +179,9 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+    # Same 11-chunk default as the runner: a larger default here would clamp requests to a depth the
+    # runner's cache can't hold, and the runner asserts on the overrunning chunk.
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -629,10 +631,15 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
-    golden trace. Dispatches on the model: MLA (single merged kvpe config) vs M3 (multi-config triple
-    cache). Returns the min PCC across layers."""
+    golden trace. Dispatches on the model: MLA (single merged kvpe config), M3 (multi-config triple
+    cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers.
+
+    The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
+    a branch here (and its own decode), not just an adapter."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "gpt_oss_d_p":
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -648,6 +655,63 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
         rows.append(decode(raw, head_dim))
     return torch.cat(rows, dim=0)[:read_len]
+
+
+def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """GPT-OSS multi-config read-back: reconstruct per-head K/V from the 2N-config table and PCC vs the
+    GQA golden (no index_k). Config layout: k_h0..N-1 = 0..N-1, v_h0..N-1 = N..2N-1."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    mc = ADAPTER.model_config
+    n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
+    rotary_dim = getattr(mc, "ROTARY_DIM", head_dim)
+    half = rotary_dim // 2
+    perm = list(range(head_dim))
+    for m in range(rotary_dim):
+        perm[m] = half * (m % 2) + (m // 2)
+    perm = torch.tensor(perm, dtype=torch.long)
+
+    read_len = ((real_len + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) * (
+        NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    )
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0}
+    for layer in range(NUM_LAYERS):
+        dev_k = torch.stack(
+            [
+                _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+        dev_v = torch.stack(
+            [
+                _read_kv_slice(table, device_map, n_kv + h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
+            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
+            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
+
+        pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
+        pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
+        mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
+        logger.info(f"  layer {layer:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
+
+    min_pcc = min(mins.values())
+    logger.info(
+        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
+    )
+    return min_pcc
 
 
 def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
@@ -1134,18 +1198,27 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    # Read the KV table BEFORE pushing (the runner publishes it at setup).
-    kv_table = _read_kv_chunk_table(timeout_s)
+    # Read the KV table BEFORE pushing (the runner publishes it at setup). Only the read-back needs it,
+    # and a runner that publishes no table (no migration, no PREFILL_MOCK_MIGRATION) would otherwise cost
+    # a full connect timeout of dead air before the first push.
+    kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
     # The LayerAck channel is a shared counter and try_consume_all() REMOVES completions. Draining it
     # serves ONLY the golden-trace KV read-back below
 
     # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
     # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
     ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and ack_channel is None:
+        logger.error(
+            "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
+            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
+            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+        )
+        sys.exit(1)
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — not consuming the LayerAck channel (pure token feeder; "
-            "the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
+            "channel (pure token feeder; the runner's migration self-test owns it)"
         )
 
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no

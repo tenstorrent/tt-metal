@@ -58,7 +58,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 weight (ttnn.Tensor, optional): Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to `None`.
                 bias (ttnn.Tensor, optional): Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                dtype (ttnn.DataType, optional): Defaults to `None`.
+                dtype (ttnn.DataType, optional): Output data type. When provided, it must equal the :attr:`input_tensor` dtype; a mismatch is rejected. Defaults to `None` (output dtype matches the input).
                 core_grid (CoreGrid, optional): Defaults to `None`.
                 inplace (bool, optional): Defaults to `True`.
                 output_layout (ttnn.Layout, optional): Defaults to `None`.
@@ -79,7 +79,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, FLOAT32
                       - TILE, ROW_MAJOR
 
                 ROW_MAJOR input is supported only for sharded inputs. An interleaved
@@ -92,8 +92,10 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, FLOAT32
                       - ROW_MAJOR
+
+                weight (gamma) and bias (beta) must share the same dtype.
 
                 .. list-table:: input_mask
                     :header-rows: 1
@@ -103,7 +105,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                     * - BFLOAT16, BFLOAT8_B
                       - TILE
 
-                The output will be BFLOAT16, and both the layout and the memory configuration will match the :attr:`input_tensor`.
+                The output dtype matches the :attr:`input_tensor` dtype (BFLOAT16 or FLOAT32); an explicit :attr:`dtype` must equal it. Both the layout and the memory configuration also match the :attr:`input_tensor`.
 
             Memory Support:
               - Interleaved: DRAM and L1
@@ -150,9 +152,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
            int64_t num_cores_across_channel,
            DataType data_type,
            int64_t tile_height,
-           int64_t tile_width) {
+           int64_t tile_width,
+           int64_t rows_in_last_tile) {
             return create_group_norm_input_mask(
-                num_channel, num_groups, num_cores_across_channel, data_type, tile_height, tile_width);
+                num_channel,
+                num_groups,
+                num_cores_across_channel,
+                data_type,
+                tile_height,
+                tile_width,
+                rows_in_last_tile);
         },
         nb::arg("num_channel"),
         nb::arg("num_groups"),
@@ -160,9 +169,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("data_type") = DataType::BFLOAT16,
         nb::arg("tile_height") = 32,
         nb::arg("tile_width") = 32,
+        nb::arg("rows_in_last_tile") = 0,
         R"doc(
             C++ implementation of create_group_norm_input_mask.
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
+
+            rows_in_last_tile (= ``logical_hw % 32``) is for non-tile-aligned H*W. It appends a
+            second set of groups -- shape becomes [1, 2*num_groups, 32, 32*block_wt] -- identical
+            to the first but with rows >= rows_in_last_tile zeroed, which group_norm selects on
+            each batch's final row-tile. Leave at 0 for tile-aligned H*W; without it, group_norm
+            derives the second set with a device-side multiply+concat on every call.
         )doc");
     mod.def(
         "create_group_norm_input_negative_mask",

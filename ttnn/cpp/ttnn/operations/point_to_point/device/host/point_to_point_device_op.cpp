@@ -227,7 +227,7 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in p2p op");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "Synchronize devices in p2p op done");
 
     const auto& send_coord = operation_attributes.send_coord;

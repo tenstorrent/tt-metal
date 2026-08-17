@@ -128,11 +128,11 @@ void kernel_main() {
             // ----- Phase 2: block amax -> scale (col 0) and 1/scale (col 0) -----
             cb_tile.wait_front(tiles_per_block);  // read by index; popped after the divide
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
-                // Abs the block row's tiles into cb_abs. Force the SrcA tile-dim/stride reconfig
-                // (is_tile_dim_reconfig_en=true): the default reconfig keeps the prior element
-                // stride, so after a bf16 tilize the fp32 cb_tile would be read with a 2-byte
-                // stride and copy_tile would misread it (corrupting the amax for bf16 input).
-                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(cb_tile_id);
+                // Abs the block row's tiles into cb_abs. Use reconfig_full_operand_srca so the SrcA tile/face
+                // geometry is reprogrammed for cb_tile too (not just the format): after a bf16 tilize the fp32
+                // cb_tile would otherwise be read with a stale geometry and copy_tile would misread it
+                // (corrupting the amax for bf16 input).
+                reconfig_full_operand_srca(cb_tile_id);
                 pack_reconfig_data_format(cb_abs_id);
                 copy_tile_init(cb_tile_id);
                 cb_abs.reserve_back(block_wt);
@@ -196,7 +196,7 @@ void kernel_main() {
             // to e4m3 -- fused divide+untilize, no cb_out_tile L1 round-trip and no separate untilize pass.
             // In 32-bit DST (fp32_dest_acc) the half-sync pack-untilize cap is 4 tiles = one block. -----
             reconfig_data_format(cb_tile_id, cb_inv_scale_tiles_id);
-            mul_bcast_cols_init_short(cb_tile_id, cb_inv_scale_tiles_id);
+            mul_bcast_cols_init(cb_tile_id, cb_inv_scale_tiles_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
             cb_inv_scale_tiles.wait_front(block_ht);
             cb_output_e4m3.reserve_back(tiles_per_block);

@@ -23,6 +23,11 @@
 namespace ttnn::operations::experimental::ccl {
 
 void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
+    nb::enum_<ttnn::experimental::prim::MMSignalAggregatorMode>(mod, "MMSignalAggregatorMode")
+        .value("Auto", ttnn::experimental::prim::MMSignalAggregatorMode::Auto)
+        .value("On", ttnn::experimental::prim::MMSignalAggregatorMode::On)
+        .value("Off", ttnn::experimental::prim::MMSignalAggregatorMode::Off);
+
     ttnn::bind_function<"strided_all_gather_minimal_matmul_async", "ttnn.experimental.">(
         mod,
         R"doc(strided_all_gather_minimal_matmul_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
@@ -47,6 +52,11 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
             * :attr:`program_config` (Optional[ttnn.MatmulProgramConfig])
             * :attr:`fused_activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
+            * :attr:`fused_ternary_input_a` (Optional[ttnn.Tensor]): addcmul residual/base tensor (added to the result).
+            * :attr:`fused_ternary_input_b` (Optional[ttnn.Tensor]): addcmul multiplier/gate tensor; a single tile-row broadcasts across M.
+            * :attr:`fused_ternary_scalar` (Optional[float]): addcmul scale; output = a + scalar * matmul_out * b. Requires both a and b.
+            * :attr:`chunks` (int): split the matmul output into this many tensors along N (default 1). Returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}]. N must be divisible by chunks.
+            * :attr:`mm_signal_aggregator_mode` (ttnn.MMSignalAggregatorMode): whether the all-gather signals the matmul through per-direction aggregator cores. These cost one worker core per direction on top of `num_links * (num_workers_per_link + 1) * 2` mux/worker cores, all placed from `strided_all_gather_core_grid_offset`. `Auto` (default) uses them when they fit and otherwise falls back to reader-signaled matmul with a warning, `On` requires them, `Off` never uses them.
 
         Example:
 
@@ -74,7 +84,12 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
-        nb::arg("read_local_slice_from_input") = nb::none());
+        nb::arg("read_local_slice_from_input") = nb::none(),
+        nb::arg("fused_ternary_input_a") = nb::none(),
+        nb::arg("fused_ternary_input_b") = nb::none(),
+        nb::arg("fused_ternary_scalar") = nb::none(),
+        nb::arg("chunks") = 1,
+        nb::arg("mm_signal_aggregator_mode") = nb::cast(ttnn::experimental::prim::MMSignalAggregatorMode::Auto));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

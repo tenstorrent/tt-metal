@@ -17,8 +17,8 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/hal.hpp>
 
@@ -436,8 +436,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         const tt::tt_metal::ShardSpec ri_shard_spec(setup.parallel_config.grid, ri_shard_shape, ri_orient);
         return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, ri_shard_spec};
     }();
-    MeshTensor reader_indices_owned = tt::tt_metal::enqueue_write_tensor(
-        cq, reader_indices_host.host_tensor(), *mesh_device, reader_indices_mem_config);
+    MeshTensor reader_indices_owned =
+        cq.enqueue_write_tensor(reader_indices_host.host_tensor(), reader_indices_mem_config);
     const tt::tt_metal::TensorSpec reader_indices_spec = reader_indices_owned.tensor_spec();
     const uint32_t reader_indices_page_size = reader_indices_owned.mesh_buffer().page_size();
 
@@ -497,8 +497,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 input.shard_spec().value().grid, shard_shape, config_orient);
             return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
         }();
-        config_tensor_owned =
-            tt::tt_metal::enqueue_write_tensor(cq, config_tensor.host_tensor(), *mesh_device, config_mem_config);
+        config_tensor_owned = cq.enqueue_write_tensor(config_tensor.host_tensor(), config_mem_config);
         config_tensor_spec = config_tensor_owned->tensor_spec();
         config_buffer_page_size = config_tensor_owned->mesh_buffer().page_size();
     }

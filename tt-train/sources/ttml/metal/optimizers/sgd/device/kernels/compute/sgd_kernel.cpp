@@ -43,7 +43,7 @@ void kernel_main() {
     const bool use_weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
     const bool use_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    binary_op_init_common(cb_grad_idx, cb_bcast_lr_idx, cb_update_idx);
+    compute_kernel_hw_startup(cb_grad_idx, cb_bcast_lr_idx, cb_update_idx);
 
     cb_wait_front(cb_bcast_lr_idx, 1);
     cb_wait_front(cb_bcast_momentum_idx, 1);
@@ -54,7 +54,7 @@ void kernel_main() {
         cb_wait_front(cb_param_in_idx, block_size);
         if (use_weight_decay) {
             // param * wd
-            mul_tiles_bcast_scalar_init_short(cb_param_in_idx, cb_bcast_wd_idx);
+            mul_bcast_scalar_init(cb_param_in_idx, cb_bcast_wd_idx);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_tiles_bcast_scalar(cb_param_in_idx, cb_bcast_wd_idx, block_idx, 0, block_idx);
@@ -65,7 +65,7 @@ void kernel_main() {
             // param * wd + grad
             cb_wait_front(cb_param_wd_idx, block_size);
             cb_wait_front(cb_grad_idx, block_size);
-            add_tiles_init(cb_param_wd_idx, cb_grad_idx);
+            add_init(cb_param_wd_idx, cb_grad_idx);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 add_tiles(cb_param_wd_idx, cb_grad_idx, block_idx, block_idx, block_idx);
@@ -80,7 +80,7 @@ void kernel_main() {
         uint32_t alias_update_not_scaled = alias_grad_modified;
 #if USE_MOMENTUM
         cb_wait_front(cb_momentum_in_idx, block_size);
-        mul_tiles_bcast_scalar_init_short(cb_momentum_in_idx, cb_bcast_momentum_idx);
+        mul_bcast_scalar_init(cb_momentum_in_idx, cb_bcast_momentum_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_scalar(cb_momentum_in_idx, cb_bcast_momentum_idx, block_idx, 0, block_idx);
@@ -92,7 +92,7 @@ void kernel_main() {
         uint32_t alias_grad_dampened = alias_grad_modified;
         if (use_dampening) {
             cb_wait_front(alias_grad_modified, block_size);
-            mul_tiles_bcast_scalar_init_short(alias_grad_modified, cb_bcast_one_minus_dampening_idx);
+            mul_bcast_scalar_init(alias_grad_modified, cb_bcast_one_minus_dampening_idx);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_tiles_bcast_scalar(alias_grad_modified, cb_bcast_one_minus_dampening_idx, block_idx, 0, block_idx);
@@ -105,7 +105,7 @@ void kernel_main() {
 
         cb_wait_front(alias_grad_dampened, block_size);
         cb_wait_front(cb_momentum_scaled_idx, block_size);
-        add_tiles_init(cb_momentum_scaled_idx, alias_grad_dampened);
+        add_init(cb_momentum_scaled_idx, alias_grad_dampened);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             add_tiles(cb_momentum_scaled_idx, alias_grad_dampened, block_idx, block_idx, block_idx);
@@ -115,7 +115,7 @@ void kernel_main() {
         cb_pop_front(cb_momentum_scaled_idx, block_size);
 #if USE_NESTEROV
         cb_wait_front(cb_momentum_out_idx, block_size);
-        mul_tiles_bcast_scalar_init_short(cb_momentum_out_idx, cb_bcast_momentum_idx);
+        mul_bcast_scalar_init(cb_momentum_out_idx, cb_bcast_momentum_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_scalar(cb_momentum_out_idx, cb_bcast_momentum_idx, block_idx, 0, block_idx);
@@ -125,7 +125,7 @@ void kernel_main() {
         cb_pop_front(cb_momentum_out_idx, block_size);
 
         cb_wait_front(cb_nesterov_momentum_idx, block_size);
-        add_tiles_init(cb_nesterov_momentum_idx, alias_grad_dampened);
+        add_init(cb_nesterov_momentum_idx, alias_grad_dampened);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             add_tiles(cb_nesterov_momentum_idx, alias_grad_dampened, block_idx, block_idx, block_idx);
@@ -142,7 +142,7 @@ void kernel_main() {
 #endif
         // grad * lr
         cb_wait_front(alias_update_not_scaled, block_size);
-        mul_tiles_bcast_scalar_init_short(alias_update_not_scaled, cb_bcast_lr_idx);
+        mul_bcast_scalar_init(alias_update_not_scaled, cb_bcast_lr_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_scalar(alias_update_not_scaled, cb_bcast_lr_idx, block_idx, 0, block_idx);
@@ -153,7 +153,7 @@ void kernel_main() {
 
         // param - grad * lr
         cb_wait_front(cb_update_idx, block_size);
-        sub_tiles_init(cb_param_in_idx, cb_update_idx);
+        sub_init(cb_param_in_idx, cb_update_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);

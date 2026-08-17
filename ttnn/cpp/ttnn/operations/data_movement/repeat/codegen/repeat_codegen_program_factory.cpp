@@ -31,7 +31,7 @@ namespace {
 constexpr uint32_t kReadBatch = 4;
 constexpr uint32_t kWriteBatch = 4;
 
-// SEQ_REPEAT, see codegen/kernels/sequencers.h.
+// SEQ_REPEAT, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kSeqRepeat = 1;
 
 struct CoreSplit {
@@ -116,7 +116,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
         KernelDescriptor reader_desc;
         reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_tile_interleaved_unified.cpp";
+            "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
         reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_desc.core_ranges = split.all_cores;
         reader_desc.compile_time_args = std::move(reader_ct_args);
@@ -140,7 +140,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
         KernelDescriptor writer_desc;
         writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/writer_interleaved.cpp";
+            "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
         writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_desc.core_ranges = split.all_cores;
         writer_desc.compile_time_args = std::move(writer_ct_args);
