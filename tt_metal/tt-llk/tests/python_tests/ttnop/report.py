@@ -109,7 +109,8 @@ def reproduce_command(record: dict, delays=()) -> str:
         "TTNOP_SITES": f"{record['thread']}:{record['site_index']}",
         "TTNOP_FILLER": record["filler"],
         "TTNOP_DELAYS": as_ranges(delays or [record["delay"]], ","),
-        "TTNOP_REPEATS": "50",
+        # Repeats is left to focus.sh's own default, so the rate a reproduce line
+        # asks for does not have to be kept in step with the runner's.
     }
     assignments = " ".join(f"{key}={value}" for key, value in env.items())
     return f"{assignments} ./focus.sh {shlex.quote(record['case'])}"
@@ -134,18 +135,77 @@ def _by_site(records: list):
     """Group failures per (case, thread, site) and label them 1a, 1b, 2a, ... .
 
     The label numbers the pytest case and letters the sites within it, so the
-    summary table and the section below it can point at each other.
+    summary table and the section below it can point at each other. Keys stay
+    in first-seen (sweep) order so leftover math sites cannot sort in front
+    of the unpack miss that actually started the case.
     """
     sites = defaultdict(list)
+    order = []
     for record in records:
-        sites[(record["case"], record["thread"], record["addr"])].append(record)
+        key = (record["case"], record["thread"], record["addr"])
+        if key not in sites:
+            order.append(key)
+        sites[key].append(record)
     labels, case_number, seen_sites = {}, {}, defaultdict(int)
-    for key in sorted(sites):
+    for key in order:
         case = key[0]
         case_number.setdefault(case, len(case_number) + 1)
         labels[key] = f"{case_number[case]}{chr(ord('a') + seen_sites[case])}"
         seen_sites[case] += 1
-    return sites, labels, len(case_number)
+    return sites, labels, len(case_number), order
+
+
+def in_plan_order(records: list) -> list:
+    """Sweep order, even when several workers appended to the same log.
+
+    A depth run can split one case over eight workers, whose records then land
+    interleaved — and _first_races reads the earliest record of a case as the race
+    that started it. Sorting on the plan index each record carries restores that.
+    Cases keep the order they first appear in, so a run that gave each worker a
+    whole case (records already in plan order) is left exactly as it was.
+    """
+    first_seen = {}
+    for record in records:
+        first_seen.setdefault(record["case"], len(first_seen))
+    return sorted(
+        records, key=lambda record: (first_seen[record["case"]], record.get("seq", 0))
+    )
+
+
+def _first_races(records: list):
+    """Keep the first miss per case; fold later sites as leftover.
+
+    After a case's first mismatch/hang the DEST tensor is stale, so every
+    later sync point fails with the same error. JSONL stays complete; the
+    markdown only details that first (thread, addr, filler) cliff.
+    """
+    seed = {}
+    races, leftover = defaultdict(list), defaultdict(list)
+    for record in records:
+        case = record["case"]
+        if case not in seed:
+            seed[case] = (record["thread"], record["addr"], record["filler"])
+        thread, addr, filler = seed[case]
+        if (
+            record["thread"] == thread
+            and record["addr"] == addr
+            and record["filler"] == filler
+        ):
+            races[case].append(record)
+        else:
+            leftover[case].append(record)
+    return races, leftover
+
+
+def _sync_points(records: list) -> str:
+    """`math 0-18, unpack 5` — leftover site indices, folded per thread."""
+    by_thread = defaultdict(list)
+    for record in records:
+        by_thread[record["thread"]].append(record["site_index"])
+    return ", ".join(
+        f"{thread} {as_ranges(indexes, ',')}"
+        for thread, indexes in sorted(by_thread.items())
+    )
 
 
 def _pcc_cell(rows: list) -> str:
@@ -176,10 +236,13 @@ def _by_filler(group: list):
 
 
 def render(report_dir: Path, env: dict) -> str:
-    records = load(report_dir)
+    records = in_plan_order(load(report_dir))
     if not records:
         return ""
-    sites, labels, cases = _by_site(records)
+    races, leftover = _first_races(records)
+    race_records = [record for group in races.values() for record in group]
+    sites, labels, cases, order = _by_site(race_records)
+    folded = sum(len(group) for group in leftover.values())
 
     out = ["# ttnop timing-perturbation findings", "", "| | |", "| --- | --- |"]
     out += [f"| {key} | `{value}` |" for key, value in env.items()]
@@ -193,14 +256,19 @@ def render(report_dir: Path, env: dict) -> str:
         "**PCC vs clean** is the Pearson correlation of those two hardware tensors "
         "(`Δ` = `1 − pcc`). It is not PCC vs golden.",
         "",
-        f"{len(records)} recorded variant(s) at {len(sites)} site(s) across {cases} case(s).",
+        f"{len(order)} race(s) across {cases} case(s)"
+        + (
+            f"; {folded} later variant(s) folded as leftover sync points."
+            if folded
+            else "."
+        ),
         "",
         "## Sites",
         "",
         "| # | thread | site | NOP_TYPE | NOP counts | how | PCC vs clean |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for key in sorted(sites):
+    for key in order:
         group = sites[key]
         site = f"`{group[0]['op']}@0x{key[2]:05x}`"
         for filler, rows in _by_filler(group):
@@ -210,8 +278,14 @@ def render(report_dir: Path, env: dict) -> str:
                 f"{as_ranges(record['delay'] for record in rows)} | {', '.join(tags)} | "
                 f"{_pcc_cell(rows)} |"
             )
+        extra = leftover.get(key[0])
+        if extra:
+            out.append(
+                f"| {labels[key]}+ | | sync points {_sync_points(extra)} fail | "
+                f"| | leftover |"
+            )
 
-    for key in sorted(sites):
+    for key in order:
         case, thread, addr = key
         group = sites[key]
         head = group[0]
@@ -228,6 +302,12 @@ def render(report_dir: Path, env: dict) -> str:
         )
         if first_error:
             out.append(f"- first finding: `{first_error}`")
+        extra = leftover.get(case)
+        if extra:
+            out.append(
+                f"- later sync points {_sync_points(extra)} fail "
+                f"(leftover output after the first miss)"
+            )
 
         out += [
             "",

@@ -4,8 +4,8 @@
 """What to perturb, and the loop that perturbs it.
 
 Nothing here knows how a variant is written to a device; the caller hands in a
-runtime that can run one variant and recover from a hang. That is the seam the
-Metal backend would slot into.
+runtime that can run one variant and say how it went. That is the seam the Metal
+backend would slot into.
 """
 
 import math
@@ -29,6 +29,9 @@ class Variant:
     filler: str
     filler_word: int
     delay: int
+    # Position in the full plan, kept so a record can be put back in sweep order
+    # after several workers have appended to one log.
+    seq: int = 0
 
     def label(self) -> str:
         return f"{self.thread} {self.site.label()} n={self.delay} {self.filler}"
@@ -52,6 +55,26 @@ def parse_delays(spec: str) -> tuple:
     return tuple(delays)
 
 
+def shard_from_env() -> tuple:
+    """Which slice of the plan this process owns, as (shard, shards).
+
+    Only a depth run splits a plan: it hands the same case to every xdist worker
+    and sets TTNOP_SHARD_VARIANTS, so worker gwN takes every Nth variant and the
+    eight cores share one sweep. A breadth run gives each worker a *different*
+    case, and must keep the whole plan for the case it was given — hence the
+    explicit opt-in rather than reading the xdist variables on their own.
+    """
+    if os.environ.get("TTNOP_SHARD_VARIANTS", "") in ("", "0"):
+        return 0, 1
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if not worker.startswith("gw"):
+        return 0, 1
+    shard = int(worker[2:])
+    shards = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1") or 1)
+    # A shard outside the count would silently drop the variants ahead of it.
+    return (shard, shards) if shard < shards else (0, 1)
+
+
 @dataclass
 class Config:
     site_mode: str = "sync"
@@ -61,6 +84,10 @@ class Config:
     filler: str = "auto"
     selector: str = ""
     repeats: int = 1
+    # Which slice of the plan this process runs, when the runner has put the same
+    # case on every xdist worker. (0, 1) is the whole thing.
+    shard: int = 0
+    shards: int = 1
     # Freeze the stimuli and compare each variant's output against the baseline's.
     # Off restores the rolling RNG stream, which samples different data per variant
     # but leaves nothing to compare against.
@@ -70,6 +97,7 @@ class Config:
 
     @classmethod
     def from_env(cls):
+        shard, shards = shard_from_env()
         config = cls(
             site_mode=os.environ.get("TTNOP_SITE_MODE", "sync").strip().lower(),
             threads=tuple(
@@ -84,6 +112,8 @@ class Config:
             filler=os.environ.get("TTNOP_FILLER", "auto").strip().lower(),
             selector=os.environ.get("TTNOP_SITES", "").strip(),
             repeats=int(os.environ.get("TTNOP_REPEATS", "1")),
+            shard=shard,
+            shards=shards,
             drift=os.environ.get("TTNOP_DRIFT", "1").strip() not in ("", "0"),
             arch=os.environ.get("CHIP_ARCH", "wormhole").strip().lower(),
             report_dir=Path(
@@ -128,7 +158,7 @@ class Config:
 
 
 def plan(config: Config, scans: dict) -> list:
-    """Expand the config into the ordered list of variants to try."""
+    """Expand the config into the ordered list of variants this process will try."""
     variants = []
     for thread in config.threads:
         scan = scans.get(thread)
@@ -143,12 +173,22 @@ def plan(config: Config, scans: dict) -> list:
                 # cave, so it separates "the jump broke it" from "the fillers broke it".
                 delays = (0,) + config.delays if config.repeats > 1 else config.delays
                 for delay in delays:
-                    variants.append(Variant(thread, site, name, word, delay))
-    return variants
+                    variants.append(
+                        Variant(thread, site, name, word, delay, len(variants))
+                    )
+    # Every Nth variant rather than an Nth of the list: a worker still walks one
+    # site and filler at a time (so a delay step stays a single word write), and
+    # the expensive high counts spread over the workers instead of landing on one.
+    return variants[config.shard :: config.shards]
 
 
 class DeviceWedged(RuntimeError):
-    """Soft reset did not take. Every later variant would look like a failure."""
+    """A variant hung the core, and only a card reset will clear it.
+
+    Carries the label of the variant that did it: that variant is the race the
+    sweep exists to find, and the reset about to follow takes the evidence with
+    it, so the label has to travel with the exception.
+    """
 
 
 def run(config: Config, variants: list, runtime, record_sink) -> list:
@@ -160,8 +200,8 @@ def run(config: Config, variants: list, runtime, record_sink) -> list:
     failing = []
     for variant in variants:
         fails, tags, first_error = 0, set(), ""
-        # Record in a finally so a hang we could not recover from is still reported;
-        # losing the finding is worse than losing the rest of the sweep.
+        # Record in a finally so the hang that ends the case below is still
+        # reported; losing the finding is worse than losing the rest of the sweep.
         try:
             for _ in range(config.repeats):
                 tag, error = runtime.run(variant)
@@ -170,8 +210,8 @@ def run(config: Config, variants: list, runtime, record_sink) -> list:
                 fails += 1
                 tags.add(tag)
                 first_error = first_error or error
-                if tag == "hang" and not runtime.recover():
-                    raise DeviceWedged(f"soft reset failed after {variant.label()}")
+                if tag == "hang":
+                    raise DeviceWedged(variant.label())
         finally:
             if fails:
                 failing.append((f"{variant.label()} {','.join(sorted(tags))}", tags))

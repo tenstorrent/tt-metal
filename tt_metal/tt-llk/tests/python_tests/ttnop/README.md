@@ -87,9 +87,11 @@ Breadth, one shot per variant, shardable across machines:
 Depth, one case repeated until a flaky race shows a rate:
 
 ```bash
-TTNOP_SITES=unpack:3 TTNOP_DELAYS=8,16 TTNOP_REPEATS=50 \
-    ./focus.sh 'test_x.py::test_y[params]'
+./focus.sh --sites unpack:3 --delays 8,16 'test_x.py::test_y[params]'
 ```
+
+[FOCUS.md](FOCUS.md) is the full reference for the depth runner; its flags are
+aliases for the variables below.
 
 `TTNOP_DELAYS` takes ints and `lo-hi` ranges, comma separated: `1-100` (the
 default), `1,5,10,20,40,60,80,100` for a coarse probe, `1-8,16,32` for a mix.
@@ -104,7 +106,7 @@ in bands tens of counts wide, and sampling powers of two walks past most of them
 | `TTNOP_MAX_DELAY` | cave capacity, default 100 |
 | `TTNOP_FILLER` | `auto`, a name from the table, or a raw word |
 | `TTNOP_SITES` | e.g. `unpack:3,math:7` |
-| `TTNOP_REPEATS` | runs per variant; >1 adds the delay-0 control |
+| `TTNOP_REPEATS` | runs per variant (10 under `focus.sh`); >1 adds the delay-0 control |
 | `TTNOP_DRIFT` | compare each variant's output to the baseline's, default on |
 | `TTNOP_REPORT_DIR` | one per machine when sharding |
 | `TTNOP_VERBOSE` | print each detour as it is applied |
@@ -166,15 +168,11 @@ spans the attempts a resume is split across, and it carries the hung cases as
 failures: the worker that would have reported one is stuck in a device read.
 
 `--device-jobs N` fans the device phase out over N Tensix cores (the harness maps
-xdist `gwN` to core `N/8, N%8`). Default is 8. Variants call the test body
-directly (`item.obj`), not `item.runtest`, so the sweep hook cannot nest.
-
-## Scanning by hand
-
-```bash
-make && ./scan --mode sync /tmp/tt-llk-build/<test>/<hash>/elf/unpack.elf
-python3 scanner.py /tmp/tt-llk-build/<test>/<hash>/elf/*.elf
-```
+xdist `gwN` to core `N/8, N%8`). Default is 8. A breadth run gives each worker
+different cases; a depth run has only one, so `focus.sh` hands it to every worker
+with `--dist each` and splits the variant plan between them instead. Variants call
+the test body directly (`item.obj`), not `item.runtest`, so the sweep hook cannot
+nest.
 
 ## Notes on the LLK harness
 
@@ -194,9 +192,10 @@ python3 scanner.py /tmp/tt-llk-build/<test>/<hash>/elf/*.elf
 - Variants are meant to fail, so the harness's logging is muted while one runs;
   otherwise every mismatch dumps the offending tiles in colour. The baseline pass
   runs outside that, so a genuinely broken test still says why.
-- A hang is a `TimeoutError`, never a substring match. Recovery soft-resets and
-  continues; if the reset does not take, the finding is recorded first and the
-  sweep stops rather than reporting a dead device as a wall of races.
+- A hang is a `TimeoutError`. The finding is recorded, the case is closed, the
+  supervisor resets the card (`tt-smi -r`) and resumes at the next test. Soft
+  reset-and-continue is gone: it rebooted BRISC mid-session and failed every
+  case after the hang.
 
 ## Metal
 
@@ -208,4 +207,4 @@ editing the ELF on disk does nothing either. Supporting Metal needs a C++ change
 in the metal tree — the smallest being an env-gated skip of the binary rewrite in
 `ComputeKernel::configure`, or a patch hook in `LaunchProgram` between configure
 and the go signal. The cave and detour arithmetic here is already backend
-agnostic; only `Perturber.run`/`recover` in `ttnop_plugin.py` are LLK specific.
+agnostic; only `Perturber.run` in `ttnop_plugin.py` is LLK specific.

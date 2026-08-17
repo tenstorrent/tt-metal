@@ -133,22 +133,23 @@ class Injector:
 
     def arm(self, thread: str, scan, site, delay: int, filler_word: int) -> None:
         cave = self.cave_for(scan)
-        if self._filler.get(thread) != filler_word:
-            self._write(cave.start, [filler_word] * cave.max_delay)
-            self._filler[thread] = filler_word
-
         displaced = self._displaced.get(thread)
         new_site = displaced is None or displaced.addr != site.addr
         if new_site:
-            self._restore(thread)
-            # The scan happened against the ELF on disk; refuse to patch if what is
-            # actually loaded disagrees, rather than corrupting an unrelated instruction.
+            # Check before any cave write: a different kernel in L1 would make
+            # the filler run land on someone else's code.
             live = self._read(site.addr, 1)[0]
             if live != site.word:
                 raise DetourError(
                     f"{thread} 0x{site.addr:05x} holds 0x{live:08x}, "
                     f"scan expected 0x{site.word:08x}"
                 )
+        if self._filler.get(thread) != filler_word:
+            self._write(cave.start, [filler_word] * cave.max_delay)
+            self._filler[thread] = filler_word
+
+        if new_site:
+            self._restore(thread)
             self._write(cave.parked, cave.tail(site.word, site.addr + 4))
             self._displaced[thread] = site
 

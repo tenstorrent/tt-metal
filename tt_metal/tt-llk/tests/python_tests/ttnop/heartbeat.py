@@ -33,6 +33,10 @@ DONE = "done"
 _HEARTBEAT_PREFIX = "hb."
 _DONE_PREFIX = "done."
 _RESULTS_PREFIX = "results."
+# One file, not one per worker: the supervisor only needs to be told once that
+# the card wants resetting, and a second worker hanging before it gets there is
+# the same request.
+_RESET_REQUEST = "reset-requested"
 
 # Enough of a failure to identify it in a report without carrying a whole tensor
 # dump per case into the junit XML.
@@ -109,6 +113,30 @@ class Writer:
             return
         with open(self._done, "a") as handle:
             handle.write(nodeid + "\n")
+
+    def request_reset(self, case: str, variant: str) -> None:
+        """Ask the supervisor to reset the card, because we cannot.
+
+        Eight workers share one card, so resetting from in here would take the
+        other seven down mid-case; and it would not even fix this process, since
+        the reset is only safe once the run it interrupts is dead. So the worker
+        states the problem and the supervisor, which owns both the card and the
+        run, decides when to act on it.
+        """
+        if self.root is None:
+            return
+        payload = {
+            "worker": self.worker,
+            "case": case,
+            "variant": variant,
+            "ts": time.time(),
+        }
+        # Same temp-and-rename as a beat: the supervisor polls this file and must
+        # never catch a half-written record.
+        temp = self.root / f"{_RESET_REQUEST}.{os.getpid()}.tmp"
+        with open(temp, "w") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+        os.replace(temp, self.root / _RESET_REQUEST)
 
     def record_result(
         self, nodeid: str, outcome: str, duration: float = 0.0, message: str = ""
@@ -221,13 +249,67 @@ def newest_beat(workers) -> float:
     return max((worker["ts"] for worker in workers), default=0.0)
 
 
-def record_skipped(root: Path, nodeids) -> None:
-    """Treat cases as covered without having run them, so a resume steps over them."""
+def family_key(nodeid: str) -> str:
+    """The test, without `[params]`. Sibling formats of one hang share this."""
+    return nodeid.split("[", 1)[0]
+
+
+def unrun_family(root: Path, hung: str, all_ids: list) -> list:
+    """Unfinished cases of the same test as `hung`.
+
+    One hang is the race. The other params hit the same site and need another
+    `tt-smi -r` to clear. Other tests stay on the queue.
+    """
+    if not hung:
+        return []
+    key = family_key(hung)
+    done = completed(root)
+    return [
+        nodeid for nodeid in all_ids if nodeid not in done and family_key(nodeid) == key
+    ]
+
+
+def record_skipped(root: Path, nodeids, reason: str = "") -> None:
+    """Treat cases as covered without having run them, so a resume steps over them.
+
+    `reason` writes a skipped result line so the cases show up in junit instead
+    of vanishing. The silent-wedge path leaves it empty: those cases are
+    reported as wedges, not skips.
+    """
     wanted = [nodeid for nodeid in nodeids if nodeid]
     if not wanted:
         return
     with open(root / f"{_DONE_PREFIX}skipped", "a") as handle:
         handle.writelines(nodeid + "\n" for nodeid in wanted)
+    if not reason:
+        return
+    with open(root / f"{_RESULTS_PREFIX}skipped", "a") as handle:
+        for nodeid in wanted:
+            handle.write(
+                json.dumps(
+                    {
+                        "nodeid": nodeid,
+                        "outcome": "skipped",
+                        "duration": 0.0,
+                        "message": reason[:_MESSAGE_LIMIT],
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+
+
+def reset_request(root: Path):
+    """The hang asking for a card reset, or None if nobody has hung."""
+    return _read(root / _RESET_REQUEST)
+
+
+def clear_reset_request(root: Path) -> None:
+    """Drop a request once it has been acted on, so one hang buys one reset."""
+    try:
+        (root / _RESET_REQUEST).unlink()
+    except OSError:
+        pass
 
 
 def clear_heartbeats(root: Path) -> None:

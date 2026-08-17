@@ -3,12 +3,21 @@
 
 """Watchdog around a sweep: reset the card when it wedges, resume on what is left.
 
-The sweep's own hang handling covers a device that still answers: the mailbox
-poll gives up after a couple of seconds and raises TimeoutError, and the case is
-recorded as a hang in-process. That is the ordinary single-core hang and it never
-gets here. What it cannot cover is a read that never returns at all, because the
-poll's deadline is only checked between reads — the worker is blocked inside one,
-where it can neither raise nor log nor run a signal handler.
+There are two ways a sweep loses a core, and they arrive here differently.
+
+The first is a device that still answers: the mailbox poll gives up after a
+couple of seconds and raises TimeoutError, so the worker can record the hang as
+the finding it is, take the case off the resume list, and ask for a reset
+(heartbeat.request_reset). Nothing else clears a core holding a kernel that
+never finished — a soft reset from inside the worker reboots BRISC mid-session
+and leaves it failing every case after that — so the request is honoured
+immediately: kill the run, reset the card, resume at the next case. It costs the
+other workers their in-flight cases, which come back on the resume list, and it
+is only worth doing because a hang is rare and is itself the finding.
+
+The second is a read that never returns at all, because the poll's deadline is
+only checked between reads — the worker is blocked inside one, where it can
+neither raise nor log nor run a signal handler, and so cannot ask for anything.
 
 How far that spreads varies. A card wedged below the NoC takes every worker with
 it; a NoC path wedged under one core strands that worker alone while the others
@@ -38,11 +47,14 @@ than any real variant could take, we:
 
 The wedging cases are marked covered as soon as they are detected, on the grounds
 that re-running a case that just wedged a core mostly wedges the next one.
+Sibling params of the same test are marked covered too: one hang is the race,
+and the rest of that family cooks the card the same way.
 
     python3 supervise.py IDS_FILE [pytest args...]
 """
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -115,11 +127,6 @@ EVICT_GRACE = float(os.environ.get("TTNOP_EVICT_GRACE", "30"))
 # re-collecting the resume list. Only ever compared against the cost of carrying
 # on short-handed, so a rough figure is enough.
 RESET_COST = float(os.environ.get("TTNOP_RESET_COST", "240"))
-# What a reset costs before the sweep is back at full speed: tt-smi -r, bounded
-# at RESET_TIMEOUT_SECONDS=180 in hardware_controller, plus starting pytest again
-# and re-collecting the resume list. Only used to compare against the cost of
-# carrying on short-handed, so a rough figure is enough.
-RESET_COST = float(os.environ.get("TTNOP_RESET_COST", "240"))
 
 # Outside pytest's 0-5 so a caller can tell the two apart: a non-zero pytest
 # status means the sweep found races, which is a result and the whole point,
@@ -142,6 +149,24 @@ def read_ids(path) -> list:
 
 def _int(value, fallback: int) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else fallback
+
+
+def skip_hang_family(root: Path, hung: str, all_ids: list) -> None:
+    """Step over the other params of a test that just hung.
+
+    The hung case is already on the done-log. What used to happen next is the
+    resume ran the next format of the same test, hit the same site, and paid
+    another `tt-smi -r`. Other tests are a different race and stay queued.
+    """
+    siblings = heartbeat.unrun_family(root, hung, all_ids)
+    if not siblings:
+        return
+    heartbeat.record_skipped(
+        root,
+        siblings,
+        reason=f"skipped: same hang family as {hung}",
+    )
+    log(f"skipping {len(siblings)} sibling(s) of {heartbeat.family_key(hung)}")
 
 
 def record_wedge(config, workers) -> None:
@@ -338,7 +363,7 @@ def reset_card() -> bool:
 # -- watching one attempt --------------------------------------------------
 
 
-def watch(child, root: Path, total: int, config, pool: int):
+def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
     """Block until the run ends or the card has to be reset.
 
     Returns (outcome, returncode, wedged workers). Outcome is "exited" if the run
@@ -368,6 +393,20 @@ def watch(child, root: Path, total: int, config, pool: int):
             last_progress = now
             log(f"{len(heartbeat.completed(root))}/{total} case(s) done")
 
+        # A worker that hung a core says so and then parks. It has already
+        # recorded the finding and taken its case off the resume list, so there
+        # is nothing to work out here: clear the core the only way that works and
+        # let the resume pick up at the next case.
+        request = heartbeat.reset_request(root)
+        if request:
+            skip_hang_family(root, request.get("case", ""), all_ids)
+            heartbeat.clear_reset_request(root)
+            log(
+                f"{request.get('worker', '?')} hung on "
+                f"{request.get('variant') or 'an unknown variant'}; resetting the card"
+            )
+            return "wedged", None, records
+
         workers = heartbeat.live_workers(root)
         if len(workers) > width:
             width = len(workers)
@@ -390,6 +429,7 @@ def watch(child, root: Path, total: int, config, pool: int):
             # so without this a later resume would retry it and wedge another core.
             record_wedge(config, [worker])
             heartbeat.record_skipped(root, [worker.get("case", "")])
+            skip_hang_family(root, worker.get("case", ""), all_ids)
 
             # Only evictions spend the budget: a worker we fail to kill is never
             # replaced, so it takes no new core from the pool.
@@ -433,7 +473,15 @@ def watch(child, root: Path, total: int, config, pool: int):
         time.sleep(POLL_SECONDS)
 
 
-def attempt(ids_path: Path, pytest_args, root: Path, total: int, config, pool: int):
+def attempt(
+    ids_path: Path,
+    pytest_args,
+    root: Path,
+    total: int,
+    config,
+    pool: int,
+    all_ids: list,
+):
     child = subprocess.Popen(
         [sys.executable, str(RUNNER), str(ids_path), *pytest_args],
         # Its own process group, so a wedge can be cleared with one killpg
@@ -441,7 +489,7 @@ def attempt(ids_path: Path, pytest_args, root: Path, total: int, config, pool: i
         start_new_session=True,
     )
     log(f"run started (pid {child.pid})")
-    return child, watch(child, root, total, config, pool)
+    return child, watch(child, root, total, config, pool, all_ids)
 
 
 # -- entry point -----------------------------------------------------------
@@ -486,7 +534,7 @@ def main(argv) -> int:
 
         heartbeat.clear_heartbeats(root)
         child, (outcome, code, payload) = attempt(
-            remaining_path, pytest_args, root, len(all_ids), config, pool
+            remaining_path, pytest_args, root, len(all_ids), config, pool, all_ids
         )
         wedged.extend(payload)
 
@@ -514,8 +562,8 @@ def main(argv) -> int:
                 "second sweep on the same cores"
             )
             break
-        # The wedging cases were recorded as covered when they were detected, so
-        # the resume already steps over them; nothing to do here but go again.
+        # The hung case and the rest of its test are already on the done-log, so
+        # the resume starts at a different test; nothing to do here but go again.
 
     path = report.write_markdown(
         config.report_dir,
@@ -539,6 +587,10 @@ def main(argv) -> int:
         # look perfectly healthy on its own.
         log(f"{len(wedged)} wedge(s) recorded; exiting {EXIT_WEDGED}")
         status = EXIT_WEDGED
+    # Resume files (hb.gwN, done.*, remaining.txt) only exist so this process can
+    # pick up after a reset. The report dir should hold what a human reads:
+    # report.md, failures.jsonl, junit.xml.
+    shutil.rmtree(root, ignore_errors=True)
     return status
 
 

@@ -5,7 +5,6 @@
 
 import json
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,18 +90,3 @@ def scan(elf: str, mode: str = "sync") -> Scan:
     )
     _cache[key] = result
     return result
-
-
-if __name__ == "__main__":
-    for path in sys.argv[1:]:
-        result = scan(path, mode="sync")
-        print(f"{path}")
-        print(
-            f"  body  0x{result.body_start:05x}..0x{result.body_end:05x} ({result.body_source})"
-        )
-        print(
-            f"  cave  0x{result.cave_start:05x}..0x{result.cave_limit:05x} ({result.cave_source})"
-        )
-        print(f"  unpackers {result.unpackers() or 'unknown'}")
-        for site in result.sites:
-            print(f"  [{site.index:3d}] {site.label():<22} sfpu={site.sfpu}")
