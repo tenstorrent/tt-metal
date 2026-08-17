@@ -891,6 +891,21 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Z-Image ────────────────────────────────────────────────────────
+
+- name: Z-Image-Turbo e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_pipeline.py
+  model: z-image-turbo
+  model_family: Z-Image
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
 - name: Stable Diffusion XL (base) e2e tests
@@ -1032,6 +1047,22 @@
   skus:
     bh_quietbox_2:
       timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Motif-Image-6B e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 1500 models/tt_dit/tests/models/motif/test_pipeline_motif.py
+    pytest --timeout 900 models/tt_dit/tests/models/motif/test_performance_motif.py
+  model: motif
+  model_family: Motif
+  skus:
+    wh_llmbox_perf:
+      timeout: 50
       tier: 2
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

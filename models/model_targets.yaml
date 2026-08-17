@@ -958,7 +958,7 @@ targets:
             seq_len: 744
             status: active
             perf:
-              decode_t/s/u: 21.9
+              decode_t/s/u: 25.3
               prefill_time_to_first_token: 118
               prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}

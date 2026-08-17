@@ -312,8 +312,13 @@ class MiniMaxH3TransformerBlock(Module):
         # on 56 of the device's 120 cores at subblock 1x1, making the fused op a measured 45%
         # regression on this stage (1.75 -> 2.55 ms) -- and silently, since an unknown shape does not
         # warn. See mmrs_config for the sweep and the grid/bandwidth tradeoff behind it.
+        #
+        # Ring only: the op asserts `attributes.topology == Ring` ("MinimalMatmulStridedReduceScatter
+        # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
+        # below. Gated here rather than left to fail, because the assert fires on the first denoise
+        # step of the first request -- long after warmup reports the model loaded.
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
-        if self.tp_factor > 1 and has_mmrs_config(*ff2_shape):
+        if self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and has_mmrs_config(*ff2_shape):
             # M is only known here (it tracks the packed sequence length), so the blocking is
             # registered at the point of use rather than at construction. Idempotent and cheap.
             register_mmrs_config(*ff2_shape)

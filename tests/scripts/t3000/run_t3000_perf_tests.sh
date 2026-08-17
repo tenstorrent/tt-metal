@@ -23,10 +23,6 @@ run_t3000_dit_tests() {
   fi
 }
 
-run_t3000_motif_tests() {
-  run_t3000_dit_tests "models/tt_dit/tests/models/motif/test_performance_motif.py --timeout 600"
-}
-
 fail=0
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly

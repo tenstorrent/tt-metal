@@ -154,12 +154,6 @@ run_t3000_dit_tests() {
   fi
 }
 
-run_t3000_motif_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif" \
-    "models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif"
-}
-
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -178,9 +172,6 @@ run_t3000_tests() {
 
   # Run Llama3.2-11B Vision tests on spoofed N300
   # run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
-
-  # Run motif tests
-  run_t3000_motif_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests

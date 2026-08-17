@@ -10,14 +10,3 @@
 #   model-type: The model type (LLM, CNN, DiT, ViT) for artifact naming.
 
 # For max allowed timeout refer to .github/time_budget.yaml
-
-- name: t3k_DiT_Motif_model_perf_tests
-  cmd: run_t3000_motif_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: motif
-  model-type: DiT
-  save-perf-data: true

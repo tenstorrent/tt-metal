@@ -10,7 +10,6 @@ on:
         default: all
         options:
           - all
-          - motif
       platform:
         required: false
         type: choice
@@ -44,6 +43,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -58,6 +58,7 @@ jobs:
       tracy: true
   t3000-perf-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:

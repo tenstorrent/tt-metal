@@ -9,11 +9,6 @@ run_tg_tests() {
     pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
     pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
 
-  elif [[ "$1" == "motif" ]]; then
-    echo "LOG_METAL: running Motif run_tg_frequent_tests"
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
-
   elif [[ "$1" == "wan22" ]]; then # Wan2.2 I2V and T2V
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
