@@ -3054,7 +3054,10 @@ def test_untilize_sub_core_grids_single_tile_height(device):
     sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
     output = ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
     assert_equal(input_torch, ttnn.to_torch(output))
-def test_untilize_codegen_with_resident_l1_buffers(device):
+
+
+@pytest.mark.parametrize("headroom_regime", ["shallower_cb_plan", "no_cb_plan_fits"])
+def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime):
     """Regression: the codegen CB plan must be budgeted against LIVE L1 occupancy.
 
     Statically allocated CBs grow upward from the allocator's base L1 address while L1 tensors are
@@ -3069,6 +3072,16 @@ def test_untilize_codegen_with_resident_l1_buffers(device):
     rather than degrading to a shallower CB plan (or falling back to native). Seen end-to-end on
     Gemma-3-4B in trace mode; reproduced here at the op level by pinning a persistent interleaved
     L1 tensor before untilizing.
+
+    Two regimes, both of which must simply produce the right answer:
+      - shallower_cb_plan: enough headroom for the single-buffered codegen plan but not the
+        double-buffered one, so the program factory must degrade the tier it picks.
+      - no_cb_plan_fits: not even the single-buffered codegen plan fits, so the program factory
+        must build the native-equivalent program instead of failing.
+
+    This asserts only on the result, never on which implementation served it: the choice is made
+    inside the program factory (once per program-cache miss, against one L1 snapshot) precisely so
+    that no observer outside it -- including this test -- has to reason about live L1 state.
     """
     torch.manual_seed(42)
 
@@ -3087,9 +3100,20 @@ def test_untilize_codegen_with_resident_l1_buffers(device):
     if info.cb_limit < double_in_bytes:
         pytest.skip(f"needs at least {double_in_bytes} B of CB space, device offers {info.cb_limit} B")
 
-    # Leave a headroom window that fits the single-buffer plan but NOT the double-buffered one, so
-    # the only non-clashing plan is unambiguous and an unbudgeted build provably overruns it.
-    headroom_target = single_buffer_bytes + 64 * 1024
+    if headroom_regime == "shallower_cb_plan":
+        # A headroom window that fits the single-buffer plan but NOT the double-buffered one, so
+        # the only non-clashing codegen plan is unambiguous and an unbudgeted build provably
+        # overruns it.
+        headroom_target = single_buffer_bytes + 64 * 1024
+        expected_headroom = (single_buffer_bytes, double_in_bytes)
+    else:
+        # Below every codegen tier, so the factory has to hand off to native. Still generous
+        # enough for native's own blocked CBs, which it sizes against the same live L1 space.
+        headroom_target = 256 * 1024
+        if headroom_target >= single_buffer_bytes:
+            pytest.skip("device L1 headroom cannot be driven below the smallest codegen CB plan")
+        expected_headroom = (0, single_buffer_bytes)
+
     tiles_per_bank = (info.cb_limit - headroom_target) // TILE_BYTES
     if tiles_per_bank <= 0:
         pytest.skip("device L1 is too small to leave a meaningful headroom window")
@@ -3114,9 +3138,10 @@ def test_untilize_codegen_with_resident_l1_buffers(device):
         # Guard against a vacuous pass: if the reservation did not land where intended there is no
         # L1 pressure left to regress against.
         actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
-        assert single_buffer_bytes <= actual_headroom < double_in_bytes, (
-            f"resident L1 buffer left {actual_headroom} B above the CB base; the test needs it in "
-            f"[{single_buffer_bytes}, {double_in_bytes}) so that only the single-buffer CB plan fits"
+        low, high = expected_headroom
+        assert low <= actual_headroom < high, (
+            f"resident L1 buffer left {actual_headroom} B above the CB base; the {headroom_regime} "
+            f"regime needs it in [{low}, {high})"
         )
 
         output = ttnn.untilize(input_ttnn_tensor)

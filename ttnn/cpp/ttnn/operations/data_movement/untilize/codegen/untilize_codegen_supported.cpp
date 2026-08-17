@@ -14,20 +14,7 @@
 namespace ttnn::operations::data_movement::untilize_codegen {
 
 uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device) {
-    // Same accounting as ProgramImpl::validate_circular_buffer_region(): statically allocated CBs
-    // grow upward from the allocator's base L1 address, L1 buffers are allocated downward from the
-    // top of L1, and that validator TT_THROWs as soon as the CB region end passes
-    // lowest_occupied_compute_l1_address(). Budget against the same frontier so a plan this gate
-    // accepts is one the program validator will accept too. Mirrors get_max_l1_space() in
-    // data_movement/common/common.cpp.
-    //
-    // std::nullopt means nothing is resident in L1 yet, in which case the whole region above the
-    // base is available.
-    const uint32_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const auto lowest_occupied = device->lowest_occupied_compute_l1_address();
-    const uint32_t ceiling =
-        lowest_occupied.has_value() ? static_cast<uint32_t>(*lowest_occupied) : device->l1_size_per_core();
-    return ceiling > base ? ceiling - base : 0;
+    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
 // Correctness scope of the codegen path: TILE input, interleaved (non-sharded) input AND
@@ -69,42 +56,20 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     constexpr uint32_t kTileSize = 2048;  // bf16/bf8_b only in this scope
     constexpr uint64_t kWideChunkThreshold = 800'000;
 
-    auto* device = input.device();
-
-    // plan_cb_depths()'s floor tier: cb_in + cb_out at a single slot each. The factory has no
-    // smaller plan to degrade to below this and TT_THROWs instead, so anything that does not clear
-    // the floor has to be routed to native from here rather than aborting inside program creation.
-    //
-    // usable_l1_bytes() is budgeted against LIVE L1 occupancy, so this check is not a static
-    // shape property: the same shape can clear it on an idle device and fail it alongside a
-    // model's resident weight/trace buffers. That is deliberate -- it is the same budget
-    // ProgramImpl::validate_circular_buffer_region() will hold the resulting program to.
-    auto min_cb_plan_fits = [&](uint32_t pages_per_unit) {
-        return 2ull * pages_per_unit * kTileSize <= usable_l1_bytes(device);
-    };
-
     // Mirrors build_column_parallel + plan_cb_depths: that builder's CB plan is sized by the
-    // busiest core's tile count, not by Wt.
+    // busiest core's tile count, not by Wt. A case whose single-buffer plan (cb_in + cb_out, one
+    // slot per tile each) cannot fit even an empty core's L1 is out of scope for every codegen
+    // builder no matter what else is resident, so reject it here and let "auto" pick native.
+    // This is a static bound only -- whether the plan fits the L1 that is actually free right now
+    // is decided once, inside the program factory (see UntilizeCodegenProgramFactory).
     auto column_parallel_plan_fits = [&](uint32_t wt) {
+        auto* device = input.device();
         auto grid = device->compute_with_storage_grid_size();
         auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
         uint32_t max_tiles_per_core =
             std::max(std::get<4>(split), std::get<3>(split).empty() ? 0u : std::get<5>(split));
-        return min_cb_plan_fits(max_tiles_per_core);
+        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(device);
     };
-
-    // Wt / total_tile_rows are derived from the PADDED shape (Wt/Ht are physical, tile-grid
-    // quantities), matching how the program factory itself derives them -- including for the
-    // with-unpadding builder, which reads the full physical tile grid and only differs in its
-    // writer.
-    const auto& padded_shape = input.padded_shape();
-    uint32_t rank = padded_shape.rank();
-    uint32_t wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t nc = 1;
-    for (uint32_t i = 0; i + 2 < rank; ++i) {
-        nc *= padded_shape[i];
-    }
-    uint32_t total_tile_rows = nc * (padded_shape[-2] / tt::constants::TILE_HEIGHT);
 
     const auto& logical = input.logical_shape();
     const bool tile_aligned =
@@ -120,31 +85,36 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         // overflow the L1 budget -- regardless of total_tile_rows -- is out of scope and goes to
         // native. Uses ceil(W/TILE_W) since W is not tile-aligned here.
         uint32_t wt_ceil = (logical[-1] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
-        if (2ull * wt_ceil * kTileSize > kWideChunkThreshold) {
-            return false;
-        }
-        // build_with_unpadding plans its CBs on the physical Wt.
-        return min_cb_plan_fits(wt);
+        return 2ull * wt_ceil * kTileSize <= kWideChunkThreshold;
     }
 
-    // Tile-aligned path: a multi-tile-row input wide enough that a single tile-row would overflow
-    // the chunking threshold (~800KB for two double-buffered CBs at 2048B/tile) needs a
-    // slice -> untilize -> concat cascade this implementation does not have, so it is out of scope
-    // here.
+    // Tile-aligned path: mirrors ops/untilize/untilize.py's wide-tensor guard for
+    // build_untilize_tile -- a multi-tile-row input wide enough that a single tile-row would
+    // overflow the slice+concat chunking threshold (~800KB for two double-buffered CBs at
+    // 2048B/tile) is routed to a slice -> untilize -> concat cascade over unrelated builder
+    // entries, out of scope here. Computed from the PADDED shape (Wt/Ht are physical, tile-grid
+    // quantities), matching how the program factory itself derives Wt/total_tile_rows.
+    const auto& padded_shape = input.padded_shape();
+    uint32_t rank = padded_shape.rank();
+    uint32_t w = padded_shape[-1];
+    uint32_t h = padded_shape[-2];
+    uint32_t wt = w / tt::constants::TILE_WIDTH;
+    uint32_t nc = 1;
+    for (uint32_t i = 0; i + 2 < rank; ++i) {
+        nc *= padded_shape[i];
+    }
+    uint32_t total_tile_rows = nc * (h / tt::constants::TILE_HEIGHT);
     if (total_tile_rows > 1 && 2ull * wt * kTileSize > kWideChunkThreshold) {
         return false;
     }
     // A single tile-row skips the chunk cascade (build_column_parallel splits Wt across the grid
     // in one dispatch instead), so it is bounded by that builder's own per-core plan, not by the
     // whole-row threshold above.
-    if (total_tile_rows == 1 && wt > 1) {
-        return column_parallel_plan_fits(wt);
+    if (total_tile_rows == 1 && wt > 1 && !column_parallel_plan_fits(wt)) {
+        return false;
     }
 
-    // build_2d_column plans on wt/ncol and build_main_split on wt, so Wt bounds both. (ncol lives
-    // in the factory's anonymous namespace; using the looser bound here can only over-route to
-    // native, never under-route into a plan the factory cannot build.)
-    return min_cb_plan_fits(wt);
+    return true;
 }
 
 bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids) {
