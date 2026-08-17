@@ -230,11 +230,11 @@ FORCE_INLINE void ScatterWriteChannel<ConnT>::write_scatter(
 }
 
 // ----------------------------------------------------------------------------
-// FabricStream — armed unicast atomic-inc channel
+// FabricStream — armed atomic-inc channel (unicast or multicast, per the arm overload)
 // ----------------------------------------------------------------------------
 
 template <typename ConnT>
-FORCE_INLINE AtomicIncChannel<ConnT> FabricStream<ConnT>::arm_inc(uint32_t val) {
+FORCE_INLINE AtomicIncChannel<ConnT, IncCast::Unicast> FabricStream<ConnT>::arm_inc(uint32_t val) {
     auto* hdr = PacketHeaderPool::allocate_header();
     // set_state programs the invariant increment value + flush (the noc_address field is a
     // placeholder, filled per-issue by inc()). Helper owns the Val|Flush mask; route is the
@@ -245,27 +245,16 @@ FORCE_INLINE AtomicIncChannel<ConnT> FabricStream<ConnT>::arm_inc(uint32_t val) 
         static_cast<uint8_t>(route_.distance_in_hops),
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, val});
     ccl_routing_utils::fabric_set_line_unicast_route(hdr, route_);
-    return AtomicIncChannel<ConnT>(conn_, hdr);
+    return AtomicIncChannel<ConnT, IncCast::Unicast>(conn_, hdr);
 }
 
 template <typename ConnT>
-FORCE_INLINE void AtomicIncChannel<ConnT>::inc(uint64_t remote_sem_noc_addr) {
-    // with_state issues the armed value, updating only the destination semaphore address.
-    linear_fabric::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        conn_->sender(), hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
-}
-
-// ----------------------------------------------------------------------------
-// FabricStream — armed multicast atomic-inc channel (the N-party barrier)
-// ----------------------------------------------------------------------------
-
-template <typename ConnT>
-FORCE_INLINE MulticastIncChannel<ConnT> FabricStream<ConnT>::arm_multicast_inc(
+FORCE_INLINE AtomicIncChannel<ConnT, IncCast::Multicast> FabricStream<ConnT>::arm_inc(
     const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t val) {
     auto* hdr = PacketHeaderPool::allocate_header();
     // set_state programs the invariant inc value + flush on a dedicated multicast header for a
-    // MULTICAST route; the dst sem addr is filled per-issue by multicast_inc. Independent of the
-    // unicast atomic-inc channel, so the barrier (multicast) and counting (unicast) may coexist.
+    // MULTICAST route (the channel's cast mode is baked here); the dst sem addr is filled per-issue
+    // by inc(). Independent of the unicast arm_inc's header, so barrier + counting may coexist.
     linear_fabric::fabric_multicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         hdr,
@@ -273,13 +262,20 @@ FORCE_INLINE MulticastIncChannel<ConnT> FabricStream<ConnT>::arm_multicast_inc(
         static_cast<uint8_t>(route.range_hops),
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, val});
     ccl_routing_utils::fabric_set_line_multicast_route(hdr, route);
-    return MulticastIncChannel<ConnT>(conn_, hdr);
+    return AtomicIncChannel<ConnT, IncCast::Multicast>(conn_, hdr);
 }
 
-template <typename ConnT>
-FORCE_INLINE void MulticastIncChannel<ConnT>::multicast_inc(uint64_t remote_sem_noc_addr) {
-    linear_fabric::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        conn_->sender(), hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
+template <typename ConnT, IncCast CastV>
+FORCE_INLINE void AtomicIncChannel<ConnT, CastV>::inc(uint64_t remote_sem_noc_addr) {
+    // with_state issues the armed value, updating only the destination semaphore address. The cast
+    // mode was baked at arm time; dispatch is compile-time.
+    if constexpr (CastV == IncCast::Unicast) {
+        linear_fabric::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            conn_->sender(), hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
+    } else {
+        linear_fabric::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            conn_->sender(), hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
+    }
 }
 
 // ----------------------------------------------------------------------------

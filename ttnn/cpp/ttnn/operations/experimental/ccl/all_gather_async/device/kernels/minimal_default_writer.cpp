@@ -196,9 +196,9 @@ void kernel_main() {
         if (detail::valid_targets(direction)) {
             // only initialize if we're actually going to send something over fabric
 
-            // The multicast-inc channel has its own pooled header (independent of the unicast
+            // The multicast-armed inc channel has its own pooled header (independent of the unicast
             // counting channel), so this is just the barrier-phase scope, not a sharing constraint.
-            auto barrier = stream.arm_multicast_inc(barrier_multicast_route_info, 1);
+            auto barrier = stream.arm_inc(barrier_multicast_route_info, 1);
 
             if constexpr (topology == Topology::Linear) {
                 // multicast to both the forward and backward worker on all devices that you write to.
@@ -208,18 +208,18 @@ void kernel_main() {
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                barrier.multicast_inc(same_direction_barrier_sem_noc_addr_in_pkt);
+                barrier.inc(same_direction_barrier_sem_noc_addr_in_pkt);
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-                barrier.multicast_inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
+                barrier.inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
                 uint64_t barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                barrier.multicast_inc(barrier_sem_noc_addr_in_pkt);
+                barrier.inc(barrier_sem_noc_addr_in_pkt);
             } else {
                 ASSERT(false);
             }
