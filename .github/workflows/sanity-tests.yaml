@@ -224,6 +224,9 @@ jobs:
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
     needs: check-harbor
+    # A failed/errored check-harbor must not skip the whole pipeline: an empty
+    # harbor-prefix output already means "fall back to direct GHCR pulls".
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

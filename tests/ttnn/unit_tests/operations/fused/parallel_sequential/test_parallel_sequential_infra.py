@@ -5,12 +5,17 @@
 """
 Standalone tests for Sequential Kernel Chaining Infrastructure.
 
-Tests the core fusion infrastructure logic without requiring a device.
+Most tests exercise fusion logic without a device. Semaphore-bank tests
+require hardware.
 """
 
-import pytest
+import gc
+import time
 from types import SimpleNamespace
 
+import pytest
+import torch
+import ttnn
 
 import models.experimental.ops.descriptors.fusion.common as _common
 import models.experimental.ops.descriptors.fusion.cb_allocator as _cb_alloc
@@ -19,7 +24,6 @@ import models.experimental.ops.descriptors.fusion.fusion as _fusion
 import models.experimental.ops.descriptors.fusion.graph as _graph
 import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
 import models.experimental.ops.descriptors.fusion.codegen.source_gen as _source_gen_mod
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -222,6 +226,9 @@ class TestCBArgNaming:
             ("cb_out", 16, True),
             ("cb_gamma", 31, True),
             ("cb_large", 63, True),
+            ("dfb_id_in", 0, True),
+            ("dfb_id_out", 16, True),
+            ("dfb_length", 16, False),
             ("blk", 4, False),
             ("num_tiles", 16, False),
             ("cb_negative", -1, False),
@@ -272,13 +279,13 @@ class TestCBPoolAllocator:
         self._alloc(pool, 1, {0: CI(**kwargs1)})
         assert pool.get_remap(0)[0] != pool.get_remap(1)[0]
 
-    def test_overflow_raises_on_projection(self):
+    def test_overflow_raises_on_projection(self, expect_error):
         pool = _cb_alloc.CBPoolAllocator()
         CI = _cb_alloc.CBInfo
         for i in range(33):
             self._alloc(pool, i, {0: CI(0, 1024, f"F{i}", 1024, None, "Default")})
         assert len(pool._slots) == 33
-        with pytest.raises(ValueError, match="CB pool overflow"):
+        with expect_error(ValueError, "CB pool overflow"):
             pool.project_to_group(list(range(33)), set())
 
     def test_phantom_cb_reservation(self):
@@ -330,14 +337,14 @@ class TestCBPoolAllocator:
         proj_b = pool.project_to_group([0, 2], set())
         assert proj_a.phase_remaps[0] == proj_b.phase_remaps[0]
 
-    def test_global_pool_unlimited_slots(self):
+    def test_global_pool_unlimited_slots(self, expect_error):
         pool = _cb_alloc.CBPoolAllocator()
         CI = _cb_alloc.CBInfo
         for i in range(35):
             self._alloc(pool, i, {0: CI(0, 1024, f"F{i}", 1024, None, "Default")})
         assert len(pool._slots) == 35
         pool.project_to_group([0, 1, 2, 3, 4], set())  # Should succeed
-        with pytest.raises(ValueError, match="CB pool overflow"):
+        with expect_error(ValueError, "CB pool overflow"):
             pool.project_to_group(list(range(35)), set())
 
 
@@ -359,16 +366,16 @@ class TestCBStateSaveRestore:
         saved = _cb_alloc._save_cb_state([_ns(cbs=[cb]), _ns(cbs=[cb])])
         assert len(saved) == 1
 
-    def test_verify_fails_on_mismatch(self):
+    def test_verify_fails_on_mismatch(self, expect_error):
         cb = _ns(total_size=8192, core_ranges="mock", format_descriptors=[_ns(buffer_index=5)])
         fmt = cb.format_descriptors[0]
         saved = [{"cb": cb, "total_size": 4096, "core_ranges": "mock", "fmt": [(fmt, 5)]}]
-        with pytest.raises(RuntimeError, match="total_size"):
+        with expect_error(RuntimeError, "total_size"):
             _cb_alloc._verify_cb_restore(saved)
 
         cb.total_size = 4096
         fmt.buffer_index = 10
-        with pytest.raises(RuntimeError, match="buffer_index"):
+        with expect_error(RuntimeError, "buffer_index"):
             _cb_alloc._verify_cb_restore(saved)
 
 
@@ -523,6 +530,14 @@ class TestArgMerging:
         result = dict(fn([{"reader": k0}, {"reader": k1}], "reader", phase_remaps=[{0: 0}, {0: 5}]))
         assert result["cb_in0"] == 0 and result["phase_1_cb_in0"] == 5
 
+    def test_named_arg_dfb_remapping(self):
+        fn = _codegen._merge_named_compile_time_args
+        k0 = _ns(named_compile_time_args=[("cb_in0", 0)])
+        k1 = _ns(named_compile_time_args=[("dfb_id_in", 0), ("dfb_length", 8)])
+        result = dict(fn([{"reader": k0}, {"reader": k1}], "reader", phase_remaps=[{0: 0}, {0: 5}]))
+        assert result["phase_1_dfb_id_in"] == 5
+        assert result["phase_1_dfb_length"] == 8
+
     def test_barrier_rt_offset_added(self):
         result = dict(
             _codegen._merge_named_compile_time_args(
@@ -550,14 +565,14 @@ class TestArgMerging:
         _, args = result[0]
         assert args == [1, 2, 3, 4, 5, 10, 20, 30]
 
-    def test_validate_fp32_consistency(self):
+    def test_validate_fp32_consistency(self, expect_error):
         fn = _codegen._validate_fp32_consistency
 
         def _desc(fp32):
             return _ns(descriptor=_ns(kernels=[_ns(config=_ns(fp32_dest_acc_en=fp32))]))
 
         fn([_desc(True), _desc(True)])  # Should not raise
-        with pytest.raises(ValueError, match="fp32_dest_acc_en mismatch"):
+        with expect_error(ValueError, "fp32_dest_acc_en mismatch"):
             fn([_desc(True), _desc(False)])
 
 
@@ -619,8 +634,8 @@ class TestMustMatchDefines:
         )
         assert {"REDUCE_OP", "REDUCE_DIM"} <= {n for n, _ in must_match}
 
-    def test_mismatched_rejected(self):
-        with pytest.raises(ValueError, match="REDUCE_OP.*inconsistent"):
+    def test_mismatched_rejected(self, expect_error):
+        with expect_error(ValueError, "REDUCE_OP.*inconsistent"):
             _codegen._collect_phase_defines(
                 [
                     {"compute": _ns(defines=[("REDUCE_OP", "0")])},
@@ -666,15 +681,15 @@ class TestOpGraphBuilder:
         result = _graph.OpGraphBuilder(_graph.OpNode(desc)).build(device=None)
         assert type(result).__name__ == "FusedOp"
 
-    def test_build_twice_raises(self, monkeypatch):
+    def test_build_twice_raises(self, monkeypatch, expect_error):
         _patch_get_node_core_range_for_mock_ops(monkeypatch)
         desc = self._make_buildable_op()
         builder = _graph.OpGraphBuilder(_graph.OpNode(desc))
         builder.build(device=None)
-        with pytest.raises(ValueError, match="Already built"):
+        with expect_error(ValueError, "Already built"):
             builder.build(device=None)
 
-    def test_overlapping_siblings_rejected(self, monkeypatch):
+    def test_overlapping_siblings_rejected(self, monkeypatch, expect_error):
         _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (3, 0))]),
@@ -683,7 +698,7 @@ class TestOpGraphBuilder:
                 _graph.OpNode(self._op([((1, 0), (3, 0))])),
             ],
         )
-        with pytest.raises(ValueError, match="overlapping cores"):
+        with expect_error(ValueError, "overlapping cores"):
             _graph.OpGraphBuilder(root)._validate_topology()
 
     def test_valid_disjoint_children(self, monkeypatch):
@@ -909,30 +924,30 @@ class TestSequentialParallelAPI:
         s = S(a)
         assert s.add(b).add(c) is s and len(s._items) == 3
 
-    def test_parallel_requires_two_items(self):
-        with pytest.raises(ValueError, match="at least 2"):
+    def test_parallel_requires_two_items(self, expect_error):
+        with expect_error(ValueError, "at least 2"):
             _fusion.Parallel(_make_mock_op("a"))
 
-    def test_parallel_in_middle_errors(self):
+    def test_parallel_in_middle_errors(self, expect_error):
         S, P = _fusion.Sequential, _fusion.Parallel
         a, b, c, d = [_make_mock_op(n) for n in "abcd"]
-        with pytest.raises(ValueError, match="diverge"):
+        with expect_error(ValueError, "diverge"):
             _fusion._resolve(S(a, P(b, c), d))
 
-    def test_empty_sequential_errors(self):
-        with pytest.raises(ValueError, match="at least 1"):
+    def test_empty_sequential_errors(self, expect_error):
+        with expect_error(ValueError, "at least 1"):
             _fusion.Sequential()
 
-    def test_resolve_raw_op_and_unsupported_type(self):
+    def test_resolve_raw_op_and_unsupported_type(self, expect_error):
         op = _make_mock_op("raw")
         nodes = _fusion._resolve(op)
         assert len(nodes) == 1 and nodes[0].op is op
-        with pytest.raises(TypeError, match="Unsupported"):
+        with expect_error(TypeError, "Unsupported"):
             _fusion._resolve(42)
 
-    def test_resolve_rejects_fused_op(self):
+    def test_resolve_rejects_fused_op(self, expect_error):
         fused = _fusion.FusedOp(op=_fusion.OpDescriptor(_PLACEHOLDER, [], [], program_cache_key=0))
-        with pytest.raises(TypeError, match="FusedOp cannot be nested"):
+        with expect_error(TypeError, "FusedOp cannot be nested"):
             _fusion._resolve(fused)
 
     def test_merge_build_results(self, monkeypatch):
@@ -940,16 +955,15 @@ class TestSequentialParallelAPI:
         shared = object()
         in_a, in_b = object(), object()
         out_a, out_b = object(), object()
-        sem_a, sem_b = object(), object()
         mock_desc = _ns(cbs=[])  # Mock descriptor with empty cbs list
         # Stub merge_program_descriptors — real one needs C++ ProgramDescriptor objects
         monkeypatch.setattr(_graph, "ttnn", _ns(merge_program_descriptors=lambda descs: descs[0]))
-        r_a = BR(mock_desc, [shared, in_a], [out_a], (sem_a,))
-        r_b = BR(mock_desc, [shared, in_b], [out_b], (sem_b,))
+        r_a = BR(mock_desc, [shared, in_a], [out_a], kernel_labels=("a",))
+        r_b = BR(mock_desc, [shared, in_b], [out_b], kernel_labels=("b",))
         merged = _graph._merge_build_results([r_a, r_b])
         assert len(merged.input_tensors) == 3  # shared deduped
         assert len(merged.output_tensors) == 2
-        assert len(merged.semaphores) == 2
+        assert merged.kernel_labels == ("a", "b")
         assert len(merged.sem_specs) == 0  # specs set at _build_internal level, not merge
         assert _graph._merge_build_results([r_a]) is r_a
 
@@ -1284,6 +1298,122 @@ class TestCompileTimePerformance:
         assert t8 < 10.0, f"8-phase took {t8:.2f}s"
         if t2 > 0.001:
             assert t8 / t2 < 20.0, f"Ratio {t8/t2:.1f}x exceeds 20x"
+
+
+# ---------------------------------------------------------------------------
+# Fusion semaphore bank
+# ---------------------------------------------------------------------------
+
+
+def _semaphore_core(x, y):
+    coord = ttnn.CoreCoord(x, y)
+    return ttnn.CoreRangeSet({ttnn.CoreRange(coord, coord)})
+
+
+def _semaphore_cores(*coords):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in coords})
+
+
+class TestFusionSemaphoreBank:
+    def test_nonzero_values_and_offsets(self, device):
+        core_ranges = [_semaphore_core(0, 0), _semaphore_core(2, 0), _semaphore_cores((0, 0), (2, 0))]
+        initial_values = [3, 7, 11]
+
+        bank = ttnn._ttnn.operations.experimental.FusionSemaphoreBank(device, core_ranges, initial_values)
+
+        base_address = bank.tensor.buffer_address()
+        assert not bank.tensor.is_per_core_allocated()
+        stride = 16
+        assert list(bank.addresses) == [base_address + stride * index for index in range(len(initial_values))]
+
+        words_per_slot = stride // 4
+        values = ttnn.to_torch(ttnn.from_device(bank.tensor)).reshape(-1, len(initial_values), words_per_slot)
+        live = values[:, :, 0]
+        padding = values[:, :, 1:]
+        expected = torch.tensor(initial_values, dtype=torch.uint32).repeat(live.shape[0], 1)
+        assert torch.equal(live, expected)
+        assert torch.all(padding == 0)
+
+    def test_releases_l1(self, device):
+        core_ranges = [_semaphore_core(0, 0), _semaphore_core(1, 0)]
+        ttnn.synchronize_device(device)
+        gc.collect()
+        pages_before = len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+        for _ in range(100):
+            bank = ttnn._ttnn.operations.experimental.FusionSemaphoreBank(device, core_ranges, [0, 0])
+            assert len(bank.addresses) == 2
+        del bank
+        ttnn.synchronize_device(device)
+        gc.collect()
+
+        assert len(ttnn._ttnn.reports.get_buffer_pages(device)) == pages_before
+
+    def test_rejects_mismatched_metadata(self, device, expect_error):
+        with expect_error(RuntimeError, "must match"):
+            ttnn._ttnn.operations.experimental.FusionSemaphoreBank(device, [_semaphore_core(0, 0)], [0, 1])
+
+    def test_rejects_empty_metadata(self, device, expect_error):
+        with expect_error(RuntimeError, "at least one semaphore"):
+            ttnn._ttnn.operations.experimental.FusionSemaphoreBank(device, [], [])
+
+    def test_mesh_address_contract(self, mesh_device):
+        bank = ttnn._ttnn.operations.experimental.FusionSemaphoreBank(
+            mesh_device,
+            [_semaphore_cores((0, 0), (1, 0)), _semaphore_core(1, 0)],
+            [0, 9],
+        )
+
+        assert not bank.tensor.is_per_core_allocated()
+        assert len(bank.tensor.device_coords()) == mesh_device.get_num_devices()
+        assert list(bank.addresses) == [bank.tensor.buffer_address(), bank.tensor.buffer_address() + 16]
+
+    def test_persistent_dispatch_releases_l1(self, device):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        activation = ttnn.from_torch(
+            torch.randn(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        weight = ttnn.from_torch(
+            torch.ones(1, 1, 1, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        kwargs = dict(core_range_set=core_range, weight=weight, epsilon=1e-5, compute_kernel_config=compute_cfg)
+        rms1 = rms_norm.rms_norm(**kwargs)
+        rms2 = rms_norm.rms_norm(rms1.output_tensors[0], **kwargs)
+        container = Sequential(rms1, rms2)
+
+        def run():
+            rms1.update(activation)
+            return container.run()
+
+        for _ in range(5):
+            run()
+        ttnn.synchronize_device(device)
+        gc.collect()
+        pages_before = len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+        for _ in range(100):
+            run()
+        ttnn.synchronize_device(device)
+        gc.collect()
+
+        assert len(ttnn._ttnn.reports.get_buffer_pages(device)) == pages_before
 
 
 if __name__ == "__main__":
